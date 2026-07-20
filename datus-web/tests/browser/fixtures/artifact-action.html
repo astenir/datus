@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Artifact action fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue"
+      import "/src/style.css"
+      import ArtifactAction from "/src/components/ai-elements/artifact/ArtifactAction.vue"
+
+      createApp({
+        setup() {
+          const clickCount = ref(0)
+
+          return () => h("main", [
+            h(ArtifactAction, {
+              label: "打开",
+              tooltip: "打开产物",
+              onClick: () => { clickCount.value += 1 },
+            }),
+            h("output", { "data-testid": "click-count" }, String(clickCount.value)),
+          ])
+        },
+      }).mount("#app")
+    </script>
+  </body>
+</html>

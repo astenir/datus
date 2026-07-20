@@ -5,6 +5,7 @@ import argparse
 from fastapi.routing import APIRoute
 
 from datus.api.enterprise.route_security_matrix import (
+    AGENT_ACL,
     ARTIFACT_ACL,
     AUDIT,
     DATA_BOUNDARY_CATEGORIES,
@@ -61,6 +62,7 @@ def test_route_security_categories_are_known_and_cover_required_dimensions():
         LEGACY_DISABLED,
         SYSTEM_READONLY,
         LOCAL_COMPATIBLE,
+        AGENT_ACL,
     } <= seen_categories
 
 
@@ -119,6 +121,13 @@ def test_table_and_semantic_routes_declare_request_datasource_and_table_scope_bo
         assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE} <= policy.data_boundaries
 
 
+def test_kb_bootstrap_declares_request_scoped_datasource_boundaries():
+    policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/kb/bootstrap")]
+
+    assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.categories
+    assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.data_boundaries
+
+
 def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_policy():
     legacy_routes = {
         key: policy for key, policy in ROUTE_SECURITY_MATRIX.items() if LEGACY_DISABLED in policy.categories
@@ -152,6 +161,18 @@ def test_admin_mutation_routes_use_module_rbac_and_platform_status_gate():
         assert MODULE_RBAC in policy.categories
         assert PLATFORM_STATUS_GATE in policy.categories
         assert policy.module_permission in admin_mutation_permissions
+
+
+def test_agent_catalog_and_dispatch_use_agent_acl_not_module_rbac():
+    for key in [
+        route_key("GET", "/api/v1/agents"),
+        route_key("GET", "/api/v1/agents/{agent_id}"),
+        route_key("POST", "/api/v1/chat/stream"),
+    ]:
+        policy = ROUTE_SECURITY_MATRIX[key]
+        assert AGENT_ACL in policy.categories
+        assert MODULE_RBAC not in policy.categories
+        assert policy.module_permission is None
 
 
 def test_datasource_grant_admin_routes_carry_datasource_boundary():

@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { adminDatasourceLabel } from "@/lib/datasource-display"
 import {
@@ -815,14 +815,36 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
       >
         {{ roles.roleDialogError.value }}
       </div>
-      <FieldGroup class="min-h-0 gap-4 overflow-y-auto pr-1">
-        <Field>
-          <FieldLabel for="admin-role-name">角色名称</FieldLabel>
-          <Input
-            id="admin-role-name"
-            v-model="roles.roleForm.value.name"
-          />
-        </Field>
+      <FieldGroup class="min-h-0 gap-4 overflow-y-auto px-1.5">
+        <FieldGroup class="gap-4 sm:grid sm:grid-cols-2">
+          <Field
+            :data-invalid="Boolean(roles.roleIdValidationError.value) || undefined"
+            :data-disabled="roles.dialogMode.value === 'edit' || undefined"
+          >
+            <FieldLabel for="admin-role-id">Role ID</FieldLabel>
+            <Input
+              id="admin-role-id"
+              v-model="roles.roleForm.value.role_id"
+              placeholder="例如：data_analyst"
+              autocomplete="off"
+              :aria-invalid="Boolean(roles.roleIdValidationError.value)"
+              :disabled="roles.dialogMode.value === 'edit'"
+            />
+            <FieldDescription>仅支持英文字母、数字、下划线和连字符，创建后不可修改。</FieldDescription>
+            <FieldError
+              v-if="roles.roleIdValidationError.value"
+              :errors="[roles.roleIdValidationError.value]"
+            />
+          </Field>
+          <Field>
+            <FieldLabel for="admin-role-name">名称</FieldLabel>
+            <Input
+              id="admin-role-name"
+              v-model="roles.roleForm.value.name"
+              placeholder="例如：数据分析员"
+            />
+          </Field>
+        </FieldGroup>
         <Field>
           <FieldLabel for="admin-role-description">说明</FieldLabel>
           <Textarea

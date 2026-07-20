@@ -13,6 +13,8 @@ storage:
     model_name: text-embedding-3-small
     dim_size: 1536
     batch_size: 10
+    sample_cell_max_chars: 1000   # 超长样例单元格只保留长度标记
+    sample_max_chars: 8000        # 单表样例序列化后的总字符上限
     target_model: openai
 
   document:
@@ -43,9 +45,14 @@ database:
   model_name: text-embedding-3-small
   dim_size: 1536
   batch_size: 10
+  sample_cell_max_chars: 1000
+  sample_max_chars: 8000
   target_model: openai                 # 关联 models 配置
 ```
-**参数**：`registry_name`、`model_name`、`dim_size`、`batch_size`、`target_model`
+**参数**：`registry_name`、`model_name`、`dim_size`、`batch_size`、`sample_cell_max_chars`、`sample_max_chars`、`target_model`
+
+- `sample_cell_max_chars`：单个元数据样例单元格的字符上限；超长内容在发送给嵌入服务前替换为长度标记。
+- `sample_max_chars`：单张表完整样例的序列化字符上限，默认 `8000`。
 
 ### 文档嵌入
 ```yaml

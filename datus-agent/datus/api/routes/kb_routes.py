@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from datus.api import deps as api_deps
 from datus.api.auth.context import AppContext
-from datus.api.enterprise.deps import get_audit_sink, require_module, require_platform_active
+from datus.api.enterprise.deps import get_audit_sink, project_request_config, require_module, require_platform_active
 from datus.api.enterprise.models import AuditEvent
 from datus.api.models.base_models import Result
 from datus.api.models.kb_models import (
@@ -186,8 +186,18 @@ async def bootstrap_kb(
 ):
     """Start KB bootstrap with SSE progress streaming."""
     svc = await api_deps.resolve_datus_service_for_request(http_request)
+    try:
+        projection = await project_request_config(
+            _ctx,
+            svc.agent_config,
+            operation="kb.bootstrap",
+            requested_datasource=request.datasource_id,
+        )
+    except DatusException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # Derive project_files_root from AgentConfig.home (= project dir)
-    project_files_root = os.path.join(svc.agent_config.home, "files")
+    project_files_root = os.path.join(projection.config.home, "files")
 
     request = await _resolve_kb_upload_sources(
         request,
@@ -207,7 +217,13 @@ async def bootstrap_kb(
 
     async def generate_sse():
         try:
-            async for event in svc.kb.bootstrap_stream(request, stream_id, cancel_event, project_files_root):
+            async for event in svc.kb.bootstrap_stream(
+                request,
+                stream_id,
+                cancel_event,
+                project_files_root,
+                agent_config=projection.config,
+            ):
                 data = json.dumps(event.model_dump(exclude_none=True), ensure_ascii=False)
                 yield f"id: {stream_id}\nevent: {event.stage}\ndata: {data}\n\n"
         finally:

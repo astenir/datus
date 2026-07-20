@@ -136,18 +136,27 @@ timeout: ${API_TIMEOUT}
 connection_string: "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 ```
 
-## Multi-Environment Configuration
+## Choosing a Configuration File
 
-Configure different environments using separate configuration files:
+The repository `conf/` directory contains complete configurations, examples,
+enterprise fragments, and the built-in model catalog:
 
 ```text
 conf/
-├── agent.yml              # Main configuration
-├── agent.yml.dev          # Development overrides
-├── agent.yml.staging      # Staging environment
-├── agent.yml.production   # Production settings
-└── .mcp.json              # MCP server configuration
+├── agent.yml                              # Git-ignored local runtime config
+├── agent.yml.example                      # Complete upstream example
+├── agent.downstream.zh-CN.yml.example     # Complete downstream starter
+├── agent.compose.yml                      # Complete Docker Compose config
+├── agent.enterprise.*.yml.example         # Fragments merged under agent:
+├── agent.local-enterprise-pg.yml.example  # Complete local enterprise PG example
+├── auth_clients.yml.example               # Separate legacy /auth/token example
+└── providers.yml                          # Built-in provider/model catalog
 ```
+
+Do not launch an enterprise fragment as a complete configuration. See
+[`conf/README.zh-CN.md`](../../conf/README.zh-CN.md) for the load order, the
+purpose of each file, and the boundary between YAML, environment variables,
+and `.env`.
 
 ## Next Steps
 

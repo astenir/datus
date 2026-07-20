@@ -527,7 +527,7 @@ class TestAddWithRetry:
             "table_type": "table",
             "definition": "CREATE TABLE t (id INT)",
         }
-        store._add_with_retry(pd.DataFrame([row]))
+        store._add_with_retry(pd.DataFrame(store._apply_default_values([row])))
         result = store.search_all(catalog_name="cat")
         assert result.num_rows == 1
 

@@ -67,7 +67,13 @@ const selectedDetailCanManageShare = computed(() => {
   const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
   return items.some(item => item.slug === slug && item.can_manage_share === true)
 })
-const selectedDetailCanEdit = computed(() => selectedDetailCanManageShare.value)
+const selectedDetailCanEdit = computed(() => {
+  const slug = selectedDetailSlug.value
+  if (!slug) return false
+
+  const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
+  return items.some(item => item.slug === slug && item.can_edit === true)
+})
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))

@@ -21,10 +21,18 @@ const props = withDefaults(defineProps<ArtifactActionProps>(), {
   size: 'sm',
 })
 
+const emit = defineEmits<{
+  click: [event: MouseEvent]
+}>()
+
 const classes = computed(() => cn(
   'size-8 p-0 text-muted-foreground hover:text-foreground',
   props.class,
 ))
+
+function handleClick(event: MouseEvent) {
+  emit('click', event)
+}
 </script>
 
 <template>
@@ -37,6 +45,7 @@ const classes = computed(() => cn(
             ...props,
             class: classes,
           }"
+          @click="handleClick"
         >
           <component
             :is="props.icon"
@@ -60,6 +69,7 @@ const classes = computed(() => cn(
       ...props,
       class: classes,
     }"
+    @click="handleClick"
   >
     <component
       :is="props.icon"

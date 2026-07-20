@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from datus.agent.node_capabilities import (
+    AGENT_NODE_CAPABILITIES,
+    AgentNodeCapability,
+    get_agent_node_capability,
+    tool_editor_node_capabilities,
+)
 from datus.api.models.agent_models import CreateAgentInput, EditAgentInput
 from datus.api.models.base_models import Result
 from datus.configuration.agent_config import AgentConfig
@@ -47,171 +53,40 @@ VALID_TOOL_CATEGORIES = set(VALID_TOOL_METHODS.keys())
 
 BUILTIN_SUBAGENTS = SYS_SUB_AGENTS - HIDDEN_SYS_SUB_AGENTS
 
-# Curated list of categories surfaced through GET /agent/use_tools' ``tool_types``
-# block. Matches the SaaS editor's whitelist — ``platform_doc_tools`` is a
-# valid tool (and stays in VALID_TOOL_METHODS for write-side validation) but is
-# excluded from the editor picker.
-_USER_FACING_TOOL_CATEGORIES: tuple[str, ...] = (
-    "db_tools",
-    "context_search_tools",
-    "semantic_tools",
-    "reference_template_tools",
-    "date_parsing_tools",
-    "filesystem_tools",
-)
+_TOOL_EDITOR_CAPABILITIES = tool_editor_node_capabilities()
 
-# Filesystem methods an ``ask_*`` agent may use. Mirrors the read-only intent
-# documented in the ``ask_report`` / ``ask_dashboard`` entries of
-# :data:`SUBAGENT_TOOL_REFERENCE`: the consultant reads ``analysis/`` and
-# ``queries/`` to answer follow-ups but must never mutate the artifact.
-_ASK_AGENT_FILESYSTEM_READ_ONLY: tuple[str, ...] = ("glob", "grep", "read_file")
-
-# Per-agent-type editor whitelist. Previously the saas frontend
-# (``tool-tree.ts`` ``enableToolGroup``) decided which categories the picker
-# would render — only ``gen_sql`` and the catch-all else branch (effectively
-# ``gen_report``) were handled explicitly, which hid filesystem_tools from
-# ask_* even though those agents preselect ``filesystem_tools.read_file`` /
-# ``glob`` / ``grep`` in their defaults. The API is now the single source of
-# truth: each agent type returns exactly the categories the editor should
-# surface, and the frontend can render whatever it receives.
-_TOOL_CATEGORIES_BY_AGENT_TYPE: dict[str, tuple[str, ...]] = {
-    "chat": _USER_FACING_TOOL_CATEGORIES + ("memory_tools",),
-    "gen_sql": (
-        "db_tools",
-        "semantic_tools",
-        "context_search_tools",
-    ),
-    "gen_report": (
-        "db_tools",
-        "semantic_tools",
-        "context_search_tools",
-        "date_parsing_tools",
-        "reference_template_tools",
-    ),
-    "ask_metrics": _USER_FACING_TOOL_CATEGORIES,
-    "ask_report": (
-        "db_tools",
-        "semantic_tools",
-        "context_search_tools",
-        "reference_template_tools",
-        "date_parsing_tools",
-        "filesystem_tools",
-    ),
-    "ask_dashboard": (
-        "db_tools",
-        "semantic_tools",
-        "context_search_tools",
-        "reference_template_tools",
-        "date_parsing_tools",
-        "filesystem_tools",
-    ),
+# Compatibility views retained for callers/tests that imported the former
+# editor constants. Their values are derived from the canonical registry.
+_TOOL_CATEGORIES_BY_AGENT_TYPE = {
+    capability.node_class: capability.tool_categories for capability in _TOOL_EDITOR_CAPABILITIES
 }
+_USER_FACING_TOOL_CATEGORIES = _TOOL_CATEGORIES_BY_AGENT_TYPE["ask_metrics"]
+_ASK_AGENT_FILESYSTEM_READ_ONLY = get_agent_node_capability("ask_report").allowed_tool_methods("filesystem_tools") or ()
 
 
-def _build_tool_types(agent_type: str) -> dict[str, dict[str, list[str]]]:
-    """Compose the ``tool_types`` block returned by ``GET /agent/use_tools``
-    for ``agent_type``. Categories are restricted to the per-type whitelist
-    in :data:`_TOOL_CATEGORIES_BY_AGENT_TYPE`; for artifact ``ask_*`` agents,
-    ``filesystem_tools`` is further restricted to the read-only subset so
-    the editor picker never surfaces ``write_file`` / ``edit_file`` as
-    selectable options.
-    """
-    is_ask_agent = agent_type in {"ask_report", "ask_dashboard"}
+def _build_tool_types(agent_type: str | AgentNodeCapability) -> dict[str, dict[str, list[str]]]:
+    """Compose the editor tool catalog declared by one node capability."""
+
+    capability = get_agent_node_capability(agent_type) if isinstance(agent_type, str) else agent_type
+    if capability is None or not capability.tool_categories:
+        raise KeyError(agent_type)
     tool_types: dict[str, dict[str, list[str]]] = {}
-    for category in _TOOL_CATEGORIES_BY_AGENT_TYPE[agent_type]:
-        if is_ask_agent and category == "filesystem_tools":
-            tool_types[category] = {"tools": list(_ASK_AGENT_FILESYSTEM_READ_ONLY)}
-        else:
-            tool_types[category] = {"tools": sorted(VALID_TOOL_METHODS[category])}
+    for category in capability.tool_categories:
+        allowlist = capability.allowed_tool_methods(category)
+        methods = sorted(VALID_TOOL_METHODS[category]) if allowlist is None else list(allowlist)
+        tool_types[category] = {"tools": methods}
     return tool_types
 
 
-# Per-agent-type tool reference. Matches the SaaS editor contract:
-# ``default_tools`` are wildcard / specific patterns preselected for the type,
-# ``tool_types`` is the curated catalog of categories the editor should
-# surface for that type (built via :func:`_build_tool_types`).
+# Compatibility export for existing API/tests. Its keys and payload now come
+# from the canonical node capability registry rather than a separate editor
+# whitelist.
 SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
-    "chat": {
-        "default_tools": [
-            "db_tools.*",
-            "context_search_tools.*",
-            "reference_template_tools.*",
-            "date_parsing_tools.*",
-            "filesystem_tools.*",
-            "memory_tools.*",
-            "platform_doc_tools.*",
-        ],
-        "tool_types": _build_tool_types("chat"),
-    },
-    "gen_sql": {
-        "default_tools": [
-            "db_tools.*",
-            "semantic_tools.*",
-            "context_search_tools.*",
-        ],
-        "tool_types": _build_tool_types("gen_sql"),
-    },
-    "gen_report": {
-        "default_tools": [
-            "semantic_tools.*",
-            "context_search_tools.list_subject_tree",
-        ],
-        "tool_types": _build_tool_types("gen_report"),
-    },
-    "ask_metrics": {
-        "default_tools": [
-            "context_search_tools.search_metrics",
-            "context_search_tools.get_metrics",
-            "semantic_tools.list_metrics",
-            "semantic_tools.get_dimensions",
-            "semantic_tools.query_metrics",
-            "semantic_tools.attribution_analyze",
-            "context_search_tools.list_subject_tree",
-        ],
-        "tool_types": _build_tool_types("ask_metrics"),
-    },
-    # ask_report / ask_dashboard: read-only follow-up consultant for a single
-    # visual artifact. Default tools cover data exploration (db_tools read
-    # methods, semantic / context_search / reference_template) plus the
-    # read-side of filesystem so the LLM can ``glob`` / ``grep`` / ``read_file``
-    # the artifact's ``analysis/`` and ``queries/`` directories. Writes are
-    # excluded by omission — these agents must never mutate the artifact.
-    "ask_report": {
-        "default_tools": [
-            "db_tools.list_databases",
-            "db_tools.list_schemas",
-            "db_tools.list_tables",
-            "db_tools.describe_table",
-            "db_tools.search_table",
-            "db_tools.execute_sql",
-            "semantic_tools.*",
-            "context_search_tools.*",
-            "reference_template_tools.*",
-            "date_parsing_tools.*",
-            "filesystem_tools.read_file",
-            "filesystem_tools.glob",
-            "filesystem_tools.grep",
-        ],
-        "tool_types": _build_tool_types("ask_report"),
-    },
-    "ask_dashboard": {
-        "default_tools": [
-            "db_tools.list_databases",
-            "db_tools.list_schemas",
-            "db_tools.list_tables",
-            "db_tools.describe_table",
-            "db_tools.search_table",
-            "db_tools.execute_sql",
-            "semantic_tools.*",
-            "context_search_tools.*",
-            "reference_template_tools.*",
-            "date_parsing_tools.*",
-            "filesystem_tools.read_file",
-            "filesystem_tools.glob",
-            "filesystem_tools.grep",
-        ],
-        "tool_types": _build_tool_types("ask_dashboard"),
-    },
+    capability.node_class: {
+        "default_tools": list(capability.default_tools),
+        "tool_types": _build_tool_types(capability),
+    }
+    for capability in _TOOL_EDITOR_CAPABILITIES
 }
 
 
@@ -549,11 +424,12 @@ def _validate_tools_for_agent_type(tools: list[str], agent_type: str) -> list[st
     Returns the offending patterns; an empty list means OK.
 
     The general :func:`_validate_tools` only confirms patterns are
-    syntactically valid (category / method exists). Artifact ask agents also
-    have a narrower read-only filesystem contract, so enforce that allowlist
-    matching the ``tool_types`` catalog returned by ``GET /agent/use_tools``.
+    syntactically valid (category / method exists). Node capabilities may
+    declare narrower method allowlists, so enforce the same catalog returned
+    by ``GET /agent/use_tools``.
     """
-    if agent_type not in {"ask_report", "ask_dashboard"}:
+    capability = get_agent_node_capability(agent_type)
+    if capability is None or not capability.tool_method_allowlists:
         return []
     catalog = SUBAGENT_TOOL_REFERENCE[agent_type]["tool_types"]
     rejected: list[str] = []
@@ -821,12 +697,9 @@ class AgentService:
 
     # Map sub-agent type to builtin prompt template base name
     _TYPE_TO_TEMPLATE = {
-        "gen_sql": "gen_sql_system",
-        "ask_metrics": "ask_metrics_system",
-        "gen_report": "gen_report_system",
-        "ask_report": "ask_report_system",
-        "ask_dashboard": "ask_dashboard_system",
-        "chat": "chat_system",
+        capability.node_class: capability.prompt_template
+        for capability in AGENT_NODE_CAPABILITIES
+        if capability.customizable and capability.prompt_template
     }
 
     _prompt_manager = PromptManager()

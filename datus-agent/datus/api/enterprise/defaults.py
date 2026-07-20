@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import functools
 import json
 import os
 import sqlite3
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from typing import Any
@@ -15,6 +18,35 @@ from datus.api.enterprise.models import AccessDecision, AuditEvent, ProjectionIn
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.model_credentials import CredentialSecretCodec
 from datus_enterprise.personal_datasources import password_hint
+
+_SQLITE_WORKER_ACTIVE: ContextVar[bool] = ContextVar("enterprise_sqlite_worker_active", default=False)
+
+
+def _offload_sqlite_async_methods(cls):
+    """Run a SQLite store's async protocol methods outside the API event loop."""
+
+    for name, method in list(cls.__dict__.items()):
+        if asyncio.iscoroutinefunction(method):
+            setattr(cls, name, _sqlite_thread_wrapper(method))
+    return cls
+
+
+def _sqlite_thread_wrapper(method):
+    @functools.wraps(method)
+    async def wrapped(*args, **kwargs):
+        if _SQLITE_WORKER_ACTIVE.get():
+            return await method(*args, **kwargs)
+
+        def run_in_worker():
+            token = _SQLITE_WORKER_ACTIVE.set(True)
+            try:
+                return asyncio.run(method(*args, **kwargs))
+            finally:
+                _SQLITE_WORKER_ACTIVE.reset(token)
+
+        return await asyncio.to_thread(run_in_worker)
+
+    return wrapped
 
 
 class LocalAuthorizationProvider:
@@ -64,6 +96,7 @@ class InMemoryEnterpriseUserStore:
 
     def __init__(self) -> None:
         self._users: dict[str, dict[str, Any]] = {}
+        self._chat_preferences: dict[str, dict[str, Any]] = {}
 
     async def list_users(self, *, enabled: bool | None = None) -> list[dict[str, Any]]:
         users = [
@@ -117,7 +150,24 @@ class InMemoryEnterpriseUserStore:
         self._users[user_id] = record
         return _copy_user_record(record)
 
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        record = self._chat_preferences.get(user_id)
+        return copy.deepcopy(record) if record is not None else _empty_chat_preference(user_id)
 
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        existing = self._chat_preferences.get(user_id)
+        now = _sqlite_now()
+        record = {
+            "user_id": user_id,
+            "default_agent_id": default_agent_id,
+            "created_at": existing.get("created_at") if existing else now,
+            "updated_at": now,
+        }
+        self._chat_preferences[user_id] = record
+        return copy.deepcopy(record)
+
+
+@_offload_sqlite_async_methods
 class SqliteEnterpriseUserStore:
     """SQLite-backed enterprise user metadata store for single-node deployments."""
 
@@ -252,8 +302,39 @@ class SqliteEnterpriseUserStore:
             return None
         return await self.get_user(user_id)
 
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT user_id, default_agent_id, created_at, updated_at
+                FROM enterprise_user_chat_preferences
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        return dict(row) if row else _empty_chat_preference(user_id)
+
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enterprise_user_chat_preferences (
+                    user_id, default_agent_id, created_at, updated_at
+                )
+                VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    default_agent_id = excluded.default_agent_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, default_agent_id),
+            )
+            conn.commit()
+        return await self.get_chat_preference(user_id)
+
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path, timeout=5.0)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        return conn
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -287,6 +368,16 @@ class SqliteEnterpriseUserStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_enterprise_users_enabled
                 ON enterprise_users (enabled, user_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_user_chat_preferences (
+                    user_id TEXT PRIMARY KEY,
+                    default_agent_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
                 """
             )
             conn.commit()
@@ -367,6 +458,7 @@ class InMemoryEnterpriseRoleStore:
         return self._roles.pop(role_id, None) is not None
 
 
+@_offload_sqlite_async_methods
 class SqliteEnterpriseRoleStore:
     """SQLite-backed enterprise role metadata store for single-node deployments."""
 
@@ -982,6 +1074,7 @@ class InMemoryUserModelCredentialStore:
         self._credentials[(user_id, credential_id)] = updated
 
 
+@_offload_sqlite_async_methods
 class SqliteUserModelCredentialStore:
     """SQLite-backed user model credential store for single-node deployments.
 
@@ -1300,6 +1393,7 @@ class InMemoryUserDatasourceStore:
         self._datasources[(user_id, datasource_id)] = updated
 
 
+@_offload_sqlite_async_methods
 class SqliteUserDatasourceStore:
     """SQLite-backed user private datasource store for single-node deployments.
 
@@ -1502,6 +1596,7 @@ class SqliteUserDatasourceStore:
             conn.commit()
 
 
+@_offload_sqlite_async_methods
 class SqliteEnterpriseDatasourceGrantStore:
     """SQLite-backed datasource grant metadata store for single-node deployments."""
 
@@ -1680,6 +1775,7 @@ class InMemorySessionOwnerStore:
         return sorted(records, key=lambda record: (str(record["user_id"]), str(record["session_id"])))
 
 
+@_offload_sqlite_async_methods
 class SqliteSessionOwnerStore:
     """SQLite-backed ``session_owners`` metadata index.
 
@@ -1805,6 +1901,7 @@ class NoopAuditSink:
         return None
 
 
+@_offload_sqlite_async_methods
 class SqliteAuditSink:
     """SQLite-backed audit sink for single-node enterprise MVP deployments."""
 
@@ -2001,6 +2098,15 @@ def _copy_user_record(record: dict[str, Any]) -> dict[str, Any]:
         "last_seen_at": _optional_str(record.get("last_seen_at")),
         "created_at": _optional_str(record.get("created_at")),
         "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _empty_chat_preference(user_id: str) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "default_agent_id": None,
+        "created_at": None,
+        "updated_at": None,
     }
 
 

@@ -15,9 +15,11 @@ from datus.api.auth.context import AppContext
 from datus.api.auth.provider import AuthProvider
 from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
 from datus.api.enterprise.models import AuditEvent
+from datus.api.services.chat_admission import ChatAdmissionController
 from datus.api.services.datus_service import DatusService
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.utils.datasource_scope import SCOPE_CONSTRAINTS_KEY, grant_may_use_tree_scope
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 
@@ -26,6 +28,7 @@ logger = get_logger(__name__)
 # Module-level singletons (set during lifespan via init_deps)
 _auth_provider: Optional[AuthProvider] = None
 _service_cache: Optional[DatusServiceCache] = None
+_chat_admission: Optional[ChatAdmissionController] = None
 _enterprise_extensions: Optional[EnterpriseExtensions] = None
 _datasource: str = "default"
 _default_source: Optional[str] = None
@@ -48,15 +51,17 @@ def init_deps(
     default_interactive: bool = True,
     stream_thinking: bool = False,
     enterprise_extensions: Optional[EnterpriseExtensions] = None,
+    chat_admission: Optional[ChatAdmissionController] = None,
 ) -> None:
     """Initialize global auth provider and service cache.
 
     Called from main.py lifespan to inject dependencies.
     """
-    global _auth_provider, _service_cache, _enterprise_extensions
+    global _auth_provider, _service_cache, _enterprise_extensions, _chat_admission
     global _datasource, _default_source, _default_interactive, _stream_thinking
     _auth_provider = auth_provider
     _service_cache = cache
+    _chat_admission = chat_admission or ChatAdmissionController()
     _enterprise_extensions = enterprise_extensions or load_enterprise_extensions(None)
     _datasource = datasource
     _default_source = default_source
@@ -150,6 +155,7 @@ async def get_datus_service(request: Request) -> DatusService:
             session_body_store=enterprise_extensions.session_body_store,
             artifact_acl_store=enterprise_extensions.artifact_acl_store,
             enterprise_enabled=enterprise_extensions.enabled,
+            chat_admission=_chat_admission,
         )
 
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)
@@ -246,11 +252,16 @@ async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: En
         )
         role_ids = _merge_string_lists(stored_role_ids)
         role_permissions: set[str] = set()
-        for role_id in role_ids:
-            role = await _enterprise_metadata_call(
-                enterprise_extensions.role_store.get_role(role_id),
-                operation="role_store.get_role",
+        roles = await asyncio.gather(
+            *(
+                _enterprise_metadata_call(
+                    enterprise_extensions.role_store.get_role(role_id),
+                    operation=f"role_store.get_role.{role_id}",
+                )
+                for role_id in role_ids
             )
+        )
+        for role_id, role in zip(role_ids, roles):
             if role is None:
                 await _audit_enterprise_context_deny(
                     ctx,
@@ -294,26 +305,25 @@ async def _merged_datasource_grants(
     enterprise_extensions: EnterpriseExtensions,
 ) -> dict[str, Any]:
     grants: dict[str, Any] = {}
-    for role_id in role_ids:
-        records = await _enterprise_metadata_call(
-            enterprise_extensions.datasource_grant_store.list_grants(
-                subject_type="role",
-                subject_id=role_id,
-            ),
-            operation="datasource_grant_store.list_grants.role",
+    subjects = [("role", role_id) for role_id in role_ids]
+    subjects.append(("user", ctx.user_id or ""))
+    record_batches = await asyncio.gather(
+        *(
+            _enterprise_metadata_call(
+                enterprise_extensions.datasource_grant_store.list_grants(
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                ),
+                operation=f"datasource_grant_store.list_grants.{subject_type}.{subject_id}",
+            )
+            for subject_type, subject_id in subjects
         )
-        for record in records:
-            _merge_grant_record(grants, record, mode="union")
-
-    records = await _enterprise_metadata_call(
-        enterprise_extensions.datasource_grant_store.list_grants(
-            subject_type="user",
-            subject_id=ctx.user_id,
-        ),
-        operation="datasource_grant_store.list_grants.user",
     )
-    for record in records:
-        _merge_grant_record(grants, record, mode="narrow")
+
+    for (subject_type, _subject_id), records in zip(subjects, record_batches):
+        mode = "union" if subject_type == "role" else "narrow"
+        for record in records:
+            _merge_grant_record(grants, record, mode=mode)
     return grants
 
 
@@ -482,6 +492,8 @@ def _intersect_allow_grants(left: dict[str, Any], right: dict[str, Any]) -> dict
         patterns = _intersect_scope_patterns(left.get(key), right.get(key))
         if patterns is not None:
             merged[key] = patterns
+    if grant_may_use_tree_scope(left) or grant_may_use_tree_scope(right):
+        merged[SCOPE_CONSTRAINTS_KEY] = [copy.deepcopy(left), copy.deepcopy(right)]
     return merged
 
 

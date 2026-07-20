@@ -2,6 +2,7 @@
 Service for handling Database Management operations.
 """
 
+import asyncio
 import os
 import time
 from typing import List, Optional
@@ -696,7 +697,8 @@ class DatasourceService:
             )
 
         # Step 2: Get semantic file path
-        semantic_model = self._get_semantic_model(
+        semantic_model = await asyncio.to_thread(
+            self._get_semantic_model,
             request.table,
             catalog=request.catalog,
             database=request.database,
@@ -713,8 +715,7 @@ class DatasourceService:
 
         # Step 3: Write YAML to file
         try:
-            with open(semantic_file_path, "w", encoding="utf-8") as f:
-                f.write(request.yaml)
+            await asyncio.to_thread(_write_text_file, semantic_file_path, request.yaml)
         except Exception as e:
             return Result[dict](
                 success=False,
@@ -724,7 +725,8 @@ class DatasourceService:
 
         # Step 4: Sync semantic model to database
         try:
-            sync_result = GenerationHooks._sync_semantic_to_db(
+            sync_result = await asyncio.to_thread(
+                GenerationHooks._sync_semantic_to_db,
                 semantic_file_path,
                 self.agent_config,
                 include_semantic_objects=True,
@@ -747,6 +749,10 @@ class DatasourceService:
         return Result[dict](success=True, data={})
 
     async def validate_semantic_model(self, request: SemanticModelInput) -> Result[ValidateSemanticModelData]:
+        """Validate semantic YAML outside the API event loop."""
+        return await asyncio.to_thread(self._validate_semantic_model_sync, request)
+
+    def _validate_semantic_model_sync(self, request: SemanticModelInput) -> Result[ValidateSemanticModelData]:
         """Validate SemanticModel YAML with full semantic model validation.
 
         This method performs complete validation by:
@@ -822,3 +828,8 @@ def _get_uri(connector: BaseSqlConnector) -> str:
     if connection_string:
         return redact_uri(connection_string)
     return f"{connector.dialect}://"
+
+
+def _write_text_file(path: str, content: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)

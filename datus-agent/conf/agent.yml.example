@@ -1,3 +1,11 @@
+# 上游默认完整配置示例。
+#
+# 文件名带 .example，不会自动加载。普通本地开发可复制为 conf/agent.yml；
+# 该目标文件已被 Git 忽略，也可以复制到其他未跟踪路径后通过 --config 加载。
+# 本文件主要保持接近上游默认配置；下游中文起步模板和企业片段见
+# agent.downstream.zh-CN.yml.example 与 agent.enterprise.*.yml.example。
+# 请使用 ${ENV_NAME} 引用密码、token 和 API key，不要提交真实凭据。
+
 agent:
   home: ~/.datus
   # Storage layout (refactored):
@@ -250,6 +258,8 @@ agent:
       model_name: text-embedding-v3-small
       dim_size: 1024
       batch_size: 10 # Aliyun only supports no more than 10
+      sample_cell_max_chars: 1000 # Replace oversized sample cells before embedding
+      sample_max_chars: 8000 # Bound the complete serialized table sample
       # single_input_only: true # Enable when the OpenAI-compatible gateway rejects array input
       target_model: openai # target model in agent.models, if not set, the agent's target configuration will be used
     document:

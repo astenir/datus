@@ -170,6 +170,7 @@ class GenMetricsAgenticNode(AgenticNode):
             strict=strict,
             inherited_memory_node=inherited_memory_node,
             session_data_dir=session_data_dir,
+            global_skills_read_only=bool(getattr(self.agent_config, "_enterprise_enabled", False)),
             **kwargs,
         )
 

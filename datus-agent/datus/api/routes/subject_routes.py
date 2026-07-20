@@ -168,7 +168,7 @@ async def get_metric_dimensions(
 ) -> Result[MetricDimensionsData]:
     """Get metric dimensions through request-scoped datasource projection."""
     explorer = await _project_explorer(svc, ctx, datasource_id=datasource_id)
-    return await explorer.get_metric_dimensions(request.subject_path)
+    return await explorer.get_metric_dimensions(request)
 
 
 @router.post(

@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import argparse
+import asyncio
 import csv
 import os
 import time
@@ -21,6 +22,7 @@ from datus.api.deps import init_deps
 from datus.api.enterprise import load_enterprise_extensions
 from datus.api.enterprise.models import AuditEvent
 from datus.api.services.background_drain import drain_background_tasks
+from datus.api.services.chat_admission import ChatAdmissionController, ChatAdmissionLimits
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config, parse_config_path
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -177,6 +179,10 @@ class DatusAPIService:
 
     async def run_workflow(self, request: RunWorkflowRequest, client_id: str = None) -> RunWorkflowResponse:
         """Execute a workflow synchronously and return results."""
+        return await asyncio.to_thread(self._run_workflow_sync, request, client_id)
+
+    def _run_workflow_sync(self, request: RunWorkflowRequest, client_id: str = None) -> RunWorkflowResponse:
+        """Run the legacy synchronous workflow outside the API event loop."""
         task_id = request.task_id or self._generate_task_id(client_id or "unknown")
         start_time = time.time()
 
@@ -298,6 +304,10 @@ class DatusAPIService:
 
     async def record_feedback(self, request: FeedbackRequest) -> FeedbackResponse:
         """Record user feedback for a task."""
+        return await asyncio.to_thread(self._record_feedback_sync, request)
+
+    def _record_feedback_sync(self, request: FeedbackRequest) -> FeedbackResponse:
+        """Persist legacy feedback outside the API event loop."""
         try:
             if not self.task_store:
                 raise HTTPException(status_code=500, detail="Task store not initialized")
@@ -318,32 +328,13 @@ class DatusAPIService:
             )
 
     async def health_check(self) -> HealthResponse:
-        """Perform health check on the service."""
-        try:
-            # Check default agent if available
-            database_status = {}
-            llm_status = "unknown"
-
-            if self.agent_config:
-                # Create a temporary agent for health check using service configuration
-                temp_agent = Agent(self.args, self.agent_config)
-
-                # Check database connectivity
-                db_check = temp_agent.check_db()
-                database_status[self.agent_config.current_datasource] = db_check.get("status", "unknown")
-
-                # Check LLM connectivity
-                llm_check = temp_agent.probe_llm()
-                llm_status = llm_check.get("status", "unknown")
-
-            return HealthResponse(
-                status="healthy", version="1.0.0", database_status=database_status, llm_status=llm_status
-            )
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            return HealthResponse(
-                status="unhealthy", version="1.0.0", database_status={"error": str(e)}, llm_status="error"
-            )
+        """Return a cheap liveness result without probing databases or LLMs."""
+        return HealthResponse(
+            status="healthy",
+            version="1.0.0",
+            database_status={},
+            llm_status="unknown",
+        )
 
 
 # Global service instance - will be initialized with command line args
@@ -360,7 +351,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
     try:
         # Initialize task tracking in database
         if service.task_store:
-            service.task_store.create_task(task_id, req.task)
+            await asyncio.to_thread(service.task_store.create_task, task_id, req.task)
 
         # Send started event
         yield f"event: started\ndata: {to_str({'task_id': task_id, 'client': current_client})}\n\n"
@@ -375,7 +366,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     sql_query = action.output["sql_query"]
                     # Update task in database
                     if service.task_store:
-                        service.task_store.update_task(task_id, sql_query=sql_query)
+                        await asyncio.to_thread(service.task_store.update_task, task_id, sql_query=sql_query)
                     yield f"event: sql_generated\ndata: {to_str({'sql': sql_query})}\n\n"
 
             elif action.action_type == "sql_execution" and action.status == "success":
@@ -384,7 +375,7 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                     sql_result = output.get("sql_result", "")
                     # Update task in database
                     if service.task_store:
-                        service.task_store.update_task(task_id, sql_result=str(sql_result))
+                        await asyncio.to_thread(service.task_store.update_task, task_id, sql_result=str(sql_result))
                     result_data = {"row_count": output.get("row_count", 0), "sql_result": sql_result}
                     yield f"event: execution_complete\ndata: {to_str(result_data)}\n\n"
 
@@ -404,13 +395,13 @@ async def generate_sse_stream(req: RunWorkflowRequest, current_client: str):
                 if action.status == "success":
                     # Update task status to completed
                     if service.task_store:
-                        service.task_store.update_task(task_id, status="completed")
+                        await asyncio.to_thread(service.task_store.update_task, task_id, status="completed")
                     execution_time_ms = int((time.time() - start_time) * 1000)
                     yield f"event: done\ndata: {json.dumps({'exec_time_ms': execution_time_ms})}\n\n"
                 elif action.status == "failed":
                     # Update task status to failed
                     if service.task_store:
-                        service.task_store.update_task(task_id, status="failed")
+                        await asyncio.to_thread(service.task_store.update_task, task_id, status="failed")
                     error_msg = (action.output or {}).get("error", "Unknown error")
                     yield f"event: error\ndata: {to_str({'error': error_msg})}\n\n"
                 # For status="processing", do nothing and wait for final status
@@ -469,6 +460,7 @@ async def lifespan(app: FastAPI):
     auth_provider = load_auth_provider(api_config, datasource=datasource, enterprise_config=enterprise_config)
     enterprise_extensions = load_enterprise_extensions(enterprise_config)
     service_cache = DatusServiceCache(max_size=128)
+    chat_admission = ChatAdmissionController(ChatAdmissionLimits.from_api_config(api_config))
     init_deps(
         auth_provider,
         service_cache,
@@ -477,6 +469,7 @@ async def lifespan(app: FastAPI):
         default_interactive=getattr(args, "interactive", True),
         stream_thinking=getattr(args, "stream_thinking", False),
         enterprise_extensions=enterprise_extensions,
+        chat_admission=chat_admission,
     )
 
     # Install a SIGUSR1 handler so operators can dump async task stacks from a

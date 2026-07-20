@@ -330,7 +330,8 @@ class TestChatTaskManagerBehavior:
         task = ChatTask(session_id="s-degraded", asyncio_task=MagicMock())
         node = SimpleNamespace(
             degraded_capabilities={
-                "context_search_tools": "Context search and @ references are disabled; DB tools remain available."
+                "context_search_tools": "Context search and @ references are disabled; DB tools remain available.",
+                "mcp.remote": "MCP Server 'remote' is missing from the runtime configuration.",
             }
         )
 
@@ -346,6 +347,7 @@ class TestChatTaskManagerBehavior:
         assert event.data.payload.role == "assistant"
         assert event.data.payload.content[0].type == "markdown"
         assert "DB tools remain available" in event.data.payload.content[0].payload["content"]
+        assert "MCP Server 'remote'" in event.data.payload.content[0].payload["content"]
 
     @pytest.mark.asyncio
     async def test_run_loop_emits_final_response_when_no_plain_assistant_response(self, real_agent_config):
@@ -1864,6 +1866,39 @@ class TestStartChatRemoteSourceHardening:
         assert cfg.filesystem_strict is True
         assert cfg.bash_tool_enabled is True
         assert cfg._client_source is None
+
+    @pytest.mark.asyncio
+    async def test_enterprise_no_source_disables_bash_tool(self, real_agent_config, monkeypatch):
+        from datus.api.models.cli_models import StreamChatInput
+
+        real_agent_config.bash_tool_enabled = True
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager(enterprise_enabled=True)
+        request = StreamChatInput(message="hi", session_id="enterprise-no-source")
+        task = await manager.start_chat(real_agent_config, request, user_id="alice")
+        await task.asyncio_task
+
+        assert captured["agent_config"].bash_tool_enabled is False
+        assert captured["agent_config"]._request_workspace_root.startswith(
+            str(real_agent_config.path_manager.workspace_dir)
+        )
+        assert not hasattr(real_agent_config, "_request_workspace_root")
+        assert real_agent_config.bash_tool_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_enterprise_requires_authenticated_user(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+
+        manager = ChatTaskManager(enterprise_enabled=True)
+        request = StreamChatInput(message="hi", session_id="enterprise-workspace-required")
+
+        with pytest.raises(ValueError, match="AUTH_REQUIRED"):
+            await manager.start_chat(real_agent_config, request)
 
 
 class TestStartChatDatasourceOverride:

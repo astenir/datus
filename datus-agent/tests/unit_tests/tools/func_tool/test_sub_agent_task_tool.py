@@ -192,39 +192,69 @@ class TestGetAvailableTypes:
 
 
 @pytest.mark.ci
-class TestEnterprisePermissionGate:
-    @pytest.mark.asyncio
-    async def test_denies_privileged_builtin_task_without_module_permission(self, mock_agent_config):
+class TestEnterpriseAgentAclGate:
+    def test_enterprise_available_types_follow_effective_agent_acl(self, mock_agent_config):
         mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"explore", "ask_metrics"}
+        mock_agent_config.principal = {"permissions": []}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+
+        available = set(tool._get_available_types())
+
+        assert "explore" in available
+        assert "ask_metrics" in available
+        assert "gen_sql" not in available
+        assert "gen_skill" not in available
+        assert "scheduler" not in available
+        assert "gen_dashboard" not in available
+
+    def test_enterprise_available_types_ignore_module_permissions(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"gen_sql", "gen_visual_dashboard"}
+        mock_agent_config.principal = {"permissions": []}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+
+        available = set(tool._get_available_types())
+
+        assert "gen_sql" in available
+        assert "gen_visual_dashboard" in available
+        assert "gen_dashboard" not in available
+        assert "gen_job" not in available
+
+    @pytest.mark.asyncio
+    async def test_denies_task_when_agent_acl_does_not_allow_target(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"chat"}
         mock_agent_config._request_user_id = "user-1"
-        mock_agent_config.principal = {"permissions": ["module.chat"]}
         tool = SubAgentTaskTool(agent_config=mock_agent_config)
 
         result = await tool._execute_node("gen_visual_dashboard", "edit dashboards", "edit dashboards")
 
         assert result.success == 0
-        assert "PERMISSION_DENIED" in result.error
-        assert "module.dashboard.query" in result.error
+        assert "Unknown or disallowed subagent type" in result.error
+        assert "module.dashboard.query" not in result.error
 
-    def test_allows_privileged_builtin_task_with_matching_permission(self, mock_agent_config):
+    def test_allows_task_target_from_effective_agent_acl(self, mock_agent_config):
         mock_agent_config._enterprise_enabled = True
-        mock_agent_config.principal = {"permissions": ["module.dashboard.*"]}
+        mock_agent_config._enterprise_allowed_agent_ids = {"gen_visual_dashboard"}
         tool = SubAgentTaskTool(agent_config=mock_agent_config)
 
-        assert tool._enterprise_permission_denial("gen_visual_dashboard") is None
+        assert tool._enterprise_acl_denial("gen_visual_dashboard") is None
 
-    def test_custom_ask_agent_maps_to_artifact_module_permission(self):
+    def test_custom_agent_is_filtered_by_acl_not_node_class_module(self):
         config = Mock(spec=AgentConfig)
+        config._enterprise_enabled = True
+        config._enterprise_allowed_agent_ids = {"sales_dashboard_ask"}
+        config.current_datasource = "default"
         config.agentic_nodes = {
             "sales_dashboard_ask": {
                 "node_class": "ask_dashboard",
                 "artifact_slug": "sales",
             }
         }
-        config.sub_agent_config.side_effect = lambda name: config.agentic_nodes.get(name)
         tool = SubAgentTaskTool(agent_config=config)
 
-        assert tool._required_module_permission("sales_dashboard_ask") == "module.dashboard.query"
+        assert "sales_dashboard_ask" in tool._get_available_types()
 
 
 # ── _resolve_node_type ─────────────────────────────────────────────

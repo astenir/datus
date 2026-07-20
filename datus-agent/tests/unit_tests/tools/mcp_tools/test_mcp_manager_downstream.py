@@ -49,3 +49,19 @@ def test_update_server_not_found(tmp_path):
 
     assert success is False
     assert "not found" in msg
+
+
+def test_runtime_server_receives_persisted_tool_filter(tmp_path):
+    manager = _make_manager(tmp_path)
+    config = STDIOServerConfig(
+        name="srv",
+        command="python",
+        tool_filter=ToolFilterConfig(allowed_tool_names=["read"], blocked_tool_names=["delete"]),
+    )
+
+    server, _ = manager._create_server_instance(config)
+
+    assert server.tool_filter == {
+        "allowed_tool_names": ["read"],
+        "blocked_tool_names": ["delete"],
+    }

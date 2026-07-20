@@ -11,6 +11,7 @@ import {
   Loader2Icon,
   RotateCcwIcon,
   ServerIcon,
+  StarIcon,
 } from "@lucide/vue"
 import { PromptInputButton } from "@/components/ai-elements/prompt-input"
 import {
@@ -25,6 +26,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import { cn } from "@/lib/utils"
 import type { DatasourceStatusItem, SelectOption } from "@/types"
@@ -36,6 +38,8 @@ const props = defineProps<{
   database: string
   schema: string
   selectedAgent: string
+  defaultAgentId: string
+  userDefaultAgentId: string
   datasourceOptions: readonly SelectOption[]
   datasourceStatuses: Readonly<Record<string, DatasourceStatusItem>>
   databaseOptions: readonly SelectOption[]
@@ -43,6 +47,7 @@ const props = defineProps<{
   agentOptions: readonly SelectOption[]
   loadingCatalog: boolean
   switchingDatasource: boolean
+  savingDefaultAgent: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +55,7 @@ const emit = defineEmits<{
   updateDatabase: [value: string]
   updateSchema: [value: string]
   updateAgent: [value: string]
+  setDefaultAgent: [value: string]
   requestCatalog: []
   requestAgents: []
 }>()
@@ -61,7 +67,28 @@ const schemaLabel = computed(() => {
   if (!props.database) return "先选择数据库"
   return optionLabel(props.schema, props.schemaOptions) || "全部"
 })
-const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOptions) || "默认 Agent")
+const effectiveDefaultAgentLabel = computed(() =>
+  optionLabel(props.defaultAgentId, props.agentOptions) || props.defaultAgentId,
+)
+const defaultAgentLabel = computed(() =>
+  effectiveDefaultAgentLabel.value
+    ? `默认 Agent（当前：${effectiveDefaultAgentLabel.value}）`
+    : "默认 Agent",
+)
+const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOptions) || defaultAgentLabel.value)
+const selectedAgentIsUserDefault = computed(() =>
+  Boolean(props.selectedAgent) && props.selectedAgent === props.userDefaultAgentId,
+)
+const defaultAgentActionLabel = computed(() => {
+  if (selectedAgentIsUserDefault.value) return "当前为我的默认 Agent"
+  if (props.selectedAgent) return "设为我的默认 Agent"
+  return props.userDefaultAgentId ? "清除我的默认设置" : "正在跟随默认 Agent"
+})
+const defaultAgentActionDisabled = computed(() =>
+  props.savingDefaultAgent
+  || selectedAgentIsUserDefault.value
+  || (!props.selectedAgent && !props.userDefaultAgentId),
+)
 const schemaSelectDisabled = computed(() =>
   !props.database || props.loadingCatalog || (props.schemaOptions.length === 0 && !props.schema),
 )
@@ -147,7 +174,10 @@ function selectSchema(value: string) {
 
 function selectAgent(value: string) {
   emit("updateAgent", value)
-  panelView.value = "root"
+}
+
+function setDefaultAgent() {
+  emit("setDefaultAgent", props.selectedAgent)
 }
 
 function resetContext() {
@@ -508,7 +538,7 @@ function resetContext() {
               Agent
             </PopoverTitle>
             <PopoverDescription class="text-xs">
-              选择本轮对话使用的 Agent
+              选择本轮 Agent，或设置新会话默认值
             </PopoverDescription>
           </div>
         </div>
@@ -525,7 +555,7 @@ function resetContext() {
                 data-icon="inline-start"
                 class="text-muted-foreground"
               />
-              <span class="min-w-0 flex-1 truncate text-sm">默认 Agent</span>
+              <span class="min-w-0 flex-1 truncate text-sm">{{ defaultAgentLabel }}</span>
               <CheckIcon
                 v-if="!selectedAgent"
                 data-icon="inline-end"
@@ -559,6 +589,28 @@ function resetContext() {
             </div>
           </div>
         </ScrollArea>
+
+        <Separator />
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          class="w-full"
+          :disabled="defaultAgentActionDisabled"
+          @click="setDefaultAgent"
+        >
+          <Spinner
+            v-if="savingDefaultAgent"
+            data-icon="inline-start"
+          />
+          <StarIcon
+            v-else
+            data-icon="inline-start"
+            :class="cn(selectedAgentIsUserDefault && 'fill-current')"
+          />
+          {{ defaultAgentActionLabel }}
+        </Button>
       </template>
     </PopoverContent>
   </Popover>

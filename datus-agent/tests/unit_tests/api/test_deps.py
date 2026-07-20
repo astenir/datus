@@ -11,6 +11,7 @@ from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import get_datus_service, get_request_app_context, init_deps
 from datus.api.services.datus_service_cache import DatusServiceCache
+from datus.utils.datasource_scope import datasource_scope_matches
 from datus.utils.exceptions import DatusException, ErrorCode
 
 
@@ -19,6 +20,7 @@ def _reset_deps():
     """Reset module-level singletons between tests."""
     deps._auth_provider = None
     deps._service_cache = None
+    deps._chat_admission = None
     deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
@@ -26,10 +28,75 @@ def _reset_deps():
     yield
     deps._auth_provider = None
     deps._service_cache = None
+    deps._chat_admission = None
     deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
     deps._default_interactive = True
+
+
+@pytest.mark.asyncio
+async def test_enterprise_role_and_grant_reads_run_concurrently():
+    active = 0
+    max_active = 0
+
+    async def tracked(value):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return value
+
+    async def get_role(_role_id):
+        return await tracked({"permissions": ["module.chat"]})
+
+    async def list_grants(**_kwargs):
+        return await tracked([])
+
+    role_store = SimpleNamespace(
+        list_user_roles=AsyncMock(return_value=["r1", "r2", "r3"]),
+        get_role=AsyncMock(side_effect=get_role),
+    )
+    grant_store = SimpleNamespace(
+        list_grants=AsyncMock(side_effect=list_grants),
+    )
+    extensions = SimpleNamespace(role_store=role_store, datasource_grant_store=grant_store)
+    ctx = AppContext(user_id="alice")
+
+    await deps._refresh_enterprise_context(ctx, extensions)
+
+    assert max_active >= 3
+    assert role_store.get_role.await_count == 3
+    assert grant_store.list_grants.await_count == 4
+
+
+def test_tree_scope_user_narrowing_does_not_restore_disjoint_role_branch():
+    role_grant = {
+        "effect": "allow",
+        "schemas": ["ccks_fund.test"],
+        "tables": ["ccks_fund.public.allowed_table"],
+    }
+    user_grant = {
+        "effect": "allow",
+        "tables": ["ccks_fund.public.allowed_table"],
+    }
+
+    merged = deps._intersect_allow_grants(role_grant, user_grant)
+    field_order = ["database", "schema", "table"]
+
+    assert datasource_scope_matches(
+        merged,
+        coordinate={"database": "ccks_fund", "schema": "public", "table": "allowed_table"},
+        target_field="table",
+        field_order=field_order,
+    )
+    assert not datasource_scope_matches(
+        merged,
+        coordinate={"database": "ccks_fund", "schema": "test", "table": "other_table"},
+        target_field="table",
+        field_order=field_order,
+    )
 
 
 class TestInitDeps:

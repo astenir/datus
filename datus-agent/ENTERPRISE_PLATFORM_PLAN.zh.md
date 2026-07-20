@@ -50,7 +50,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 | 层级 | 负责内容 | 典型控制点 |
 | --- | --- | --- |
 | 认证 | 谁在请求、是否来自企业身份域 | Bearer + userinfo、签名 header、后续 OIDC/JWKS |
-| 模块 RBAC | 能不能进入某类 API/功能 | `module.chat`、`module.sql_executor`、`module.admin.users` |
+| 模块 RBAC | 能不能进入独立业务 API 或管理 API | `module.sql_executor`、`module.report.query`、`module.admin.users` |
 | 资源授权 | 能访问哪些 datasource/session/artifact/agent | datasource grant、session owner、artifact ACL、agent ACL |
 | 执行策略 | 真正执行时能不能过 | SQL policy、tool permission、DB 账号、quota、platform status |
 | 审计 | 为什么 allow/deny、谁做了 mutation | `AuditSink`、audit logs、request_id |
@@ -94,6 +94,7 @@ module.report.edit
 module.dashboard.view
 module.dashboard.query
 module.dashboard.export
+module.dashboard.edit
 module.kb
 module.mcp
 mcp.server.list
@@ -152,6 +153,9 @@ module.system.status
 
 - `/me` 只返回当前用户能力和可见工作区 view，不做管理操作。
 - `/admin` 只管理当前企业上下文，使用 `module.admin.*`。
+- Agent ACL 管理使用由 `module.admin.agents` 守卫的脱敏用户、角色候选目录；不复用用户/角色管理详情接口或其他资源的分享候选目录。
+- 普通用户的内置与自定义 Agent 目录、详情和分发统一由 Agent 状态与 ACL 控制，不再与 `module.chat*` 或 node class 对应的模块权限绑定；直接 `subagent_id` 和 `task()` 委派必须重做同一 ACL 校验。
+- `module.sql_executor`、`module.report.query`、`module.dashboard.query` 继续保护直接 SQL、报表、仪表盘等独立业务 API，但不决定对应 Agent 是否显示或可调用。
 - `/system` 给部署运维和系统状态，不默认开放普通前端用户。
 - `/internal` 使用独立服务认证，不复用普通用户 JWT。
 - 不存在和无权限的可猜测资源可统一返回 `RESOURCE_NOT_FOUND`，避免泄漏存在性。
@@ -223,8 +227,24 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 - 静态 HTML/detail/list 需要 `*.view` + ACL。
 - 实时 query/export 需要 `*.query`/`*.export` + ACL + datasource grant + SQL policy + quota + audit。
+- 创建编辑会话需要对应的 `*.edit` 且当前用户是 owner；`module.admin.artifacts` 管理员可跨 owner 编辑。
 - 创建后默认 private：owner 和 `module.admin.artifacts` 管理员可见。
 - 创建者自助分享只能使用脱敏用户/角色目录，不复用 admin 用户/角色详情接口。
+
+## Agent 用户 Workspace
+
+企业请求中的通用文件操作不能直接使用共享 `agent.project_root`。当前最小边界为：
+
+- `ChatTaskManager` 在所有授权、SQL policy、model policy 和 quota 前置检查通过后，根据服务端认证得到的 `user_id` 创建请求级私有目录：`{agent.home}/workspace/{project_name}/{sha256(user_id)}`。
+- 目录使用不暴露原始用户标识的固定摘要段，并设置为 `0700`；路径由服务端构造，不接受请求体或 Agent 提交 workspace root。
+- Chat、Feedback 和 GenSQL 节点的通用文件工具优先使用请求级 workspace，覆盖节点配置中的 `workspace_root`；共享 `DatusService.agent_config` 和原始 `project_root` 不得被修改。
+- Enterprise Chat 缺少认证用户时拒绝启动；通用 Bash 始终禁用，因为工作目录不是文件系统沙箱。
+- 全局 `{agent.home}/skills` 对 Enterprise 文件工具只读；用户 workspace 内的 `.datus/skills` 和 `.datus/plans` 仍可按工具权限写入。
+- Visual Report/Dashboard 继续写入共享 `project_root/reports|dashboards/<slug>`，但 Enterprise 新建节点只暴露 `start_new_*`；默认 private ACL 成功持久化后，文件工具才绑定新 slug。缺少 ACL store/认证 owner 时创建失败并回滚。
+- 已有 Visual Report/Dashboard 只能由通过 `require_artifact_edit_access` 的服务端 edit session 绑定；节点和文件工具锁定到唯一 slug，不能创建第二个 Artifact、绑定其他 slug、枚举其他 Artifact 或写入 Artifact 外路径。
+- 语义模型、指标和 SQL summary 等其他项目级作者节点暂时继续使用共享 `project_root`，必须依赖各自 module permission 或专用生成路径。它们不属于本轮用户 workspace 隔离完成面，后续迁移前不得宣称“全部 Agent 项目文件已按用户隔离”。
+
+当前实现是同一 API 进程内的应用级路径隔离，不是任意代码执行沙箱。若重新开放 Bash、Python、任意 MCP 文件工具或用户代码执行，必须使用仅挂载当前 workspace 的独立 worker/container，不能把 `cwd` 或工具确认提示当作隔离边界。
 
 ## Platform Status
 
@@ -246,6 +266,10 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 - `conf/agent.local-enterprise-pg.yml.example`：本地联调用完整配置，配合 seed/mock userinfo/签名工具使用。
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
+
+用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+
+Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。`runtime_policy.max_permission_mode` 限制用户请求的最高 permission mode，`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
 
 每个 PG metadata/body store 独立持有 asyncpg pool。连接预算按：
 
@@ -272,7 +296,7 @@ store 数量 * max_size * API 进程数 + 业务 datasource + 运维/监控余�
 | 0 开关与兼容 | enterprise 开关、默认兼容、fail-closed skeleton | 本地 NoAuth 行为不破坏；企业缺 provider 不放行 |
 | 1 身份与上下文 | auth provider、AppContext、RBAC 刷新、service cache 隔离 | 禁用用户/缺身份拒绝；本地与企业 cache 不串 |
 | 2 会话隔离 | task owner、session scope、session owner index | 用户不能操作他人 session/task |
-| 3 模块 RBAC | `require_module()` 覆盖 route/subagent/admin/MCP/KB/config | 无权限 403；legacy enterprise disabled |
+| 3 模块 RBAC | `require_module()` 覆盖独立业务 API、管理 API、MCP、KB、config | 无权限 403；legacy enterprise disabled |
 | 4 数据源投影 | datasource grant、request config clone、metadata 裁剪 | 未授权 datasource/table 不可见也不可执行 |
 | 5 SQL 与审计兜底 | direct SQL/dashboard/report query 接 SQL policy/quota/audit | principal 缺失 fail closed；执行路径有审计 |
 | 6 管理 API | 用户、角色、grant、artifact ACL、audit、quota、secret、agent 管理 | mutation 脱敏审计；新请求立即按新授权生效 |
@@ -320,7 +344,7 @@ store 数量 * max_size * API 进程数 + 业务 datasource + 运维/监控余�
 - 使用 `UserInfoBearerAuthProvider` 或 `SignedHeaderAuthProvider`，且生产模式不信任裸 header。
 - 显式配置 auth、authorization、datasource grant store、config projector、audit sink；需要 quota 的路径有 quota store。
 - 角色、permission、datasource grant、artifact ACL 来自服务端 metadata store，新请求会刷新。
-- chat/direct SQL/dashboard query/table/semantic metadata 都经过模块权限、datasource/table grant、request projection、SQL policy principal 和审计。
+- Agent chat 经过 Agent ACL、Tool/runtime policy、datasource/table grant、request projection、SQL policy principal 和审计；direct SQL/dashboard query/table/semantic metadata 仍经过各自模块权限及对应数据边界。
 - 未进入安全链的 legacy route 在企业模式禁用。
 - session owner index、用户级 scope、运行中 task owner 校验开启。
 - 审计覆盖 auth deny、permission deny、datasource deny、session/artifact deny、SQL/dashboard 执行、admin mutation、platform status deny。

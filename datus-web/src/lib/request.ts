@@ -7,6 +7,7 @@ import type { UserInfo } from "@/composables/useAuth";
 let currentUser: UserInfo | null = null;
 let apiBaseResolver: (() => string) | null = null;
 let currentAccessToken: string | null = null;
+let authenticationFailureHandler: ((error: HttpError) => void) | null = null;
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -116,6 +117,14 @@ export function getCurrentAccessToken(): string | null {
 }
 
 /**
+ * 注册 Datus API 认证失败处理器。
+ * 请求层只上报 401，认证状态清理和重新登录由 useAuth 统一负责。
+ */
+export function setAuthenticationFailureHandler(handler: ((error: HttpError) => void) | null): void {
+  authenticationFailureHandler = handler;
+}
+
+/**
  * 设置默认 API 地址解析器。
  * 用于让相对 /api 请求跟随当前控制台配置、注入配置或环境变量。
  */
@@ -130,11 +139,27 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     public statusText: string,
-    public response?: Response
+    public response?: Response,
+    public code?: string,
   ) {
     super(`HTTP ${status}: ${statusText}`);
     this.name = "HttpError";
   }
+}
+
+async function responseErrorCode(response: Response): Promise<string | undefined> {
+  try {
+    const payload = await response.clone().json() as unknown;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+
+    const record = payload as Record<string, unknown>;
+    for (const value of [record.detail, record.errorCode, record.error_code, record.code]) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  } catch {
+    // Non-JSON error responses still retain their HTTP status and response body.
+  }
+  return undefined;
 }
 
 /**
@@ -164,7 +189,16 @@ export async function request(
 
   // 状态码非 200 时抛出错误
   if (!response.ok) {
-    throw new HttpError(response.status, response.statusText, response);
+    const error = new HttpError(
+      response.status,
+      response.statusText,
+      response,
+      await responseErrorCode(response),
+    );
+    if (response.status === 401 && shouldAttachAccessToken(input)) {
+      authenticationFailureHandler?.(error);
+    }
+    throw error;
   }
 
   return response;

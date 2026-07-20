@@ -73,6 +73,7 @@ class FakePool:
 class FakeConnection:
     def __init__(self):
         self.users = {}
+        self.chat_preferences = {}
         self.roles = {}
         self.role_permissions = {}
         self.user_roles = {}
@@ -231,6 +232,19 @@ class FakeConnection:
             user["enabled"] = args[1]
             user["updated_at"] = NOW
             return user
+        if "INSERT INTO enterprise_user_chat_preferences" in normalized:
+            user_id, default_agent_id = args
+            existing = self.chat_preferences.get(user_id, {})
+            row = Row(
+                user_id=user_id,
+                default_agent_id=default_agent_id,
+                created_at=existing.get("created_at", NOW),
+                updated_at=NOW,
+            )
+            self.chat_preferences[user_id] = row
+            return row
+        if "FROM enterprise_user_chat_preferences" in normalized:
+            return self.chat_preferences.get(args[0])
         if "FROM enterprise_roles WHERE role_id" in normalized and normalized.startswith("SELECT 1"):
             return Row({"?column?": 1}) if args[0] in self.roles else None
         if "FROM enterprise_roles WHERE role_id" in normalized and "FOR UPDATE" in normalized:
@@ -647,6 +661,12 @@ async def test_pg_user_store_upsert_list_get_and_disable(fake_pg):
     disabled = await store.set_user_enabled("alice", False)
     assert disabled["enabled"] is False
     assert await store.list_users(enabled=True) == []
+
+    assert (await store.get_chat_preference("alice"))["default_agent_id"] is None
+    preference = await store.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+    assert preference["default_agent_id"] == "sales_sql"
+    cleared = await store.put_chat_preference(user_id="alice", default_agent_id=None)
+    assert cleared["default_agent_id"] is None
 
 
 @pytest.mark.asyncio

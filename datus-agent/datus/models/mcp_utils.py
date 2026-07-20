@@ -4,7 +4,7 @@
 
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 from datus.utils.loggings import get_logger
 
@@ -58,7 +58,10 @@ async def _safe_connect_server(server_name: str, server, max_retries: int = 3):
 
 
 @asynccontextmanager
-async def multiple_mcp_servers(mcp_servers: Dict[str, Any]):
+async def multiple_mcp_servers(
+    mcp_servers: Dict[str, Any],
+    on_connection_failure: Optional[Callable[[str, str], None]] = None,
+):
     """Context manager for managing multiple MCP servers.
 
     Args:
@@ -82,6 +85,8 @@ async def multiple_mcp_servers(mcp_servers: Dict[str, Any]):
                 logger.info(f"Successfully connected MCP server: {server_name}")
             except Exception as e:
                 logger.error(f"Failed to start MCP server {server_name}: {str(e)}")
+                if on_connection_failure is not None:
+                    on_connection_failure(server_name, str(e))
 
         if not connected_servers:
             logger.debug("Warning: No MCP servers were successfully connected")

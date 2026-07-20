@@ -65,6 +65,8 @@ full license and upstream attribution notes.
 
 ```bash
 cp .env.compose.example .env
+cp deploy/docker/agent/models.example.yml deploy/docker/agent/models.yml
+# Edit models.yml and replace every `change-me` credential before starting.
 docker compose up --build
 ```
 
@@ -76,6 +78,9 @@ docker compose up --build
 - PostgreSQL：`127.0.0.1:55433`
 
 Compose 默认使用 `dev-alice-token`、mock userinfo、PostgreSQL metadata store 和示例 `ccks_fund` datasource，只适合本地体验和测试。`.env` 只保留常用运行参数：
+
+- 网络边界：所有宿主机端口默认只绑定 `127.0.0.1`；确需从其他主机访问时，显式修改 `DATUS_BIND_ADDRESS`，并先替换 mock 认证、默认密码和开发 token。
+- 凭据加密：本地 Compose 在持久卷中首次生成两把独立加密密钥，并在启动事务中迁移旧版缺失值占位密钥写入的记录；无法用当前或旧版密钥解密时会终止启动且不提交迁移。需要备份恢复时，应显式设置 `DATUS_USER_MODEL_CREDENTIAL_SECRET` 和 `DATUS_USER_DATASOURCE_SECRET` 并把它们纳入密钥恢复流程。
 
 - 大模型：先复制 `deploy/docker/agent/models.example.yml` 为 `deploy/docker/agent/models.yml`；`.env` 只用 `DATUS_TARGET_PROVIDER`、`DATUS_TARGET_MODEL` 或 `DATUS_TARGET` 选择默认模型，多个 provider、API key、私有 base_url 和自定义模型条目放在该 YAML 文件。
 - 外接数据源：复制 `deploy/docker/agent/datasources.example.yml` 为 `deploy/docker/agent/datasources.yml`，在一个 YAML 文件里维护 datasource 清单；`.env` 中只用 `DATUS_DATASOURCE` 选择默认 datasource。

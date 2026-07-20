@@ -4,6 +4,7 @@
 
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, List, Optional
 
@@ -84,6 +85,7 @@ class FilesystemFuncTool(BaseTool):
         strict: bool = False,
         session_data_dir: Optional[str] = None,
         protect_artifact_paths: bool = False,
+        global_skills_read_only: bool = False,
         **kwargs,
     ):
         """
@@ -105,6 +107,10 @@ class FilesystemFuncTool(BaseTool):
                 ``reports/`` and ``dashboards/`` is hidden from ordinary chat
                 nodes. Enterprise report/dashboard access must flow through the
                 artifact routes and ACL-aware subagents, not raw file scans.
+            global_skills_read_only: When True, global ``{datus_home}/skills``
+                remains readable but cannot be written, edited, or deleted by
+                this tool. Project/user workspace skills keep their normal
+                write policy.
         """
         super().__init__(**kwargs)
         self.root_path = root_path or os.getcwd()
@@ -115,6 +121,7 @@ class FilesystemFuncTool(BaseTool):
         self._strict = strict
         self._session_data_dir = Path(session_data_dir).expanduser().resolve(strict=False) if session_data_dir else None
         self._protect_artifact_paths = protect_artifact_paths
+        self._global_skills_read_only = global_skills_read_only
 
     @property
     def strict(self) -> bool:
@@ -164,13 +171,21 @@ class FilesystemFuncTool(BaseTool):
     # ------------------------------------------------------------------ zones
 
     def _classify(self, path: str) -> ResolvedPath:
-        return classify_path(
+        resolved = classify_path(
             path,
             root_path=self._root_resolved,
             current_node=self._current_node,
             datus_home=self._datus_home,
             session_data_dir=self._session_data_dir,
         )
+        if not self._global_skills_read_only or resolved.zone != PathZone.WHITELIST:
+            return resolved
+
+        datus_home = self._datus_home or (Path.home() / ".datus").resolve(strict=False)
+        global_skills = (datus_home / "skills").resolve(strict=False)
+        if resolved.resolved.is_relative_to(global_skills):
+            return replace(resolved, read_only=True)
+        return resolved
 
     def _read_only_reject(self, resolved: ResolvedPath) -> FuncToolResult:
         """Reject writes to a read-only whitelist (e.g. the session compact archive)."""

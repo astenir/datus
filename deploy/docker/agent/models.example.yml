@@ -7,8 +7,8 @@
 # - embedding model entries such as compose_embedding
 #
 # `.env` should only select the active model:
-#   DATUS_TARGET_PROVIDER=qwen
-#   DATUS_TARGET_MODEL=qwen3.6-plus
+#   DATUS_TARGET_PROVIDER=deepseek
+#   DATUS_TARGET_MODEL=deepseek-v4-flash
 # or, for a custom model entry:
 #   DATUS_TARGET=my_private_model
 #   DATUS_TARGET_PROVIDER=
@@ -19,39 +19,20 @@ providers:
     api_key: change-me
     base_url: https://api.deepseek.com
 
-  openai:
-    api_key: change-me
-    base_url: https://api.openai.com/v1
-
-  qwen:
-    api_key: change-me
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-
-  openrouter:
-    api_key: change-me
-    base_url: https://openrouter.ai/api/v1
-
 models:
   # Embedding model used by the Docker compose config. The storage section in
   # datus-agent/conf/agent.compose.yml points to this key with:
   #   target_model: ${DATUS_EMBEDDING_MODEL_KEY:-compose_embedding}
   # To use a different key, set DATUS_EMBEDDING_MODEL_KEY=<your_key> and define
   # a matching models.<your_key> entry here.
-  # If you switch to a model with a different vector dimension, update
-  # storage.*.dim_size in agent.compose.yml as well.
+  # If you switch to a different embedding model, update
+  # DATUS_EMBEDDING_MODEL_NAME and DATUS_EMBEDDING_DIM_SIZE in `.env`.
   compose_embedding:
     type: openai
     model: Qwen/Qwen3-Embedding-0.6B
     base_url: https://api.siliconflow.cn/v1
     api_key: change-me
 
-  # Example OpenAI-compatible private model. Select it with DATUS_TARGET.
-  my_private_model:
-    type: openai
-    model: qwen-plus
-    base_url: https://llm-gateway.example.internal/v1
-    api_key: change-me
-
-model_extras:
-  my_private_model:
-    owner: local-compose
+  # Add private or self-hosted model entries here and select one with
+  # DATUS_TARGET. Keep only entries that are actually configured; startup
+  # validation rejects leftover `change-me` credentials.

@@ -28,7 +28,10 @@ router = APIRouter(prefix="/api/v1", tags=["enterprise-datasources"])
 
 _require_admin_datasources = require_module("module.admin.datasources")
 AdminDatasourcesCtx = Annotated[AppContext, Depends(_require_admin_datasources)]
-_DB_IO_TIMEOUT = 30.0
+# Grant editing loads the complete datasource hierarchy and can require several
+# sequential metadata queries. Keep this above the adapter's usual 30-second
+# connection timeout so the route does not cut off a recoverable catalog load.
+_DB_IO_TIMEOUT = 60.0
 
 
 class SetDefaultDatasourceRequest(BaseModel):

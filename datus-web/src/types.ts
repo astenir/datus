@@ -247,9 +247,25 @@ export type ViewType = DeveloperViewType | "settings";
 
 export type AgentAcl = components["schemas"]["AgentAcl"];
 
+export type AgentVisibility = "private" | "role" | "enterprise";
+
+export type AgentAclUserSummary = components["schemas"]["AgentAclUserSummary"];
+
+export type AgentAclRoleSummary = components["schemas"]["AgentAclRoleSummary"];
+
+export type AgentToolPolicy = components["schemas"]["AgentToolPolicy"];
+
+export type AgentRuntimePolicy = components["schemas"]["AgentRuntimePolicy"];
+
+export type AgentPolicy = components["schemas"]["AgentPolicy"];
+
+export type AgentPreferenceSummary = components["schemas"]["AgentPreferenceSummary"];
+
 export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"];
 
 export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];
+
+export type AgentNodeType = components["schemas"]["EnterpriseAgentNodeType"];
 
 export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
 
@@ -494,6 +510,7 @@ export type BootstrapStrategy = "overwrite" | "check" | "incremental";
 export type BootstrapBuildMode = "overwrite" | "check";
 
 export type BootstrapKbInput = {
+  datasource_id: string;
   components: BootstrapComponent[];
   strategy?: BootstrapStrategy;
   schema_linking_type?: string;
@@ -610,6 +627,7 @@ export type ArtifactManifest = {
   datasources?: string[];
   key_tables?: string[];
   can_manage_share?: boolean;
+  can_edit?: boolean;
 };
 
 export type ArtifactVisibility = "private" | "role" | "enterprise";

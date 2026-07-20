@@ -1,9 +1,24 @@
-"""Unit tests for datus.api.models.kb_models — BootstrapDocInput."""
+"""Unit tests for datus.api.models.kb_models."""
 
 import pytest
 from pydantic import ValidationError
 
-from datus.api.models.kb_models import BootstrapDocInput
+from datus.api.models.kb_models import BootstrapDocInput, BootstrapKbInput
+
+
+class TestBootstrapKbInput:
+    def test_datasource_id_is_required(self):
+        with pytest.raises(ValidationError):
+            BootstrapKbInput(components=["metadata"])
+
+    def test_datasource_id_is_trimmed(self):
+        request = BootstrapKbInput(datasource_id="  ccks_fund  ", components=["metadata"])
+
+        assert request.datasource_id == "ccks_fund"
+
+    def test_blank_datasource_id_is_rejected(self):
+        with pytest.raises(ValidationError):
+            BootstrapKbInput(datasource_id="   ", components=["metadata"])
 
 
 class TestBootstrapDocInput:

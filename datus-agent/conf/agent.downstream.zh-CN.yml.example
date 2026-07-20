@@ -1,6 +1,8 @@
-# 下游本地开发示例配置。
+# 下游本地开发完整起步模板。
 #
 # 该文件保留下游中文化、前端联调和企业试点常用的简化默认项。
+# 文件名带 .example，不会被自动加载；复制为 conf/agent.yml 后再填写本机配置，
+# 或复制到未跟踪文件并通过 --config 显式加载。不要提交真实密码、token 或 API key。
 # 上游默认示例保留在 conf/agent.yml.example，后续合并上游 release 时优先保持它接近上游。
 # 企业平台专用片段见 conf/agent.enterprise.*.yml.example。
 

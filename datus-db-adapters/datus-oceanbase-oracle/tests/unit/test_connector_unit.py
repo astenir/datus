@@ -2,6 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Lock
+
+import jpype
 import pytest
 
 from datus_oceanbase_oracle import connector as connector_module
@@ -70,6 +74,51 @@ class TestConnectionPool:
                 {},
             )
         ]
+
+    def test_jaydebeapi_creator_serializes_initial_jvm_start(self, monkeypatch):
+        workers_ready = Barrier(2)
+        startup_entered = Event()
+        release_startup = Event()
+        duplicate_start = Event()
+        state_lock = Lock()
+        state = {"jvm_started": False, "startup_attempts": 0}
+
+        monkeypatch.setattr(jpype, "isJVMStarted", lambda: state["jvm_started"])
+
+        def fake_connect(*_args, **_kwargs):
+            with state_lock:
+                if not state["jvm_started"]:
+                    state["startup_attempts"] += 1
+                    if state["startup_attempts"] > 1:
+                        duplicate_start.set()
+                    startup_entered.set()
+            release_startup.wait(timeout=1)
+            state["jvm_started"] = True
+            return object()
+
+        monkeypatch.setattr(connector_module.jaydebeapi, "connect", fake_connect)
+
+        def connect():
+            workers_ready.wait(timeout=1)
+            return _JayDeBeApiCreator.connect(
+                driver_class="com.oceanbase.jdbc.Driver",
+                jdbc_url="jdbc:oceanbase://db.example.com:2883/APP?useSSL=false",
+                username="app@tenant#cluster",
+                password="secret",
+                jar_path="/opt/oceanbase-client.jar",
+                ping_timeout_seconds=5,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(connect) for _ in range(2)]
+            assert startup_entered.wait(timeout=1)
+            duplicate_start.wait(timeout=0.1)
+            release_startup.set()
+            connections = [future.result(timeout=1) for future in futures]
+
+        assert duplicate_start.is_set() is False
+        assert state["startup_attempts"] == 1
+        assert len(connections) == 2
 
     def test_connector_uses_pool_creator_adapter(self, monkeypatch):
         captured = {}
@@ -176,6 +225,54 @@ class TestConnectionPool:
 
 
 class TestQueryExecution:
+    def test_execute_sql_converts_jdbc_clob_to_text(self, monkeypatch):
+        connector = make_connector_without_pool()
+        calls = []
+
+        class FakeClob:
+            def __init__(self, value):
+                self.value = value
+
+            def length(self):
+                return len(self.value)
+
+            def getSubString(self, position, length):
+                assert calls[-1] != ("cursor_close", None)
+                return self.value[position - 1 : position - 1 + length]
+
+            def __str__(self):
+                return "com.oceanbase.jdbc.Clob@59608db2"
+
+        class FakeCursor:
+            description = [("ID",), ("CONTENT",)]
+
+            def execute(self, sql):
+                calls.append(("execute", sql))
+
+            def fetchall(self):
+                return [(1, FakeClob("CLOB contents"))]
+
+            def close(self):
+                calls.append(("cursor_close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        monkeypatch.setattr(connector, "_get_raw_connection", lambda: FakeConnection())
+
+        df = connector._execute_sql("SELECT ID, CONTENT FROM APP.T")
+
+        assert df.to_dict(orient="records") == [{"ID": 1, "CONTENT": "CLOB contents"}]
+        assert calls == [
+            ("execute", "SELECT ID, CONTENT FROM APP.T"),
+            ("cursor_close", None),
+            ("connection_close", None),
+        ]
+
     def test_execute_sql_uses_cursor_dataframe_reader(self, monkeypatch):
         connector = make_connector_without_pool()
         calls = []
@@ -264,6 +361,43 @@ class TestQueryExecution:
 
 
 class TestMetadataQueries:
+    def test_get_ddl_reads_jdbc_clob_contents(self, monkeypatch):
+        connector = make_connector_without_pool()
+        ddl = 'CREATE TABLE "APP"."ORDERS" ("ID" NUMBER)'
+
+        class FakeClob:
+            def length(self):
+                return len(ddl)
+
+            def getSubString(self, position, length):
+                return ddl[position - 1 : position - 1 + length]
+
+            def __str__(self):
+                return "com.oceanbase.jdbc.Clob@59608db2"
+
+        class FakeCursor:
+            description = [("DDL",)]
+
+            def execute(self, sql):
+                assert "DBMS_METADATA.GET_DDL('TABLE', 'ORDERS', 'APP')" in sql
+
+            def fetchall(self):
+                return [(FakeClob(),)]
+
+            def close(self):
+                pass
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(connector, "_get_raw_connection", lambda: FakeConnection())
+
+        assert connector._get_ddl("APP", "ORDERS") == ddl
+
     def test_metadata_queries_use_all_views(self, monkeypatch):
         connector = make_connector_without_pool()
         sql_calls = []

@@ -23,6 +23,7 @@ from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import DBType, SQLType
+from datus.utils.datasource_scope import datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
@@ -313,6 +314,160 @@ class DBFuncTool:
             if scoped_pattern:
                 patterns.append(scoped_pattern)
         return patterns
+
+    @staticmethod
+    def _grant_scope_patterns(grant: Dict[str, Any], scope_key: str) -> Optional[List[str]]:
+        if scope_key not in grant or grant.get(scope_key) is None:
+            return None
+        raw_patterns = grant[scope_key]
+        if isinstance(raw_patterns, str):
+            raw_patterns = [part.strip() for part in raw_patterns.split(",")]
+        if not isinstance(raw_patterns, (list, tuple, set)):
+            return []
+        return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+
+    def _datasource_grant(self, datasource: Optional[str] = "") -> Any:
+        grants = self.principal.get("datasource_grants")
+        if not isinstance(grants, dict):
+            return None
+        datasource_key = str(datasource or self.principal.get("datasource") or self._default_datasource or "")
+        return grants.get(datasource_key, grants.get("*", False))
+
+    def _grant_scope_matches(
+        self,
+        scope_key: str,
+        candidates: Iterable[str],
+        datasource: Optional[str] = "",
+    ) -> bool:
+        grant = self._datasource_grant(datasource)
+        if grant is None or grant is True:
+            return True
+        if not isinstance(grant, dict):
+            return False
+        if str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return False
+
+        patterns = self._grant_scope_patterns(grant, scope_key)
+        if patterns is None:
+            return True
+        values = [str(candidate).strip() for candidate in candidates if str(candidate).strip()]
+        if not patterns:
+            return False
+        if not values:
+            return any(pattern in ("*", "%") for pattern in patterns)
+        return any(fnmatchcase(value, pattern) for value in values for pattern in patterns)
+
+    @staticmethod
+    def _schema_scope_candidates(coordinate: TableCoordinate) -> List[str]:
+        candidates = [coordinate.schema] if coordinate.schema else []
+        if coordinate.database and coordinate.schema:
+            candidates.append(f"{coordinate.database}.{coordinate.schema}")
+        if coordinate.catalog and coordinate.schema:
+            candidates.append(f"{coordinate.catalog}.{coordinate.schema}")
+        if coordinate.catalog and coordinate.database and coordinate.schema:
+            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}")
+        return candidates
+
+    @staticmethod
+    def _table_scope_candidates(coordinate: TableCoordinate) -> List[str]:
+        candidates = [coordinate.table] if coordinate.table else []
+        if coordinate.schema and coordinate.table:
+            candidates.append(f"{coordinate.schema}.{coordinate.table}")
+        if coordinate.database and coordinate.table:
+            candidates.append(f"{coordinate.database}.{coordinate.table}")
+        if coordinate.database and coordinate.schema and coordinate.table:
+            candidates.append(f"{coordinate.database}.{coordinate.schema}.{coordinate.table}")
+        if coordinate.catalog and coordinate.database and coordinate.table:
+            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.table}")
+        if coordinate.catalog and coordinate.database and coordinate.schema and coordinate.table:
+            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}.{coordinate.table}")
+        return candidates
+
+    def _table_matches_datasource_grant(
+        self,
+        coordinate: TableCoordinate,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        grant = self._datasource_grant(datasource)
+        if isinstance(grant, dict) and grant_uses_tree_scope(grant, self._field_order):
+            return datasource_scope_matches(
+                grant,
+                coordinate={field: getattr(coordinate, field) for field in self._field_order},
+                target_field="table",
+                field_order=self._field_order,
+            )
+
+        return all(
+            (
+                self._grant_scope_matches("catalogs", [coordinate.catalog], datasource),
+                self._grant_scope_matches("databases", [coordinate.database], datasource),
+                self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource),
+                self._grant_scope_matches("tables", self._table_scope_candidates(coordinate), datasource),
+            )
+        )
+
+    def _table_matches_listing_grant(
+        self,
+        coordinate: TableCoordinate,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        if self._table_matches_datasource_grant(coordinate, datasource):
+            return True
+
+        grant = self._datasource_grant(datasource)
+        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return False
+        table_patterns = self._grant_scope_patterns(grant, "tables")
+        if not table_patterns or not coordinate.table:
+            return False
+
+        for raw_pattern in table_patterns:
+            pattern = self._parse_scope_token(raw_pattern)
+            if pattern is None or not _pattern_matches(pattern.table, coordinate.table):
+                continue
+            if any(
+                pattern_value and coordinate_value and not _pattern_matches(pattern_value, coordinate_value)
+                for pattern_value, coordinate_value in (
+                    (pattern.catalog, coordinate.catalog),
+                    (pattern.database, coordinate.database),
+                    (pattern.schema, coordinate.schema),
+                )
+            ):
+                continue
+
+            effective = TableCoordinate(
+                catalog=coordinate.catalog or pattern.catalog,
+                database=coordinate.database or pattern.database,
+                schema=coordinate.schema or pattern.schema,
+                table=coordinate.table,
+            )
+            if self._table_matches_datasource_grant(effective, datasource):
+                return True
+        return False
+
+    def _grant_uses_tree_scope(self, datasource: Optional[str] = "") -> bool:
+        """Return whether this grant contains independently selected tree nodes."""
+        grant = self._datasource_grant(datasource)
+        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return False
+        return grant_uses_tree_scope(grant, self._field_order)
+
+    def _tree_grant_matches_namespace(
+        self,
+        coordinate: TableCoordinate,
+        namespace_field: str,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        """Check whether a namespace intersects an independently selected tree branch."""
+        if not self._grant_uses_tree_scope(datasource) or namespace_field not in self._field_order:
+            return False
+        grant = self._datasource_grant(datasource)
+        return datasource_scope_matches(
+            grant,
+            coordinate={field: getattr(coordinate, field) for field in self._field_order},
+            target_field=namespace_field,
+            field_order=self._field_order,
+        )
 
     def _resolve_scoped_context_tables(self) -> Sequence[str]:
         if not self.agent_config:
@@ -653,10 +808,17 @@ class DBFuncTool:
                 idx -= 1
         return coordinate
 
-    def _table_matches_scope(self, coordinate: TableCoordinate) -> bool:
-        if not self._scoped_patterns:
-            return True
-        return any(pattern.matches(coordinate) for pattern in self._scoped_patterns)
+    def _table_matches_scope(
+        self,
+        coordinate: TableCoordinate,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        return self._table_matches_scoped_context(coordinate) and self._table_matches_datasource_grant(
+            coordinate, datasource
+        )
+
+    def _table_matches_scoped_context(self, coordinate: TableCoordinate) -> bool:
+        return not self._scoped_patterns or any(pattern.matches(coordinate) for pattern in self._scoped_patterns)
 
     def _filter_table_entries(
         self,
@@ -664,10 +826,9 @@ class DBFuncTool:
         catalog: Optional[str],
         database: Optional[str],
         schema: Optional[str],
+        datasource: Optional[str] = "",
+        connector: Optional[BaseSqlConnector] = None,
     ) -> List[Dict[str, Any]]:
-        if not self._scoped_patterns:
-            return list(entries)
-
         filtered: List[Dict[str, Any]] = []
         for entry in entries:
             coordinate = self._build_table_coordinate(
@@ -675,8 +836,11 @@ class DBFuncTool:
                 catalog=catalog,
                 database=database,
                 schema=schema,
+                connector=connector,
             )
-            if self._table_matches_scope(coordinate):
+            if self._table_matches_scoped_context(coordinate) and self._table_matches_listing_grant(
+                coordinate, datasource
+            ):
                 filtered.append(entry)
         return filtered
 
@@ -687,40 +851,73 @@ class DBFuncTool:
             return False
         return True
 
-    def _database_matches_scope(self, catalog: Optional[str], database: str) -> bool:
-        if not self._scoped_patterns:
-            return True
+    def _database_matches_scope(
+        self,
+        catalog: Optional[str],
+        database: str,
+        datasource: Optional[str] = "",
+    ) -> bool:
         catalog_value = self._default_field_value("catalog", catalog or "")
         database_value = self._default_field_value("database", database or "")
 
-        wildcard_allowed = False
-        for pattern in self._scoped_patterns:
-            if not self._matches_catalog_database(pattern, catalog_value, database_value):
-                continue
-            if pattern.database:
-                if _pattern_matches(pattern.database, database_value):
-                    return True
-                continue
-            wildcard_allowed = True
-        return wildcard_allowed
+        scoped_context_matches = not self._scoped_patterns
+        if self._scoped_patterns:
+            for pattern in self._scoped_patterns:
+                if not self._matches_catalog_database(pattern, catalog_value, database_value):
+                    continue
+                if pattern.database:
+                    if _pattern_matches(pattern.database, database_value):
+                        scoped_context_matches = True
+                        break
+                    continue
+                scoped_context_matches = True
+                break
+        if not scoped_context_matches:
+            return False
+        coordinate = TableCoordinate(catalog=catalog_value, database=database_value)
+        if self._grant_uses_tree_scope(datasource):
+            return self._tree_grant_matches_namespace(coordinate, "database", datasource)
+        return self._grant_scope_matches("catalogs", [catalog_value], datasource) and self._grant_scope_matches(
+            "databases", [database_value], datasource
+        )
 
-    def _schema_matches_scope(self, catalog: Optional[str], database: Optional[str], schema: str) -> bool:
-        if not self._scoped_patterns:
-            return True
+    def _schema_matches_scope(
+        self,
+        catalog: Optional[str],
+        database: Optional[str],
+        schema: str,
+        datasource: Optional[str] = "",
+    ) -> bool:
         catalog_value = self._default_field_value("catalog", catalog or "")
         database_value = self._default_field_value("database", database or "")
         schema_value = self._default_field_value("schema", schema or "")
 
-        wildcard_allowed = False
-        for pattern in self._scoped_patterns:
-            if not self._matches_catalog_database(pattern, catalog_value, database_value):
-                continue
-            if pattern.schema:
-                if _pattern_matches(pattern.schema, schema_value):
-                    return True
-                continue
-            wildcard_allowed = True
-        return wildcard_allowed
+        scoped_context_matches = not self._scoped_patterns
+        if self._scoped_patterns:
+            for pattern in self._scoped_patterns:
+                if not self._matches_catalog_database(pattern, catalog_value, database_value):
+                    continue
+                if pattern.schema:
+                    if _pattern_matches(pattern.schema, schema_value):
+                        scoped_context_matches = True
+                        break
+                    continue
+                scoped_context_matches = True
+                break
+        coordinate = TableCoordinate(
+            catalog=catalog_value,
+            database=database_value,
+            schema=schema_value,
+        )
+        if not scoped_context_matches:
+            return False
+        if self._grant_uses_tree_scope(datasource):
+            return self._tree_grant_matches_namespace(coordinate, "schema", datasource)
+        return (
+            self._grant_scope_matches("catalogs", [catalog_value], datasource)
+            and self._grant_scope_matches("databases", [database_value], datasource)
+            and self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource)
+        )
 
     def _check_sql_table_scope(self, sql: str, connector: Optional[BaseSqlConnector] = None) -> List[str]:
         """Return table names from *sql* that fall outside the scoped context."""
@@ -1009,6 +1206,22 @@ class DBFuncTool:
             if not metadata_rows:
                 return FuncToolResult(success=1, result=result_dict)
 
+            metadata_rows = [
+                row
+                for row in metadata_rows
+                if self._table_matches_scope(
+                    self._build_table_coordinate(
+                        raw_name=str(row.get("table_name") or row.get("identifier") or ""),
+                        catalog=str(row.get("catalog_name") or ""),
+                        database=str(row.get("database_name") or ""),
+                        schema=str(row.get("schema_name") or ""),
+                    ),
+                    datasource,
+                )
+            ]
+            if not metadata_rows:
+                return FuncToolResult(success=1, result=result_dict)
+
             current_has_semantic = False
             if self.has_semantic_models:
                 for metadata_row in metadata_rows:
@@ -1048,7 +1261,14 @@ class DBFuncTool:
                         "sample_rows",
                         "_distance",
                     ]
-                sample_rows = sample_values.select(selected_fields).to_pylist()
+                sample_rows = [
+                    row
+                    for row in sample_values.select(selected_fields).to_pylist()
+                    if self._table_matches_scope(
+                        self._build_table_coordinate(raw_name=str(row.get("identifier") or "")),
+                        datasource,
+                    )
+                ]
             result_dict["sample_data"] = self.compressor.compress(sample_rows)
             return FuncToolResult(result=result_dict)
         except Exception as e:
@@ -1087,12 +1307,12 @@ class DBFuncTool:
                 cfg = None
             if cfg is not None and getattr(cfg, "path_pattern", ""):
                 databases = self.agent_config.list_databases(source)
-                filtered = [db for db in databases if self._database_matches_scope(catalog, db)]
+                filtered = [db for db in databases if self._database_matches_scope(catalog, db, source)]
                 return FuncToolResult(result=filtered)
         try:
             connector = self._get_connector(source)
             databases = connector.get_databases(catalog, include_sys=include_sys)
-            filtered = [db for db in databases if self._database_matches_scope(catalog, db)]
+            filtered = [db for db in databases if self._database_matches_scope(catalog, db, source)]
             return FuncToolResult(result=filtered)
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
@@ -1121,11 +1341,13 @@ class DBFuncTool:
         """
         try:
             catalog, database, _ = self._normalize_namespace_args(catalog, database, "", datasource)
-            if database and not self._database_matches_scope(catalog, database):
+            if database and not self._database_matches_scope(catalog, database, datasource):
                 return FuncToolResult(result=[])
             connector = self._get_connector(datasource, database)
             schemas = connector.get_schemas(catalog, database, include_sys=include_sys)
-            filtered = [schema for schema in schemas if self._schema_matches_scope(catalog, database, schema)]
+            filtered = [
+                schema for schema in schemas if self._schema_matches_scope(catalog, database, schema, datasource)
+            ]
             return FuncToolResult(result=filtered)
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
@@ -1187,7 +1409,14 @@ class DBFuncTool:
                 except Exception as e:
                     logger.debug(f"get_materialized_views unavailable on {connector.dialect}: {e}")
 
-            filtered_result = self._filter_table_entries(result, catalog, database, schema_name)
+            filtered_result = self._filter_table_entries(
+                result,
+                catalog,
+                database,
+                schema_name,
+                datasource,
+                connector,
+            )
             return FuncToolResult(result=filtered_result)
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
@@ -1234,14 +1463,16 @@ class DBFuncTool:
                 schema_name,
                 datasource,
             )
+            connector = self._get_connector(datasource, database)
             coordinate = self._build_table_coordinate(
                 raw_name=table_name,
                 catalog=catalog,
                 database=database,
                 schema=schema_name,
+                connector=connector,
             )
 
-            if not self._table_matches_scope(coordinate):
+            if not self._table_matches_scope(coordinate, datasource):
                 error_msg = f"Table '{table_name}' is outside the scoped context."
                 logger.warning(error_msg)
                 return FuncToolResult(
@@ -1627,7 +1858,7 @@ class DBFuncTool:
                 schema=schema_name,
                 connector=connector,
             )
-            if not self._table_matches_scope(coordinate):
+            if not self._table_matches_scope(coordinate, datasource):
                 return FuncToolResult(
                     success=0,
                     error=f"Table '{table_name}' is outside the scoped context.",

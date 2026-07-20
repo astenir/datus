@@ -419,6 +419,22 @@ class TestGetUseTools:
             "reference_template_tools",
         }
 
+    @pytest.mark.parametrize("agent_type", ["gen_visual_report", "gen_visual_dashboard"])
+    def test_visual_artifact_types_use_registered_tool_profile(self, agent_type):
+        result = AgentService.get_use_tools(agent_type)
+
+        assert result.success is True
+        assert result.data["default_tools"] == [
+            "semantic_tools.*",
+            "db_tools.*",
+            "context_search_tools.*",
+        ]
+        assert set(result.data["tool_types"]) == {
+            "db_tools",
+            "semantic_tools",
+            "context_search_tools",
+        }
+
     def test_ask_metrics_returns_broad_configurable_tool_types(self):
         """ask_metrics keeps narrow defaults but surfaces valid configurable tools."""
         result = AgentService.get_use_tools("ask_metrics")

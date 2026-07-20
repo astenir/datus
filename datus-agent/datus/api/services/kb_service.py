@@ -50,9 +50,12 @@ class KbService:
         stream_id: str,
         cancel_event: asyncio.Event,
         project_root: str,
+        *,
+        agent_config: AgentConfig | None = None,
     ) -> AsyncGenerator[BootstrapKbEvent, None]:
         """Run bootstrap components sequentially, yielding SSE events."""
 
+        config = agent_config or self.agent_config
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         summary: dict[str, dict] = {}
@@ -73,17 +76,17 @@ class KbService:
             # Stream BatchEvents from the queue in real-time while the thread runs.
             trace_component = comp_name.value if hasattr(comp_name, "value") else str(comp_name)
             trace_ctx = build_bootstrap_trace_context(
-                datasource=self.agent_config.current_datasource,
+                datasource=config.current_datasource,
                 components=[trace_component],
                 strategy=request.strategy,
                 stream_id=stream_id,
-                agent_home=self.agent_config.home,
+                agent_home=config.home,
                 extra={"source": "api"},
             )
 
             def _run_component_with_trace(trace_ctx=trace_ctx, comp_name=comp_name):
                 with trace_context(trace_ctx, replace=True):
-                    return self._run_component(request, comp_name, queue, loop, cancel_event, project_root)
+                    return self._run_component(request, comp_name, queue, loop, cancel_event, project_root, config)
 
             future = loop.run_in_executor(None, _run_component_with_trace)
 
@@ -183,8 +186,9 @@ class KbService:
         loop: asyncio.AbstractEventLoop,
         cancel_event: asyncio.Event,
         project_root: str,
+        config: AgentConfig | None = None,
     ) -> dict:
-        config = self.agent_config
+        config = config or self.agent_config
         strategy = request.strategy
         pool_size = 1
         dir_path = config.rag_storage_path()

@@ -31,6 +31,7 @@ export interface RoleListData {
 }
 
 export interface RoleFormData {
+  role_id: string;
   name: string;
   description: string;
   permissions: string[];

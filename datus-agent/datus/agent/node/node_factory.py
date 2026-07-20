@@ -10,6 +10,8 @@ Used by CLI print mode and interactive REPL to avoid duplicating node creation l
 
 from typing import TYPE_CHECKING, Literal, Optional
 
+from datus.agent.node_capabilities import get_agent_node_capability
+
 if TYPE_CHECKING:
     from datus.configuration.agent_config import AgentConfig
 
@@ -44,6 +46,10 @@ def create_interactive_node(
     """
     if subagent_name:
         node_class_type = _resolve_node_class_type(subagent_name, agent_config)
+        if node_class_type and subagent_name != node_class_type:
+            capability = get_agent_node_capability(node_class_type)
+            if capability is None or not capability.customizable:
+                raise ValueError(f"Unsupported custom Agent node_class '{node_class_type}'.")
 
         if subagent_name == "gen_semantic_model":
             from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode

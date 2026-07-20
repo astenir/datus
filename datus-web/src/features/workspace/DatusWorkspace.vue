@@ -41,7 +41,7 @@ const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"
 const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
 
 const workspace = useChatWorkspace()
-const { state: authState, checkAuth, logout } = useAuth()
+const { state: authState, failureMessage: authFailureMessage, checkAuth, logout } = useAuth()
 const permission = usePermission()
 const { theme, toggleTheme } = useTheme()
 const sqlDialogOpen = shallowRef(false)
@@ -166,6 +166,10 @@ function openSqlDialog() {
 function handleLogout() {
   void logout()
 }
+
+function handleRetryAuth() {
+  void checkAuth()
+}
 </script>
 
 <template>
@@ -187,8 +191,12 @@ function handleLogout() {
       <BotIcon class="size-8 text-muted-foreground" />
       <h1 class="text-lg font-semibold">认证失败</h1>
       <p class="text-sm text-muted-foreground">
-        未获取到有效登录状态，请确认登录配置或重新登录。
+        {{ authFailureMessage || "未获取到有效登录状态，请确认登录配置或重新登录。" }}
       </p>
+      <Button variant="outline" size="sm" @click="handleRetryAuth">
+        <RefreshCwIcon class="size-4" />
+        重新验证
+      </Button>
     </div>
   </div>
 
@@ -294,7 +302,10 @@ function handleLogout() {
           value="agents"
           class="m-0 flex min-h-0 flex-1"
         >
-          <AgentManagerPanel v-if="viewAccess.canViewAgents" />
+          <AgentManagerPanel
+            v-if="viewAccess.canViewAgents"
+            :workspace="workspace"
+          />
         </TabsContent>
         <TabsContent
           value="configuration"

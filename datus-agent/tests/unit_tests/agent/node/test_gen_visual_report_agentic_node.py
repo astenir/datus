@@ -133,6 +133,23 @@ class TestGenVisualReportInit:
         assert "save_query" in tool_names
         assert "validate_render" in tool_names
 
+    def test_enterprise_create_node_is_create_only_until_acl_binding(self, real_agent_config, mock_llm_create):
+        real_agent_config._enterprise_enabled = True
+        node = _make_node(
+            real_agent_config,
+            input_data=GenVisualReportNodeInput(user_message="创建报告"),
+        )
+        tool_names = {tool.name for tool in node.tools}
+
+        assert "start_new_report" in tool_names
+        assert "bind_existing_report" not in tool_names
+        result = node.filesystem_func_tool.write_file(
+            "reports/not_authorized/render/app.jsx",
+            "export default function App() {}\n",
+        )
+        assert result.success == 0
+        assert "ACL-authorized binding" in (result.error or "")
+
     def test_tool_registry_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
         """Filesystem tools must be declared in the ``filesystem_tools``
         category so ``PermissionHooks._handle_filesystem_zone`` engages and

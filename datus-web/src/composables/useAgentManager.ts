@@ -7,10 +7,15 @@ import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/ap
 import { ApiResultError } from "@/lib/chat";
 import { adminDatasourceLabel } from "@/lib/datasource-display";
 import type {
+  AgentAclRoleSummary,
+  AgentAclUserSummary,
   AgentDetail,
   AgentInfo,
+  AgentNodeType,
+  AgentPolicy,
   AgentToolsData,
   AgentUseToolsData,
+  AgentVisibility,
   CreateAgentInput,
   EditAgentInput,
   McpServerInfo,
@@ -33,6 +38,15 @@ export interface AgentFormState {
   subjectsText: string;
   rulesText: string;
   maxTurns: string;
+  visibility: AgentVisibility;
+  allowedRoleIds: string[];
+  allowedUserIds: string[];
+  toolPolicyMode: "inherit" | "allowlist";
+  deniedToolsText: string;
+  maxPermissionMode: "normal" | "auto" | "dangerous";
+  allowSubagentDelegation: boolean;
+  allowedSubagentIds: string[];
+  defaultUserIds: string[];
 }
 
 export type AgentFormMode = "create" | "edit";
@@ -43,6 +57,7 @@ export interface AgentMcpServerOption {
   target: string;
   tools: string[];
   selected: boolean;
+  missing: boolean;
 }
 
 export interface AgentSelectOption {
@@ -51,16 +66,14 @@ export interface AgentSelectOption {
   description?: string;
 }
 
-type AgentListFormField = "toolsText" | "mcpText" | "skillsText" | "catalogsText" | "subjectsText" | "rulesText";
-
-const defaultNodeClassOptions = [
-  { value: "chat", label: "通用聊天", description: "面向普通问答、规划和多工具协作。" },
-  { value: "gen_sql", label: "SQL 分析", description: "生成和执行只读 SQL。" },
-  { value: "gen_report", label: "报表生成", description: "创建或更新报表产物。" },
-  { value: "ask_report", label: "报表问答", description: "围绕一个已存在报表做只读问答。" },
-  { value: "ask_dashboard", label: "仪表盘问答", description: "围绕一个已存在仪表盘做只读问答。" },
-  { value: "ask_metrics", label: "指标问答", description: "围绕指标、维度和归因分析问答。" },
-] satisfies AgentSelectOption[];
+type AgentListFormField =
+  | "toolsText"
+  | "deniedToolsText"
+  | "mcpText"
+  | "skillsText"
+  | "catalogsText"
+  | "subjectsText"
+  | "rulesText";
 
 function emptyForm(): AgentFormState {
   return {
@@ -79,6 +92,15 @@ function emptyForm(): AgentFormState {
     subjectsText: "",
     rulesText: "",
     maxTurns: "",
+    visibility: "enterprise",
+    allowedRoleIds: [],
+    allowedUserIds: [],
+    toolPolicyMode: "allowlist",
+    deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
+    maxPermissionMode: "normal",
+    allowSubagentDelegation: false,
+    allowedSubagentIds: [],
+    defaultUserIds: [],
   };
 }
 
@@ -86,8 +108,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseListText(value: string): string[] | undefined {
-  const items = value
+function parseListText(value: string | undefined): string[] | undefined {
+  const items = (value ?? "")
     .split(/[\n,]/)
     .map(item => item.trim())
     .filter(Boolean);
@@ -103,16 +125,37 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))];
 }
 
+function isMcpToolPolicyPattern(value: string): boolean {
+  return value.startsWith("mcp.") && value.endsWith(".*");
+}
+
+function allowedToolPolicyPatterns(form: AgentFormState, supportsMcp: boolean): string[] {
+  const nativeTools = parseListText(form.toolsText) ?? [];
+  const mcpTools = supportsMcp
+    ? (parseListText(form.mcpText) ?? []).map(serverName => `mcp.${serverName}.*`)
+    : [];
+  return uniqueStrings([...nativeTools, ...mcpTools]).sort((left, right) => left.localeCompare(right));
+}
+
+function toggleSelectedValue(values: readonly string[], value: string): string[] {
+  const normalized = value.trim();
+  if (!normalized) return [...values];
+  return values.includes(normalized)
+    ? values.filter(item => item !== normalized)
+    : [...values, normalized].sort((left, right) => left.localeCompare(right));
+}
+
 function withSelectedFallbackOptions(
   options: readonly AgentSelectOption[],
   selectedValues: readonly string[],
+  fallbackLabel: (value: string) => string = value => `当前：${value}`,
 ): AgentSelectOption[] {
   const optionValues = new Set(options.map(option => option.value));
   const fallbackOptions = uniqueStrings(selectedValues)
     .filter(value => !optionValues.has(value))
     .map(value => ({
       value,
-      label: `当前：${value}`,
+      label: fallbackLabel(value),
     }));
   return [...fallbackOptions, ...options];
 }
@@ -157,7 +200,15 @@ function parsePositiveInteger(value: string): number | undefined {
   return parsed;
 }
 
+function normalizeAgentVisibility(value: string | null | undefined): AgentVisibility {
+  if (value === "enterprise" || value === "role") return value;
+  return "private";
+}
+
 function formFromDetail(agent: AgentDetail): AgentFormState {
+  const configuredTools = agent.tools?.length
+    ? agent.tools
+    : agent.tool_policy?.allowed?.filter(value => !isMcpToolPolicyPattern(value));
   return {
     id: agent.agent_id,
     name: agent.name,
@@ -167,17 +218,28 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     artifactSlug: agent.artifact_slug ?? "",
     description: agent.description ?? "",
     promptTemplate: agent.prompt_template ?? agent.prompt_template_content ?? "",
-    toolsText: listText(agent.tools),
+    toolsText: listText(configuredTools),
     mcpText: listText(agent.mcp),
     skillsText: listText(agent.skills),
     catalogsText: listText(listFromScopedContext(agent.scoped_context, "catalogs")),
     subjectsText: listText(listFromScopedContext(agent.scoped_context, "subjects")),
     rulesText: listText(agent.rules),
     maxTurns: String(agent.max_turns || ""),
+    visibility: normalizeAgentVisibility(agent.acl?.visibility),
+    allowedRoleIds: [...(agent.acl?.allowed_roles ?? [])],
+    allowedUserIds: [...(agent.acl?.allowed_user_ids ?? [])],
+    toolPolicyMode: agent.tool_policy?.mode === "inherit" ? "inherit" : "allowlist",
+    deniedToolsText: listText(agent.tool_policy?.denied),
+    maxPermissionMode: agent.runtime_policy?.max_permission_mode === "dangerous"
+      ? "dangerous"
+      : agent.runtime_policy?.max_permission_mode === "auto" ? "auto" : "normal",
+    allowSubagentDelegation: agent.runtime_policy?.allow_subagent_delegation ?? false,
+    allowedSubagentIds: [...(agent.runtime_policy?.allowed_subagents ?? [])],
+    defaultUserIds: [],
   };
 }
 
-function createInputFromForm(form: AgentFormState): CreateAgentInput {
+function createInputFromForm(form: AgentFormState, supportsMcp: boolean): CreateAgentInput {
   return {
     name: trimmedOptional(form.name),
     node_class: trimmedOptional(form.nodeClass) ?? "gen_sql",
@@ -189,16 +251,46 @@ function createInputFromForm(form: AgentFormState): CreateAgentInput {
     prompt_language: "en",
     prompt_version: "1.0",
     tools: parseListText(form.toolsText),
-    mcp: parseListText(form.mcpText),
+    mcp: supportsMcp ? parseListText(form.mcpText) : undefined,
     skills: parseListText(form.skillsText),
     scoped_context: scopedContextFromForm(form),
     rules: parseListText(form.rulesText),
     max_turns: parsePositiveInteger(form.maxTurns) ?? 30,
+    acl: {
+      visibility: form.visibility,
+      allowed_roles: form.allowedRoleIds,
+      allowed_user_ids: form.allowedUserIds,
+    },
+    tool_policy: {
+      mode: form.toolPolicyMode ?? "allowlist",
+      allowed: form.toolPolicyMode !== "inherit" ? allowedToolPolicyPatterns(form, supportsMcp) : [],
+      denied: parseListText(form.deniedToolsText) ?? [],
+    },
+    runtime_policy: {
+      max_permission_mode: form.maxPermissionMode ?? "normal",
+      allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
+      allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
+    },
   };
 }
 
-function editInputFromForm(form: AgentFormState): EditAgentInput {
-  return createInputFromForm(form);
+function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentPolicy {
+  return {
+    tool_policy: {
+      mode: form.toolPolicyMode ?? "allowlist",
+      allowed: form.toolPolicyMode !== "inherit" ? allowedToolPolicyPatterns(form, supportsMcp) : [],
+      denied: parseListText(form.deniedToolsText) ?? [],
+    },
+    runtime_policy: {
+      max_permission_mode: form.maxPermissionMode ?? "normal",
+      allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
+      allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
+    },
+  };
+}
+
+function editInputFromForm(form: AgentFormState, supportsMcp: boolean): EditAgentInput {
+  return createInputFromForm(form, supportsMcp);
 }
 
 function agentIdentifier(agent: AgentInfo | AgentDetail): string {
@@ -233,6 +325,29 @@ function artifactOption(artifact: AdminArtifact): AgentSelectOption {
     value: manifest.slug,
     label: `${manifest.name || manifest.slug}（${typeLabel}）`,
     description: manifest.description || manifest.slug,
+  };
+}
+
+function agentAclUserOption(user: AgentAclUserSummary): AgentSelectOption {
+  const label = user.display_name?.trim() || user.user_id;
+  const description = uniqueStrings([
+    label === user.user_id ? "" : user.user_id,
+    user.email ?? "",
+    user.department ?? "",
+    user.title ?? "",
+  ]).join(" · ");
+  return {
+    value: user.user_id,
+    label,
+    description: description || undefined,
+  };
+}
+
+function agentAclRoleOption(role: AgentAclRoleSummary): AgentSelectOption {
+  return {
+    value: role.role_id,
+    label: role.name || role.role_id,
+    description: role.description?.trim() || role.role_id,
   };
 }
 
@@ -314,23 +429,33 @@ export function useAgentManager() {
 
   const agents = ref<AgentInfo[]>([]);
   const selectedAgent = ref<AgentDetail | null>(null);
+  const nodeTypes = ref<AgentNodeType[]>([]);
   const toolCatalog = ref<AgentToolsData | null>(null);
   const selectedUseTools = ref<AgentUseToolsData | null>(null);
   const mcpServers = ref<McpServerInfo[]>([]);
   const mcpToolsByServer = ref<Record<string, string[]>>({});
   const datasources = ref<AdminDatasource[]>([]);
   const artifacts = ref<AdminArtifact[]>([]);
+  const aclUsers = ref<AgentAclUserSummary[]>([]);
+  const aclRoles = ref<AgentAclRoleSummary[]>([]);
+  const enterpriseDefaultAgentId = shallowRef<string | null>(null);
   const form = ref<AgentFormState>(emptyForm());
   const formMode = shallowRef<AgentFormMode>("create");
   const loading = shallowRef(false);
   const detailLoading = shallowRef(false);
   const saving = shallowRef(false);
   const deleting = shallowRef(false);
+  const nodeTypesLoading = shallowRef(false);
+  const nodeTypesError = shallowRef<string | null>(null);
   const toolsLoading = shallowRef(false);
   const mcpCatalogLoading = shallowRef(false);
+  const mcpCatalogLoaded = shallowRef(false);
   const mcpCatalogError = shallowRef<string | null>(null);
   const resourceCatalogLoading = shallowRef(false);
   const resourceCatalogError = shallowRef<string | null>(null);
+  const aclDirectoryLoading = shallowRef(false);
+  const aclDirectoryError = shallowRef<string | null>(null);
+  const defaultPolicyLoading = shallowRef(false);
   const error = shallowRef<string | null>(null);
   const enterpriseRoutesUnavailable = shallowRef(false);
 
@@ -338,10 +463,19 @@ export function useAgentManager() {
   const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
   const selectedAgentName = computed(() => selectedAgent.value?.name ?? null);
   const selectedIsBuiltin = computed(() => isBuiltinAgent(selectedAgent.value));
+  const selectedCanCloneBuiltin = computed(() =>
+    selectedIsBuiltin.value
+    && nodeTypes.value.some(item => item.node_class === selectedAgent.value?.node_class)
+  );
+  const selectedNodeSupportsMcp = computed(() => {
+    const capability = nodeTypes.value.find(item => item.node_class === form.value.nodeClass);
+    return capability?.supports_mcp ?? ["chat", "gen_sql"].includes(form.value.nodeClass);
+  });
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
   const selectedTools = computed(() => parseListText(form.value.toolsText) ?? []);
+  const deniedTools = computed(() => parseListText(form.value.deniedToolsText) ?? []);
   const selectedSkills = computed(() => parseListText(form.value.skillsText) ?? []);
   const selectedMcpNames = computed(() => new Set(parseListText(form.value.mcpText) ?? []));
   const datasourceOptions = computed(() =>
@@ -360,7 +494,11 @@ export function useAgentManager() {
   );
   const nodeClassOptions = computed(() =>
     withSelectedFallbackOptions(
-      defaultNodeClassOptions,
+      nodeTypes.value.map(item => ({
+        value: item.node_class,
+        label: item.label,
+        description: item.description,
+      })),
       form.value.nodeClass ? [form.value.nodeClass] : [],
     )
   );
@@ -372,14 +510,22 @@ export function useAgentManager() {
     const baseOptions = toolOptionsFromCatalog(
       Object.keys(typeCatalog).length ? typeCatalog : toolCatalog.value?.tools ?? {},
     );
-    return withSelectedFallbackOptions(baseOptions, [
-      ...selectedTools.value,
-      ...(selectedUseTools.value?.default_tools ?? []),
-    ]);
+    const optionsWithDefaults = withSelectedFallbackOptions(
+      baseOptions,
+      selectedUseTools.value?.default_tools ?? [],
+      value => `默认：${value}`,
+    );
+    return withSelectedFallbackOptions(
+      optionsWithDefaults,
+      [...selectedTools.value, ...deniedTools.value],
+      value => `当前配置：${value}`,
+    );
   });
   const skillOptions = computed(() => skillOptionsFromAgents(agents.value, selectedAgent.value, form.value));
-  const mcpServerOptions = computed<AgentMcpServerOption[]>(() =>
-    [...mcpServers.value]
+  const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
+  const canListMcpTools = computed(() => permission.hasPermission("mcp.server.tools"));
+  const mcpServerOptions = computed<AgentMcpServerOption[]>(() => {
+    const configuredOptions = [...mcpServers.value]
       .sort((left, right) => left.name.localeCompare(right.name))
       .map((server) => ({
         name: server.name,
@@ -387,19 +533,64 @@ export function useAgentManager() {
         target: mcpServerTarget(server),
         tools: mcpToolsByServer.value[server.name] ?? [],
         selected: selectedMcpNames.value.has(server.name),
-      }))
-  );
-  const selectedMcpCount = computed(() => selectedMcpNames.value.size);
+        missing: false,
+      }));
+    if (!canListMcpServers.value || !mcpCatalogLoaded.value || mcpCatalogError.value) {
+      return configuredOptions;
+    }
+
+    const configuredNames = new Set(configuredOptions.map(server => server.name));
+    const missingOptions = [...selectedMcpNames.value]
+      .filter(serverName => !configuredNames.has(serverName))
+      .map(serverName => ({
+        name: serverName,
+        type: "missing",
+        target: "Server 已不存在，请解除绑定",
+        tools: [],
+        selected: true,
+        missing: true,
+      }));
+    return [...configuredOptions, ...missingOptions]
+      .sort((left, right) => left.name.localeCompare(right.name));
+  });
+  const selectedMcpCount = computed(() => selectedNodeSupportsMcp.value ? selectedMcpNames.value.size : 0);
   const selectedMcpToolCount = computed(() =>
-    [...selectedMcpNames.value].reduce((total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0), 0)
+    selectedNodeSupportsMcp.value
+      ? [...selectedMcpNames.value].reduce(
+          (total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0),
+          0,
+        )
+      : 0
   );
-  const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
-  const canListMcpTools = computed(() => permission.hasPermission("mcp.server.tools"));
+  const aclUserOptions = computed(() =>
+    withSelectedFallbackOptions(
+      aclUsers.value.map(agentAclUserOption).sort(optionSort),
+      [...form.value.allowedUserIds, ...form.value.defaultUserIds],
+    )
+  );
+  const aclRoleOptions = computed(() =>
+    withSelectedFallbackOptions(
+      aclRoles.value.map(agentAclRoleOption).sort(optionSort),
+      form.value.allowedRoleIds,
+    )
+  );
+  const subagentOptions = computed(() =>
+    withSelectedFallbackOptions(
+      agents.value
+        .filter(agent => agent.agent_id !== selectedAgent.value?.agent_id)
+        .map(agent => ({
+          value: agent.agent_id,
+          label: agent.name,
+          description: agent.source === "builtin" ? "系统内置" : agent.node_class,
+        }))
+        .sort(optionSort),
+      form.value.allowedSubagentIds,
+    )
+  );
   const canListAdminDatasources = computed(() => permission.hasPermission("module.admin.datasources"));
   const canListAdminArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"));
   const canSubmitForm = computed(() => {
     if (saving.value) return false;
-    if (formMode.value === "edit" && selectedIsBuiltin.value) return false;
     if (formMode.value === "edit" && !form.value.id.trim()) return false;
     return Boolean(form.value.name.trim());
   });
@@ -409,6 +600,9 @@ export function useAgentManager() {
       if (err.errorCode === "ENTERPRISE_ROUTE_DISABLED" || err.errorCode === "ENTERPRISE_LEGACY_API_DISABLED") {
         enterpriseRoutesUnavailable.value = true;
         return "当前企业 Agent 管理接口不可用，请确认后端企业接口已启用且当前用户具备管理权限。";
+      }
+      if (err.errorCode === "AGENT_DEFAULT_REQUIRES_PUBLISHED") {
+        return "只有已发布的 Agent 才能分配默认用户，请先将状态切换为“已发布”。";
       }
       return err.message;
     }
@@ -445,6 +639,20 @@ export function useAgentManager() {
     }
   }
 
+  async function loadEnterpriseDefault() {
+    defaultPolicyLoading.value = true;
+    try {
+      const result = await agentApi.enterpriseDefault(connection.effectiveBase());
+      enterpriseDefaultAgentId.value = result?.default_agent_id ?? null;
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "读取企业默认 Agent 失败");
+      console.error("读取企业默认 Agent 失败:", err);
+      toast.error(message);
+    } finally {
+      defaultPolicyLoading.value = false;
+    }
+  }
+
   async function loadToolCatalog() {
     toolsLoading.value = true;
 
@@ -459,12 +667,30 @@ export function useAgentManager() {
     }
   }
 
+  async function loadNodeTypes() {
+    nodeTypesLoading.value = true;
+    nodeTypesError.value = null;
+
+    try {
+      nodeTypes.value = await agentApi.nodeTypes(connection.effectiveBase()) ?? [];
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "读取 Agent 节点类型失败");
+      console.error("读取 Agent 节点类型失败:", err);
+      nodeTypes.value = [];
+      nodeTypesError.value = message;
+      toast.error(message);
+    } finally {
+      nodeTypesLoading.value = false;
+    }
+  }
+
   async function loadMcpCatalog() {
     await ensurePermissionsLoaded();
 
     if (!canListMcpServers.value) {
       mcpServers.value = [];
       mcpToolsByServer.value = {};
+      mcpCatalogLoaded.value = false;
       mcpCatalogError.value = null;
       return;
     }
@@ -476,6 +702,7 @@ export function useAgentManager() {
       const result = await mcpApi.listServers(connection.effectiveBase());
       const servers = [...(result?.servers ?? [])].sort((left, right) => left.name.localeCompare(right.name));
       mcpServers.value = servers;
+      mcpCatalogLoaded.value = true;
 
       if (canListMcpTools.value) {
         const toolEntries = await Promise.all(
@@ -501,6 +728,7 @@ export function useAgentManager() {
       const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
       mcpServers.value = [];
       mcpToolsByServer.value = {};
+      mcpCatalogLoaded.value = false;
       mcpCatalogError.value = message;
       console.error("读取 MCP Server 失败:", err);
       toast.error(message);
@@ -557,6 +785,29 @@ export function useAgentManager() {
     }
   }
 
+  async function loadAclDirectory() {
+    aclDirectoryLoading.value = true;
+    aclDirectoryError.value = null;
+
+    try {
+      const [usersResult, rolesResult] = await Promise.all([
+        agentApi.aclUsers(connection.effectiveBase()),
+        agentApi.aclRoles(connection.effectiveBase()),
+      ]);
+      aclUsers.value = usersResult ?? [];
+      aclRoles.value = rolesResult ?? [];
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "读取 Agent 可见用户和角色失败");
+      aclUsers.value = [];
+      aclRoles.value = [];
+      aclDirectoryError.value = message;
+      console.error("读取 Agent ACL 候选目录失败:", err);
+      toast.error(message);
+    } finally {
+      aclDirectoryLoading.value = false;
+    }
+  }
+
   async function selectAgent(agentName: string | null) {
     if (!agentName) {
       selectedAgent.value = null;
@@ -573,8 +824,14 @@ export function useAgentManager() {
       selectedAgent.value = detail;
       if (detail) {
         form.value = formFromDetail(detail);
+        form.value.defaultUserIds = await agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id) ?? [];
         formMode.value = "edit";
-        await loadUseToolsForNodeClass(detail.node_class || "gen_sql");
+        const nodeClass = detail.node_class || "gen_sql";
+        if (!nodeTypes.value.length || nodeTypes.value.some(item => item.node_class === nodeClass)) {
+          await loadUseToolsForNodeClass(nodeClass);
+        } else {
+          selectedUseTools.value = null;
+        }
       } else {
         selectedUseTools.value = null;
       }
@@ -600,6 +857,10 @@ export function useAgentManager() {
       toast.error("请选择一个系统内置 Agent 后再复制。");
       return false;
     }
+    if (!nodeTypes.value.some(item => item.node_class === source.node_class)) {
+      toast.error("当前系统内置 Agent 不支持复制为企业 Agent。");
+      return false;
+    }
 
     const agentId = uniqueAgentId(source.agent_id, agents.value);
     const defaultTools = selectedUseTools.value?.default_tools ?? [];
@@ -611,6 +872,15 @@ export function useAgentManager() {
       status: "draft",
       toolsText: source.tools?.length ? listText(source.tools) : listText(defaultTools),
       mcpText: "",
+      visibility: "enterprise",
+      allowedRoleIds: [],
+      allowedUserIds: [],
+      toolPolicyMode: "allowlist",
+      deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
+      maxPermissionMode: "normal",
+      allowSubagentDelegation: false,
+      allowedSubagentIds: [],
+      defaultUserIds: [],
     };
     selectedAgent.value = null;
     formMode.value = "create";
@@ -659,6 +929,22 @@ export function useAgentManager() {
     setListFieldValues(field, [...next]);
   }
 
+  function toggleAclRole(roleId: string) {
+    form.value.allowedRoleIds = toggleSelectedValue(form.value.allowedRoleIds, roleId);
+  }
+
+  function toggleAclUser(userId: string) {
+    form.value.allowedUserIds = toggleSelectedValue(form.value.allowedUserIds, userId);
+  }
+
+  function toggleDefaultUser(userId: string) {
+    form.value.defaultUserIds = toggleSelectedValue(form.value.defaultUserIds, userId);
+  }
+
+  function toggleAllowedSubagent(agentId: string) {
+    form.value.allowedSubagentIds = toggleSelectedValue(form.value.allowedSubagentIds, agentId);
+  }
+
   function applyDefaultTools() {
     const defaults = selectedUseTools.value?.default_tools ?? [];
     if (!defaults.length) {
@@ -670,21 +956,42 @@ export function useAgentManager() {
   }
 
   async function saveForm(): Promise<boolean> {
-    if (formMode.value === "edit" && selectedIsBuiltin.value) {
-      toast.error("系统内置 Agent 为只读，不能在管理页保存。");
-      return false;
-    }
     if (!canSubmitForm.value) return false;
 
     saving.value = true;
 
     try {
       const agentId = form.value.id.trim() || form.value.name.trim();
-      if (formMode.value === "edit") {
-        await agentApi.edit(connection.effectiveBase(), agentId, editInputFromForm(form.value));
+      const defaultUserIds = form.value.status === "published" ? form.value.defaultUserIds : [];
+      if (formMode.value === "edit" && selectedIsBuiltin.value) {
+        await agentApi.updateStatus(connection.effectiveBase(), agentId, form.value.status);
+        await agentApi.updateAcl(connection.effectiveBase(), agentId, {
+          visibility: form.value.visibility,
+          allowed_roles: form.value.allowedRoleIds,
+          allowed_user_ids: form.value.allowedUserIds,
+        });
+        await agentApi.updatePolicy(
+          connection.effectiveBase(),
+          agentId,
+          policyInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
+        await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
+        toast.success("内置 Agent 企业策略已保存");
+      } else if (formMode.value === "edit") {
+        await agentApi.edit(
+          connection.effectiveBase(),
+          agentId,
+          editInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
+        await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已保存");
       } else {
-        await agentApi.create(connection.effectiveBase(), agentId, createInputFromForm(form.value));
+        await agentApi.create(
+          connection.effectiveBase(),
+          agentId,
+          createInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
+        await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已创建");
       }
 
@@ -702,6 +1009,21 @@ export function useAgentManager() {
       return false;
     } finally {
       saving.value = false;
+    }
+  }
+
+  async function setEnterpriseDefault(agentId: string | null) {
+    defaultPolicyLoading.value = true;
+    try {
+      const result = await agentApi.updateEnterpriseDefault(connection.effectiveBase(), agentId);
+      enterpriseDefaultAgentId.value = result?.default_agent_id ?? null;
+      toast.success(agentId ? "企业默认 Agent 已更新" : "已清除企业默认 Agent");
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "更新企业默认 Agent 失败");
+      console.error("更新企业默认 Agent 失败:", err);
+      toast.error(message);
+    } finally {
+      defaultPolicyLoading.value = false;
     }
   }
 
@@ -742,11 +1064,15 @@ export function useAgentManager() {
   return {
     agents: readonly(agents),
     selectedAgent: readonly(selectedAgent),
+    nodeTypes: readonly(nodeTypes),
     selectedUseTools: readonly(selectedUseTools),
     mcpServers: readonly(mcpServers),
     mcpToolsByServer: readonly(mcpToolsByServer),
     datasources: readonly(datasources),
     artifacts: readonly(artifacts),
+    aclUsers: readonly(aclUsers),
+    aclRoles: readonly(aclRoles),
+    enterpriseDefaultAgentId: readonly(enterpriseDefaultAgentId),
     toolCatalog: readonly(toolCatalog),
     form,
     formMode: readonly(formMode),
@@ -754,21 +1080,29 @@ export function useAgentManager() {
     detailLoading: readonly(detailLoading),
     saving: readonly(saving),
     deleting: readonly(deleting),
+    nodeTypesLoading: readonly(nodeTypesLoading),
+    nodeTypesError: readonly(nodeTypesError),
     toolsLoading: readonly(toolsLoading),
     mcpCatalogLoading: readonly(mcpCatalogLoading),
     mcpCatalogError: readonly(mcpCatalogError),
     resourceCatalogLoading: readonly(resourceCatalogLoading),
     resourceCatalogError: readonly(resourceCatalogError),
+    aclDirectoryLoading: readonly(aclDirectoryLoading),
+    aclDirectoryError: readonly(aclDirectoryError),
+    defaultPolicyLoading: readonly(defaultPolicyLoading),
     error: readonly(error),
     enterpriseRoutesUnavailable: readonly(enterpriseRoutesUnavailable),
     agentCount,
     selectedAgentId,
     selectedAgentName,
     selectedIsBuiltin,
+    selectedCanCloneBuiltin,
+    selectedNodeSupportsMcp,
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
     selectedTools,
+    deniedTools,
     selectedSkills,
     datasourceOptions,
     artifactOptions,
@@ -776,13 +1110,19 @@ export function useAgentManager() {
     toolOptions,
     skillOptions,
     mcpServerOptions,
+    aclUserOptions,
+    aclRoleOptions,
+    subagentOptions,
     selectedMcpCount,
     selectedMcpToolCount,
     canSubmitForm,
     loadAgents,
+    loadEnterpriseDefault,
+    loadNodeTypes,
     loadToolCatalog,
     loadMcpCatalog,
     loadResourceCatalogs,
+    loadAclDirectory,
     loadUseToolsForNodeClass,
     selectAgent,
     startCreate,
@@ -791,8 +1131,13 @@ export function useAgentManager() {
     toggleMcpServer,
     addListFieldValue,
     toggleListFieldValue,
+    toggleAclRole,
+    toggleAclUser,
+    toggleDefaultUser,
+    toggleAllowedSubagent,
     applyDefaultTools,
     saveForm,
+    setEnterpriseDefault,
     deleteAgent,
     isBuiltinAgent,
     toolCatalogEntries,
@@ -800,11 +1145,14 @@ export function useAgentManager() {
   };
 }
 
+export type AgentManagerController = ReturnType<typeof useAgentManager>;
+
 export const agentManagerInternals = {
   createInputFromForm,
   editInputFromForm,
   parseListText,
   parsePositiveInteger,
+  normalizeAgentVisibility,
   normalizeAgentList,
   agentIdentifier,
   scopedContextFromForm,

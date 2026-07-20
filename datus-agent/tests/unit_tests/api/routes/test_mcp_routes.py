@@ -43,6 +43,7 @@ def _svc() -> MagicMock:
     svc.mcp.add_server.return_value = Result[dict](success=True, data={"name": "srv"})
     svc.mcp.update_server.return_value = Result[dict](success=True, data={"name": "srv"})
     svc.mcp.remove_server.return_value = Result[dict](success=True, data={"removed": True})
+    svc.mcp.remove_server_if_unreferenced = AsyncMock(return_value=Result[dict](success=True, data={"removed": True}))
     svc.mcp.check_connectivity = AsyncMock(return_value=Result[dict](success=True, data={"connected": True}))
     svc.mcp.list_tools = AsyncMock(return_value=Result[dict](success=True, data={"tools": []}))
     svc.mcp.call_tool = AsyncMock(return_value=Result[dict](success=True, data={"result": "ok"}))
@@ -170,6 +171,50 @@ def test_mcp_routes_allow_wildcard_admin_permission(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.mcp.list_servers.assert_called_once_with(server_type=None)
+
+
+def test_remove_mcp_server_returns_agent_reference_conflict(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    svc.mcp.remove_server_if_unreferenced.return_value = Result[dict](
+        success=False,
+        data={
+            "server_name": "srv",
+            "agents": [
+                {
+                    "agent_id": "analyst",
+                    "name": "Analyst",
+                    "status": "published",
+                    "source": "enterprise",
+                }
+            ],
+        },
+        errorCode="MCP_SERVER_IN_USE",
+        errorMessage="MCP Server 'srv' is still referenced by Agent(s): Analyst.",
+    )
+    ctx = AppContext(user_id="admin", project_id="enterprise", permissions={"module.mcp", "mcp.server.remove"})
+
+    with _client(ctx, svc) as client:
+        response = client.delete("/api/v1/mcp/servers/srv")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": False,
+        "data": {
+            "server_name": "srv",
+            "agents": [
+                {
+                    "agent_id": "analyst",
+                    "name": "Analyst",
+                    "status": "published",
+                    "source": "enterprise",
+                }
+            ],
+        },
+        "errorCode": "MCP_SERVER_IN_USE",
+        "errorMessage": "MCP Server 'srv' is still referenced by Agent(s): Analyst.",
+    }
+    svc.mcp.remove_server_if_unreferenced.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -356,7 +401,7 @@ def test_mcp_tool_call_allows_matching_fine_grained_tool_permission(monkeypatch)
             "add_server",
         ),
         ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}, "mcp.server.edit", "update_server"),
-        ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server"),
+        ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server_if_unreferenced"),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None, "mcp.server.connectivity", "check_connectivity"),
         (
             "put",
@@ -459,7 +504,7 @@ def test_mcp_invalid_body_does_not_resolve_datus_service(monkeypatch, method, pa
             "add_server",
         ),
         ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}, "mcp.server.edit", "update_server"),
-        ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server"),
+        ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server_if_unreferenced"),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None, "mcp.server.connectivity", "check_connectivity"),
         (
             "put",

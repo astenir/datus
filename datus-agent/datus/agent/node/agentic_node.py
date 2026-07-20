@@ -114,6 +114,11 @@ class AgenticNode(Node):
     # Visibility in ``<available_skills>`` is still filtered normally.
     SKILL_AUTHORING_MODE: bool = False
 
+    # General-purpose conversational nodes opt in to the request-scoped
+    # enterprise workspace. Project authoring nodes keep project_root until
+    # their shared resource/ACL storage contracts are migrated deliberately.
+    USE_REQUEST_WORKSPACE: bool = False
+
     def __init__(
         self,
         node_id: str,
@@ -155,6 +160,7 @@ class AgenticNode(Node):
         self.actions: List[ActionHistory] = []
         if not hasattr(self, "degraded_capabilities"):
             self.degraded_capabilities: Dict[str, str] = {}
+        self._mcp_connection_failures: List[tuple[str, str]] = []
         # Resume target (or freshly generated id when caller passes ``None``).
         # ``session_id`` is set once below — after ``get_node_name()`` is wired
         # up — and is treated as immutable for the node's lifetime: resume /
@@ -332,6 +338,35 @@ class AgenticNode(Node):
     def _record_degraded_capability(self, key: str, message: str) -> None:
         """Record a non-fatal capability degradation for API/CLI surfaces."""
         self.degraded_capabilities[key] = message
+
+    def _record_mcp_connection_failure(self, server_name: str, error: str) -> None:
+        failure = (server_name, error)
+        failures = getattr(self, "_mcp_connection_failures", None)
+        if failures is None:
+            failures = []
+            self._mcp_connection_failures = failures
+        if failure not in failures:
+            failures.append(failure)
+
+    def _drain_mcp_connection_failure_actions(self, manager: ActionHistoryManager) -> List[ActionHistory]:
+        failures = getattr(self, "_mcp_connection_failures", [])
+        self._mcp_connection_failures = []
+        actions: List[ActionHistory] = []
+        for server_name, error in failures:
+            action = ActionHistory(
+                action_id=str(uuid.uuid4()),
+                role=ActionRole.TOOL,
+                action_type=f"mcp.{server_name}.connect",
+                input={"server_name": server_name},
+                output={
+                    "error": error,
+                    "summary": f"MCP Server '{server_name}' connection failed; the Agent continued without it.",
+                },
+                status=ActionStatus.FAILED,
+            )
+            manager.add_action(action)
+            actions.append(action)
+        return actions
 
     def _record_context_search_degraded(self, error: BaseException | str) -> str:
         from datus.storage.embedding_diagnostics import format_context_degraded_warning
@@ -2144,6 +2179,8 @@ class AgenticNode(Node):
             # Read by report/dashboard edit sessions to lock creation and
             # filesystem writes to one existing artifact.
             "edit_locked",
+            # Set only by the API after the artifact edit ACL check succeeds.
+            "_acl_authorized_artifact_edit",
         ]
         for attr in direct_attributes:
             # Handle both dict and object access patterns
@@ -2988,6 +3025,9 @@ class AgenticNode(Node):
             else None
         )
         effective_max_turns = explicit_turns if explicit_turns is not None else self.max_turns
+        from datus.agent.tool_policy import apply_agent_runtime_policy
+
+        apply_agent_runtime_policy(self)
         self._current_action_history = ctx.action_history_manager
         try:
             async for stream_action in self.model.generate_with_tools_stream(
@@ -3003,10 +3043,13 @@ class AgenticNode(Node):
                 agent_name=self.get_node_name(),
                 interrupt_controller=self.interrupt_controller,
                 pending_input_queue=ctx.pending_input_queue,
+                mcp_connection_failure_callback=self._record_mcp_connection_failure,
                 # Defensive: test doubles that bypass ``AgenticNode.__init__``
                 # may not have a broker; the model layer skips emit when None.
                 interaction_broker=getattr(self, "interaction_broker", None),
             ):
+                for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                    yield failure_action
                 rewritten = self._maybe_rewrite_stream_action(stream_action, ctx)
                 action_to_yield = rewritten or stream_action
 
@@ -3361,8 +3404,9 @@ class AgenticNode(Node):
 
     def _resolve_workspace_root(self) -> str:
         """
-        Resolve workspace_root with priority: node-specific ``workspace_root`` >
-        ``agent_config.project_root`` (which itself defaults to the launch CWD).
+        Resolve workspace_root with priority: enterprise request workspace >
+        node-specific ``workspace_root`` > ``agent_config.project_root`` (which
+        itself defaults to the launch CWD).
 
         Expands ``~`` to the user home directory if present.
 
@@ -3380,8 +3424,15 @@ class AgenticNode(Node):
         if getattr(self.agent_config, "_client_source", None) == "vscode":
             return "."
 
+        request_workspace_root = None
+        if self.USE_REQUEST_WORKSPACE and self.agent_config is not None:
+            request_workspace_root = getattr(self.agent_config, "_request_workspace_root", None)
+
         node_workspace_root = self.node_config.get("workspace_root")
-        if node_workspace_root:
+        if request_workspace_root:
+            workspace_root = request_workspace_root
+            logger.debug(f"Using request-scoped workspace_root: {workspace_root}")
+        elif node_workspace_root:
             workspace_root = node_workspace_root
             logger.debug(f"Using node-specific workspace_root: {workspace_root}")
         elif self.agent_config and hasattr(self.agent_config, "project_root"):
@@ -3443,6 +3494,7 @@ class AgenticNode(Node):
             strict=strict,
             session_data_dir=session_data_dir,
             protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
+            global_skills_read_only=bool(getattr(self.agent_config, "_enterprise_enabled", False)),
             **kwargs,
         )
 
@@ -3647,6 +3699,7 @@ class AgenticNode(Node):
                 broker=self.interaction_broker,
                 permission_manager=self.permission_manager,
                 node_name=self.get_node_name(),
+                node_class=self.get_node_class_name(),
                 tool_registry=self.tool_registry,
                 fs_policy=self._make_filesystem_policy(),
                 non_interactive=non_interactive,

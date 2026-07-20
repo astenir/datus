@@ -45,10 +45,10 @@ class CredentialSecretCodec:
             ) from exc
 
         raw_secret = (encryption_secret or "").strip()
-        if len(raw_secret) < 32:
+        if raw_secret.startswith("<MISSING:") or len(raw_secret) < 32:
             raise DatusException(
                 ErrorCode.COMMON_CONFIG_ERROR,
-                message="User model credential encryption secret must be at least 32 characters.",
+                message="Credential encryption secret must be explicitly configured with at least 32 characters.",
             )
         key = base64.urlsafe_b64encode(hashlib.sha256(raw_secret.encode("utf-8")).digest())
         self._fernet = Fernet(key)

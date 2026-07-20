@@ -25,6 +25,7 @@ MUTATION_EXECUTION = "mutation_execution"
 MODEL_POLICY = "model_policy"
 QUOTA = "quota"
 TOOL_PERMISSION = "tool_permission"
+AGENT_ACL = "agent_acl"
 
 KNOWN_SECURITY_CATEGORIES = frozenset(
     {
@@ -45,6 +46,7 @@ KNOWN_SECURITY_CATEGORIES = frozenset(
         MODEL_POLICY,
         QUOTA,
         TOOL_PERMISSION,
+        AGENT_ACL,
     }
 )
 
@@ -118,17 +120,14 @@ _LEGACY_DISABLED_POLICY = _policy(
     note="Compatibility route; enterprise.enabled=true must reject before legacy execution.",
 )
 _CHAT_READ_POLICY = _policy(
-    MODULE_RBAC,
     SESSION_OWNER,
     SYSTEM_READONLY,
-    module_permission="module.chat",
     note="Read-only chat/session metadata; session owner checks prevent cross-user access.",
 )
 _AGENT_READ_POLICY = _policy(
-    MODULE_RBAC,
+    AGENT_ACL,
     SYSTEM_READONLY,
-    module_permission="module.chat",
-    note="Current-user agent catalog; enterprise agents are filtered by status and ACL before dispatch.",
+    note="Current-user Agent catalog is filtered only by effective Agent status and ACL.",
 )
 _ADMIN_AGENT_READ_POLICY = _policy(
     MODULE_RBAC,
@@ -146,20 +145,16 @@ _ADMIN_AGENT_MUTATION_POLICY = _policy(
     audit_action="module.admin.agents",
 )
 _CHAT_ACTIVE_POLICY = _policy(
-    MODULE_RBAC,
     SESSION_OWNER,
     PLATFORM_STATUS_GATE,
     MUTATION_EXECUTION,
-    module_permission="module.chat",
     audit_action="system.platform_status",
     note="Chat session mutation/control route; active status is required before service execution.",
 )
 _CHAT_CONTROL_EXCEPTION_POLICY = _policy(
-    MODULE_RBAC,
     SESSION_OWNER,
     PLATFORM_STATUS_EXCEPTION,
     MUTATION_EXECUTION,
-    module_permission="module.chat",
     note="Operational stop/cancel control remains available during readonly/maintenance.",
 )
 _CATALOG_READ_POLICY = _policy(
@@ -257,7 +252,8 @@ _add(
     "POST",
     "/api/v1/chat/stream",
     _policy(
-        MODULE_RBAC,
+        AGENT_ACL,
+        TOOL_PERMISSION,
         SESSION_OWNER,
         DATASOURCE_PROJECTION,
         DATASOURCE_GRANT,
@@ -267,7 +263,6 @@ _add(
         AUDIT,
         PLATFORM_STATUS_GATE,
         MUTATION_EXECUTION,
-        module_permission="module.chat",
         audit_action="chat.stream",
         data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, SQL_POLICY},
     ),
@@ -276,7 +271,6 @@ _add(
     "POST",
     "/api/v1/chat/feedback",
     _policy(
-        MODULE_RBAC,
         SESSION_OWNER,
         DATASOURCE_PROJECTION,
         DATASOURCE_GRANT,
@@ -286,7 +280,6 @@ _add(
         AUDIT,
         PLATFORM_STATUS_GATE,
         MUTATION_EXECUTION,
-        module_permission="module.chat",
         audit_action="chat.feedback",
         data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, SQL_POLICY},
     ),
@@ -311,10 +304,16 @@ _add_many(
     "GET",
     [
         "/api/v1/admin/agents",
+        "/api/v1/admin/agents/node-types",
         "/api/v1/admin/agents/tools",
         "/api/v1/admin/agents/tool-reference",
+        "/api/v1/admin/agents/acl-users",
+        "/api/v1/admin/agents/acl-roles",
         "/api/v1/admin/agents/{agent_id}",
         "/api/v1/admin/agents/{agent_id}/acl",
+        "/api/v1/admin/agents/{agent_id}/policy",
+        "/api/v1/admin/agents/{agent_id}/default-users",
+        "/api/v1/admin/agents/default",
     ],
     _ADMIN_AGENT_READ_POLICY,
 )
@@ -324,6 +323,9 @@ _add_many(
         "/api/v1/admin/agents/{agent_id}",
         "/api/v1/admin/agents/{agent_id}/status",
         "/api/v1/admin/agents/{agent_id}/acl",
+        "/api/v1/admin/agents/{agent_id}/policy",
+        "/api/v1/admin/agents/{agent_id}/default-users",
+        "/api/v1/admin/agents/default",
     ],
     _ADMIN_AGENT_MUTATION_POLICY,
 )
@@ -547,9 +549,23 @@ _add_many(
     _policy(MODULE_RBAC, TOOL_PERMISSION, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.mcp"),
 )
 
+_add(
+    "POST",
+    "/api/v1/kb/bootstrap",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        DATASOURCE_GRANT,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.kb",
+        data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
+        note="Knowledge bootstrap runs against the explicitly requested and authorized datasource config clone.",
+    ),
+)
 _add_many(
     "POST",
-    ["/api/v1/kb/bootstrap", "/api/v1/kb/bootstrap-docs", "/api/v1/kb/uploads"],
+    ["/api/v1/kb/bootstrap-docs", "/api/v1/kb/uploads"],
     _policy(MODULE_RBAC, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.kb"),
 )
 _add(
@@ -627,6 +643,25 @@ _add(
     _policy(SESSION_OWNER, SYSTEM_READONLY, note="Lists only the current user's sessions."),
 )
 _add("GET", "/api/v1/me/usage", _policy(QUOTA, SYSTEM_READONLY))
+_add(
+    "GET",
+    "/api/v1/me/agent-preferences",
+    _policy(
+        AGENT_ACL,
+        SYSTEM_READONLY,
+        note="Returns the effective user, enterprise, or first ACL-available default Agent.",
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/me/agent-preferences",
+    _policy(
+        AGENT_ACL,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        note="Persists only a visible, published Agent as the authenticated user's default.",
+    ),
+)
 _add_many(
     "GET",
     [

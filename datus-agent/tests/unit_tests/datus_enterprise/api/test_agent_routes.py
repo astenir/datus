@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
@@ -14,6 +15,10 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import chat_routes
+from datus_enterprise.agent_registry import (
+    ENTERPRISE_AGENT_NODE_CAPABILITIES,
+    ENTERPRISE_AGENT_NODE_CLASSES,
+)
 from datus_enterprise.api import agent_routes
 from datus_enterprise.postgres_stores import _agent_record, _normalized_agent_metadata
 
@@ -85,6 +90,124 @@ def test_admin_agent_tools_and_tool_reference(monkeypatch):
     assert "db_tools" in reference_response.json()["data"]["tool_types"]
 
 
+def test_admin_agent_node_types(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/node-types")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    items = response.json()["data"]
+    assert [item["node_class"] for item in items] == [
+        "chat",
+        "gen_sql",
+        "gen_report",
+        "gen_visual_report",
+        "gen_visual_dashboard",
+        "ask_metrics",
+        "ask_report",
+        "ask_dashboard",
+    ]
+    assert {item["node_class"] for item in items} == ENTERPRISE_AGENT_NODE_CLASSES
+    assert all(item["label"] and item["description"] for item in items)
+    assert {item["node_class"] for item in items if item["supports_mcp"]} == {"chat", "gen_sql"}
+    assert all(capability.enterprise_visible for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES)
+
+
+def test_admin_agent_node_types_rejects_without_permission(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/node-types")
+
+    assert response.status_code == 403
+    assert "module.admin.agents" in response.json()["detail"]
+
+
+def test_admin_agent_acl_directories_use_agent_permission_and_return_sanitized_records(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    extensions = _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore(), audit_sink)
+    extensions.user_store._users.update(
+        {
+            "alice": {
+                "user_id": "alice",
+                "display_name": "Alice Chen",
+                "email": "alice@example.com",
+                "enabled": True,
+                "department": "Finance",
+                "title": "Analyst",
+            },
+            "disabled": {
+                "user_id": "disabled",
+                "display_name": "Disabled User",
+                "email": None,
+                "enabled": False,
+            },
+        }
+    )
+    extensions.role_store._roles.update(
+        {
+            "analyst": {
+                "role_id": "analyst",
+                "name": "Analyst",
+                "description": "Read-only analysts",
+                "permissions": ["module.chat"],
+                "built_in": False,
+            },
+            "operator": {
+                "role_id": "operator",
+                "name": "Operator",
+                "description": None,
+                "permissions": ["module.admin.*"],
+                "built_in": False,
+            },
+        }
+    )
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        users_response = client.get("/api/v1/admin/agents/acl-users", params={"query": "alice"})
+        roles_response = client.get("/api/v1/admin/agents/acl-roles", params={"query": "analyst"})
+
+    assert users_response.status_code == 200
+    assert users_response.json()["data"] == [
+        {
+            "user_id": "alice",
+            "display_name": "Alice Chen",
+            "email": "alice@example.com",
+            "department": "Finance",
+            "title": "Analyst",
+        }
+    ]
+    assert roles_response.status_code == 200
+    assert roles_response.json()["data"] == [
+        {
+            "role_id": "analyst",
+            "name": "Analyst",
+            "description": "Read-only analysts",
+        }
+    ]
+    assert audit_sink.events[-2].metadata["operation"] == "list_admin_agent_acl_users"
+    assert audit_sink.events[-1].metadata["operation"] == "list_admin_agent_acl_roles"
+
+
+def test_admin_agent_acl_directories_reject_without_agent_permission(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users", "module.admin.roles"})
+
+    with _client(ctx) as client:
+        users_response = client.get("/api/v1/admin/agents/acl-users")
+        roles_response = client.get("/api/v1/admin/agents/acl-roles")
+
+    assert users_response.status_code == 403
+    assert roles_response.status_code == 403
+    assert "module.admin.agents" in users_response.json()["detail"]
+    assert "module.admin.agents" in roles_response.json()["detail"]
+
+
 def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
@@ -104,8 +227,8 @@ def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
     assert items["chat"]["source"] == "builtin"
     assert items["chat"]["node_class"] == "chat"
     assert items["gen_sql"]["source"] == "builtin"
-    assert items["gen_sql"]["status"] == "published"
-    assert items["gen_sql"]["acl"] is None
+    assert items["gen_sql"]["status"] == "disabled"
+    assert items["gen_sql"]["acl"]["visibility"] == "private"
     assert "feedback" not in items
     assert items["sales_sql"]["source"] == "enterprise"
     assert items["sales_sql"]["acl"]["visibility"] == "enterprise"
@@ -123,7 +246,7 @@ def test_admin_agents_status_filter_treats_builtins_as_published(monkeypatch):
     published_ids = {item["agent_id"] for item in published_response.json()["data"]}
     draft_ids = {item["agent_id"] for item in draft_response.json()["data"]}
     assert "chat" in published_ids
-    assert "gen_sql" in published_ids
+    assert "gen_sql" not in published_ids
     assert "gen_sql" not in draft_ids
 
 
@@ -138,7 +261,7 @@ def test_admin_builtin_agent_detail_is_readonly(monkeypatch):
     assert detail_response.status_code == 200
     assert detail_response.json()["success"] is True
     assert detail_response.json()["data"]["source"] == "builtin"
-    assert detail_response.json()["data"]["acl"] is None
+    assert detail_response.json()["data"]["acl"]["visibility"] == "private"
     assert detail_response.json()["data"]["prompt_template_name"] == "gen_sql_system"
     assert detail_response.json()["data"]["prompt_version"] == "1.2"
     assert (
@@ -182,7 +305,7 @@ def test_admin_default_chat_agent_detail_is_readonly(monkeypatch):
     assert mutation_response.json()["errorCode"] == "AGENT_ID_INVALID"
 
 
-def test_available_agent_tools_require_visible_agent_and_node_permission(monkeypatch):
+def test_available_agent_tools_require_visible_agent_acl_not_node_permission(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
     agent_store._agents["sales_sql"] = {
@@ -202,11 +325,10 @@ def test_available_agent_tools_require_visible_agent_and_node_permission(monkeyp
 
     chat_only_ctx = AppContext(user_id="bob", permissions={"module.chat"})
     with _client(chat_only_ctx) as client:
-        denied_response = client.get("/api/v1/agents/sales_sql/tools")
+        allowed_response = client.get("/api/v1/agents/sales_sql/tools")
 
-    assert denied_response.status_code == 200
-    assert denied_response.json()["success"] is False
-    assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert allowed_response.status_code == 200
+    assert allowed_response.json()["success"] is True
 
 
 def test_available_default_chat_agent_is_listed_and_readable(monkeypatch):
@@ -224,6 +346,134 @@ def test_available_default_chat_agent_is_listed_and_readable(monkeypatch):
     assert detail_response.json()["data"]["source"] == "builtin"
     assert tools_response.json()["success"] is True
     assert "memory_tools.*" in tools_response.json()["data"]["default_tools"]
+
+
+def test_available_builtin_agents_use_persisted_acl_overlay_not_module_permissions(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+
+    chat_ctx = AppContext(user_id="alice", permissions={"module.chat"})
+    with _client(chat_ctx) as client:
+        chat_response = client.get("/api/v1/agents")
+
+    chat_builtin_ids = {item["agent_id"] for item in chat_response.json()["data"] if item["source"] == "builtin"}
+    assert chat_builtin_ids == {"chat"}
+
+    privileged_ctx = AppContext(user_id="operator", permissions={"*"})
+    with _client(privileged_ctx) as client:
+        privileged_response = client.get("/api/v1/agents")
+
+    privileged_builtin_ids = {
+        item["agent_id"] for item in privileged_response.json()["data"] if item["source"] == "builtin"
+    }
+    assert privileged_builtin_ids == {"chat"}
+
+
+def test_user_can_persist_and_read_visible_default_agent(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    extensions = _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "name": "Sales SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "operator",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="alice", permissions={"module.chat", "module.sql_executor"})
+
+    with _client(ctx) as client:
+        update_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "sales_sql"},
+        )
+        read_response = client.get("/api/v1/me/agent-preferences")
+
+    assert update_response.status_code == 200
+    assert update_response.json()["data"]["default_agent_id"] == "sales_sql"
+    assert read_response.json()["data"]["default_agent_id"] == "sales_sql"
+    assert extensions.user_store._chat_preferences["alice"]["default_agent_id"] == "sales_sql"
+
+
+def test_user_agent_preference_rejects_unavailable_agent_and_falls_back_when_disabled(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["private_sql"] = {
+        "agent_id": "private_sql",
+        "name": "Private SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "bob",
+        "acl": {"visibility": "private"},
+    }
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "name": "Sales SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "operator",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="alice", permissions={"module.chat", "module.sql_executor"})
+
+    with _client(ctx) as client:
+        denied_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "private_sql"},
+        )
+        saved_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "sales_sql"},
+        )
+        agent_store._agents["sales_sql"]["status"] = "disabled"
+        fallback_response = client.get("/api/v1/me/agent-preferences")
+
+    assert denied_response.json()["success"] is False
+    assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert saved_response.json()["success"] is True
+    assert fallback_response.json()["data"]["default_agent_id"] == "chat"
+    assert fallback_response.json()["data"]["source"] == "builtin_chat"
+
+
+def test_user_can_clear_default_agent_preference_and_stably_fall_back_to_chat(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["ask_metrics"] = {
+        "agent_id": "ask_metrics",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="alice", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.put("/api/v1/me/agent-preferences", json={"default_agent_id": None})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["default_agent_id"] == "chat"
+    assert response.json()["data"]["source"] == "builtin_chat"
+    assert response.json()["data"]["user_default_agent_id"] is None
+
+
+def test_default_agent_falls_back_to_first_acl_available_when_chat_is_disabled(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["ask_metrics"] = {
+        "agent_id": "ask_metrics",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    agent_store._agents["chat"] = {
+        "agent_id": "chat",
+        "status": "disabled",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="alice", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me/agent-preferences")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["default_agent_id"] == "ask_metrics"
+    assert response.json()["data"]["source"] == "first_available"
 
 
 def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
@@ -260,7 +510,7 @@ def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
     assert "sales_sql" in ids
 
 
-def test_available_agents_filters_node_class_permission(monkeypatch):
+def test_available_agents_do_not_filter_by_node_class_permission(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
     agent_store._agents["sales_sql"] = {
@@ -275,7 +525,7 @@ def test_available_agents_filters_node_class_permission(monkeypatch):
         response = client.get("/api/v1/agents")
 
     ids = {item["agent_id"] for item in response.json()["data"]}
-    assert "sales_sql" not in ids
+    assert "sales_sql" in ids
 
 
 def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
@@ -291,6 +541,7 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
                 "node_class": "chat",
                 "status": "published",
                 "mcp": ["filesystem"],
+                "tool_policy": {"mode": "allowlist", "allowed": []},
                 "acl": {"visibility": "enterprise"},
             },
         )
@@ -299,7 +550,46 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
     assert response.json()["success"] is True
     assert response.json()["data"]["node_class"] == "chat"
     assert response.json()["data"]["mcp"] == ["filesystem"]
+    assert response.json()["data"]["tool_policy"]["allowed"] == ["mcp.filesystem.*"]
     assert agent_store._agents["custom_chat"]["node_class"] == "chat"
+
+
+def test_admin_agent_upsert_rejects_mcp_for_unsupported_node_class(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/report_writer",
+            json={"node_class": "gen_report", "mcp": ["filesystem"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert "does not support MCP" in response.json()["errorMessage"]
+    assert agent_store._agents == {}
+
+
+def test_admin_agent_upsert_accepts_visual_artifact_node_classes(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        report_response = client.put(
+            "/api/v1/admin/agents/visual_report_writer",
+            json={"name": "Visual Report Writer", "node_class": "gen_visual_report"},
+        )
+        dashboard_response = client.put(
+            "/api/v1/admin/agents/visual_dashboard_writer",
+            json={"name": "Visual Dashboard Writer", "node_class": "gen_visual_dashboard"},
+        )
+
+    assert report_response.json()["success"] is True
+    assert report_response.json()["data"]["node_class"] == "gen_visual_report"
+    assert dashboard_response.json()["success"] is True
+    assert dashboard_response.json()["data"]["node_class"] == "gen_visual_dashboard"
 
 
 def test_admin_agent_upsert_is_blocked_in_readonly_status(monkeypatch):
@@ -327,6 +617,13 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
         "status": "published",
         "description": "Sales SQL",
         "tools": ["db_tools.read_query"],
+        "mcp": ["filesystem"],
+        "scoped_context": {
+            "_enterprise_agent_policy": {
+                "tool_policy": {"mode": "allowlist", "allowed": ["db_tools.read_query"]},
+                "runtime_policy": {},
+            }
+        },
         "acl": {"visibility": "enterprise"},
     }
 
@@ -337,6 +634,52 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
     assert entry["id"] == "sales_sql"
     assert entry["node_class"] == "gen_sql"
     assert entry["tools"] == "db_tools.read_query"
+    assert entry["mcp"] == "filesystem"
+    assert entry["tool_policy"]["allowed"] == ["db_tools.read_query", "mcp.filesystem.*"]
+
+
+def test_enterprise_agent_materializes_custom_prompt_content():
+    agent_config = SimpleNamespace(agentic_nodes={})
+    record = {
+        "agent_id": "chat_custom",
+        "node_class": "chat",
+        "status": "published",
+        "prompt_template": "You are the custom chat Agent.",
+        "prompt_version": "1.0",
+        "tools": [],
+        "mcp": [],
+        "scoped_context": {},
+        "acl": {"visibility": "enterprise"},
+    }
+
+    chat_routes._materialize_enterprise_agent(agent_config, record)
+
+    entry = agent_config.agentic_nodes["chat_custom"]
+    assert entry["system_prompt"] == "chat_custom"
+    assert entry["prompt_template"] == "You are the custom chat Agent."
+    assert entry["prompt_version"] == "1.0"
+
+
+def test_enterprise_agent_without_custom_prompt_uses_latest_builtin_template():
+    agent_config = SimpleNamespace(agentic_nodes={})
+    record = {
+        "agent_id": "chat_custom",
+        "node_class": "chat",
+        "status": "published",
+        "prompt_template": None,
+        "prompt_version": "1.0",
+        "tools": [],
+        "mcp": [],
+        "scoped_context": {},
+        "acl": {"visibility": "enterprise"},
+    }
+
+    chat_routes._materialize_enterprise_agent(agent_config, record)
+
+    entry = agent_config.agentic_nodes["chat_custom"]
+    assert entry["system_prompt"] == "chat"
+    assert entry["prompt_template"] is None
+    assert entry["prompt_version"] is None
 
 
 def test_pg_agent_store_helpers_preserve_runtime_record_shape():
@@ -387,3 +730,113 @@ def test_pg_agent_store_helpers_preserve_runtime_record_shape():
     assert record["status"] == "published"
     assert record["scoped_context"] == {"tables": ["sales.orders"]}
     assert record["acl"]["visibility"] == "role"
+
+
+def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store, enabled=True)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        status_response = client.put("/api/v1/admin/agents/gen_sql/status", json={"status": "published"})
+        acl_response = client.put(
+            "/api/v1/admin/agents/gen_sql/acl",
+            json={"visibility": "enterprise", "allowed_roles": [], "allowed_user_ids": []},
+        )
+        policy_response = client.put(
+            "/api/v1/admin/agents/gen_sql/policy",
+            json={
+                "tool_policy": {
+                    "mode": "allowlist",
+                    "allowed": ["db_tools.list_tables", "db_tools.describe_table"],
+                    "denied": ["filesystem_tools.*", "bash_tools.*"],
+                },
+                "runtime_policy": {
+                    "max_permission_mode": "normal",
+                    "allow_subagent_delegation": False,
+                    "allowed_subagents": [],
+                },
+            },
+        )
+
+    assert status_response.json()["success"] is True
+    assert acl_response.json()["data"]["visibility"] == "enterprise"
+    assert policy_response.json()["data"]["tool_policy"]["mode"] == "allowlist"
+    assert agent_store._agents["gen_sql"]["scoped_context"]["_enterprise_agent_policy"]["tool_policy"]["denied"] == [
+        "bash_tools.*",
+        "filesystem_tools.*",
+    ]
+
+    ordinary_ctx = AppContext(user_id="alice", permissions=set())
+    with _client(ordinary_ctx) as client:
+        list_response = client.get("/api/v1/agents")
+        detail_response = client.get("/api/v1/agents/gen_sql")
+
+    assert "gen_sql" in {item["agent_id"] for item in list_response.json()["data"]}
+    assert detail_response.json()["data"]["tool_policy"]["allowed"] == [
+        "db_tools.describe_table",
+        "db_tools.list_tables",
+    ]
+
+
+def test_disabled_agent_can_clear_but_not_assign_default_users(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    extensions = _install_extensions(monkeypatch, agent_store, enabled=True)
+    extensions.user_store._users["alice"] = {"user_id": "alice", "enabled": True}
+    asyncio.run(extensions.user_store.put_chat_preference(user_id="alice", default_agent_id="chat"))
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        disable_response = client.put("/api/v1/admin/agents/chat/status", json={"status": "disabled"})
+        clear_response = client.put(
+            "/api/v1/admin/agents/chat/default-users",
+            json={"user_ids": []},
+        )
+        assign_response = client.put(
+            "/api/v1/admin/agents/chat/default-users",
+            json={"user_ids": ["alice"]},
+        )
+
+    assert disable_response.json()["data"]["status"] == "disabled"
+    assert clear_response.json()["success"] is True
+    assert clear_response.json()["data"] == []
+    assert assign_response.json()["errorCode"] == "AGENT_DEFAULT_REQUIRES_PUBLISHED"
+    preference = asyncio.run(extensions.user_store.get_chat_preference("alice"))
+    assert preference["default_agent_id"] is None
+
+
+def test_effective_default_priority_user_enterprise_then_first_available(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    extensions = _install_extensions(monkeypatch, agent_store, enabled=True)
+    extensions.user_store._users["alice"] = {"user_id": "alice", "enabled": True}
+    agent_store._agents["safe_chat"] = {
+        "agent_id": "safe_chat",
+        "name": "Safe Chat",
+        "node_class": "chat",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+    with _client(admin_ctx) as client:
+        enterprise_response = client.put(
+            "/api/v1/admin/agents/default",
+            json={"default_agent_id": "safe_chat"},
+        )
+        default_users_response = client.put(
+            "/api/v1/admin/agents/chat/default-users",
+            json={"user_ids": ["alice"]},
+        )
+
+    assert enterprise_response.json()["data"]["default_agent_id"] == "safe_chat"
+    assert default_users_response.json()["data"] == ["alice"]
+
+    alice_ctx = AppContext(user_id="alice", permissions=set())
+    with _client(alice_ctx) as client:
+        personal_response = client.get("/api/v1/me/agent-preferences")
+        client.put("/api/v1/me/agent-preferences", json={"default_agent_id": None})
+        enterprise_fallback = client.get("/api/v1/me/agent-preferences")
+
+    assert personal_response.json()["data"]["default_agent_id"] == "chat"
+    assert personal_response.json()["data"]["source"] == "user"
+    assert enterprise_fallback.json()["data"]["default_agent_id"] == "safe_chat"
+    assert enterprise_fallback.json()["data"]["source"] == "enterprise"

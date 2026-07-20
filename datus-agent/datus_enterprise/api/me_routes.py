@@ -14,6 +14,7 @@ from datus.api.auth.context import AppContext
 from datus.api.deps import AppContextDep, ServiceDep
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData
+from datus.utils.datasource_scope import SCOPE_CONSTRAINTS_KEY
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-me"])
 RequestContextDep = Annotated[AppContext, Depends(deps.get_request_app_context)]
@@ -143,7 +144,12 @@ def _permissions(ctx: AppContext) -> list[str]:
 
 def _datasource_grants(ctx: AppContext) -> dict[str, Any]:
     grants = copy.deepcopy(getattr(ctx, "datasource_grants", {}) or {})
-    return grants if isinstance(grants, dict) else {}
+    if not isinstance(grants, dict):
+        return {}
+    for grant in grants.values():
+        if isinstance(grant, dict):
+            grant.pop(SCOPE_CONSTRAINTS_KEY, None)
+    return grants
 
 
 def _features(ctx: AppContext) -> dict[str, bool]:

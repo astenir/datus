@@ -70,7 +70,7 @@ const triggerText = computed(() => {
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        class="w-[--reka-popover-trigger-width] p-0"
+        class="w-[var(--reka-popover-trigger-width)] p-0"
       >
         <Command>
           <CommandInput :placeholder="searchPlaceholder" />

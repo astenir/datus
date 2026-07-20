@@ -6,6 +6,7 @@ import asyncio
 import queue
 import threading
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -117,6 +118,7 @@ class FakePingConnection(FakePymysqlConnection):
 def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     normalized = " ".join(f"{METADATA_SCHEMA_SQL}\n{BODY_SCHEMA_SQL}".lower().split())
     assert "create table if not exists enterprise_users" in normalized
+    assert "create table if not exists enterprise_user_chat_preferences" in normalized
     assert "create table if not exists enterprise_roles" in normalized
     assert "create table if not exists enterprise_datasource_grants" in normalized
     assert "create table if not exists enterprise_agents" in normalized
@@ -136,6 +138,36 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized
+
+
+@pytest.mark.asyncio
+async def test_ob_user_store_persists_chat_preference(monkeypatch):
+    store = ObEnterpriseUserStore(
+        host="127.0.0.1",
+        user="root",
+        password="secret",
+        database="enterprise",
+    )
+    fetchone = AsyncMock(
+        side_effect=[
+            None,
+            {
+                "user_id": "alice",
+                "default_agent_id": "sales_sql",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            },
+        ]
+    )
+    execute = AsyncMock(return_value=1)
+    monkeypatch.setattr(store, "_fetchone", fetchone)
+    monkeypatch.setattr(store, "_execute", execute)
+
+    assert (await store.get_chat_preference("alice"))["default_agent_id"] is None
+    preference = await store.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+
+    assert preference["default_agent_id"] == "sales_sql"
+    assert execute.await_args.args[1] == ("alice", "sales_sql")
 
 
 def test_ob_user_model_credential_store_adds_base_url_column_for_existing_table():

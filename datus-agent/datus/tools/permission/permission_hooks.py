@@ -256,6 +256,7 @@ class PermissionHooks(AgentHooks):
         node_name: str,
         tool_registry: ToolRegistry,
         *,
+        node_class: Optional[str] = None,
         fs_policy: Optional[FilesystemPolicy] = None,
         non_interactive: bool = False,
         proxied_tool_names: Optional[Set[str]] = None,
@@ -268,6 +269,10 @@ class PermissionHooks(AgentHooks):
             permission_manager: PermissionManager for checking permissions
             node_name: Name of the current agentic node (e.g., "chat")
             tool_registry: Shared ToolRegistry instance (from AgenticNode)
+            node_class: Stable class-level node identifier. Runtime permission
+                rules continue to use ``node_name``; capability checks that
+                must survive custom aliases use this canonical identifier.
+                Defaults to ``node_name`` for legacy callers.
             fs_policy: Optional per-node filesystem policy. When provided,
                 ``filesystem_tools`` calls are routed through
                 :func:`classify_path` first so ``EXTERNAL`` paths force a user
@@ -300,6 +305,7 @@ class PermissionHooks(AgentHooks):
         self.broker = broker
         self.permission_manager = permission_manager
         self.node_name = node_name
+        self.node_class = node_class or node_name
         self.tool_registry = tool_registry
         self.fs_policy = fs_policy
         self.non_interactive = non_interactive
@@ -466,7 +472,7 @@ class PermissionHooks(AgentHooks):
     # ``isAutoConfirmFilePath`` carve-out in ``Datus-saas`` (which silences
     # the per-tool Accept bar in the chat panel). All three layers must
     # agree or one of them keeps gating the user.
-    _ARTIFACT_AUTOALLOW_NODES = frozenset({"gen_visual_report", "gen_visual_dashboard"})
+    _ARTIFACT_AUTOALLOW_NODE_CLASSES = frozenset({"gen_visual_report", "gen_visual_dashboard"})
 
     # Relative-to-project-root path prefixes the carve-out applies to.
     # Slug character class is loose on purpose — ``ARTIFACT_SLUG_PATTERN``
@@ -552,18 +558,23 @@ class PermissionHooks(AgentHooks):
                 # Visual artifact subagents author the entire artifact tree
                 # in one turn — bypass the per-file ASK for paths under
                 # their own ``reports/<slug>/`` or ``dashboards/<slug>/``
-                # directory. See ``_ARTIFACT_AUTOALLOW_NODES`` docstring.
-                if self.node_name in self._ARTIFACT_AUTOALLOW_NODES:
+                # directory. Use the stable node class so custom Agent ids and
+                # server-issued artifact edit-session aliases retain the same
+                # narrowly scoped capability. See
+                # ``_ARTIFACT_AUTOALLOW_NODE_CLASSES`` docstring.
+                if self.node_class in self._ARTIFACT_AUTOALLOW_NODE_CLASSES:
                     try:
                         rel = resolved.resolved.relative_to(policy.root_path).as_posix()
                     except ValueError:
                         rel = None
                     if rel and self._ARTIFACT_AUTOALLOW_PATH_RE.match(rel):
                         logger.debug(
-                            "Filesystem zone INTERNAL × write × normal: auto-allowing %s on %s for artifact node %r",
+                            "Filesystem zone INTERNAL × write × normal: auto-allowing %s on %s "
+                            "for artifact node %r (class=%r)",
                             tool_name,
                             rel,
                             self.node_name,
+                            self.node_class,
                         )
                         return True
                 logger.debug(

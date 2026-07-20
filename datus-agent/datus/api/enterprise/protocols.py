@@ -108,6 +108,19 @@ class EnterpriseRoleStore(Protocol):
 
 
 @runtime_checkable
+class UserChatPreferenceStore(Protocol):
+    """Optional per-user chat preference capability for enterprise user stores."""
+
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        """Return the user's chat preference record, or an empty preference."""
+        ...
+
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        """Create or replace the user's default Agent preference."""
+        ...
+
+
+@runtime_checkable
 class EnterpriseDatasourceGrantStore(Protocol):
     """Persist and query role/user datasource grants."""
 

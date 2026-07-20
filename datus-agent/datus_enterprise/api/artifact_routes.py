@@ -94,6 +94,7 @@ class ArtifactListItem(ArtifactManifest):
     """User-visible artifact list item with current-user UI capabilities."""
 
     can_manage_share: bool = False
+    can_edit: bool = False
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -718,6 +719,31 @@ async def _can_manage_artifact_share(ctx: AppContext, acl: ArtifactAcl) -> bool:
     return decision.allowed
 
 
+async def _can_edit_artifact(
+    ctx: AppContext,
+    *,
+    artifact_type: Literal["report", "dashboard"],
+    slug: str,
+    acl: ArtifactAcl,
+) -> bool:
+    is_owner = bool(ctx.user_id and ctx.user_id == acl.owner_user_id)
+    if is_owner:
+        decision = await authorize(
+            ctx,
+            action=f"module.{artifact_type}.edit",
+            resource=ResourceRef(type=artifact_type, id=slug),
+        )
+        if decision.allowed:
+            return True
+
+    admin_decision = await authorize(
+        ctx,
+        action="module.admin.artifacts",
+        resource=ResourceRef(type="artifact_acl", id="module.admin.artifacts"),
+    )
+    return admin_decision.allowed
+
+
 async def _artifact_list_items(
     ctx: AppContext,
     *,
@@ -728,13 +754,28 @@ async def _artifact_list_items(
     items: list[ArtifactListItem] = []
     for manifest in manifests:
         can_manage_share = False
+        can_edit = False
         if store is not None:
             try:
                 raw_acl = await store.get_acl(artifact_type=artifact_type, slug=manifest.slug)
-                can_manage_share = await _can_manage_artifact_share(ctx, ArtifactAcl(**raw_acl))
+                acl = ArtifactAcl(**raw_acl)
+                can_manage_share = await _can_manage_artifact_share(ctx, acl)
+                can_edit = await _can_edit_artifact(
+                    ctx,
+                    artifact_type=artifact_type,
+                    slug=manifest.slug,
+                    acl=acl,
+                )
             except Exception:
                 can_manage_share = False
-        items.append(ArtifactListItem(**manifest.model_dump(), can_manage_share=can_manage_share))
+                can_edit = False
+        items.append(
+            ArtifactListItem(
+                **manifest.model_dump(),
+                can_manage_share=can_manage_share,
+                can_edit=can_edit,
+            )
+        )
     return items
 
 

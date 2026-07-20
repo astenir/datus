@@ -4,6 +4,7 @@ All external dependencies are mocked. Zero API keys, zero network access require
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,6 +42,10 @@ def mock_datus_service():
     svc.agent_config.api_config = {}
     svc.agent_config.enterprise_config = {}
     svc.agent_config.document_configs = {}
+    svc.agent_config.current_datasource = "datus_enterprise"
+    svc.agent_config.services = SimpleNamespace(
+        datasources={"ccks_fund": MagicMock(), "datus_enterprise": MagicMock()},
+    )
     svc.kb = MagicMock()
     return svc
 
@@ -116,7 +121,7 @@ def _make_kb_events():
 @pytest.mark.parametrize(
     ("path", "json_body"),
     [
-        ("/api/v1/kb/bootstrap", {"components": ["metadata"]}),
+        ("/api/v1/kb/bootstrap", {"datasource_id": "ccks_fund", "components": ["metadata"]}),
         ("/api/v1/kb/bootstrap/stream-1/cancel", None),
         ("/api/v1/kb/bootstrap-docs", {"platform": "snowflake"}),
         ("/api/v1/kb/bootstrap-docs/stream-1/cancel", None),
@@ -140,7 +145,7 @@ def test_kb_routes_require_module_kb(monkeypatch, mock_datus_service, path, json
 @pytest.mark.parametrize(
     ("path", "json_body"),
     [
-        ("/api/v1/kb/bootstrap", {"components": ["metadata"]}),
+        ("/api/v1/kb/bootstrap", {"datasource_id": "ccks_fund", "components": ["metadata"]}),
         ("/api/v1/kb/bootstrap/stream-1/cancel", None),
         ("/api/v1/kb/bootstrap-docs", {"platform": "snowflake"}),
         ("/api/v1/kb/bootstrap-docs/stream-1/cancel", None),
@@ -356,7 +361,11 @@ class TestKbUploads:
             delete_response = test_client.delete(f"/api/v1/kb/uploads/{upload['upload_id']}")
             build_response = test_client.post(
                 "/api/v1/kb/bootstrap",
-                json={"components": ["semantic_model"], "upload_id": upload["upload_id"]},
+                json={
+                    "datasource_id": "ccks_fund",
+                    "components": ["semantic_model"],
+                    "upload_id": upload["upload_id"],
+                },
             )
 
         assert delete_response.status_code == 200
@@ -369,7 +378,7 @@ class TestKbUploads:
         ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
         captured_requests = []
 
-        async def mock_stream(request, stream_id, cancel_event, project_files_root):  # noqa: ARG001
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):  # noqa: ARG001
             captured_requests.append((request, project_files_root))
             yield BootstrapKbEvent(
                 stream_id=stream_id,
@@ -387,7 +396,11 @@ class TestKbUploads:
             ).json()
             response = test_client.post(
                 "/api/v1/kb/bootstrap",
-                json={"components": ["semantic_model"], "upload_id": upload["upload_id"]},
+                json={
+                    "datasource_id": "ccks_fund",
+                    "components": ["semantic_model"],
+                    "upload_id": upload["upload_id"],
+                },
             )
 
         assert response.status_code == 200
@@ -400,7 +413,7 @@ class TestKbUploads:
         ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
         captured_requests = []
 
-        async def mock_stream(request, stream_id, cancel_event, project_files_root):  # noqa: ARG001
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):  # noqa: ARG001
             captured_requests.append(request)
             yield BootstrapKbEvent(
                 stream_id=stream_id,
@@ -421,7 +434,11 @@ class TestKbUploads:
             ).json()
             response = test_client.post(
                 "/api/v1/kb/bootstrap",
-                json={"components": ["reference_sql"], "upload_id": upload["upload_id"]},
+                json={
+                    "datasource_id": "ccks_fund",
+                    "components": ["reference_sql"],
+                    "upload_id": upload["upload_id"],
+                },
             )
 
         assert response.status_code == 200
@@ -673,13 +690,15 @@ def test_kb_cancel_routes_reject_foreign_stream_owner(mock_datus_service, path):
 
 class TestBootstrapKb:
     def _valid_bootstrap_payload(self):
-        return {"components": ["metadata"]}
+        return {"datasource_id": "ccks_fund", "components": ["metadata"]}
 
     def test_bootstrap_kb_returns_sse_stream(self, client, mock_datus_service):
         """bootstrap_stream async generator → 200 SSE with event lines."""
         events = _make_kb_events()
+        captured_configs = []
 
-        async def mock_stream(*args, **kwargs):
+        async def mock_stream(*args, agent_config=None, **kwargs):
+            captured_configs.append(agent_config)
             for event in events:
                 yield event
 
@@ -695,13 +714,15 @@ class TestBootstrapKb:
         body = response.text
         assert "task_started" in body
         assert "task_completed" in body
+        assert captured_configs[0].current_datasource == "ccks_fund"
+        assert mock_datus_service.agent_config.current_datasource == "datus_enterprise"
 
     def test_bootstrap_kb_retries_stream_id_collision(self, client, mock_datus_service):
         """A UUID collision must not overwrite another active stream token."""
         old_event = create_cancel_token("dup-stream", owner_user_id="u1", project_id="proj")
         seen_stream_ids = []
 
-        async def mock_stream(request, stream_id, cancel_event, project_files_root):
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):
             seen_stream_ids.append(stream_id)
             yield BootstrapKbEvent(
                 stream_id=stream_id,
@@ -744,6 +765,7 @@ class TestBootstrapKb:
                 response = client.post(
                     "/api/v1/kb/bootstrap",
                     json={
+                        "datasource_id": "ccks_fund",
                         "components": ["semantic_model"],
                         "success_story": "../../etc/passwd",
                     },
@@ -759,16 +781,40 @@ class TestBootstrapKb:
         """components field is required with min_length=1; empty list → 422."""
         response = client.post(
             "/api/v1/kb/bootstrap",
-            json={"components": []},
+            json={"datasource_id": "ccks_fund", "components": []},
         )
 
         assert response.status_code == 422
+
+    @pytest.mark.parametrize("datasource_id", [None, "   "])
+    def test_bootstrap_kb_requires_non_blank_datasource(self, client, datasource_id):
+        payload = {"components": ["metadata"]}
+        if datasource_id is not None:
+            payload["datasource_id"] = datasource_id
+
+        response = client.post("/api/v1/kb/bootstrap", json=payload)
+
+        assert response.status_code == 422
+
+    def test_bootstrap_kb_rejects_unknown_datasource(self, client, mock_datus_service):
+        response = client.post(
+            "/api/v1/kb/bootstrap",
+            json={"datasource_id": "missing", "components": ["metadata"]},
+        )
+
+        assert response.status_code == 400
+        assert "missing" in response.json()["detail"]
+        mock_datus_service.kb.bootstrap_stream.assert_not_called()
 
     def test_bootstrap_kb_invalid_strategy_returns_422(self, client):
         """strategy must be one of overwrite/check/incremental → 422 for invalid."""
         response = client.post(
             "/api/v1/kb/bootstrap",
-            json={"components": ["metadata"], "strategy": "invalid_strategy"},
+            json={
+                "datasource_id": "ccks_fund",
+                "components": ["metadata"],
+                "strategy": "invalid_strategy",
+            },
         )
 
         assert response.status_code == 422

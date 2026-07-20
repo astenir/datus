@@ -474,6 +474,16 @@ export function useAdminOverview() {
       const result = await adminDatasourceApi.listCatalog(normalizedDatasourceKey);
       if (requestId !== grantCatalogRequestId) return;
 
+      if (!result.success) {
+        const message = result.errorCode === "REQUEST_TIMEOUT"
+          ? "数据源目录加载超时，请稍后重试"
+          : result.errorMessage?.trim() || "加载数据源目录失败";
+        grantCatalogError.value = message;
+        grantCatalogDatabases.value = [];
+        toast.error(message);
+        return;
+      }
+
       grantCatalogDatabases.value = catalogDatabasesForDatasource(
         normalizedDatasourceKey,
         result.data?.databases ?? [],
@@ -488,8 +498,12 @@ export function useAdminOverview() {
     } catch (err) {
       if (requestId !== grantCatalogRequestId) return;
       console.error("加载数据源目录失败:", err);
-      grantCatalogError.value = "加载数据源目录失败";
+      const message = err instanceof Error && /timeout|timed out|超时/i.test(err.message)
+        ? "数据源目录加载超时，请稍后重试"
+        : "加载数据源目录失败，请稍后重试";
+      grantCatalogError.value = message;
       grantCatalogDatabases.value = [];
+      toast.error(message);
     } finally {
       if (requestId === grantCatalogRequestId) {
         loadingGrantCatalog.value = false;

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.models import ProjectionInput, ProjectionResult
 from datus.configuration.agent_config import AgentConfig
+from datus.utils.datasource_scope import datasource_field_order, datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.personal_datasources import (
     datasource_id_from_key,
@@ -96,6 +97,7 @@ class DatasourceGrantConfigProjector:
             allowed_grants[selected_datasource],
             request,
             selected_datasource=selected_datasource,
+            datasource_type=str(getattr(configured_datasources[selected_datasource], "type", "") or ""),
         )
         if denied_reason:
             return ProjectionResult(
@@ -222,7 +224,32 @@ def _requested_scope_denial(
     request: ProjectionInput,
     *,
     selected_datasource: str,
+    datasource_type: str = "",
 ) -> str | None:
+    field_order = datasource_field_order(datasource_type)
+    requested_coordinate = {
+        "catalog": (request.requested_catalog or "").strip(),
+        "database": (request.requested_database or "").strip(),
+        "schema": (request.requested_schema or "").strip(),
+        "table": "",
+    }
+    requested_field = next(
+        (field for field in ("schema", "database", "catalog") if requested_coordinate[field] and field in field_order),
+        None,
+    )
+    if requested_field and grant_uses_tree_scope(grant, field_order):
+        if datasource_scope_matches(
+            grant,
+            coordinate=requested_coordinate,
+            target_field=requested_field,
+            field_order=field_order,
+        ):
+            return None
+        return (
+            f"Requested {requested_field} '{requested_coordinate[requested_field]}' is not authorized "
+            f"for datasource '{selected_datasource}'."
+        )
+
     checks = [
         ("catalogs", "catalog", [request.requested_catalog]),
         ("databases", "database", [request.requested_database]),

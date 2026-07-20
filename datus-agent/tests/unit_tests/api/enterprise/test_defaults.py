@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import time
 
 import pytest
 
@@ -20,6 +21,26 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.models import AuditEvent, ResourceRef
 from datus.utils.exceptions import DatusException
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_does_not_block_event_loop(tmp_path, monkeypatch):
+    store = SqliteEnterpriseUserStore(str(tmp_path / "enterprise.db"))
+    original_connect = store._connect
+
+    def slow_connect():
+        time.sleep(0.1)
+        return original_connect()
+
+    monkeypatch.setattr(store, "_connect", slow_connect)
+    read_task = asyncio.create_task(store.get_user("alice"))
+    ticks = 0
+    while not read_task.done():
+        ticks += 1
+        await asyncio.sleep(0.01)
+
+    assert await read_task is None
+    assert ticks >= 5
 
 
 @pytest.mark.asyncio
@@ -111,6 +132,11 @@ async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filte
     disabled = await store.set_user_enabled("alice", False)
     assert disabled["enabled"] is False
     assert await store.set_user_enabled("missing", False) is None
+
+    assert (await store.get_chat_preference("alice"))["default_agent_id"] is None
+    preference = await store.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+    assert preference["default_agent_id"] == "sales_sql"
+    assert (await store.get_chat_preference("alice"))["created_at"] == preference["created_at"]
 
 
 @pytest.mark.asyncio
@@ -374,6 +400,14 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     enabled = await reopened.set_user_enabled("alice", True)
     assert enabled["enabled"] is True
     assert await reopened.set_user_enabled("missing", False) is None
+
+    preference = await reopened.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+    assert preference["default_agent_id"] == "sales_sql"
+
+    reopened_again = SqliteEnterpriseUserStore(str(db_path))
+    assert (await reopened_again.get_chat_preference("alice"))["default_agent_id"] == "sales_sql"
+    cleared = await reopened_again.put_chat_preference(user_id="alice", default_agent_id=None)
+    assert cleared["default_agent_id"] is None
 
 
 @pytest.mark.asyncio

@@ -5,8 +5,18 @@ const getAgent = vi.fn();
 const createAgent = vi.fn();
 const editAgent = vi.fn();
 const deleteAgent = vi.fn();
+const agentNodeTypes = vi.fn();
+const agentAclUsers = vi.fn();
+const agentAclRoles = vi.fn();
 const agentTools = vi.fn();
 const agentUseTools = vi.fn();
+const updateAgentStatus = vi.fn();
+const updateAgentAcl = vi.fn();
+const updateAgentPolicy = vi.fn();
+const agentDefaultUsers = vi.fn();
+const updateAgentDefaultUsers = vi.fn();
+const enterpriseDefault = vi.fn();
+const updateEnterpriseDefault = vi.fn();
 const listDatasources = vi.fn();
 const listArtifacts = vi.fn();
 const listMcpServers = vi.fn();
@@ -29,8 +39,18 @@ vi.mock("@/lib/api", () => ({
     create: createAgent,
     edit: editAgent,
     delete: deleteAgent,
+    nodeTypes: agentNodeTypes,
+    aclUsers: agentAclUsers,
+    aclRoles: agentAclRoles,
     tools: agentTools,
     useTools: agentUseTools,
+    updateStatus: updateAgentStatus,
+    updateAcl: updateAgentAcl,
+    updatePolicy: updateAgentPolicy,
+    defaultUsers: agentDefaultUsers,
+    updateDefaultUsers: updateAgentDefaultUsers,
+    enterpriseDefault,
+    updateEnterpriseDefault,
   },
   adminDatasourceApi: {
     listDatasources,
@@ -97,10 +117,56 @@ describe("useAgentManager", () => {
       },
       rules: ["cite sources"],
       max_turns: 30,
+      acl: {
+        visibility: "role",
+        allowed_roles: ["analyst"],
+        allowed_user_ids: ["alice"],
+      },
     });
     createAgent.mockResolvedValue({ agent_id: "analyst", name: "analyst" });
     editAgent.mockResolvedValue({});
     deleteAgent.mockResolvedValue({});
+    updateAgentStatus.mockResolvedValue({});
+    updateAgentAcl.mockResolvedValue({});
+    updateAgentPolicy.mockResolvedValue({});
+    agentDefaultUsers.mockResolvedValue([]);
+    updateAgentDefaultUsers.mockResolvedValue([]);
+    enterpriseDefault.mockResolvedValue({ default_agent_id: "chat", source: "enterprise" });
+    updateEnterpriseDefault.mockResolvedValue({ default_agent_id: "chat", source: "enterprise" });
+    agentNodeTypes.mockResolvedValue([
+      {
+        node_class: "gen_sql",
+        label: "SQL 分析",
+        description: "生成和执行只读 SQL。",
+        supports_mcp: true,
+      },
+      {
+        node_class: "ask_metrics",
+        label: "指标问答",
+        description: "围绕指标、维度和归因分析问答。",
+        supports_mcp: false,
+      },
+    ]);
+    agentAclUsers.mockResolvedValue([
+      {
+        user_id: "alice",
+        display_name: "Alice Chen",
+        email: "alice@example.com",
+        department: "Finance",
+        title: "Analyst",
+      },
+      {
+        user_id: "bob",
+        display_name: null,
+        email: "bob@example.com",
+        department: null,
+        title: null,
+      },
+    ]);
+    agentAclRoles.mockResolvedValue([
+      { role_id: "analyst", name: "Analyst", description: "Read-only analysts" },
+      { role_id: "fund_researcher", name: "Fund Researcher", description: null },
+    ]);
     agentTools.mockResolvedValue({
       tools: {
         sql: ["read_query", "explain_query"],
@@ -166,6 +232,17 @@ describe("useAgentManager", () => {
     expect(manager.agentCount.value).toBe(2);
   });
 
+  it("defaults newly created enterprise agents to enterprise visibility", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    expect(manager.form.value).toMatchObject({
+      visibility: "enterprise",
+      allowedRoleIds: [],
+      allowedUserIds: [],
+    });
+  });
+
   it("surfaces enterprise disabled legacy agent routes explicitly", async () => {
     const { ApiResultError } = await import("@/lib/chat");
     listAgents.mockRejectedValue(new ApiResultError("legacy disabled", "ENTERPRISE_ROUTE_DISABLED"));
@@ -192,8 +269,71 @@ describe("useAgentManager", () => {
       name: "analyst",
       promptTemplate: "Analyze data",
       toolsText: "read_query",
+      visibility: "role",
+      allowedRoleIds: ["analyst"],
+      allowedUserIds: ["alice"],
     });
     expect(manager.selectedUseToolCount.value).toBe(2);
+  });
+
+  it("keeps existing agents private when the detail payload has no ACL", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "legacy",
+      name: "legacy",
+      node_class: "gen_sql",
+      status: "published",
+      source: "enterprise",
+      tools: [],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("legacy");
+
+    expect(manager.form.value.visibility).toBe("private");
+  });
+
+  it("distinguishes default tool patterns from saved catalog fallbacks", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "analyst",
+      name: "analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      source: "custom",
+      tools: ["db_tools.*", "legacy_tools.old_method", "db_tools.list_tables"],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    agentUseTools.mockResolvedValue({
+      default_tools: ["db_tools.*"],
+      tool_types: {
+        db_tools: { tools: ["list_tables"] },
+      },
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+
+    expect(manager.toolOptions.value).toEqual([
+      { value: "legacy_tools.old_method", label: "当前配置：legacy_tools.old_method" },
+      { value: "db_tools.*", label: "默认：db_tools.*" },
+      { value: "db_tools.list_tables", label: "list_tables", description: "db_tools" },
+    ]);
+    expect(manager.toolOptions.value.filter(option => option.value === "db_tools.*")).toHaveLength(1);
+    expect(manager.selectedTools.value).toEqual([
+      "db_tools.*",
+      "legacy_tools.old_method",
+      "db_tools.list_tables",
+    ]);
   });
 
   it("hydrates builtin templates from the read-only detail payload", async () => {
@@ -223,7 +363,7 @@ describe("useAgentManager", () => {
 
     expect(manager.form.value.promptTemplate).toBe("builtin template body");
     expect(manager.selectedIsBuiltin.value).toBe(true);
-    expect(manager.canSubmitForm.value).toBe(false);
+    expect(manager.canSubmitForm.value).toBe(true);
   });
 
   it("copies the builtin chat agent into an editable enterprise draft", async () => {
@@ -254,10 +394,19 @@ describe("useAgentManager", () => {
       default_tools: ["memory_tools.*"],
       tool_types: {},
     });
+    agentNodeTypes.mockResolvedValue([
+      {
+        node_class: "chat",
+        label: "通用聊天",
+        description: "面向普通问答、规划和多工具协作。",
+        supports_mcp: true,
+      },
+    ]);
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
 
     await manager.loadAgents();
+    await manager.loadNodeTypes();
     await manager.selectAgent("chat");
     const started = manager.startCreateFromSelectedBuiltin();
 
@@ -274,8 +423,36 @@ describe("useAgentManager", () => {
       promptTemplate: "builtin template body",
       toolsText: "memory_tools.*",
       mcpText: "",
+      visibility: "enterprise",
+      allowedRoleIds: [],
+      allowedUserIds: [],
     });
     expect(toastSuccess).toHaveBeenCalledWith("已复制为企业 Agent 草稿，可选择 MCP 后保存。");
+  });
+
+  it("does not clone an internal builtin without an enterprise node capability", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "gen_semantic_model",
+      name: "gen_semantic_model",
+      node_class: "gen_semantic_model",
+      status: "published",
+      source: "builtin",
+      tools: [],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadNodeTypes();
+    await manager.selectAgent("gen_semantic_model");
+
+    expect(manager.selectedCanCloneBuiltin.value).toBe(false);
+    expect(manager.startCreateFromSelectedBuiltin()).toBe(false);
+    expect(toastError).toHaveBeenCalledWith("当前系统内置 Agent 不支持复制为企业 Agent。");
   });
 
   it("loads available agent tool catalogs", async () => {
@@ -287,6 +464,44 @@ describe("useAgentManager", () => {
     expect(agentTools).toHaveBeenCalledWith("http://api.test");
     expect(manager.toolCategoryCount.value).toBe(1);
     expect(manager.toolCount.value).toBe(2);
+  });
+
+  it("loads node class options from the enterprise API in response order", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadNodeTypes();
+
+    expect(agentNodeTypes).toHaveBeenCalledWith("http://api.test");
+    expect(manager.nodeClassOptions.value).toEqual([
+      {
+        value: "gen_sql",
+        label: "SQL 分析",
+        description: "生成和执行只读 SQL。",
+      },
+      {
+        value: "ask_metrics",
+        label: "指标问答",
+        description: "围绕指标、维度和归因分析问答。",
+      },
+    ]);
+    expect(manager.nodeTypesLoading.value).toBe(false);
+    expect(manager.nodeTypesError.value).toBeNull();
+  });
+
+  it("keeps only the selected node class when the node type catalog fails", async () => {
+    agentNodeTypes.mockRejectedValue(new Error("unavailable"));
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    manager.form.value.nodeClass = "legacy_type";
+
+    await manager.loadNodeTypes();
+
+    expect(manager.nodeClassOptions.value).toEqual([
+      { value: "legacy_type", label: "当前：legacy_type" },
+    ]);
+    expect(manager.nodeTypesError.value).toBe("读取 Agent 节点类型失败");
+    expect(toastError).toHaveBeenCalledWith("读取 Agent 节点类型失败");
   });
 
   it("loads MCP servers and toggles agent server bindings", async () => {
@@ -341,6 +556,31 @@ describe("useAgentManager", () => {
     expect(manager.mcpServerOptions.value[0]?.tools).toEqual([]);
   });
 
+  it("surfaces and removes an Agent MCP binding whose Server no longer exists", async () => {
+    listMcpServers.mockResolvedValue({
+      servers: [{ name: "remote_api", type: "http", url: "https://api.example.test/mcp" }],
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+    await manager.loadMcpCatalog();
+
+    expect(manager.mcpServerOptions.value).toContainEqual({
+      name: "filesystem",
+      type: "missing",
+      target: "Server 已不存在，请解除绑定",
+      tools: [],
+      selected: true,
+      missing: true,
+    });
+
+    manager.toggleMcpServer("filesystem");
+
+    expect(manager.form.value.mcpText).toBe("");
+    expect(manager.mcpServerOptions.value.some(server => server.name === "filesystem")).toBe(false);
+  });
+
   it("loads datasource and artifact option catalogs for picker fields", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -353,6 +593,54 @@ describe("useAgentManager", () => {
     expect(manager.datasourceOptions.value[0]?.label).toContain("默认");
     expect(manager.datasourceOptions.value[0]?.label).toContain("基金分析库 (fund_pg)");
     expect(manager.artifactOptions.value.map(option => option.value)).toEqual(["risk_dashboard", "weekly_report"]);
+  });
+
+  it("loads searchable ACL user and role options and toggles selections", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAclDirectory();
+    manager.toggleAclRole("analyst");
+    manager.toggleAclUser("alice");
+
+    expect(agentAclUsers).toHaveBeenCalledWith("http://api.test");
+    expect(agentAclRoles).toHaveBeenCalledWith("http://api.test");
+    expect(manager.aclUserOptions.value).toContainEqual({
+      value: "alice",
+      label: "Alice Chen",
+      description: "alice · alice@example.com · Finance · Analyst",
+    });
+    expect(manager.aclRoleOptions.value).toContainEqual({
+      value: "analyst",
+      label: "Analyst",
+      description: "Read-only analysts",
+    });
+    expect(manager.form.value.allowedRoleIds).toEqual(["analyst"]);
+    expect(manager.form.value.allowedUserIds).toEqual(["alice"]);
+
+    manager.toggleAclRole("analyst");
+    manager.toggleAclUser("alice");
+
+    expect(manager.form.value.allowedRoleIds).toEqual([]);
+    expect(manager.form.value.allowedUserIds).toEqual([]);
+  });
+
+  it("loads and updates the enterprise default Agent", async () => {
+    updateEnterpriseDefault.mockResolvedValue({
+      default_agent_id: "analyst",
+      source: "enterprise",
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadEnterpriseDefault();
+    expect(manager.enterpriseDefaultAgentId.value).toBe("chat");
+
+    await manager.setEnterpriseDefault("analyst");
+
+    expect(updateEnterpriseDefault).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(manager.enterpriseDefaultAgentId.value).toBe("analyst");
+    expect(toastSuccess).toHaveBeenCalledWith("企业默认 Agent 已更新");
   });
 
   it("skips optional resource catalogs without admin datasource or artifact permissions", async () => {
@@ -416,6 +704,15 @@ describe("useAgentManager", () => {
       subjectsText: "portfolio\nrisk",
       rulesText: "",
       maxTurns: "8",
+      visibility: "role",
+      allowedRoleIds: ["analyst", "fund_researcher"],
+      allowedUserIds: ["alice", "bob"],
+      toolPolicyMode: "allowlist",
+      deniedToolsText: "filesystem_tools.*",
+      maxPermissionMode: "normal",
+      allowSubagentDelegation: false,
+      allowedSubagentIds: [],
+      defaultUserIds: [],
     };
 
     await manager.saveForm();
@@ -439,8 +736,72 @@ describe("useAgentManager", () => {
       },
       rules: undefined,
       max_turns: 8,
+      acl: {
+        visibility: "role",
+        allowed_roles: ["analyst", "fund_researcher"],
+        allowed_user_ids: ["alice", "bob"],
+      },
+      tool_policy: {
+        mode: "allowlist",
+        allowed: ["explain_query", "mcp.filesystem.*", "read_query"],
+        denied: ["filesystem_tools.*"],
+      },
+      runtime_policy: {
+        max_permission_mode: "normal",
+        allow_subagent_delegation: false,
+        allowed_subagents: [],
+      },
     });
     expect(toastSuccess).toHaveBeenCalledWith("Agent 已创建");
+  });
+
+  it("does not persist stale MCP bindings for node types without MCP runtime support", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    await manager.loadNodeTypes();
+    manager.form.value.name = "metrics_reader";
+    manager.form.value.nodeClass = "ask_metrics";
+    manager.form.value.toolsText = "semantic_tools.list_metrics";
+    manager.form.value.mcpText = "filesystem";
+
+    expect(manager.selectedNodeSupportsMcp.value).toBe(false);
+    expect(manager.selectedMcpCount.value).toBe(0);
+
+    await manager.saveForm();
+
+    expect(createAgent).toHaveBeenCalledWith(
+      "http://api.test",
+      "metrics_reader",
+      expect.objectContaining({
+        node_class: "ask_metrics",
+        mcp: undefined,
+        tool_policy: expect.objectContaining({
+          allowed: ["semantic_tools.list_metrics"],
+        }),
+      }),
+    );
+  });
+
+  it("explicitly publishes new enterprise agents with enterprise visibility", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    manager.form.value.name = "company_assistant";
+    manager.form.value.status = "published";
+
+    await manager.saveForm();
+
+    expect(createAgent).toHaveBeenCalledWith(
+      "http://api.test",
+      "company_assistant",
+      expect.objectContaining({
+        status: "published",
+        acl: {
+          visibility: "enterprise",
+          allowed_roles: [],
+          allowed_user_ids: [],
+        },
+      }),
+    );
   });
 
   it("edits agents through the enterprise upsert payload", async () => {
@@ -455,10 +816,15 @@ describe("useAgentManager", () => {
       name: "analyst",
       node_class: "gen_sql",
       prompt_template: "Updated prompt",
+      acl: {
+        visibility: "role",
+        allowed_roles: ["analyst"],
+        allowed_user_ids: ["alice"],
+      },
     }));
   });
 
-  it("does not save or delete builtin agents from the management surface", async () => {
+  it("saves builtin enterprise policy but does not mutate or delete its definition", async () => {
     listAgents.mockResolvedValue([
       { agent_id: "gen_sql", name: "gen_sql", node_class: "gen_sql", status: "published", source: "builtin" },
     ]);
@@ -486,9 +852,73 @@ describe("useAgentManager", () => {
     await manager.deleteAgent("gen_sql");
 
     expect(editAgent).not.toHaveBeenCalled();
+    expect(updateAgentStatus).toHaveBeenCalledWith("http://api.test", "gen_sql", "published");
+    expect(updateAgentAcl).toHaveBeenCalled();
+    expect(updateAgentPolicy).toHaveBeenCalled();
+    expect(updateAgentDefaultUsers).toHaveBeenCalledWith("http://api.test", "gen_sql", []);
     expect(deleteAgent).not.toHaveBeenCalled();
-    expect(toastError).toHaveBeenCalledWith("系统内置 Agent 为只读，不能在管理页保存。");
+    expect(toastSuccess).toHaveBeenCalledWith("内置 Agent 企业策略已保存");
     expect(toastError).toHaveBeenCalledWith("系统内置 Agent 为只读，不能删除。");
+  });
+
+  it("publishes a disabled builtin before assigning its default users", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "gen_sql", name: "gen_sql", node_class: "gen_sql", status: "disabled", source: "builtin" },
+    ]);
+    getAgent.mockResolvedValue({
+      agent_id: "gen_sql",
+      name: "gen_sql",
+      description: "SQL assistant",
+      node_class: "gen_sql",
+      status: "disabled",
+      source: "builtin",
+      tools: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    agentDefaultUsers.mockResolvedValue(["alice"]);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+    await manager.selectAgent("gen_sql");
+    manager.form.value.status = "published";
+    await manager.saveForm();
+
+    expect(updateAgentStatus).toHaveBeenCalledWith("http://api.test", "gen_sql", "published");
+    expect(updateAgentDefaultUsers).toHaveBeenCalledWith("http://api.test", "gen_sql", ["alice"]);
+    expect(updateAgentStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      updateAgentDefaultUsers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("clears default user assignments when a builtin remains disabled", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "gen_sql", name: "gen_sql", node_class: "gen_sql", status: "disabled", source: "builtin" },
+    ]);
+    getAgent.mockResolvedValue({
+      agent_id: "gen_sql",
+      name: "gen_sql",
+      description: "SQL assistant",
+      node_class: "gen_sql",
+      status: "disabled",
+      source: "builtin",
+      tools: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    agentDefaultUsers.mockResolvedValue(["alice"]);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+    await manager.selectAgent("gen_sql");
+    await manager.saveForm();
+
+    expect(updateAgentStatus).toHaveBeenCalledWith("http://api.test", "gen_sql", "disabled");
+    expect(updateAgentDefaultUsers).toHaveBeenCalledWith("http://api.test", "gen_sql", []);
   });
 
   it("rejects invalid max turn values before saving", async () => {

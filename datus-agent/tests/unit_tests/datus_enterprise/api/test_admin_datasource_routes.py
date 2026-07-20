@@ -1,4 +1,5 @@
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -211,6 +212,47 @@ def test_list_admin_datasource_catalog_returns_unpruned_catalog_for_grant_editin
     assert event.resource_id == "db_b"
     assert event.decision == "allow"
     assert event.metadata == {"operation": "list_admin_datasource_catalog", "count": 1}
+
+
+def test_list_admin_datasource_catalog_uses_extended_timeout_and_returns_stable_error(monkeypatch):
+    assert admin_datasource_routes._DB_IO_TIMEOUT == 60.0
+
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="admin", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    class SlowDatasource:
+        def __init__(self):
+            self.record_datasource_timeout = MagicMock()
+
+        def list_databases(self, _request):
+            time.sleep(0.05)
+            return Result(success=True, data=ListDatabasesData(databases=[], total_count=0))
+
+    datasource = SlowDatasource()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(datasource)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+    monkeypatch.setattr(admin_datasource_routes, "_DB_IO_TIMEOUT", 0.001)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/datasources/db_b/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "REQUEST_TIMEOUT"
+    assert body["errorMessage"] == "Datasource query timed out."
+    datasource.record_datasource_timeout.assert_called_once_with("db_b")
+    event = audit_sink.events[-1]
+    assert event.decision == "deny"
+    assert event.reason == "datasource catalog timed out"
 
 
 def test_list_admin_datasource_catalog_rejects_without_admin_datasources(monkeypatch):

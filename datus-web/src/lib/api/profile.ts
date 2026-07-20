@@ -1,5 +1,6 @@
 import { del, get, post, put } from "@/lib/request";
 import type {
+  AgentPreferenceSummary,
   ApiResponse,
   MeSessionsData,
   MeSummary,
@@ -12,6 +13,7 @@ import type {
   PersonalDatasourceProviderOptions,
   PersonalDatasourceSummary,
   UpdateModelPreferenceInput,
+  UpdateAgentPreferenceInput,
   UpsertModelCredentialInput,
   UpsertPersonalDatasourceInput,
 } from "@/types/profile";
@@ -39,6 +41,14 @@ export const meApi = {
 
   usage(): Promise<ApiResponse<MeUsage[]>> {
     return get<ApiResponse<MeUsage[]>>("/api/v1/me/usage");
+  },
+
+  agentPreference(): Promise<ApiResponse<AgentPreferenceSummary>> {
+    return get<ApiResponse<AgentPreferenceSummary>>("/api/v1/me/agent-preferences");
+  },
+
+  updateAgentPreference(input: UpdateAgentPreferenceInput): Promise<ApiResponse<AgentPreferenceSummary>> {
+    return put<ApiResponse<AgentPreferenceSummary>>("/api/v1/me/agent-preferences", input);
   },
 
   modelProviders(): Promise<ApiResponse<ModelProviderOption[]>> {

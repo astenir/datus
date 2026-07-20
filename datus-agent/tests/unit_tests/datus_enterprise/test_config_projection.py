@@ -22,6 +22,12 @@ def _agent_config(*, current_datasource: str = "finance"):
     )
 
 
+def _postgres_agent_config():
+    config = _agent_config(current_datasource="ccks_fund")
+    config.services.datasources = {"ccks_fund": SimpleNamespace(type="postgresql")}
+    return config
+
+
 @pytest.mark.asyncio
 async def test_datasource_grant_projector_filters_clone_and_injects_principal():
     base_config = _agent_config()
@@ -94,6 +100,40 @@ async def test_datasource_grant_projector_denies_requested_schema_outside_scope(
     )
 
     assert result.denied_reason == "Requested schema 'private' is not authorized for datasource 'finance'."
+
+
+@pytest.mark.asyncio
+async def test_datasource_grant_projector_unions_qualified_tree_nodes_for_requested_scope():
+    grant = {
+        "effect": "allow",
+        "databases": ["postgres"],
+        "schemas": ["ccks_fund.test"],
+        "tables": ["ccks_fund.public.mf_benchmarkgrowthrate"],
+    }
+
+    allowed = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(datasource_grants={"ccks_fund": grant}),
+            base_config=_postgres_agent_config(),
+            operation="catalog.list",
+            requested_datasource="ccks_fund",
+            requested_database="ccks_fund",
+            requested_schema="public",
+        )
+    )
+    denied = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(datasource_grants={"ccks_fund": grant}),
+            base_config=_postgres_agent_config(),
+            operation="catalog.list",
+            requested_datasource="ccks_fund",
+            requested_database="ccks_fund",
+            requested_schema="private",
+        )
+    )
+
+    assert allowed.denied_reason is None
+    assert denied.denied_reason == "Requested schema 'private' is not authorized for datasource 'ccks_fund'."
 
 
 @pytest.mark.asyncio

@@ -88,6 +88,28 @@ def _enterprise_extensions(
     )
 
 
+def _put_enterprise_agent(
+    extensions: EnterpriseExtensions,
+    *,
+    agent_id: str,
+    node_class: str,
+    artifact_slug: str | None = None,
+) -> None:
+    asyncio.run(
+        extensions.agent_store.put_agent(
+            agent_id=agent_id,
+            payload={
+                "agent_id": agent_id,
+                "name": agent_id,
+                "node_class": node_class,
+                "status": "published",
+                "artifact_slug": artifact_slug,
+                "acl": {"visibility": "enterprise"},
+            },
+        )
+    )
+
+
 def _client(router, ctx: AppContext, svc: MagicMock):
     app = FastAPI()
     app.include_router(router)
@@ -183,66 +205,22 @@ def _datasource_agent_config(*, current_datasource: str = "default"):
     )
 
 
-def test_chat_routes_require_module_chat(monkeypatch):
+def test_chat_session_routes_use_authenticated_context_not_module_chat(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
-    svc.chat.list_sessions.return_value = Result[ChatSessionData](success=True, data=ChatSessionData())
+    svc.chat.list_sessions_async = AsyncMock(return_value=Result[ChatSessionData](success=True, data=ChatSessionData()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
 
     with _client(chat_routes.router, ctx, svc) as client:
         response = client.get("/api/v1/chat/sessions")
 
-    assert response.status_code == 403
-    svc.chat.list_sessions.assert_not_called()
-
-
-def test_chat_rbac_denial_does_not_resolve_datus_service(monkeypatch):
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
-    app = FastAPI()
-    app.include_router(chat_routes.router)
-
-    async def reject_service(request: Request):
-        raise AssertionError("RBAC denial resolved DatusService")
-
-    async def override_context(request: Request):
-        request.state.app_context = ctx
-        return ctx
-
-    app.dependency_overrides[deps.get_datus_service] = reject_service
-    app.dependency_overrides[deps.get_request_app_context] = override_context
-
-    with TestClient(app, raise_server_exceptions=False) as client:
-        responses = [
-            client.post("/api/v1/chat/stream", json={"message": "hello"}),
-            client.post(
-                "/api/v1/chat/feedback",
-                json={"source_session_id": "s1", "reaction_emoji": "thumbsup", "reference_msg": "ok"},
-            ),
-            client.post("/api/v1/chat/resume", json={"session_id": "s1"}),
-            client.post("/api/v1/chat/stop", json={"session_id": "s1"}),
-            client.post("/api/v1/chat/sessions/s1/compact"),
-            client.get("/api/v1/chat/sessions"),
-            client.delete("/api/v1/chat/sessions/s1"),
-            client.get("/api/v1/chat/history", params={"session_id": "s1"}),
-            client.post(
-                "/api/v1/chat/user_interaction",
-                json={"session_id": "s1", "interaction_key": "k1", "input": [["1"]]},
-            ),
-            client.post("/api/v1/chat/insert", json={"session_id": "s1", "message": "hello"}),
-            client.post(
-                "/api/v1/chat/tool_result",
-                json={"session_id": "s1", "call_tool_id": "tc_1", "tool_result": {"success": 1, "result": {}}},
-            ),
-        ]
-
-    assert [response.status_code for response in responses] == [403] * len(responses)
+    assert response.status_code == 200
+    svc.chat.list_sessions_async.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
     ("path", "permissions"),
     [
-        ("/api/v1/agents/sales_sql/tools", {"module.datasource_catalog"}),
         ("/api/v1/admin/agents/tools", {"module.chat"}),
         ("/api/v1/admin/agents/tool-reference", {"module.chat"}),
     ],
@@ -459,7 +437,7 @@ def test_chat_stream_consumes_quota_before_task_start(monkeypatch):
 
 @pytest.mark.parametrize(
     "subagent_id",
-    ["gen_sql", "gen_report", "gen_visual_report", "gen_dashboard", "gen_visual_dashboard"],
+    ["gen_sql", "gen_report", "gen_visual_report", "gen_visual_dashboard"],
 )
 def test_chat_stream_denies_privileged_subagents_with_module_chat_only(monkeypatch, subagent_id):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
@@ -474,11 +452,35 @@ def test_chat_stream_denies_privileged_subagents_with_module_chat_only(monkeypat
     svc.chat.stream_chat.assert_not_called()
 
 
-def test_chat_stream_denies_custom_privileged_subagent_with_module_chat_only(monkeypatch):
+def test_chat_stream_denies_disabled_builtin_by_agent_acl(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
-    svc.agent_config.agentic_nodes = {"sales_dashboard": {"id": "custom-dashboard-id", "node_class": "gen_dashboard"}}
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    svc.agent_config.agentic_nodes = {}
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"*"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "build dashboard", "subagent_id": "gen_dashboard"},
+        )
+
+    assert response.status_code == 403
+    svc.chat.stream_chat.assert_not_called()
+
+
+def test_chat_stream_allows_custom_agent_without_node_class_module_permission(monkeypatch):
+    async def empty_stream(*_args, **_kwargs):
+        if False:
+            yield
+
+    extensions = _enterprise_extensions()
+    _put_enterprise_agent(extensions, agent_id="custom-dashboard-id", node_class="gen_dashboard")
+    monkeypatch.setattr(deps, "_enterprise_extensions", extensions)
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.agentic_nodes = {}
+    svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions=set())
 
     with _client(chat_routes.router, ctx, svc) as client:
         response = client.post(
@@ -486,8 +488,8 @@ def test_chat_stream_denies_custom_privileged_subagent_with_module_chat_only(mon
             json={"message": "build dashboard", "subagent_id": "custom-dashboard-id"},
         )
 
-    assert response.status_code == 403
-    svc.chat.stream_chat.assert_not_called()
+    assert response.status_code == 200
+    svc.chat.stream_chat.assert_called_once()
 
 
 def test_chat_stream_allows_custom_chat_subagent_with_module_chat_only(monkeypatch):
@@ -495,7 +497,9 @@ def test_chat_stream_allows_custom_chat_subagent_with_module_chat_only(monkeypat
         if False:
             yield
 
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    extensions = _enterprise_extensions()
+    _put_enterprise_agent(extensions, agent_id="custom-chat-id", node_class="chat")
+    monkeypatch.setattr(deps, "_enterprise_extensions", extensions)
     svc = MagicMock()
     svc.agent_config = _datasource_agent_config()
     svc.agent_config.agentic_nodes = {"custom_chat": {"id": "custom-chat-id", "node_class": "chat"}}
@@ -517,11 +521,18 @@ def test_chat_stream_allows_custom_chat_subagent_with_module_chat_only(monkeypat
     ("agent_type", "subagent_id"),
     [("ask_report", "custom-ask-report-id"), ("ask_dashboard", "custom-ask-dashboard-id")],
 )
-def test_chat_stream_denies_custom_ask_artifact_subagent_with_module_chat_only(monkeypatch, agent_type, subagent_id):
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+def test_chat_stream_does_not_require_artifact_node_class_module(monkeypatch, agent_type, subagent_id):
+    extensions = _enterprise_extensions()
+    _put_enterprise_agent(
+        extensions,
+        agent_id=subagent_id,
+        node_class=agent_type,
+        artifact_slug="sales_overview",
+    )
+    monkeypatch.setattr(deps, "_enterprise_extensions", extensions)
     svc = MagicMock()
-    svc.agent_config.agentic_nodes = {"ask_artifact": {"id": subagent_id, "type": agent_type}}
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    svc.agent_config.agentic_nodes = {}
+    ctx = AppContext(user_id="u1", project_id="proj", permissions=set())
 
     with _client(chat_routes.router, ctx, svc) as client:
         response = client.post(
@@ -529,8 +540,7 @@ def test_chat_stream_denies_custom_ask_artifact_subagent_with_module_chat_only(m
             json={"message": "inspect artifact", "subagent_id": subagent_id},
         )
 
-    assert response.status_code == 403
-    svc.chat.stream_chat.assert_not_called()
+    assert response.status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -646,6 +656,7 @@ def test_chat_stream_materializes_report_edit_session_subagent(monkeypatch):
     assert edit_entry["node_class"] == "gen_visual_report"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
+    assert edit_entry["_acl_authorized_artifact_edit"] is True
     rules_text = "\n".join(edit_entry["rules"])
     assert "Your first artifact tool call must be bind_existing_report('sales_overview')" in rules_text
     assert "Do not call read_file, glob" in rules_text
@@ -681,6 +692,7 @@ def test_chat_stream_materializes_dashboard_edit_session_subagent(monkeypatch):
     assert edit_entry["node_class"] == "gen_visual_dashboard"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
+    assert edit_entry["_acl_authorized_artifact_edit"] is True
     rules_text = "\n".join(edit_entry["rules"])
     assert "Your first artifact tool call must be bind_existing_dashboard('sales_overview')" in rules_text
     assert "Do not call read_file, glob" in rules_text
@@ -2135,13 +2147,6 @@ def test_cli_invalid_body_does_not_resolve_datus_service(monkeypatch, path, perm
             {"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
             {"module.chat"},
             "module.dashboard.query",
-        ),
-        (
-            chat_routes.router,
-            "/api/v1/chat/stream",
-            {"message": "hello"},
-            {"module.sql_executor"},
-            "module.chat",
         ),
     ],
 )

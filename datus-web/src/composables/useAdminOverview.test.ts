@@ -159,6 +159,7 @@ describe("useAdminOverview", () => {
     getAcl.mockResolvedValue({ data: artifactAcl });
     putAcl.mockResolvedValue({ data: artifactAcl });
     listAdminCatalog.mockResolvedValue({
+      success: true,
       data: {
         databases: [
           {
@@ -402,6 +403,35 @@ describe("useAdminOverview", () => {
         tables: ["orders", "accounts"],
       },
     ]);
+  });
+
+  it("surfaces catalog timeout responses both inline and as a toast", async () => {
+    listAdminCatalog.mockResolvedValueOnce({
+      success: false,
+      errorCode: "REQUEST_TIMEOUT",
+      errorMessage: "Datasource query timed out.",
+    });
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.loadGrantCatalog("fund");
+
+    expect(overview.grantCatalogError.value).toBe("数据源目录加载超时，请稍后重试");
+    expect(overview.grantCatalogDatabases.value).toEqual([]);
+    expect(toastError).toHaveBeenCalledWith("数据源目录加载超时，请稍后重试");
+    expect(overview.loadingGrantCatalog.value).toBe(false);
+  });
+
+  it("surfaces rejected catalog requests both inline and as a toast", async () => {
+    listAdminCatalog.mockRejectedValueOnce(new Error("upstream timeout"));
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.loadGrantCatalog("fund");
+
+    expect(overview.grantCatalogError.value).toBe("数据源目录加载超时，请稍后重试");
+    expect(toastError).toHaveBeenCalledWith("数据源目录加载超时，请稍后重试");
+    expect(overview.loadingGrantCatalog.value).toBe(false);
   });
 
   it("narrows an inherited parent selection when a child node is selected", async () => {

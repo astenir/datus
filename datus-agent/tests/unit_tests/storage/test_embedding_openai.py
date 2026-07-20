@@ -226,6 +226,27 @@ class TestGenerateEmbeddings:
         assert emb.generate_embeddings(["first", "bad", "third"]) == [[1.0, 2.0], None, [5.0, 6.0]]
 
     @pytest.mark.ci
+    def test_batch_bad_request_retries_individually_and_keeps_valid_results(self):
+        emb = OpenAIEmbeddings(name="jina-embeddings-v3", dim=2)
+        client = MagicMock()
+        response = httpx.Response(400, request=httpx.Request("POST", "https://example.test/v1/embeddings"))
+        client.embeddings.create.side_effect = [
+            BadRequestError("bad batch", response=response, body={}),
+            self._response([1.0, 2.0]),
+            BadRequestError("bad input", response=response, body={}),
+            self._response([5.0, 6.0]),
+        ]
+        emb.__dict__["_openai_client"] = client
+
+        assert emb.generate_embeddings(["first", "bad", "third"]) == [[1.0, 2.0], None, [5.0, 6.0]]
+        assert client.embeddings.create.call_args_list[0].kwargs["input"] == ["first", "bad", "third"]
+        assert [call.kwargs["input"] for call in client.embeddings.create.call_args_list[1:]] == [
+            "first",
+            "bad",
+            "third",
+        ]
+
+    @pytest.mark.ci
     def test_empty_inputs_do_not_call_api(self):
         emb = OpenAIEmbeddings(single_input_only=True)
         client = MagicMock()

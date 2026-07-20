@@ -1,12 +1,11 @@
-# Docker Compose local deployment config.
+# Docker Compose 本地部署完整配置。
 #
-# This file is intentionally wired for the root `docker-compose.yml`:
-# - Browser auth uses UserInfoBearerAuthProvider with the mock userinfo service.
-# - Enterprise metadata and the sample `ccks_fund` datasource use the compose
-#   PostgreSQL service.
-# - This is a single-process local/test deployment. Production deployments still
-#   need real identity, secrets, backups, observability, and sticky routing for
-#   chat/SSE state if scaled beyond one API process.
+# 仓库根目录 docker-compose.yml 和镜像默认命令会通过 --config 显式加载本文件；
+# 普通 CLI 不会自动加载它，也不要把它复制为本机 conf/agent.yml。
+# 浏览器认证使用 mock userinfo，企业 metadata 和示例 ccks_fund 数据源使用
+# Compose PostgreSQL 服务；模型凭据和业务数据源从容器挂载文件合并。
+# 这里只支持单 API 进程的本地/测试部署。生产环境仍需真实身份源、密钥、
+# 备份、可观测性，以及多进程时的 chat/SSE 状态路由。
 
 agent:
   home: ${DATUS_HOME:-/data/.datus}
@@ -17,6 +16,14 @@ agent:
   models_file: ${DATUS_MODELS_FILE:-/run/datus/agent/models.yml}
 
   api:
+    chat:
+      max_active_global: ${DATUS_CHAT_MAX_ACTIVE_GLOBAL:-32}
+      max_active_per_project: ${DATUS_CHAT_MAX_ACTIVE_PER_PROJECT:-16}
+      max_active_per_user: ${DATUS_CHAT_MAX_ACTIVE_PER_USER:-4}
+      max_buffer_events: ${DATUS_CHAT_MAX_BUFFER_EVENTS:-5000}
+      max_buffer_bytes: ${DATUS_CHAT_MAX_BUFFER_BYTES:-16777216}
+      completed_task_ttl_seconds: ${DATUS_CHAT_COMPLETED_TTL_SECONDS:-300}
+      cleanup_interval_seconds: ${DATUS_CHAT_CLEANUP_INTERVAL_SECONDS:-60}
     auth_provider:
       class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
       kwargs:
@@ -130,7 +137,7 @@ agent:
   models:
     compose_embedding:
       type: openai
-      model: ${DATUS_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      model: ${DATUS_EMBEDDING_MODEL_NAME:-Qwen/Qwen3-Embedding-0.6B}
       base_url: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
       api_key: ${SILICONFLOW_API_KEY}
 
@@ -189,8 +196,8 @@ agent:
     embedding_device_type: cpu
     database: &local_embedding
       registry_name: openai
-      model_name: Qwen/Qwen3-Embedding-0.6B
-      dim_size: 1024
+      model_name: ${DATUS_EMBEDDING_MODEL_NAME:-Qwen/Qwen3-Embedding-0.6B}
+      dim_size: ${DATUS_EMBEDDING_DIM_SIZE:-1024}
       batch_size: 10
       target_model: ${DATUS_EMBEDDING_MODEL_KEY:-compose_embedding}
     document: *local_embedding

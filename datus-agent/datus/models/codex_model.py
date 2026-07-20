@@ -445,7 +445,14 @@ class CodexModel(LLMBaseModel):
         self._refresh_client_token()
         responses_model = self._get_responses_model()
 
-        async with multiple_mcp_servers(mcp_servers or {}) as connected_servers:
+        async with multiple_mcp_servers(
+            mcp_servers or {},
+            **(
+                {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
+                if kwargs.get("mcp_connection_failure_callback")
+                else {}
+            ),
+        ) as connected_servers:
             agent_name = kwargs.get("agent_name", "codex_agent")
             agent_kwargs: Dict[str, Any] = {
                 "name": agent_name,
@@ -535,7 +542,14 @@ class CodexModel(LLMBaseModel):
         self._refresh_client_token()
         responses_model = self._get_responses_model()
 
-        async with multiple_mcp_servers(mcp_servers or {}) as connected_servers:
+        async with multiple_mcp_servers(
+            mcp_servers or {},
+            **(
+                {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
+                if kwargs.get("mcp_connection_failure_callback")
+                else {}
+            ),
+        ) as connected_servers:
             agent_name = kwargs.get("agent_name", "codex_agent")
             agent_kwargs: Dict[str, Any] = {
                 "name": agent_name,

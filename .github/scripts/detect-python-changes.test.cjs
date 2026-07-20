@@ -60,6 +60,19 @@ test("does not match similar directory names", () => {
   );
 });
 
+test("selects Agent quality for root Compose deployment configuration", () => {
+  for (const filename of [
+    ".env.compose.example",
+    "docker-compose.yml",
+    "deploy/docker/agent/models.example.yml",
+  ]) {
+    assert.deepEqual(
+      detectPythonChanges("pull_request", [{ filename }]),
+      { ...NONE, agent: true },
+    );
+  }
+});
+
 test("runs every project when shared Python CI files change", () => {
   for (const filename of [
     ".github/workflows/python-quality.yml",

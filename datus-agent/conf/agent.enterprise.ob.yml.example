@@ -1,6 +1,8 @@
 # 企业 OceanBase MySQL metadata/session 配置片段。
 #
-# 将需要的片段合并到 agent.yml，用于把企业 metadata、会话 owner/index
+# 该文件不是完整配置，也不会自动加载。请把顶层 enterprise 合并到完整
+# agent.yml 的 agent: 下，再通过默认查找或 --config 加载完整文件。
+# 它用于把企业 metadata、会话 owner/index
 # metadata 和新会话正文/history/state 存到 OceanBase MySQL 模式。
 #
 # 注意：
@@ -11,6 +13,7 @@
 # - 历史本地 AdvancedSQLiteSession .db 文件不会自动迁移到 OceanBase。
 # - 生产 schema 迁移、备份恢复、滚动发布兼容仍是独立运维工作；这里仅做
 #   CREATE DATABASE IF NOT EXISTS / CREATE TABLE IF NOT EXISTS bootstrap。
+# - DSN、密码和 credential secret 必须通过环境变量或密钥系统注入，不能提交真实值。
 #
 # 本地 OceanBase CE 验证时可使用类似环境变量：
 #

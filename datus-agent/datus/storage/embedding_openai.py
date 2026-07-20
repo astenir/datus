@@ -108,18 +108,37 @@ class OpenAIEmbeddings(BaseModel, EmbeddingFunction):
                 kwargs["dimensions"] = self.dim
 
             logger.debug(f"Calling OpenAI API: model={self.name}, text_count={len(valid_texts)}")
-            if self.single_input_only:
-                valid_embeddings = {}
+            valid_embeddings = {}
+
+            def generate_individually() -> None:
                 for text, idx in zip(valid_texts, valid_indices):
                     try:
-                        rs = self._openai_client.embeddings.create(input=text, **kwargs)
-                        if rs.data:
-                            valid_embeddings[idx] = rs.data[0].embedding
+                        response = self._openai_client.embeddings.create(input=text, **kwargs)
+                        if response.data:
+                            valid_embeddings[idx] = response.data[0].embedding
                     except BadRequestError:
-                        logger.error(f"Bad request when generating embedding: model={self.name}, input_index={idx}")
+                        logger.error(
+                            "Bad request when generating embedding: model=%s, input_index=%d, input_chars=%d",
+                            self.name,
+                            idx,
+                            len(text),
+                        )
+
+            if self.single_input_only:
+                generate_individually()
             else:
-                rs = self._openai_client.embeddings.create(input=valid_texts, **kwargs)
-                valid_embeddings = {idx: v.embedding for v, idx in zip(rs.data, valid_indices)}
+                try:
+                    rs = self._openai_client.embeddings.create(input=valid_texts, **kwargs)
+                    valid_embeddings.update({idx: v.embedding for v, idx in zip(rs.data, valid_indices)})
+                except BadRequestError:
+                    if len(valid_texts) == 1:
+                        raise
+                    logger.warning(
+                        "Embedding batch was rejected; retrying inputs individually: model=%s, text_count=%d",
+                        self.name,
+                        len(valid_texts),
+                    )
+                    generate_individually()
             logger.debug(f"Successfully generated embeddings for {len(valid_embeddings)} texts")
         except BadRequestError:
             logger.error(f"Bad request when generating embeddings: model={self.name}, text_count={len(texts)}")

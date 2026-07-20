@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const toastError = vi.hoisted(() => vi.fn());
+
+vi.mock("vue-sonner", () => ({
+  toast: { error: toastError },
+}));
+
 import { getCurrentAccessToken, getCurrentUser, setCurrentAccessToken, setCurrentUser } from "@/lib/request";
 import { usePermission } from "./usePermission";
 import {
@@ -28,9 +34,11 @@ describe("useAuth", () => {
   afterEach(() => {
     const auth = useAuth();
     auth.state.value = { loading: true, authenticated: false, user: null };
+    auth.failureMessage.value = null;
     usePermission().clearPermissions();
     setCurrentAccessToken(null);
     setCurrentUser(null);
+    toastError.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -159,8 +167,44 @@ describe("useAuth", () => {
       authenticated: false,
       user: null,
     });
+    expect(auth.failureMessage.value).toBe("认证服务暂时不可用，请稍后重新验证。");
     expect(getCurrentUser()).toBeNull();
     expect(getCurrentAccessToken()).toBeNull();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("handles repeated Datus 401 responses as one friendly expired-login flow", async () => {
+    stubAccessTokenCookie("expired-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse(
+      { detail: "AUTH_TOKEN_INVALID" },
+      401,
+    ));
+    setCurrentAccessToken("expired-token");
+    setCurrentUser(createDevUser("alice"));
+
+    const auth = useAuth();
+    auth.state.value = {
+      loading: false,
+      authenticated: true,
+      user: createDevUser("alice"),
+    };
+
+    await usePermission().fetchPermissions();
+    await usePermission().fetchPermissions();
+
+    expect(auth.state.value).toEqual({
+      loading: false,
+      authenticated: false,
+      user: null,
+    });
+    expect(auth.failureMessage.value).toBe("登录状态已过期，请重新登录后再继续操作。");
+    expect(getCurrentUser()).toBeNull();
+    expect(getCurrentAccessToken()).toBeNull();
+    expect(document.cookie).toContain("access_token=;");
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith("登录已过期", expect.objectContaining({
+      description: expect.stringContaining("重新登录"),
+    }));
   });
 
   it("logs out without clearing non-auth local storage", async () => {

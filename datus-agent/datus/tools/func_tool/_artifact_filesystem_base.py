@@ -73,9 +73,27 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         cls._QUERIES_PATH_RE = re.compile(rf"^{root}/{slug}/queries/.+$")
         cls._ARTIFACT_PATH_RE = re.compile(rf"^{root}/({slug})(?:/.*)?$")
 
-    def __init__(self, *args, locked_artifact_slug: str | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        locked_artifact_slug: str | None = None,
+        require_authorized_artifact: bool = False,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._locked_artifact_slug = locked_artifact_slug if locked_artifact_slug else None
+        self._require_authorized_artifact = require_authorized_artifact
+
+    def bind_authorized_artifact(self, artifact_slug: str) -> None:
+        """Bind Enterprise filesystem mutations to one ACL-authorized slug."""
+
+        if not self._require_authorized_artifact:
+            return
+        if self._locked_artifact_slug and self._locked_artifact_slug != artifact_slug:
+            raise ValueError(
+                f"Artifact filesystem is already locked to {self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}."
+            )
+        self._locked_artifact_slug = artifact_slug
 
     # ── Path classification ──────────────────────────────────────────────
 
@@ -125,10 +143,26 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return match.group(1) if match else None
 
     def _violates_locked_artifact(self, path: str) -> bool:
-        if not self._locked_artifact_slug:
-            return False
         slug = self._artifact_slug_for_path(path)
-        return slug is not None and slug != self._locked_artifact_slug
+        if slug is None:
+            return False
+        if self._require_authorized_artifact:
+            return slug != self._locked_artifact_slug
+        return bool(self._locked_artifact_slug and slug != self._locked_artifact_slug)
+
+    def _authorized_mutation_reject(self, path: str) -> Optional[FuncToolResult]:
+        if not self._require_authorized_artifact:
+            return None
+        slug = self._artifact_slug_for_path(path)
+        if self._locked_artifact_slug and slug == self._locked_artifact_slug:
+            return None
+        return FuncToolResult(
+            success=0,
+            error=(
+                f"Artifact filesystem writes require an ACL-authorized binding under "
+                f"{self.ARTIFACT_ROOT_DIR_NAME}/<slug>/; cannot modify {path}."
+            ),
+        )
 
     def _locked_artifact_not_found(self, path: str) -> FuncToolResult:
         return FuncToolResult(success=0, error=f"File not found: {path}")
@@ -180,6 +214,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
     # ── Overrides ────────────────────────────────────────────────────────
 
     def write_file(self, path: str, content: str, file_type: str = "") -> FuncToolResult:  # type: ignore[override]
+        authorization_error = self._authorized_mutation_reject(path)
+        if authorization_error is not None:
+            return authorization_error
         if self._violates_locked_artifact(path):
             return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
@@ -191,6 +228,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().write_file(path, content, file_type)
 
     def edit_file(self, path: str, old_string: str, new_string: str) -> FuncToolResult:  # type: ignore[override]
+        authorization_error = self._authorized_mutation_reject(path)
+        if authorization_error is not None:
+            return authorization_error
         if self._violates_locked_artifact(path):
             return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
@@ -202,6 +242,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().edit_file(path, old_string, new_string)
 
     def delete_file(self, path: str) -> FuncToolResult:  # type: ignore[override]
+        authorization_error = self._authorized_mutation_reject(path)
+        if authorization_error is not None:
+            return authorization_error
         if self._violates_locked_artifact(path):
             return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
@@ -219,7 +262,7 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
 
     def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:  # type: ignore[override]
         for path in super()._walk_files(seed, include_pattern, include_dirs):
-            if self._locked_artifact_slug:
+            if self._require_authorized_artifact or self._locked_artifact_slug:
                 slug = self._artifact_slug_for_resolved_path(path)
                 if slug is not None and slug != self._locked_artifact_slug:
                     continue

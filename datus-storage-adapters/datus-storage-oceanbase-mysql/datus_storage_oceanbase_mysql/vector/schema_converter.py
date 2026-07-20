@@ -46,7 +46,11 @@ def schema_to_columns(schema: pa.Schema, indexed_columns: Optional[set[str]] = N
     columns = []
     for field in schema:
         _validate_identifier(field.name)
-        columns.append((field.name, _pa_type_to_ob(field.type, indexed=field.name in indexed_columns)))
+        indexed = field.name in indexed_columns
+        column_type = _pa_type_to_ob(field.type, indexed=indexed)
+        if indexed or not field.nullable:
+            column_type += " NOT NULL"
+        columns.append((field.name, column_type))
     return columns
 
 

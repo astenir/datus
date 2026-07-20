@@ -21,7 +21,13 @@ from datus.api.models.database_models import (
     ListDatabasesData,
     ListDatabasesInput,
 )
-from datus.api.routes.database_routes import _DB_IO_TIMEOUT, datasource_status, list_catalogs, prewarm_datasource
+from datus.api.routes.database_routes import (
+    _DB_IO_TIMEOUT,
+    _prune_databases_for_datasource_grant,
+    datasource_status,
+    list_catalogs,
+    prewarm_datasource,
+)
 
 
 def _make_db_info(name: str = "main") -> DatabaseInfo:
@@ -211,6 +217,94 @@ class TestListCatalogs:
         assert len(result.data.databases) == 3
         assert result.data.databases[0].name == "db_0"
         assert result.data.databases[2].name == "db_2"
+
+
+def test_catalog_pruning_unions_independently_selected_grant_nodes():
+    """A selected leaf must retain its ancestors without hiding disjoint selected branches."""
+    databases = [
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="public",
+            connection_status="connected",
+            tables=["mf_benchmarkgrowthrate", "mf_bondportifoliodetail", "other_table"],
+        ),
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="test",
+            connection_status="connected",
+            tables=[],
+        ),
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="private",
+            connection_status="connected",
+            tables=["secret_table"],
+        ),
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="leaf_only",
+            connection_status="connected",
+            tables=[],
+        ),
+        DatabaseInfo(
+            name="postgres",
+            uri="postgresql://postgres",
+            type="postgresql",
+            current=False,
+            schema_name="public",
+            connection_status="connected",
+            tables=["server_table"],
+        ),
+        DatabaseInfo(
+            name="other_db",
+            uri="postgresql://other_db",
+            type="postgresql",
+            current=False,
+            schema_name="public",
+            connection_status="connected",
+            tables=["other_table"],
+        ),
+    ]
+
+    visible = _prune_databases_for_datasource_grant(
+        databases,
+        datasource_id="ccks_fund",
+        datasource_grants={
+            "ccks_fund": {
+                "effect": "allow",
+                "databases": ["postgres"],
+                "schemas": ["ccks_fund.test"],
+                "tables": [
+                    "ccks_fund.public.mf_benchmarkgrowthrate",
+                    "ccks_fund.public.mf_bondportifoliodetail",
+                    "ccks_fund.leaf_only.missing_table",
+                ],
+            }
+        },
+    )
+
+    assert [(item.name, item.schema_name, item.tables_count, item.tables) for item in visible] == [
+        (
+            "ccks_fund",
+            "public",
+            2,
+            ["mf_benchmarkgrowthrate", "mf_bondportifoliodetail"],
+        ),
+        ("ccks_fund", "test", 0, []),
+        ("postgres", "public", 1, ["server_table"]),
+    ]
 
 
 class TestDatasourceStatus:

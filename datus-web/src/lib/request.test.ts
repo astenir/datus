@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { get, setApiBaseResolver, setCurrentAccessToken } from "./request";
+import {
+  get,
+  setApiBaseResolver,
+  setAuthenticationFailureHandler,
+  setCurrentAccessToken,
+} from "./request";
 
 function mockJsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), {
@@ -12,6 +17,7 @@ function mockJsonResponse(payload: unknown) {
 describe("request helpers", () => {
   afterEach(() => {
     setApiBaseResolver(null);
+    setAuthenticationFailureHandler(null);
     setCurrentAccessToken(null);
     vi.restoreAllMocks();
   });
@@ -121,5 +127,42 @@ describe("request helpers", () => {
     const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
     expect(headers.has("Authorization")).toBe(false);
+  });
+
+  it("reports a structured authentication failure for Datus API 401 responses", async () => {
+    const handler = vi.fn();
+    setAuthenticationFailureHandler(handler);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ detail: "AUTH_TOKEN_INVALID" }),
+      {
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { "Content-Type": "application/json" },
+      },
+    ));
+
+    await expect(get("/api/v1/me")).rejects.toMatchObject({
+      status: 401,
+      code: "AUTH_TOKEN_INVALID",
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      status: 401,
+      code: "AUTH_TOKEN_INVALID",
+    });
+  });
+
+  it("does not report external authentication endpoint failures as Datus API failures", async () => {
+    const handler = vi.fn();
+    setAuthenticationFailureHandler(handler);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ detail: "token expired" }),
+      { status: 401, statusText: "Unauthorized" },
+    ));
+
+    await expect(get("https://auth.example.test/me")).rejects.toMatchObject({ status: 401 });
+
+    expect(handler).not.toHaveBeenCalled();
   });
 });

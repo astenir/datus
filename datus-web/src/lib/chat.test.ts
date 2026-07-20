@@ -536,6 +536,21 @@ describe("chat error display", () => {
       code: "AUTH_REQUIRED",
     }]);
   });
+
+  it("distinguishes an expired token from an unavailable authentication service", () => {
+    const expired = friendlyChatErrorBlock({ code: "AUTH_TOKEN_INVALID" });
+    const unavailable = friendlyChatErrorBlock({ code: "AUTH_USERINFO_UNAVAILABLE" });
+
+    expect(expired).toMatchObject({
+      title: "登录已过期",
+      code: "AUTH_TOKEN_INVALID",
+    });
+    expect(unavailable).toMatchObject({
+      title: "认证服务暂时不可用",
+      code: "AUTH_USERINFO_UNAVAILABLE",
+    });
+    expect(unavailable.message).toContain("登录状态不会因此被清除");
+  });
 });
 
 describe("shouldResetConversationOnAgentChange", () => {

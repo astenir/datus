@@ -24,6 +24,11 @@ coverage/
 .tmp/
 *.log
 
+# Local environment overrides
+/.env
+/.env.local
+/.env.*.local
+
 # Local Docker Compose datasource overrides
 deploy/docker/agent/datasources.yml
 deploy/docker/agent/models.yml

@@ -204,13 +204,19 @@ function uploadRef(record: KbUploadRecord | null): { uploadId: string; fileId?: 
 
 function buildKbBootstrapInput(
   form: KnowledgeBootstrapKbForm,
+  datasourceId: string,
   uploads: Pick<KnowledgeBootstrapUploads, "successStory" | "referenceSql"> = {
     successStory: null,
     referenceSql: null,
   },
 ): BootstrapKbInput {
+  const selectedDatasource = datasourceId.trim();
+  if (!selectedDatasource) {
+    throw new Error("请选择数据源");
+  }
   const component = KB_COMPONENTS.includes(form.component) ? form.component : "metadata";
   const input: BootstrapKbInput = {
+    datasource_id: selectedDatasource,
     components: [component],
     strategy: form.strategy,
   };
@@ -517,7 +523,7 @@ export function useKnowledgeBootstrap(options: UseKnowledgeBootstrapOptions = {}
 
     let input: BootstrapKbInput;
     try {
-      input = buildKbBootstrapInput(forms.value.kb, {
+      input = buildKbBootstrapInput(forms.value.kb, options.currentDatasource?.() ?? "", {
         successStory: uploads.value.successStory,
         referenceSql: uploads.value.referenceSql,
       });

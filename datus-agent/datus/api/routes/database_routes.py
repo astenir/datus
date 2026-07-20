@@ -21,6 +21,7 @@ from datus.api.models.database_models import (
     ListDatabasesInput,
 )
 from datus.api.services.background_drain import track_background_task
+from datus.utils.datasource_scope import datasource_field_order, datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1", tags=["databases"])
@@ -196,16 +197,37 @@ def _prune_databases_for_datasource_grant(
 
     visible_databases: list[DatabaseInfo] = []
     for database in databases:
-        if not _scope_matches(grant, "catalogs", [database.catalog_name]):
-            continue
-        if not _scope_matches(grant, "databases", [database.name]):
-            continue
-        if not _scope_matches(grant, "schemas", _schema_scope_candidates(database)):
-            continue
+        field_order = datasource_field_order(database.type or "")
+        tree_scope = grant_uses_tree_scope(grant, field_order)
+        namespace_selected = False
+        if tree_scope:
+            namespace_field = "schema" if "schema" in field_order and database.schema_name else "database"
+            coordinate = _database_coordinate(database)
+            if not datasource_scope_matches(
+                grant,
+                coordinate=coordinate,
+                target_field=namespace_field,
+                field_order=field_order,
+            ):
+                continue
+            namespace_selected = datasource_scope_matches(
+                grant,
+                coordinate=coordinate,
+                target_field=namespace_field,
+                field_order=field_order,
+                include_descendants=False,
+            )
+        else:
+            if not _scope_matches(grant, "catalogs", [database.catalog_name]):
+                continue
+            if not _scope_matches(grant, "databases", [database.name]):
+                continue
+            if not _scope_matches(grant, "schemas", _schema_scope_candidates(database)):
+                continue
 
         table_patterns = _scope_patterns(grant, "tables")
-        tables = _filter_tables_for_grant(database, grant)
-        if table_patterns is not None and not tables:
+        tables = _filter_tables_for_grant(database, grant, field_order=field_order, tree_scope=tree_scope)
+        if table_patterns is not None and not tables and not namespace_selected:
             continue
         update = {"tables": tables}
         if table_patterns is not None and tables is not None:
@@ -214,15 +236,42 @@ def _prune_databases_for_datasource_grant(
     return visible_databases
 
 
-def _filter_tables_for_grant(database: DatabaseInfo, grant: dict[str, Any]) -> list[str] | None:
+def _filter_tables_for_grant(
+    database: DatabaseInfo,
+    grant: dict[str, Any],
+    *,
+    field_order: list[str],
+    tree_scope: bool,
+) -> list[str] | None:
     table_patterns = _scope_patterns(grant, "tables")
     if table_patterns is None:
         return database.tables
     if not database.tables:
         return []
+    if tree_scope:
+        coordinate = _database_coordinate(database)
+        return [
+            table
+            for table in database.tables
+            if datasource_scope_matches(
+                grant,
+                coordinate={**coordinate, "table": table},
+                target_field="table",
+                field_order=field_order,
+            )
+        ]
     return [
         table for table in database.tables if _matches_any(_table_scope_candidates(database, table), table_patterns)
     ]
+
+
+def _database_coordinate(database: DatabaseInfo) -> dict[str, str]:
+    return {
+        "catalog": database.catalog_name or "",
+        "database": database.name or "",
+        "schema": database.schema_name or "",
+        "table": "",
+    }
 
 
 def _table_scope_candidates(database: DatabaseInfo, table: str) -> list[str]:

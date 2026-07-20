@@ -189,6 +189,7 @@ class AskMetricsAgenticNode(AgenticNode):
                 sub_agent_name=sub_agent_name,
                 adapter_type=self._resolve_adapter_type(),
                 runtime_db_context_provider=self._semantic_runtime_db_context,
+                reference_date_provider=self._runtime_context_current_date,
             )
             if not self.semantic_tools._configured_adapter_type():
                 self.startup_error = self.semantic_tools._adapter_unavailable_message()

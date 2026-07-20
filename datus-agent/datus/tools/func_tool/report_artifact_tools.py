@@ -32,7 +32,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from agents import Tool
 
@@ -306,11 +306,15 @@ class ReportArtifactTools:
         user_message: str = "",
         locked_report_slug: str | None = None,
         allow_create: bool = True,
+        allow_bind_existing: bool = True,
+        on_artifact_authorized: Callable[[str], None] | None = None,
     ) -> None:
         self.agent_config = agent_config
         self._db_func_tool = db_func_tool
         self._locked_report_slug = locked_report_slug
         self._allow_create = allow_create
+        self._allow_bind_existing = allow_bind_existing
+        self._on_artifact_authorized = on_artifact_authorized
         # Raw user prompt that drove this node invocation — appended to
         # analysis/intent.md verbatim when the artifact is created / bound,
         # so the file becomes the authoritative log of what the user asked
@@ -340,16 +344,22 @@ class ReportArtifactTools:
 
     def available_tools(self) -> List[Tool]:
         """Return tools registered with the agent framework."""
-        return [
-            trans_to_function_tool(self.start_new_report),
-            trans_to_function_tool(self.bind_existing_report),
-            # ``save_query.uses`` is a free-form ``Dict[str, List[str]]`` —
-            # strict-mode JSON schema rejects ``additionalProperties: true``
-            # which ``Dict[str, Any]`` emits. We validate the shape
-            # ourselves via :func:`coerce_uses_arg` once the call lands.
-            trans_to_function_tool(self.save_query, strict_mode=False),
-            trans_to_function_tool(self.validate_render),
-        ]
+        tools: List[Tool] = []
+        if self._allow_create:
+            tools.append(trans_to_function_tool(self.start_new_report))
+        if self._allow_bind_existing:
+            tools.append(trans_to_function_tool(self.bind_existing_report))
+        tools.extend(
+            [
+                # ``save_query.uses`` is a free-form ``Dict[str, List[str]]`` —
+                # strict-mode JSON schema rejects ``additionalProperties: true``
+                # which ``Dict[str, Any]`` emits. We validate the shape
+                # ourselves via :func:`coerce_uses_arg` once the call lands.
+                trans_to_function_tool(self.save_query, strict_mode=False),
+                trans_to_function_tool(self.validate_render),
+            ]
+        )
+        return tools
 
     # -- intent declaration --------------------------------------------------
 
@@ -359,10 +369,9 @@ class ReportArtifactTools:
 
         The LLM picks the ``slug`` — it doubles as the on-disk directory
         name and as the stable identifier surfaced everywhere downstream
-        (SaaS list pages, IDE explorer, backend routes). **Before calling
-        this tool the LLM must ``glob('reports/*')`` and confirm the
-        chosen slug doesn't collide** — this tool refuses to overwrite
-        an existing directory.
+        (SaaS list pages, IDE explorer, backend routes). The tool refuses to
+        overwrite an existing directory; retry with a different semantic slug
+        if the requested value is already reserved.
 
         Args:
             slug: Lowercase ASCII identifier matching ``^[a-z0-9_]{1,80}$``.
@@ -419,15 +428,6 @@ class ReportArtifactTools:
                 success=0,
                 error="description must be a non-empty one-paragraph description of what the report covers.",
             )
-        candidate = self._project_root / "reports" / slug
-        if candidate.exists():
-            return FuncToolResult(
-                success=0,
-                error=(
-                    f"reports/{slug}/ already exists. Pick a different slug — first `glob('reports/*')` "
-                    "to see what's taken, or call `bind_existing_report` if you meant to edit it."
-                ),
-            )
         try:
             manifest = ArtifactManifest(
                 slug=slug,
@@ -438,8 +438,30 @@ class ReportArtifactTools:
             )
         except Exception as exc:
             return FuncToolResult(success=0, error=f"Manifest validation failed: {exc}")
+        candidate = self._project_root / "reports" / slug
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            if not self._allow_bind_existing:
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        f"reports/{slug}/ already exists. Pick a different slug; existing reports "
+                        "can only be opened through an ACL-authorized edit session."
+                    ),
+                )
+            return FuncToolResult(
+                success=0,
+                error=(
+                    f"reports/{slug}/ already exists. Pick a different slug — first `glob('reports/*')` "
+                    "to see what's taken, or call `bind_existing_report` if you meant to edit it."
+                ),
+            )
+        except OSError as exc:
+            return FuncToolResult(success=0, error=f"Failed to reserve reports/{slug}/: {exc}")
         result = self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
         if result.success != 1:
+            self._rollback_created_report(slug)
             return result
         acl_error = await create_default_artifact_acl_after_manifest(
             self.agent_config,
@@ -451,6 +473,11 @@ class ReportArtifactTools:
             cleanup_error = self._rollback_created_report(slug)
             error = acl_error if cleanup_error is None else f"{acl_error}; cleanup failed: {cleanup_error}"
             return FuncToolResult(success=0, error=error)
+        if self._on_artifact_authorized is not None:
+            self._on_artifact_authorized(slug)
+        if not self._allow_bind_existing:
+            self._locked_report_slug = slug
+            self._allow_create = False
         return result
 
     def bind_existing_report(self, report_slug: str) -> FuncToolResult:
@@ -491,6 +518,11 @@ class ReportArtifactTools:
             section appended with the user's prompt so the running log of
             "what the user has asked over time" stays complete.
         """
+        if not self._allow_bind_existing:
+            return FuncToolResult(
+                success=0,
+                error="Binding an existing report requires an ACL-authorized edit session.",
+            )
         if self._locked_report_slug and report_slug != self._locked_report_slug:
             return FuncToolResult(
                 success=0,
@@ -548,6 +580,8 @@ class ReportArtifactTools:
                     f"reports/{report_slug}/ was incomplete ({missing_text}); inspect the restored tree, "
                     "write or repair render/app.jsx if needed, then call validate_render()."
                 )
+            if result.success == 1 and self._on_artifact_authorized is not None:
+                self._on_artifact_authorized(report_slug)
             return result
         if missing_app:
             return FuncToolResult(
@@ -557,7 +591,10 @@ class ReportArtifactTools:
                     "Cannot bind for editing."
                 ),
             )
-        return self._activate(report_slug, mode="edit", create_dirs=False)
+        result = self._activate(report_slug, mode="edit", create_dirs=False)
+        if result.success == 1 and self._on_artifact_authorized is not None:
+            self._on_artifact_authorized(report_slug)
+        return result
 
     def _activate(
         self,

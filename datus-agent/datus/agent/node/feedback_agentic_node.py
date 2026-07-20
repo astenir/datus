@@ -39,6 +39,7 @@ class FeedbackAgenticNode(AgenticNode):
     # _setup_sub_agent_task_tool reads node_config first and falls back here.
     DEFAULT_SUBAGENTS = "gen_sql_summary, gen_metrics, gen_skill"
     result_class = FeedbackNodeResult
+    USE_REQUEST_WORKSPACE = True
 
     def __init__(
         self,

@@ -546,14 +546,17 @@ class TestHealthCheck:
         assert response.status == "healthy"
 
     @pytest.mark.asyncio
-    async def test_unhealthy_on_exception(self):
+    async def test_health_does_not_construct_or_probe_agent(self):
         service = _make_service()
         service.agent_config = MagicMock()
 
-        with patch("datus.api.service.Agent", side_effect=RuntimeError("config error")):
+        with patch("datus.api.service.Agent") as agent_cls:
             response = await service.health_check()
 
-        assert response.status == "unhealthy"
+        assert response.status == "healthy"
+        assert response.database_status == {}
+        assert response.llm_status == "unknown"
+        agent_cls.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_healthy_when_no_config(self):
