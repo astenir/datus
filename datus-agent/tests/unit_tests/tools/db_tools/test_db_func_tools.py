@@ -185,6 +185,38 @@ class TestDBFuncTool:
         assert result.success == 1
         mock_connector.get_schemas.assert_called_once_with("", "", include_sys=False)
 
+    def test_list_databases_respects_projected_role_grant(self, mock_connector):
+        """Chat database discovery must use the request's effective role grant."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {"effect": "allow", "databases": ["db1"]},
+                },
+            },
+        )
+
+        result = tool.list_databases()
+
+        assert result.result == ["db1"]
+
+    def test_list_schemas_respects_projected_role_grant(self, mock_connector):
+        """Chat schema discovery must use the request's effective role grant."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {"effect": "allow", "schemas": ["schema1"]},
+                },
+            },
+        )
+
+        result = tool.list_schemas(database="db1")
+
+        assert result.result == ["schema1"]
+
     def test_list_schemas_failure(self, db_func_tool, mock_connector):
         """Test list_schemas with exception."""
         mock_connector.get_schemas.side_effect = Exception("Schema retrieval failed")
@@ -232,6 +264,87 @@ class TestDBFuncTool:
             "order_view",
             "sales_mv",
         ]
+
+    def test_list_tables_respects_projected_role_grant(self, mock_connector):
+        """Chat tools must not list tables outside the request's effective role grant."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "schemas": ["schema1"],
+                        "tables": ["orders"],
+                    }
+                },
+            },
+        )
+
+        result = tool.list_tables(database="db1", schema_name="schema1", include_views=True)
+
+        assert result.success == 1
+        assert result.result == [{"type": "table", "qualified_name": "orders"}]
+
+    def test_list_tables_keeps_unscoped_admin_grant(self, mock_connector):
+        """An allow grant without object scopes keeps the existing full-list behavior."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "allow_catalog": True,
+                        "allow_sql": True,
+                    }
+                },
+            },
+        )
+
+        result = tool.list_tables(database="db1", schema_name="schema1", include_views=False)
+
+        assert [item["qualified_name"] for item in result.result] == ["users", "orders"]
+
+    def test_list_tables_wildcard_grant_allows_unsupported_schema_dimension(self, mock_connector):
+        """A global wildcard must not hide tables when the dialect has no schema coordinate."""
+        mock_connector.dialect = "sqlite"
+        mock_connector.schema_name = ""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "schemas": ["*"],
+                        "tables": ["*"],
+                    }
+                },
+            },
+        )
+
+        result = tool.list_tables(include_views=False)
+
+        assert [item["qualified_name"] for item in result.result] == ["users", "orders"]
+
+    def test_describe_table_rejects_table_outside_projected_role_grant(self, mock_connector):
+        """A hidden table must not remain reachable through describe_table."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {"effect": "allow", "tables": ["orders"]},
+                },
+            },
+        )
+
+        result = tool.describe_table("users", database="db1", schema_name="schema1")
+
+        assert result.success == 0
+        assert "outside the scoped context" in result.error
+        mock_connector.get_schema.assert_not_called()
 
     def test_list_databases_respects_scope(self, scoped_db_func_tool, mock_connector):
         """list_databases should honor scoped table restrictions."""
@@ -1337,6 +1450,39 @@ class TestDBFuncToolIntegration:
         assert isinstance(result.result["sample_data"], dict)
         assert result.result["sample_data"]["original_rows"] == 0
         db_func_tool._get_semantic_model.assert_called_once()
+
+    def test_search_table_respects_projected_role_grant(self, mock_connector):
+        """RAG table discovery must use the same effective grant as list_tables."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {"effect": "allow", "tables": ["orders"]},
+                },
+            },
+        )
+        tool.has_schema = True
+        tool.schema_rag = Mock()
+        unauthorized_metadata = {
+            **self._build_metadata_batch().to_pylist()[0],
+            "table_name": "payroll",
+            "identifier": "db1.public.payroll",
+        }
+        unauthorized_sample = {
+            **self._build_sample_batch().to_pylist()[0],
+            "identifier": "db1.public.payroll",
+        }
+        tool.schema_rag.search_similar.return_value = (
+            FakeRecordBatch(self._build_metadata_batch().to_pylist() + [unauthorized_metadata]),
+            FakeRecordBatch(self._build_sample_batch().to_pylist() + [unauthorized_sample]),
+        )
+
+        result = tool.search_table("finance tables")
+
+        assert [row["table_name"] for row in result.result["metadata"]] == ["orders"]
+        assert result.result["sample_data"]["original_rows"] == 1
+        assert "payroll" not in result.result["sample_data"]["compressed_data"]
 
     def test_tool_transformation_integration(self, db_func_tool):
         """Test that tools can be transformed properly."""
