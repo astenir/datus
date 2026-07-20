@@ -125,14 +125,21 @@ def agent_record_to_runtime_entry(record: dict[str, Any]) -> dict[str, Any]:
 
     policy = agent_policy_metadata(record)
     policy["tool_policy"] = include_bound_mcp_servers(policy["tool_policy"], record.get("mcp"))
+    prompt_template = record.get("prompt_template")
+    has_custom_prompt = isinstance(prompt_template, str) and bool(prompt_template.strip())
+    node_class = str(record["node_class"])
+    capability = get_agent_node_capability(node_class)
+    builtin_template = (
+        capability.prompt_template if capability and capability.prompt_template else f"{node_class}_system"
+    )
     entry: dict[str, Any] = {
         "id": record["agent_id"],
-        "type": record["node_class"],
-        "node_class": record["node_class"],
-        "system_prompt": record["agent_id"],
+        "type": node_class,
+        "node_class": node_class,
+        "system_prompt": record["agent_id"] if has_custom_prompt else builtin_template.removesuffix("_system"),
         "agent_description": record.get("description") or "",
-        "prompt_template": record.get("prompt_template"),
-        "prompt_version": record.get("prompt_version") or "1.0",
+        "prompt_template": prompt_template if has_custom_prompt else None,
+        "prompt_version": (record.get("prompt_version") or "1.0") if has_custom_prompt else None,
         "prompt_language": record.get("prompt_language") or "en",
         "tools": ", ".join(record.get("tools") or []),
         "mcp": ", ".join(record.get("mcp") or []),

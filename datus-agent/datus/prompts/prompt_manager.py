@@ -159,6 +159,27 @@ class PromptManager:
         filename = self._get_template_filename(template_name, version)
         return self._get_env().get_template(filename)
 
+    def _get_runtime_template_content(self, template_name: str, version: Optional[str]) -> Optional[str]:
+        """Return request-scoped Agent prompt content matching a template lookup."""
+        agentic_nodes = getattr(self._agent_config, "agentic_nodes", None)
+        if not isinstance(agentic_nodes, dict):
+            return None
+
+        for node_name, node_config in agentic_nodes.items():
+            if not isinstance(node_config, dict):
+                continue
+            system_prompt_name = node_config.get("system_prompt") or node_name
+            if f"{system_prompt_name}_system" != template_name:
+                continue
+            content = node_config.get("prompt_template")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            configured_version = node_config.get("prompt_version")
+            if version and configured_version and str(version) != str(configured_version):
+                continue
+            return content
+        return None
+
     def render_template(self, template_name: str, version: Optional[str] = None, **kwargs) -> str:
         """
         Render a template with the given variables.
@@ -171,7 +192,11 @@ class PromptManager:
         Returns:
             Rendered template string
         """
-        template = self.load_template(template_name, version)
+        runtime_content = self._get_runtime_template_content(template_name, version)
+        if runtime_content is not None:
+            template = self._get_env().from_string(runtime_content)
+        else:
+            template = self.load_template(template_name, version)
         return template.render(**kwargs)
 
     def get_raw_template(self, template_name: str, version: Optional[str] = None) -> str:

@@ -724,6 +724,31 @@ class TestChatAgenticNodeSystemPrompt:
         assert isinstance(prompt, str)
         assert len(prompt) >= 100
 
+    def test_custom_agent_renders_request_scoped_prompt_content(self, real_agent_config, mock_llm_create, caplog):
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        real_agent_config.agentic_nodes["chat_custom"] = {
+            "node_class": "chat",
+            "system_prompt": "chat_custom",
+            "prompt_template": "Custom database prompt for {{ agent_description }}.",
+            "prompt_version": "1.0",
+            "agent_description": "investment research",
+            "tools": "",
+        }
+        node = ChatAgenticNode(
+            node_id="test_custom_prompt",
+            description="Test custom Agent prompt",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            node_name="chat_custom",
+        )
+
+        with caplog.at_level("WARNING"):
+            prompt = node._get_system_prompt()
+
+        assert "Custom database prompt for investment research." in prompt
+        assert "Failed to render system prompt 'chat_custom'" not in caplog.text
+
     def test_get_system_prompt_excludes_permission_profile(self, real_agent_config, mock_llm_create):
         """The permission profile is enforced by hooks at tool-call time, never prompted.
 

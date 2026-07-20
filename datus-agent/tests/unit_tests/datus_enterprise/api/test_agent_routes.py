@@ -608,6 +608,50 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
     assert entry["tool_policy"]["allowed"] == ["db_tools.read_query", "mcp.filesystem.*"]
 
 
+def test_enterprise_agent_materializes_custom_prompt_content():
+    agent_config = SimpleNamespace(agentic_nodes={})
+    record = {
+        "agent_id": "chat_custom",
+        "node_class": "chat",
+        "status": "published",
+        "prompt_template": "You are the custom chat Agent.",
+        "prompt_version": "1.0",
+        "tools": [],
+        "mcp": [],
+        "scoped_context": {},
+        "acl": {"visibility": "enterprise"},
+    }
+
+    chat_routes._materialize_enterprise_agent(agent_config, record)
+
+    entry = agent_config.agentic_nodes["chat_custom"]
+    assert entry["system_prompt"] == "chat_custom"
+    assert entry["prompt_template"] == "You are the custom chat Agent."
+    assert entry["prompt_version"] == "1.0"
+
+
+def test_enterprise_agent_without_custom_prompt_uses_latest_builtin_template():
+    agent_config = SimpleNamespace(agentic_nodes={})
+    record = {
+        "agent_id": "chat_custom",
+        "node_class": "chat",
+        "status": "published",
+        "prompt_template": None,
+        "prompt_version": "1.0",
+        "tools": [],
+        "mcp": [],
+        "scoped_context": {},
+        "acl": {"visibility": "enterprise"},
+    }
+
+    chat_routes._materialize_enterprise_agent(agent_config, record)
+
+    entry = agent_config.agentic_nodes["chat_custom"]
+    assert entry["system_prompt"] == "chat"
+    assert entry["prompt_template"] is None
+    assert entry["prompt_version"] is None
+
+
 def test_pg_agent_store_helpers_preserve_runtime_record_shape():
     payload = _normalized_agent_metadata(
         {
