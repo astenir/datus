@@ -286,6 +286,31 @@ class TestDBFuncTool:
         assert result.success == 1
         assert result.result == [{"type": "table", "qualified_name": "orders"}]
 
+    def test_list_tables_matches_qualified_role_grant_without_default_schema(self, mock_connector):
+        """Qualified UI grants must match bare connector names when no schema was requested."""
+        mock_connector.schema_name = ""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "tables": ["db1.schema1.orders"],
+                    }
+                },
+            },
+        )
+
+        result = tool.list_tables(include_views=False)
+
+        assert result.success == 1
+        assert result.result == [{"type": "table", "qualified_name": "orders"}]
+
+        wrong_schema = tool.list_tables(schema_name="schema2", include_views=False)
+
+        assert wrong_schema.result == []
+
     def test_list_tables_keeps_unscoped_admin_grant(self, mock_connector):
         """An allow grant without object scopes keeps the existing full-list behavior."""
         tool = DBFuncTool(

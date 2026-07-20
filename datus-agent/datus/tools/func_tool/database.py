@@ -396,6 +396,49 @@ class DBFuncTool:
             )
         )
 
+    def _table_matches_listing_grant(
+        self,
+        coordinate: TableCoordinate,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        if self._table_matches_datasource_grant(coordinate, datasource):
+            return True
+
+        grant = self._datasource_grant(datasource)
+        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return False
+        table_patterns = self._grant_scope_patterns(grant, "tables")
+        if not table_patterns or not coordinate.table:
+            return False
+
+        for raw_pattern in table_patterns:
+            pattern = self._parse_scope_token(raw_pattern)
+            if pattern is None or not _pattern_matches(pattern.table, coordinate.table):
+                continue
+            if any(
+                pattern_value and coordinate_value and not _pattern_matches(pattern_value, coordinate_value)
+                for pattern_value, coordinate_value in (
+                    (pattern.catalog, coordinate.catalog),
+                    (pattern.database, coordinate.database),
+                    (pattern.schema, coordinate.schema),
+                )
+            ):
+                continue
+
+            effective = TableCoordinate(
+                catalog=coordinate.catalog or pattern.catalog,
+                database=coordinate.database or pattern.database,
+                schema=coordinate.schema or pattern.schema,
+                table=coordinate.table,
+            )
+            if (
+                self._grant_scope_matches("catalogs", [effective.catalog], datasource)
+                and self._grant_scope_matches("databases", [effective.database], datasource)
+                and self._grant_scope_matches("schemas", self._schema_scope_candidates(effective), datasource)
+            ):
+                return True
+        return False
+
     def _resolve_scoped_context_tables(self) -> Sequence[str]:
         if not self.agent_config:
             return []
@@ -740,10 +783,12 @@ class DBFuncTool:
         coordinate: TableCoordinate,
         datasource: Optional[str] = "",
     ) -> bool:
-        scoped_context_matches = not self._scoped_patterns or any(
-            pattern.matches(coordinate) for pattern in self._scoped_patterns
+        return self._table_matches_scoped_context(coordinate) and self._table_matches_datasource_grant(
+            coordinate, datasource
         )
-        return scoped_context_matches and self._table_matches_datasource_grant(coordinate, datasource)
+
+    def _table_matches_scoped_context(self, coordinate: TableCoordinate) -> bool:
+        return not self._scoped_patterns or any(pattern.matches(coordinate) for pattern in self._scoped_patterns)
 
     def _filter_table_entries(
         self,
@@ -763,7 +808,9 @@ class DBFuncTool:
                 schema=schema,
                 connector=connector,
             )
-            if self._table_matches_scope(coordinate, datasource):
+            if self._table_matches_scoped_context(coordinate) and self._table_matches_listing_grant(
+                coordinate, datasource
+            ):
                 filtered.append(entry)
         return filtered
 
