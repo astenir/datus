@@ -3699,6 +3699,7 @@ class AgenticNode(Node):
                 broker=self.interaction_broker,
                 permission_manager=self.permission_manager,
                 node_name=self.get_node_name(),
+                node_class=self.get_node_class_name(),
                 tool_registry=self.tool_registry,
                 fs_policy=self._make_filesystem_policy(),
                 non_interactive=non_interactive,

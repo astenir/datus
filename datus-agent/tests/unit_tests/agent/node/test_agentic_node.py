@@ -1853,3 +1853,16 @@ class TestEnsurePermissionHooksProxyWiring:
 
         kwargs = ph_cls.call_args.kwargs
         assert kwargs["proxied_tool_names"] == set()
+
+    def test_passes_canonical_node_class(self):
+        """Permission hooks receive stable class identity alongside the runtime alias."""
+        node = self._prepare_node(set())
+        node.get_node_name = MagicMock(return_value="dashboard_edit__unit")
+        node.get_node_class_name = MagicMock(return_value="gen_visual_dashboard")
+
+        with patch("datus.tools.permission.permission_hooks.PermissionHooks") as ph_cls:
+            node._ensure_permission_hooks()
+
+        kwargs = ph_cls.call_args.kwargs
+        assert kwargs["node_name"] == "dashboard_edit__unit"
+        assert kwargs["node_class"] == "gen_visual_dashboard"
