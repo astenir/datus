@@ -387,6 +387,10 @@ class DBFuncTool:
         coordinate: TableCoordinate,
         datasource: Optional[str] = "",
     ) -> bool:
+        qualified_table_patterns = self._fully_qualified_table_grant_patterns(datasource)
+        if any(pattern.matches(coordinate) for pattern in qualified_table_patterns):
+            return True
+
         return all(
             (
                 self._grant_scope_matches("catalogs", [coordinate.catalog], datasource),
@@ -431,13 +435,56 @@ class DBFuncTool:
                 schema=coordinate.schema or pattern.schema,
                 table=coordinate.table,
             )
-            if (
-                self._grant_scope_matches("catalogs", [effective.catalog], datasource)
-                and self._grant_scope_matches("databases", [effective.database], datasource)
-                and self._grant_scope_matches("schemas", self._schema_scope_candidates(effective), datasource)
-            ):
+            if self._table_matches_datasource_grant(effective, datasource):
                 return True
         return False
+
+    def _fully_qualified_table_grant_patterns(self, datasource: Optional[str] = "") -> List[ScopedTablePattern]:
+        """Return leaf grants that identify every namespace supported by this connector."""
+        grant = self._datasource_grant(datasource)
+        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return []
+        raw_patterns = self._grant_scope_patterns(grant, "tables")
+        if not raw_patterns:
+            return []
+
+        namespace_fields = self._field_order[:-1]
+        if not namespace_fields:
+            return []
+        patterns: List[ScopedTablePattern] = []
+        for raw_pattern in raw_patterns:
+            pattern = self._parse_scope_token(raw_pattern)
+            if pattern is not None and all(getattr(pattern, field) for field in namespace_fields):
+                patterns.append(pattern)
+        return patterns
+
+    def _qualified_table_grants_define_namespace_scope(self, datasource: Optional[str] = "") -> bool:
+        """Use table ancestors for discovery only when every table grant is self-contained."""
+        grant = self._datasource_grant(datasource)
+        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
+            return False
+        raw_patterns = self._grant_scope_patterns(grant, "tables")
+        return bool(raw_patterns) and len(self._fully_qualified_table_grant_patterns(datasource)) == len(raw_patterns)
+
+    def _qualified_table_grant_matches_namespace(
+        self,
+        coordinate: TableCoordinate,
+        namespace_field: str,
+        datasource: Optional[str] = "",
+    ) -> bool:
+        """Check whether a namespace is an ancestor of a fully qualified table grant."""
+        if (
+            not self._qualified_table_grants_define_namespace_scope(datasource)
+            or namespace_field not in self._field_order
+        ):
+            return False
+        namespace_fields = self._field_order[: self._field_order.index(namespace_field) + 1]
+        return any(
+            all(
+                _field_matches(field, getattr(pattern, field), getattr(coordinate, field)) for field in namespace_fields
+            )
+            for pattern in self._fully_qualified_table_grant_patterns(datasource)
+        )
 
     def _resolve_scoped_context_tables(self) -> Sequence[str]:
         if not self.agent_config:
@@ -842,10 +889,13 @@ class DBFuncTool:
                     continue
                 scoped_context_matches = True
                 break
-        return (
-            scoped_context_matches
-            and self._grant_scope_matches("catalogs", [catalog_value], datasource)
-            and self._grant_scope_matches("databases", [database_value], datasource)
+        if not scoped_context_matches:
+            return False
+        coordinate = TableCoordinate(catalog=catalog_value, database=database_value)
+        if self._qualified_table_grants_define_namespace_scope(datasource):
+            return self._qualified_table_grant_matches_namespace(coordinate, "database", datasource)
+        return self._grant_scope_matches("catalogs", [catalog_value], datasource) and self._grant_scope_matches(
+            "databases", [database_value], datasource
         )
 
     def _schema_matches_scope(
@@ -876,9 +926,12 @@ class DBFuncTool:
             database=database_value,
             schema=schema_value,
         )
+        if not scoped_context_matches:
+            return False
+        if self._qualified_table_grants_define_namespace_scope(datasource):
+            return self._qualified_table_grant_matches_namespace(coordinate, "schema", datasource)
         return (
-            scoped_context_matches
-            and self._grant_scope_matches("catalogs", [catalog_value], datasource)
+            self._grant_scope_matches("catalogs", [catalog_value], datasource)
             and self._grant_scope_matches("databases", [database_value], datasource)
             and self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource)
         )

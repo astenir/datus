@@ -217,6 +217,30 @@ class TestDBFuncTool:
 
         assert result.result == ["schema1"]
 
+    def test_list_namespaces_include_ancestors_of_qualified_table_grants(self, mock_connector):
+        """Namespace discovery must retain ancestors that contain explicitly granted tables."""
+        mock_connector.get_databases.return_value = ["ccks_fund", "other_db"]
+        mock_connector.get_schemas.return_value = ["public", "test", "private"]
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "ccks_fund",
+                "datasource_grants": {
+                    "ccks_fund": {
+                        "effect": "allow",
+                        "schemas": ["ccks_fund.test"],
+                        "tables": ["ccks_fund.public.mf_benchmarkgrowthrate"],
+                    }
+                },
+            },
+        )
+
+        databases = tool.list_databases()
+        schemas = tool.list_schemas(database="ccks_fund")
+
+        assert databases.result == ["ccks_fund"]
+        assert schemas.result == ["public"]
+
     def test_list_schemas_failure(self, db_func_tool, mock_connector):
         """Test list_schemas with exception."""
         mock_connector.get_schemas.side_effect = Exception("Schema retrieval failed")
@@ -310,6 +334,82 @@ class TestDBFuncTool:
         wrong_schema = tool.list_tables(schema_name="schema2", include_views=False)
 
         assert wrong_schema.result == []
+
+    def test_list_tables_uses_qualified_table_path_over_unrelated_schema_filter(self, mock_connector):
+        """A qualified leaf grant must not be rejected by an unrelated schema filter."""
+        mock_connector.get_tables.return_value = [
+            "mf_benchmarkgrowthrate",
+            "mf_bondportifoliodetail",
+            "other_table",
+        ]
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "ccks_fund",
+                "datasource_grants": {
+                    "ccks_fund": {
+                        "effect": "allow",
+                        "schemas": ["ccks_fund.test"],
+                        "tables": [
+                            "ccks_fund.public.mf_benchmarkgrowthrate",
+                            "ccks_fund.public.mf_bondportifoliodetail",
+                        ],
+                    }
+                },
+            },
+        )
+
+        public_tables = tool.list_tables(
+            database="ccks_fund",
+            schema_name="public",
+            datasource="ccks_fund",
+            include_views=False,
+        )
+        test_tables = tool.list_tables(
+            database="ccks_fund",
+            schema_name="test",
+            datasource="ccks_fund",
+            include_views=False,
+        )
+
+        assert public_tables.result == [
+            {"type": "table", "qualified_name": "mf_benchmarkgrowthrate"},
+            {"type": "table", "qualified_name": "mf_bondportifoliodetail"},
+        ]
+        assert test_tables.result == []
+
+    def test_table_detail_uses_same_qualified_leaf_semantics_as_listing(self, mock_connector):
+        """Qualified leaf grants must remain reachable through detail while siblings stay denied."""
+        tool = DBFuncTool(
+            mock_connector,
+            principal={
+                "datasource": "ccks_fund",
+                "datasource_grants": {
+                    "ccks_fund": {
+                        "effect": "allow",
+                        "schemas": ["ccks_fund.test"],
+                        "tables": ["ccks_fund.public.mf_benchmarkgrowthrate"],
+                    }
+                },
+            },
+        )
+
+        allowed = tool.describe_table(
+            "mf_benchmarkgrowthrate",
+            database="ccks_fund",
+            schema_name="public",
+            datasource="ccks_fund",
+        )
+        denied = tool.describe_table(
+            "other_table",
+            database="ccks_fund",
+            schema_name="public",
+            datasource="ccks_fund",
+        )
+
+        assert allowed.success == 1
+        assert denied.success == 0
+        assert "outside the scoped context" in denied.error
 
     def test_list_tables_keeps_unscoped_admin_grant(self, mock_connector):
         """An allow grant without object scopes keeps the existing full-list behavior."""
