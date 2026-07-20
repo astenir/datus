@@ -431,11 +431,17 @@ def test_user_agent_preference_rejects_unavailable_agent_and_falls_back_when_dis
     assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
     assert saved_response.json()["success"] is True
     assert fallback_response.json()["data"]["default_agent_id"] == "chat"
-    assert fallback_response.json()["data"]["source"] == "first_available"
+    assert fallback_response.json()["data"]["source"] == "builtin_chat"
 
 
-def test_user_can_clear_default_agent_preference(monkeypatch):
-    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+def test_user_can_clear_default_agent_preference_and_stably_fall_back_to_chat(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["ask_metrics"] = {
+        "agent_id": "ask_metrics",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
     ctx = AppContext(user_id="alice", permissions={"module.chat"})
 
     with _client(ctx) as client:
@@ -443,6 +449,30 @@ def test_user_can_clear_default_agent_preference(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data"]["default_agent_id"] == "chat"
+    assert response.json()["data"]["source"] == "builtin_chat"
+    assert response.json()["data"]["user_default_agent_id"] is None
+
+
+def test_default_agent_falls_back_to_first_acl_available_when_chat_is_disabled(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["ask_metrics"] = {
+        "agent_id": "ask_metrics",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    agent_store._agents["chat"] = {
+        "agent_id": "chat",
+        "status": "disabled",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="alice", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me/agent-preferences")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["default_agent_id"] == "ask_metrics"
     assert response.json()["data"]["source"] == "first_available"
 
 

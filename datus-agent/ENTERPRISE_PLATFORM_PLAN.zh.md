@@ -265,7 +265,7 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
 
-用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> 第一个 ACL 可用 Agent -> 无可用 Agent”，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
 
 Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。`runtime_policy.max_permission_mode` 限制用户请求的最高 permission mode，`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
 

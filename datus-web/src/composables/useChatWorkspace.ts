@@ -108,7 +108,7 @@ export function useChatWorkspace() {
   const artifactEditSession = shallowRef<ArtifactEditSession | null>(null);
   const agentOptions = computed<SelectOption[]>(() => [
     ...availableAgents.value
-      .filter((agent) => agent.agent_id !== "chat" && agent.status === "published")
+      .filter((agent) => agent.status === "published")
       .map((agent) => ({
         value: agent.agent_id,
         label: agent.name || agent.agent_id,
@@ -125,6 +125,7 @@ export function useChatWorkspace() {
   ]);
   const selectedAgent = shallowRef("");
   const defaultAgentId = shallowRef("");
+  const userDefaultAgentId = shallowRef("");
   const isSavingDefaultAgent = shallowRef(false);
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
@@ -290,7 +291,7 @@ export function useChatWorkspace() {
 
   function startNewSession() {
     artifactEditSession.value = null;
-    selectedAgent.value = defaultAgentId.value;
+    selectedAgent.value = "";
     clearMessages();
     selectSession(null);
   }
@@ -389,15 +390,17 @@ export function useChatWorkspace() {
         selectedAgent.value = "";
       }
       if (defaultAgentId.value && !agentOptions.value.some((option) => option.value === defaultAgentId.value)) {
-        if (selectedAgent.value === defaultAgentId.value) {
-          selectedAgent.value = "";
-        }
         defaultAgentId.value = "";
+      }
+      if (userDefaultAgentId.value && !agentOptions.value.some((option) => option.value === userDefaultAgentId.value)) {
+        userDefaultAgentId.value = "";
       }
       return true;
     } catch (error) {
       console.error("Failed to load chat agent options:", error);
       availableAgents.value = [];
+      defaultAgentId.value = "";
+      userDefaultAgentId.value = "";
       if (!isArtifactEditAgent(selectedAgent.value)) {
         selectedAgent.value = "";
       }
@@ -414,20 +417,27 @@ export function useChatWorkspace() {
     return response.data ?? { source: "none" };
   }
 
+  function availableAgentId(agentId: string | null | undefined): string {
+    const normalizedAgentId = agentId?.trim() ?? "";
+    return agentOptions.value.some((option) => option.value === normalizedAgentId)
+      ? normalizedAgentId
+      : "";
+  }
+
+  function applyAgentPreference(preference: AgentPreferenceSummary) {
+    defaultAgentId.value = availableAgentId(preference.default_agent_id);
+    userDefaultAgentId.value = availableAgentId(preference.user_default_agent_id);
+  }
+
   async function loadAgentPreference(): Promise<boolean> {
     try {
       const preference = preferenceData(await meApi.agentPreference());
-      const preferredAgent = preference.default_agent_id?.trim() ?? "";
-      defaultAgentId.value = agentOptions.value.some((option) => option.value === preferredAgent)
-        ? preferredAgent
-        : "";
-      if (!selectedAgent.value) {
-        selectedAgent.value = defaultAgentId.value;
-      }
+      applyAgentPreference(preference);
       return true;
     } catch (error) {
       console.error("Failed to load default Agent preference:", error);
       defaultAgentId.value = "";
+      userDefaultAgentId.value = "";
       return false;
     }
   }
@@ -444,16 +454,20 @@ export function useChatWorkspace() {
       const preference = preferenceData(await meApi.updateAgentPreference({
         default_agent_id: normalizedAgentId || null,
       }));
-      const savedAgentId = preference.default_agent_id?.trim() ?? "";
-      defaultAgentId.value = savedAgentId;
-      selectedAgent.value = savedAgentId;
-      toast.success(
-        preference.source === "user"
-          ? "已设为我的默认 Agent"
-          : preference.source === "enterprise"
-            ? "已恢复企业默认 Agent"
-            : "已恢复可用 Agent 默认选择",
-      );
+      applyAgentPreference(preference);
+      selectedAgent.value = normalizedAgentId;
+      if (normalizedAgentId) {
+        toast.success("已设为我的默认 Agent");
+      } else {
+        const effectiveDefaultLabel = agentOptions.value.find(
+          (option) => option.value === defaultAgentId.value,
+        )?.label ?? defaultAgentId.value;
+        toast.success(
+          effectiveDefaultLabel
+            ? `已清除我的默认设置，当前跟随 ${effectiveDefaultLabel}`
+            : "已清除我的默认设置",
+        );
+      }
       return true;
     } catch (error) {
       console.error("Failed to update default Agent preference:", error);
@@ -560,6 +574,7 @@ export function useChatWorkspace() {
     prewarmDatasource,
     selectedAgent,
     defaultAgentId,
+    userDefaultAgentId,
     selectedModel,
     database,
     schema,

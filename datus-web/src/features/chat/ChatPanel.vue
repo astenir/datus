@@ -286,6 +286,7 @@ function openArtifact(kind: string, slug: string) {
                 :schema="workspace.schema.value"
                 :selected-agent="workspace.selectedAgent.value"
                 :default-agent-id="workspace.defaultAgentId.value"
+                :user-default-agent-id="workspace.userDefaultAgentId.value"
                 :datasource-options="workspace.visibleDatasourceOptions.value"
                 :datasource-statuses="workspace.datasourceStatuses.value"
                 :database-options="workspace.databaseOptions.value"

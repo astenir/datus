@@ -391,7 +391,7 @@ async def list_available_agent_records(ctx: AppContext) -> list[dict[str, Any]]:
 
 
 async def resolve_effective_default_agent(ctx: AppContext) -> tuple[dict[str, Any] | None, str]:
-    """Resolve user default, enterprise default, then the first ACL-usable Agent."""
+    """Resolve user default, enterprise default, built-in chat, then the first ACL-usable Agent."""
 
     from datus.api import deps
 
@@ -409,6 +409,9 @@ async def resolve_effective_default_agent(ctx: AppContext) -> tuple[dict[str, An
     for record in available:
         if agent_policy_metadata(record)["enterprise_default"]:
             return record, "enterprise"
+    for record in available:
+        if record.get("agent_id") == DEFAULT_CHAT_AGENT_ID:
+            return record, "builtin_chat"
     if available:
         return available[0], "first_available"
     return None, "none"

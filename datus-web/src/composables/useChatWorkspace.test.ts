@@ -2,11 +2,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 function mockMeApi() {
   return {
-    agentPreference: vi.fn(async () => ({ success: true, data: { default_agent_id: null } })),
-    updateAgentPreference: vi.fn(async (input: { default_agent_id?: string | null }) => ({
+    agentPreference: vi.fn(async () => ({
       success: true,
-      data: { default_agent_id: input.default_agent_id ?? null },
+      data: {
+        default_agent_id: "chat",
+        source: "builtin_chat",
+        user_default_agent_id: null,
+        enterprise_default_agent_id: null,
+      },
     })),
+    updateAgentPreference: vi.fn(async (input: { default_agent_id?: string | null }) => {
+      const userDefaultAgentId = input.default_agent_id ?? null;
+      return {
+        success: true,
+        data: {
+          default_agent_id: userDefaultAgentId || "chat",
+          source: userDefaultAgentId ? "user" : "builtin_chat",
+          user_default_agent_id: userDefaultAgentId,
+          enterprise_default_agent_id: null,
+        },
+      };
+    }),
   };
 }
 
@@ -43,12 +59,25 @@ describe("useChatWorkspace", () => {
     const clearMessages = vi.fn();
     const agentPreference = vi.fn(async () => ({
       success: true,
-      data: { default_agent_id: "research" },
+      data: {
+        default_agent_id: "research",
+        source: "user",
+        user_default_agent_id: "research",
+        enterprise_default_agent_id: null,
+      },
     }));
-    const updateAgentPreference = vi.fn(async (input: { default_agent_id?: string | null }) => ({
-      success: true,
-      data: { default_agent_id: input.default_agent_id ?? null },
-    }));
+    const updateAgentPreference = vi.fn(async (input: { default_agent_id?: string | null }) => {
+      const userDefaultAgentId = input.default_agent_id ?? null;
+      return {
+        success: true,
+        data: {
+          default_agent_id: userDefaultAgentId || "chat",
+          source: userDefaultAgentId ? "user" : "builtin_chat",
+          user_default_agent_id: userDefaultAgentId,
+          enterprise_default_agent_id: null,
+        },
+      };
+    });
 
     vi.doMock("@/composables/useTheme", () => ({
       useTheme: () => ({}),
@@ -165,21 +194,31 @@ describe("useChatWorkspace", () => {
     expect(loadCatalog).not.toHaveBeenCalled();
     expect(loadDatasourceStatuses).not.toHaveBeenCalled();
     expect(prewarmDatasource).not.toHaveBeenCalled();
-    expect(workspace.agentOptions.value).toEqual([{ value: "research", label: "Research" }]);
+    expect(workspace.agentOptions.value).toEqual([
+      { value: "chat", label: "chat" },
+      { value: "research", label: "Research" },
+    ]);
     expect(agentPreference).toHaveBeenCalledTimes(1);
     expect(workspace.defaultAgentId.value).toBe("research");
-    expect(workspace.selectedAgent.value).toBe("research");
+    expect(workspace.userDefaultAgentId.value).toBe("research");
+    expect(workspace.selectedAgent.value).toBe("");
 
-    workspace.selectedAgent.value = "";
     workspace.startNewSession();
-    expect(workspace.selectedAgent.value).toBe("research");
+    expect(workspace.selectedAgent.value).toBe("");
     expect(clearMessages).toHaveBeenCalledTimes(1);
     expect(selectSession).toHaveBeenCalledWith(null);
 
     await expect(workspace.setDefaultAgent("")).resolves.toBe(true);
     expect(updateAgentPreference).toHaveBeenCalledWith({ default_agent_id: null });
-    expect(workspace.defaultAgentId.value).toBe("");
+    expect(workspace.defaultAgentId.value).toBe("chat");
+    expect(workspace.userDefaultAgentId.value).toBe("");
     expect(workspace.selectedAgent.value).toBe("");
+
+    await expect(workspace.setDefaultAgent("chat")).resolves.toBe(true);
+    expect(updateAgentPreference).toHaveBeenLastCalledWith({ default_agent_id: "chat" });
+    expect(workspace.defaultAgentId.value).toBe("chat");
+    expect(workspace.userDefaultAgentId.value).toBe("chat");
+    expect(workspace.selectedAgent.value).toBe("chat");
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
     expect(compactSession).toHaveBeenCalledWith("s1");
@@ -195,6 +234,7 @@ describe("useChatWorkspace", () => {
 
     expect(workspace.selectedAgent.value).toBe("report_edit__edit_1");
     expect(workspace.agentOptions.value).toEqual([
+      { value: "chat", label: "chat" },
       { value: "research", label: "Research" },
       { value: "report_edit__edit_1", label: "编辑报表：fund-report" },
     ]);
@@ -212,6 +252,7 @@ describe("useChatWorkspace", () => {
 
     expect(workspace.selectedAgent.value).toBe("dashboard_edit__edit_2");
     expect(workspace.agentOptions.value).toEqual([
+      { value: "chat", label: "chat" },
       { value: "research", label: "Research" },
       { value: "dashboard_edit__edit_2", label: "编辑仪表盘：fund-overview" },
     ]);

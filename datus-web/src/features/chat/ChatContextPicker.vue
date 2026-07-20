@@ -39,6 +39,7 @@ const props = defineProps<{
   schema: string
   selectedAgent: string
   defaultAgentId: string
+  userDefaultAgentId: string
   datasourceOptions: readonly SelectOption[]
   datasourceStatuses: Readonly<Record<string, DatasourceStatusItem>>
   databaseOptions: readonly SelectOption[]
@@ -66,12 +67,28 @@ const schemaLabel = computed(() => {
   if (!props.database) return "先选择数据库"
   return optionLabel(props.schema, props.schemaOptions) || "全部"
 })
-const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOptions) || "默认 Agent")
-const selectedAgentIsDefault = computed(() => props.selectedAgent === props.defaultAgentId)
+const effectiveDefaultAgentLabel = computed(() =>
+  optionLabel(props.defaultAgentId, props.agentOptions) || props.defaultAgentId,
+)
+const defaultAgentLabel = computed(() =>
+  effectiveDefaultAgentLabel.value
+    ? `默认 Agent（当前：${effectiveDefaultAgentLabel.value}）`
+    : "默认 Agent",
+)
+const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOptions) || defaultAgentLabel.value)
+const selectedAgentIsUserDefault = computed(() =>
+  Boolean(props.selectedAgent) && props.selectedAgent === props.userDefaultAgentId,
+)
 const defaultAgentActionLabel = computed(() => {
-  if (selectedAgentIsDefault.value && props.selectedAgent) return "当前为我的默认 Agent"
-  return props.selectedAgent ? "设为我的默认 Agent" : "设为系统默认 Agent"
+  if (selectedAgentIsUserDefault.value) return "当前为我的默认 Agent"
+  if (props.selectedAgent) return "设为我的默认 Agent"
+  return props.userDefaultAgentId ? "清除我的默认设置" : "正在跟随默认 Agent"
 })
+const defaultAgentActionDisabled = computed(() =>
+  props.savingDefaultAgent
+  || selectedAgentIsUserDefault.value
+  || (!props.selectedAgent && !props.userDefaultAgentId),
+)
 const schemaSelectDisabled = computed(() =>
   !props.database || props.loadingCatalog || (props.schemaOptions.length === 0 && !props.schema),
 )
@@ -538,7 +555,7 @@ function resetContext() {
                 data-icon="inline-start"
                 class="text-muted-foreground"
               />
-              <span class="min-w-0 flex-1 truncate text-sm">默认 Agent</span>
+              <span class="min-w-0 flex-1 truncate text-sm">{{ defaultAgentLabel }}</span>
               <CheckIcon
                 v-if="!selectedAgent"
                 data-icon="inline-end"
@@ -580,7 +597,7 @@ function resetContext() {
           variant="outline"
           size="sm"
           class="w-full"
-          :disabled="savingDefaultAgent || (selectedAgentIsDefault && Boolean(selectedAgent))"
+          :disabled="defaultAgentActionDisabled"
           @click="setDefaultAgent"
         >
           <Spinner
@@ -590,7 +607,7 @@ function resetContext() {
           <StarIcon
             v-else
             data-icon="inline-start"
-            :class="cn(selectedAgentIsDefault && 'fill-current')"
+            :class="cn(selectedAgentIsUserDefault && 'fill-current')"
           />
           {{ defaultAgentActionLabel }}
         </Button>
