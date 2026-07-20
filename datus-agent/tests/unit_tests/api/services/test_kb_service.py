@@ -301,9 +301,7 @@ class TestKbServiceBootstrapStream:
         worker_can_finish = Event()
         request = _bootstrap_input(components=["metadata", "reference_sql"], strategy="check")
 
-        def fake_run_component(
-            request, component, queue, loop, cancel_event, project_root, config
-        ):  # noqa: ARG001
+        def fake_run_component(request, component, queue, loop, cancel_event, project_root, config):  # noqa: ARG001
             loop.call_soon_threadsafe(
                 queue.put_nowait,
                 BatchEvent(

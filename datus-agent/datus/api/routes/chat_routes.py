@@ -147,10 +147,7 @@ def _harden_chat_permission_mode(
     if permission_mode_exceeds(request.permission_mode, maximum):
         raise HTTPException(
             status_code=403,
-            detail=(
-                f"Permission mode '{request.permission_mode}' exceeds Agent maximum "
-                f"'{maximum}'."
-            ),
+            detail=(f"Permission mode '{request.permission_mode}' exceeds Agent maximum '{maximum}'."),
         )
     if maximum == "normal":
         agent_config.active_profile_name = "normal"
@@ -224,6 +221,7 @@ async def _authorize_subagent_dispatch(
     if artifact_requirement is not None:
         artifact_type, artifact_slug = artifact_requirement
         await require_artifact_access(ctx, artifact_type=artifact_type, slug=artifact_slug, action="query")
+
 
 def _subagent_artifact_acl_requirement(
     svc,
@@ -601,9 +599,7 @@ async def stream_chat(
     if enterprise_extensions.enabled:
         available_records = await list_available_agent_records(ctx)
         projection.config._enterprise_enabled = True
-        projection.config._enterprise_allowed_agent_ids = {
-            str(record["agent_id"]) for record in available_records
-        }
+        projection.config._enterprise_allowed_agent_ids = {str(record["agent_id"]) for record in available_records}
         for record in available_records:
             _materialize_enterprise_agent(projection.config, record)
 

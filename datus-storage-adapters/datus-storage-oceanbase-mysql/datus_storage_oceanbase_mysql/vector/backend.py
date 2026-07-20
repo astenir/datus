@@ -541,8 +541,10 @@ class OceanBaseMySQLVectorTable(VectorTable):
                         f"CREATE UNIQUE INDEX {_quote_ident(index_name)} ON {self._qualified_name} ({cols_sql})"
                     )
                 except Exception as e:
-                    if getattr(e, "args", None) and e.args[0] == 1061 and self._unique_index_exists(
-                        index_name, len(conflict_cols)
+                    if (
+                        getattr(e, "args", None)
+                        and e.args[0] == 1061
+                        and self._unique_index_exists(index_name, len(conflict_cols))
                     ):
                         pass
                     else:

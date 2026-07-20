@@ -95,9 +95,7 @@ class TestChatPermissionModeHardening:
             _raw_permissions={},
         )
         agent_record = {
-            "scoped_context": {
-                "_enterprise_agent_policy": {"runtime_policy": {"max_permission_mode": "normal"}}
-            }
+            "scoped_context": {"_enterprise_agent_policy": {"runtime_policy": {"max_permission_mode": "normal"}}}
         }
 
         with pytest.raises(HTTPException) as exc_info:

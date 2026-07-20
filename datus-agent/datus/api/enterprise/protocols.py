@@ -61,6 +61,7 @@ class EnterpriseUserStore(Protocol):
         """Enable or disable a user record."""
         ...
 
+
 @runtime_checkable
 class EnterpriseRoleStore(Protocol):
     """Persist and query enterprise role metadata and permission sets."""

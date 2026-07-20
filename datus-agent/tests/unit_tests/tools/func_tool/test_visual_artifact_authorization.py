@@ -119,9 +119,10 @@ async def test_enterprise_create_binds_filesystem_only_after_private_acl(
 
     assert result.success == 1, result.error
     assert store.acls[(artifact_type, "alice_view")]["owner_user_id"] == "alice"
-    assert filesystem.write_file(
-        f"{root_name}/alice_view/render/app.jsx", "export default function App() {}\n"
-    ).success == 1
+    assert (
+        filesystem.write_file(f"{root_name}/alice_view/render/app.jsx", "export default function App() {}\n").success
+        == 1
+    )
     assert filesystem.write_file("unrelated.txt", "not an artifact").success == 0
     assert filesystem.write_file(f"{root_name}/other_user/render/app.jsx", "cross-user").success == 0
     assert filesystem.read_file(f"{root_name}/other_user/manifest.json").success == 0
@@ -312,7 +313,7 @@ def test_enterprise_edit_exposes_only_locked_authorized_artifact(
     assert bound.success == 1, bound.error
     assert filesystem.read_file(f"{root_name}/allowed/manifest.json").success == 1
     assert filesystem.read_file(f"{root_name}/other_user/manifest.json").success == 0
-    assert filesystem.write_file(
-        f"{root_name}/allowed/render/app.jsx", "export default function App() {}\n"
-    ).success == 1
+    assert (
+        filesystem.write_file(f"{root_name}/allowed/render/app.jsx", "export default function App() {}\n").success == 1
+    )
     assert filesystem.write_file(f"{root_name}/other_user/render/app.jsx", "cross-user").success == 0

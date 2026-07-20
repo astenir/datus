@@ -61,9 +61,7 @@ _TOOL_CATEGORIES_BY_AGENT_TYPE = {
     capability.node_class: capability.tool_categories for capability in _TOOL_EDITOR_CAPABILITIES
 }
 _USER_FACING_TOOL_CATEGORIES = _TOOL_CATEGORIES_BY_AGENT_TYPE["ask_metrics"]
-_ASK_AGENT_FILESYSTEM_READ_ONLY = (
-    get_agent_node_capability("ask_report").allowed_tool_methods("filesystem_tools") or ()
-)
+_ASK_AGENT_FILESYSTEM_READ_ONLY = get_agent_node_capability("ask_report").allowed_tool_methods("filesystem_tools") or ()
 
 
 def _build_tool_types(agent_type: str | AgentNodeCapability) -> dict[str, dict[str, list[str]]]:

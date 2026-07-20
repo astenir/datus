@@ -8,13 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _VENDOR_DIR = (
-    Path(__file__).parents[4]
-    / "datus"
-    / "agent"
-    / "node"
-    / "visual_artifact"
-    / "vendor"
-    / "web_artifact_render_dist"
+    Path(__file__).parents[4] / "datus" / "agent" / "node" / "visual_artifact" / "vendor" / "web_artifact_render_dist"
 )
 
 

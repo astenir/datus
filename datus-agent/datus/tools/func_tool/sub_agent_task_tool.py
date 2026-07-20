@@ -1421,9 +1421,7 @@ class SubAgentTaskTool:
         in SYS_SUB_AGENTS (which only guards reserved system names).
         """
         enterprise_enabled = bool(getattr(self.agent_config, "_enterprise_enabled", False))
-        allowed_agent_ids = set(
-            getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set()
-        )
+        allowed_agent_ids = set(getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set())
         types = ["explore"] if not enterprise_enabled or "explore" in allowed_agent_ids else []
         builtin_types = sorted(name for name in SYS_SUB_AGENTS if name != "feedback")
         if enterprise_enabled:

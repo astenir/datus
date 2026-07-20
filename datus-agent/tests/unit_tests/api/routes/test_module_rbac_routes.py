@@ -208,9 +208,7 @@ def _datasource_agent_config(*, current_datasource: str = "default"):
 def test_chat_session_routes_use_authenticated_context_not_module_chat(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
-    svc.chat.list_sessions_async = AsyncMock(
-        return_value=Result[ChatSessionData](success=True, data=ChatSessionData())
-    )
+    svc.chat.list_sessions_async = AsyncMock(return_value=Result[ChatSessionData](success=True, data=ChatSessionData()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
 
     with _client(chat_routes.router, ctx, svc) as client:

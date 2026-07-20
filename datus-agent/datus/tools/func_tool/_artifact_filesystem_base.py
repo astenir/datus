@@ -91,8 +91,7 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
             return
         if self._locked_artifact_slug and self._locked_artifact_slug != artifact_slug:
             raise ValueError(
-                f"Artifact filesystem is already locked to {self.ARTIFACT_ROOT_DIR_NAME}/"
-                f"{self._locked_artifact_slug}."
+                f"Artifact filesystem is already locked to {self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}."
             )
         self._locked_artifact_slug = artifact_slug
 

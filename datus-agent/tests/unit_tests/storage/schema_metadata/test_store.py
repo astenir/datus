@@ -50,9 +50,7 @@ class TestExtractTableName:
         assert store._schema.field("storage_key").nullable is False
         assert store._storage_key_source_column == "identifier"
 
-        rows = store._apply_default_values(
-            [{"identifier": "catalog.database.orders", "datasource_id": "sales"}]
-        )
+        rows = store._apply_default_values([{"identifier": "catalog.database.orders", "datasource_id": "sales"}])
         assert rows[0]["storage_key"] == "sales:catalog.database.orders"
         assert store._scope_column_migration_exprs()["storage_key"] == (
             "coalesce(nullif(datasource_id, ''), 'legacy') || ':' || identifier"

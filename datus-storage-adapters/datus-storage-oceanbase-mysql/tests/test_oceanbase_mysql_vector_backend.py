@@ -125,9 +125,7 @@ def test_ensure_unique_columns_repairs_nullable_existing_key():
         schema=schema,
     )
     table._fetch_column_names = lambda: list(schema.names)
-    table._fetch_column_definitions = lambda columns: {
-        "storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}
-    }
+    table._fetch_column_definitions = lambda columns: {"storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}}
     table._unique_index_exists = lambda index_name, expected_columns: False
 
     table.ensure_unique_columns(["storage_key"])
@@ -158,9 +156,7 @@ def test_ensure_unique_columns_rejects_duplicate_existing_keys():
         schema=schema,
     )
     table._fetch_column_names = lambda: list(schema.names)
-    table._fetch_column_definitions = lambda columns: {
-        "storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}
-    }
+    table._fetch_column_definitions = lambda columns: {"storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}}
     table._unique_index_exists = lambda index_name, expected_columns: False
 
     with pytest.raises(ValueError, match="duplicate row key.*sales:table:orders"):

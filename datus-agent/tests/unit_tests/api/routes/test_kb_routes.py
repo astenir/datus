@@ -378,9 +378,7 @@ class TestKbUploads:
         ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
         captured_requests = []
 
-        async def mock_stream(
-            request, stream_id, cancel_event, project_files_root, *, agent_config=None
-        ):  # noqa: ARG001
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):  # noqa: ARG001
             captured_requests.append((request, project_files_root))
             yield BootstrapKbEvent(
                 stream_id=stream_id,
@@ -415,9 +413,7 @@ class TestKbUploads:
         ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
         captured_requests = []
 
-        async def mock_stream(
-            request, stream_id, cancel_event, project_files_root, *, agent_config=None
-        ):  # noqa: ARG001
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):  # noqa: ARG001
             captured_requests.append(request)
             yield BootstrapKbEvent(
                 stream_id=stream_id,
