@@ -79,6 +79,7 @@ describe("useArtifacts", () => {
         name: "Fund Overview",
         description: "Dashboard",
         can_manage_share: true,
+        can_edit: false,
       },
     ]);
     reportList.mockResolvedValue([
@@ -87,6 +88,7 @@ describe("useArtifacts", () => {
         name: "Fund Report",
         description: "Report",
         can_manage_share: false,
+        can_edit: false,
       },
     ]);
     dashboardDetail.mockResolvedValue({
@@ -201,7 +203,9 @@ describe("useArtifacts", () => {
     expect(artifacts.dashboards.value).toHaveLength(1);
     expect(artifacts.reports.value).toHaveLength(1);
     expect(artifacts.dashboards.value[0]?.can_manage_share).toBe(true);
+    expect(artifacts.dashboards.value[0]?.can_edit).toBe(false);
     expect(artifacts.reports.value[0]?.can_manage_share).toBe(false);
+    expect(artifacts.reports.value[0]?.can_edit).toBe(false);
     expect(artifacts.listError.value).toBeNull();
   });
 

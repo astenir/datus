@@ -94,6 +94,7 @@ module.report.edit
 module.dashboard.view
 module.dashboard.query
 module.dashboard.export
+module.dashboard.edit
 module.kb
 module.mcp
 mcp.server.list
@@ -226,6 +227,7 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 - 静态 HTML/detail/list 需要 `*.view` + ACL。
 - 实时 query/export 需要 `*.query`/`*.export` + ACL + datasource grant + SQL policy + quota + audit。
+- 创建编辑会话需要对应的 `*.edit` 且当前用户是 owner；`module.admin.artifacts` 管理员可跨 owner 编辑。
 - 创建后默认 private：owner 和 `module.admin.artifacts` 管理员可见。
 - 创建者自助分享只能使用脱敏用户/角色目录，不复用 admin 用户/角色详情接口。
 

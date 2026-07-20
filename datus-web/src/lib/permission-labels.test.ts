@@ -49,6 +49,8 @@ describe("permission labels", () => {
         expect.objectContaining({ value: "module.*", kind: "wildcard", label: "全部功能权限" }),
         expect.objectContaining({ value: "module.admin.*", kind: "wildcard", label: "全部管理权限" }),
         expect.objectContaining({ value: "module.sql_executor", kind: "regular", label: "SQL 执行" }),
+        expect.objectContaining({ value: "module.report.edit", kind: "regular", label: "报表编辑" }),
+        expect.objectContaining({ value: "module.dashboard.edit", kind: "regular", label: "仪表盘编辑" }),
         expect.objectContaining({ value: "mcp.server.edit", kind: "regular", label: "MCP Server 编辑" }),
         expect.objectContaining({ value: "mcp.filter.set", kind: "regular", label: "MCP 过滤设置" }),
         expect.objectContaining({ value: "module.admin.users", kind: "regular", label: "用户管理" }),
@@ -100,6 +102,7 @@ describe("permission labels", () => {
       "view-agent",
       "view-configuration",
       "view-permissions",
+      "artifact-editor",
       "artifact-operator",
       "mcp-operator",
       "user-role-admin",
@@ -128,7 +131,7 @@ describe("permission labels", () => {
       },
       {
         label: "增强能力",
-        presets: ["artifact-operator", "mcp-operator"],
+        presets: ["artifact-editor", "artifact-operator", "mcp-operator"],
       },
       {
         label: "治理权限",
@@ -165,6 +168,12 @@ describe("permission labels", () => {
       "module.report.export",
       "module.dashboard.query",
       "module.dashboard.export",
+    ]);
+    expect(applyPermissionPresetSelection([], "artifact-editor")).toEqual([
+      "module.report.view",
+      "module.dashboard.view",
+      "module.report.edit",
+      "module.dashboard.edit",
     ]);
   });
 

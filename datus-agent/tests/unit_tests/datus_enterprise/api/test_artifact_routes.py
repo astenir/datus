@@ -341,6 +341,45 @@ async def test_dashboard_list_filters_through_enterprise_acl(tmp_path: Path):
     assert [item.slug for item in result.data] == ["hidden"]
 
 
+@pytest.mark.asyncio
+async def test_dashboard_list_grants_edit_capability_to_owner_with_dashboard_edit(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(
+        user_id="owner-1",
+        permissions={"module.dashboard.view", "module.dashboard.edit"},
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    result = await artifact_routes.list_dashboards(_svc(tmp_path), ctx)
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert result.data[0].can_manage_share is True
+    assert result.data[0].can_edit is True
+
+
 def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: Path):
     _write_manifest(tmp_path, "report", "visible_report")
     _write_manifest(tmp_path, "report", "hidden_report")
@@ -665,6 +704,25 @@ def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, t
         assert owner_response.json()["success"] is True
         assert [item["slug"] for item in owner_response.json()["data"]] == ["sales"]
         assert owner_response.json()["data"][0]["can_manage_share"] is True
+        assert owner_response.json()["data"][0]["can_edit"] is False
+
+        ctx_holder["ctx"] = AppContext(
+            user_id="owner-1",
+            permissions={"module.report.view", "module.report.edit"},
+        )
+        editor_response = client.get("/api/v1/reports")
+        assert editor_response.json()["success"] is True
+        assert editor_response.json()["data"][0]["can_manage_share"] is True
+        assert editor_response.json()["data"][0]["can_edit"] is True
+
+        ctx_holder["ctx"] = AppContext(
+            user_id="admin-1",
+            permissions={"module.report.view", "module.admin.artifacts"},
+        )
+        admin_response = client.get("/api/v1/reports")
+        assert admin_response.json()["success"] is True
+        assert admin_response.json()["data"][0]["can_manage_share"] is True
+        assert admin_response.json()["data"][0]["can_edit"] is True
 
 
 def test_artifact_share_user_directory_returns_sanitized_enabled_users(monkeypatch, tmp_path: Path):
@@ -841,6 +899,7 @@ def test_creator_can_share_report_with_single_user(monkeypatch, tmp_path: Path):
         list_response = client.get("/api/v1/reports")
         assert [item["slug"] for item in list_response.json()["data"]] == ["sales"]
         assert list_response.json()["data"][0]["can_manage_share"] is False
+        assert list_response.json()["data"][0]["can_edit"] is False
         detail_response = client.get("/api/v1/reports/sales")
         assert detail_response.json()["success"] is True
 

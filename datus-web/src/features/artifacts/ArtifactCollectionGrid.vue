@@ -102,7 +102,7 @@ const emit = defineEmits<{
             {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
           </Button>
           <Button
-            v-if="props.editEnabled && item.can_manage_share"
+            v-if="props.editEnabled && item.can_edit"
             variant="outline"
             size="sm"
             :disabled="Boolean(props.editingSlug)"
