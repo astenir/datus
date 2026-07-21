@@ -1,13 +1,35 @@
 <script setup lang="ts">
+import { computed, h } from "vue"
+import {
+  BracesIcon,
+  ChartNoAxesCombinedIcon,
+  SquareTerminalIcon,
+} from "@lucide/vue"
 import {
   FileTreeFile,
   FileTreeFolder,
 } from "@/components/ai-elements/file-tree"
 import type { SubjectTreeNode } from "@/lib/subject-tree"
 
-defineProps<{
+const props = defineProps<{
   node: SubjectTreeNode
 }>()
+
+const nodeIcon = computed(() => {
+  const nodeType = String(props.node.type)
+
+  if (nodeType === "metric") {
+    return h(ChartNoAxesCombinedIcon, { class: "size-4 text-emerald-500" })
+  }
+  if (nodeType === "reference_sql") {
+    return h(SquareTerminalIcon, { class: "size-4 text-sky-500" })
+  }
+  if (nodeType === "reference_template") {
+    return h(BracesIcon, { class: "size-4 text-amber-500" })
+  }
+
+  return undefined
+})
 </script>
 
 <template>
@@ -26,6 +48,7 @@ defineProps<{
     v-else
     :path="node.path"
     :name="node.name"
+    :icon="nodeIcon"
     :aria-label="`加载 ${node.subjectPath.join('/')}`"
   />
 </template>
