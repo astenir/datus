@@ -15,6 +15,7 @@ export type ChatStreamPhase =
   | "idle"
   | "submitting"
   | "connected"
+  | "preparing_response"
   | "responding"
   | "running_tool"
   | "awaiting_user"

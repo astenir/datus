@@ -70,6 +70,20 @@ describe("chat stream activity", () => {
       },
       4_000,
     );
+    const allCompleted = chatStreamActivityAfterEvent(
+      oneCompleted,
+      { event: "message" },
+      {
+        operation: "createMessage",
+        message: {
+          id: "complete_call-2",
+          role: "assistant",
+          content: "工具完成 query",
+          blocks: [{ type: "tool-result", callToolId: "call-2", toolName: "query", result: {} }],
+        },
+      },
+      5_000,
+    );
 
     expect(parallelRunning).toMatchObject({
       phase: "running_tool",
@@ -83,6 +97,57 @@ describe("chat stream activity", () => {
       toolCompletedCount: 1,
     });
     expect(Object.keys(oneCompleted.activeTools)).toEqual(["call-2"]);
+    expect(allCompleted).toMatchObject({
+      phase: "preparing_response",
+      activeTools: {},
+      toolCallCount: 2,
+      toolCompletedCount: 2,
+    });
+  });
+
+  it("keeps preparing visible through pings and switches off when response content starts", () => {
+    const preparing = {
+      phase: "preparing_response" as const,
+      startedAt: 1_000,
+      connectedAt: 1_100,
+      lastEventAt: 4_000,
+      lastContentAt: 4_000,
+      activeTools: {},
+      toolCallCount: 1,
+      toolCompletedCount: 1,
+    };
+
+    const afterPing = chatStreamActivityAfterEvent(
+      preparing,
+      { event: "ping", data: {} },
+      null,
+      10_000,
+    );
+    const responseStarted = chatStreamActivityAfterEvent(
+      afterPing,
+      { event: "message" },
+      {
+        operation: "createMessage",
+        message: {
+          id: "assistant-1",
+          role: "assistant",
+          content: "分析完成",
+          blocks: [{ type: "markdown", content: "分析完成" }],
+        },
+      },
+      11_000,
+    );
+
+    expect(afterPing).toMatchObject({
+      phase: "preparing_response",
+      lastEventAt: 10_000,
+      lastContentAt: 4_000,
+    });
+    expect(responseStarted).toMatchObject({
+      phase: "responding",
+      lastContentAt: 11_000,
+    });
+    expect(chatActivityPresentation(responseStarted, 11_000).visible).toBe(false);
   });
 
   it("switches to awaiting user without losing the pending tool set", () => {
@@ -190,6 +255,37 @@ describe("chat activity presentation", () => {
       visible: true,
       tone: "warning",
       label: "暂未收到新进展",
+    });
+  });
+
+  it("shows preparation after tools complete until response content arrives", () => {
+    const activity = {
+      phase: "preparing_response" as const,
+      startedAt: 1_000,
+      connectedAt: 1_100,
+      lastEventAt: 4_000,
+      lastContentAt: 4_000,
+      activeTools: {},
+      toolCallCount: 2,
+      toolCompletedCount: 2,
+    };
+
+    expect(chatActivityPresentation(activity, 5_000)).toEqual({
+      visible: true,
+      tone: "normal",
+      label: "正在整理工具结果…",
+    });
+    expect(chatActivityPresentation(activity, 12_000)).toEqual({
+      visible: true,
+      tone: "normal",
+      label: "正在整理工具结果…",
+      detail: "已等待 8 秒",
+    });
+    expect(chatActivityPresentation(activity, 19_000)).toEqual({
+      visible: true,
+      tone: "warning",
+      label: "暂未收到新进展",
+      detail: "最近更新于 15 秒前",
     });
   });
 

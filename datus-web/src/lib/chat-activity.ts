@@ -110,7 +110,7 @@ export function chatStreamActivityAfterEvent(
       ...next,
       phase: next.phase === "awaiting_user"
         ? "awaiting_user"
-        : Object.keys(activeTools).length > 0 ? "running_tool" : "responding",
+        : Object.keys(activeTools).length > 0 ? "running_tool" : "preparing_response",
       lastContentAt: now,
       activeTools,
       toolCompletedCount: next.toolCompletedCount + (wasActive ? 1 : 0),
@@ -182,6 +182,16 @@ export function chatActivityPresentation(
   }
   if (activity.phase === "responding") {
     return { visible: false, tone: "normal", label: "" };
+  }
+  if (activity.phase === "preparing_response") {
+    return {
+      visible: true,
+      tone: "normal",
+      label: "正在整理工具结果…",
+      detail: idleMs >= CHAT_ACTIVITY_LONG_WAIT_MS
+        ? `已等待 ${formatElapsed(Math.floor(idleMs / 1000))}`
+        : undefined,
+    };
   }
   if (activity.phase === "running_tool") {
     const activeTools = Object.values(activity.activeTools);
