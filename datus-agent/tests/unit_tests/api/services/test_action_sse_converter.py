@@ -581,6 +581,15 @@ class TestBuildErrorContent:
         assert contents[0].type == "error"
         assert contents[0].payload["content"] == "Connection timeout"
 
+    def test_preserves_structured_error_type(self):
+        """Structured error type is available to real-time SSE consumers."""
+        action = _make_action(output={"error": "Permission denied", "error_type": "PERMISSION_DENIED"})
+        contents = _build_error_content(action)
+        assert contents[0].payload == {
+            "content": "Permission denied",
+            "error_type": "PERMISSION_DENIED",
+        }
+
     def test_falls_back_to_messages(self):
         """Uses action.messages when output has no error key."""
         action = _make_action(output={}, messages="Something went wrong")
@@ -916,7 +925,7 @@ class TestActionToSSEEvent:
         action = _make_action(
             role=ActionRole.ASSISTANT,
             status=ActionStatus.FAILED,
-            output={"error": "Timeout"},
+            output={"error": "Permission denied", "error_type": "PERMISSION_DENIED"},
         )
         event = action_to_sse_event(action, event_id=1, message_id="msg-1")
         event = _assert_sse_event(event)
@@ -925,7 +934,10 @@ class TestActionToSSEEvent:
         assert event.data.type == SSEDataType.CREATE_MESSAGE
         content = event.data.payload.content[0]
         assert content.type == "error"
-        assert content.payload["content"] == "Timeout"
+        assert content.payload == {
+            "content": "Permission denied",
+            "error_type": "PERMISSION_DENIED",
+        }
 
     def test_tool_failed_produces_call_tool_result_with_error(self):
         """TOOL + FAILED stays on the call-tool-result channel and adds an error field.

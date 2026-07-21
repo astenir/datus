@@ -2943,18 +2943,22 @@ class AgenticNode(Node):
             raise
         except Exception as exc:
             error_msg = self._format_execution_error(exc)
-            if self._is_permission_denied_error(exc):
+            is_permission_denied = self._is_permission_denied_error(exc)
+            if is_permission_denied:
                 logger.warning("%s permission denied: %s", node_name, error_msg)
             else:
                 logger.error("%s execution error: %s", node_name, error_msg)
 
             error_result = self._build_error_result(exc, ctx)
             self.result = error_result
+            error_output = error_result.model_dump()
+            if is_permission_denied:
+                error_output["error_type"] = "PERMISSION_DENIED"
             current_actions = ahm.get_actions()
             if current_actions and current_actions[-1].status == ActionStatus.PROCESSING:
                 ahm.update_current_action(
                     status=ActionStatus.FAILED,
-                    output=error_result.model_dump(),
+                    output=error_output,
                     messages=f"Error: {error_msg}",
                 )
             error_action = ActionHistory.create_action(
@@ -2962,7 +2966,7 @@ class AgenticNode(Node):
                 action_type="error",
                 messages=f"{node_name} interaction failed: {error_msg}",
                 input_data=self.input.model_dump(),
-                output_data=error_result.model_dump(),
+                output_data=error_output,
                 status=ActionStatus.FAILED,
             )
             ahm.add_action(error_action)

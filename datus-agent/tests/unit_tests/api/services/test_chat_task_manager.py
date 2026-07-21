@@ -482,6 +482,64 @@ class TestChatTaskManagerBehavior:
         assert sdk_items == []
 
     @pytest.mark.asyncio
+    async def test_permission_denial_action_is_durable_with_stable_error_type(self, real_agent_config):
+        """Expected tool-policy denials retain their safe detail and stable code."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        session_id = "durable-permission-denial"
+        error = (
+            "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
+            "write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。"
+            "请联系管理员核对该 Agent 的工具策略和最高权限模式。"
+        )
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class PermissionDeniedNode:
+            session_id = "llm-durable-permission-denial"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield ActionHistory(
+                    action_id="permission-denied-action",
+                    role=ActionRole.ASSISTANT,
+                    action_type="error",
+                    messages=f"chat interaction failed: {error}",
+                    input={},
+                    output={"success": False, "error": error, "error_type": "PERMISSION_DENIED"},
+                    status=ActionStatus.FAILED,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: PermissionDeniedNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="create a file", session_id=session_id),
+        )
+
+        assert task.status == "error"
+        history = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        ).get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["error_type"] == "PERMISSION_DENIED"
+        assert history_error.payload["error"] == error
+
+    @pytest.mark.asyncio
     async def test_interrupted_action_is_durable_in_fresh_history(self, real_agent_config):
         """A graceful user stop is restored as a cancelled terminal block."""
         from datus.api.models.cli_models import StreamChatInput

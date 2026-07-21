@@ -76,8 +76,8 @@ export type ChatErrorBlock = {
   type: "error";
   title: string;
   message: string;
+  tone?: "error" | "warning" | "info";
   code?: string;
-  detail?: string;
 };
 
 export type MessageBlock =

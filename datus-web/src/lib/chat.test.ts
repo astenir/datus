@@ -10,6 +10,7 @@ import {
   contentFromPayloadBlocks,
   filterVisibleChatSessions,
   friendlyChatErrorBlock,
+  friendlyTransportErrorBlock,
   friendlyToolErrorText,
   isReviewableAssistantMessage,
   mergeToolExecutionBlocks,
@@ -202,7 +203,7 @@ describe("tool execution blocks", () => {
         type: "tool-result",
         callToolId: "call-1",
         toolName: "read_query",
-        errorText: "permission denied",
+        errorText: "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
         result: { rows: [] },
       },
     ]);
@@ -469,7 +470,7 @@ describe("chat error display", () => {
     });
   });
 
-  it("keeps backend error details secondary when a known code has detail text", () => {
+  it("does not expose backend details for a known error code", () => {
     expect(friendlyChatErrorBlock({
       code: "DATASOURCE_UNAVAILABLE",
       message: "No active LLM model configured",
@@ -478,7 +479,74 @@ describe("chat error display", () => {
       title: "数据源不可用",
       message: "当前数据源暂时无法访问。请检查数据源连接、授权范围或稍后重试。",
       code: "DATASOURCE_UNAVAILABLE",
-      detail: "No active LLM model configured",
+    });
+  });
+
+  it("renders user cancellation as informational copy without technical detail", () => {
+    expect(friendlyChatErrorBlock({
+      code: "CHAT_CANCELLED",
+      message: "Execution stopped by user",
+    })).toEqual({
+      type: "error",
+      title: "已停止生成",
+      message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+      tone: "info",
+    });
+  });
+
+  it("keeps a user-safe permission explanation without repeating the title", () => {
+    expect(friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截。",
+    })).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
+  it("hides raw exception text when no stable error code is available", () => {
+    const block = friendlyChatErrorBlock({ message: "RuntimeError: /srv/private/provider failed" });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "请求没有完成",
+      message: "服务未能完成本次请求。请稍后重试；若问题持续，请联系管理员查看后台日志。",
+    });
+    expect(block.message).not.toContain("/srv/private");
+  });
+
+  it("maps current backend error codes and preserves USER_DISABLED", () => {
+    expect(friendlyChatErrorBlock({ code: "CHAT_EXECUTION_ERROR" })).toMatchObject({
+      title: "对话执行未完成",
+      code: "CHAT_EXECUTION_ERROR",
+    });
+    expect(friendlyChatErrorBlock({ code: "USER_DISABLED" })).toMatchObject({
+      title: "账号不可用",
+      code: "USER_DISABLED",
+    });
+    expect(friendlyChatErrorBlock({ code: "AGENT_FORBIDDEN" })).toMatchObject({
+      title: "无法使用当前 Agent",
+      code: "AGENT_FORBIDDEN",
+    });
+  });
+
+  it("uses structured HTTP codes and safe network copy for transport failures", () => {
+    expect(friendlyTransportErrorBlock({
+      name: "HttpError",
+      status: 403,
+      code: "SESSION_FORBIDDEN",
+    }, "history")).toMatchObject({
+      title: "无法访问会话",
+      code: "SESSION_FORBIDDEN",
+    });
+
+    expect(friendlyTransportErrorBlock(new Error("fetch failed for /internal/path"), "stream")).toEqual({
+      type: "error",
+      title: "无法连接到对话服务",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
     });
   });
 
@@ -834,6 +902,26 @@ describe("contentFromPayloadBlocks", () => {
     ]);
   });
 
+  it("replaces raw interaction failure details with safe user copy", () => {
+    const parsed = contentFromPayloadBlocks([{
+      type: "interaction-summary",
+      payload: {
+        status: "failed",
+        actionType: "ask_user",
+        error: "RuntimeError: broker failed at /srv/private/session.py",
+      },
+    }]);
+
+    expect(parsed.blocks).toEqual([{
+      type: "interaction-summary",
+      status: "failed",
+      actionType: "ask_user",
+      requests: [],
+      answers: [],
+      error: "本次交互处理失败。请稍后重试；若问题持续，请联系管理员。",
+    }]);
+  });
+
   it("keeps sub-agent completion payloads structured for node rendering", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -853,7 +941,7 @@ describe("contentFromPayloadBlocks", () => {
         subagent: "visual_report",
         toolCount: 3,
         duration: 1.25,
-        errorText: "render failed",
+        errorText: "子 Agent 执行失败。请稍后重试；若问题持续，请联系管理员。",
       },
     ]);
   });
@@ -1165,7 +1253,32 @@ describe("normalizeHistoryMessages", () => {
       title: "模型暂时不可用",
       message: "当前模型服务没有完成请求。请稍后重试，或切换到其他可用模型。",
       code: "MODEL_UNAVAILABLE",
-      detail: "provider stream failed",
+    }]);
+  });
+
+  it("restores a durable permission denial with the backend user-safe detail", () => {
+    const detail = "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。";
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "permission-terminal",
+        role: "system",
+        content: [{
+          type: "error",
+          payload: {
+            error: detail,
+            error_type: "PERMISSION_DENIED",
+            event_type: "error",
+          },
+        }],
+      },
+    ]);
+
+    expect(messages[0]?.blocks).toEqual([{
+      type: "error",
+      title: "权限受限",
+      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
     }]);
   });
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, shallowRef } from "vue"
 import type { ChatStatus } from "ai"
-import { CircleAlertIcon, ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon, XIcon } from "@lucide/vue"
+import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import {
   Conversation,
@@ -31,8 +31,6 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Button } from "@/components/ui/button"
 import { activeStreamingMessageId, activeUserInteractionRequest, mergeToolExecutionMessages } from "@/lib/chat"
 import { parsePermissionRequest } from "@/lib/interaction-display"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
@@ -41,6 +39,7 @@ import type { SelectOption } from "@/types"
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
+import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
@@ -253,26 +252,13 @@ function openArtifact(kind: string, slug: string) {
 
     <footer class="shrink-0 px-4 pb-5 pt-3 md:px-8 md:pb-7">
       <div class="mx-auto max-w-[52rem]">
-        <Alert
+        <ChatErrorBlock
           v-if="workspace.transportError.value"
-          variant="destructive"
+          :block="workspace.transportError.value"
+          dismissible
           class="mb-3"
-        >
-          <CircleAlertIcon />
-          <AlertTitle>连接或加载失败</AlertTitle>
-          <AlertDescription>{{ workspace.transportError.value }}</AlertDescription>
-          <AlertAction>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="关闭错误提示"
-              @click="workspace.clearTransportError"
-            >
-              <XIcon />
-            </Button>
-          </AlertAction>
-        </Alert>
+          @dismiss="workspace.clearTransportError"
+        />
 
         <ActiveInteractionDock
           :interaction="dockedInteraction"

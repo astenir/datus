@@ -87,7 +87,7 @@ function artifactKindLabel(kind: string) {
 
 function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-complete" }>) {
   const parts = []
-  if (block.toolCount != null) parts.push(`${block.toolCount} tools`)
+  if (block.toolCount != null) parts.push(`${block.toolCount} 次工具调用`)
   if (block.duration != null) parts.push(`${block.duration.toFixed(2)}s`)
   return parts.join(" · ") || "已完成"
 }

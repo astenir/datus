@@ -374,7 +374,11 @@ def _build_error_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for failed action event, extracting error from BaseResult format."""
     output = action.output if isinstance(action.output, dict) else {}
     error_message = output.get("error") or action.messages or "Unknown error"
-    return [IMessageContent(type="error", payload={"content": error_message})]
+    payload = {"content": error_message}
+    error_type = output.get("error_type")
+    if error_type:
+        payload["error_type"] = str(error_type)
+    return [IMessageContent(type="error", payload=payload)]
 
 
 def _build_interaction_content(action: ActionHistory) -> List[IMessageContent]:

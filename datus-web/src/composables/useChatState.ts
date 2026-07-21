@@ -13,6 +13,7 @@ import {
   requestJson,
   extractResultData,
   filterVisibleChatSessions,
+  friendlyTransportErrorBlock,
   normalizeBaseUrl,
 } from "@/lib/chat";
 import { request } from "@/lib/request";
@@ -23,7 +24,7 @@ import {
   idleChatStreamActivity,
   startedChatStreamActivity,
 } from "@/lib/chat-activity";
-import type { ChatMessage, ChatSessionOption, ParsedMessage, SseEvent } from "@/types";
+import type { ChatErrorBlock, ChatMessage, ChatSessionOption, ParsedMessage, SseEvent } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
 
@@ -35,7 +36,7 @@ const selectedSession = shallowRef<string | null>(null);
 const isStreaming = shallowRef(false);
 const streamActivity = shallowRef(idleChatStreamActivity());
 const isLoadingSessions = shallowRef(false);
-const transportError = shallowRef<string | null>(null);
+const transportError = shallowRef<ChatErrorBlock | null>(null);
 const submittedInteractionKeys = shallowRef<ReadonlySet<string>>(new Set());
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
@@ -118,7 +119,7 @@ async function loadSessionHistory(sessionId: string, requestId = ++historyReques
   } catch (error) {
     if (requestId !== historyRequestId || selectedSession.value !== sessionId) return;
     console.error("Failed to load session history:", error);
-    transportError.value = `加载会话历史失败：${error instanceof Error ? error.message : String(error)}`;
+    transportError.value = friendlyTransportErrorBlock(error, "history");
   }
 }
 
@@ -249,7 +250,7 @@ async function sendMessage(opts: {
     streamCompleted = true;
   } catch (error) {
     if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
-      transportError.value = error instanceof Error ? error.message : String(error);
+      transportError.value = friendlyTransportErrorBlock(error, "stream");
       if (selectedSession.value) {
         nonCanonicalSessions.add(selectedSession.value);
         messageCache.delete(selectedSession.value);
@@ -289,7 +290,7 @@ async function stopSession() {
       await loadSessionHistory(sessionId);
     } catch (error) {
       console.error("Failed to stop session:", error);
-      transportError.value = error instanceof Error ? error.message : String(error);
+      transportError.value = friendlyTransportErrorBlock(error, "stop");
     }
   }
   isStreaming.value = false;
@@ -378,7 +379,7 @@ async function resumeSession(sessionId?: string) {
   } catch (error) {
     if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
       console.error("Failed to resume session:", error);
-      transportError.value = error instanceof Error ? error.message : String(error);
+      transportError.value = friendlyTransportErrorBlock(error, "resume");
       nonCanonicalSessions.add(targetSession);
       messageCache.delete(targetSession);
     }
@@ -415,7 +416,7 @@ async function insertMessage(message: string) {
   } catch (error) {
     console.error("Failed to insert message:", error);
     messages.value = messages.value.filter((item) => item.id !== userMessage.id);
-    transportError.value = `注入失败：${error instanceof Error ? error.message : String(error)}`;
+    transportError.value = friendlyTransportErrorBlock(error, "insert");
   }
 }
 

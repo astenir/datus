@@ -144,7 +144,11 @@ describe("useChatState", () => {
 
     expect(state.messages.value).toHaveLength(1);
     expect(state.messages.value[0]?.role).toBe("user");
-    expect(state.transportError.value).toBe("network disconnected");
+    expect(state.transportError.value).toEqual({
+      type: "error",
+      title: "无法连接到对话服务",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
+    });
 
     state.clearTransportError();
     expect(state.transportError.value).toBeNull();
@@ -242,6 +246,10 @@ describe("useChatState", () => {
     await state.compactSession("session-a");
 
     expect(state.messages.value[0]?.content).toBe("saved answer");
-    expect(state.transportError.value).toContain("history unavailable");
+    expect(state.transportError.value).toEqual({
+      type: "error",
+      title: "会话历史加载失败",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
+    });
   });
 });

@@ -52,7 +52,7 @@ function statusDetails(status: InteractionSummaryStatus) {
   if (status === "answered") {
     return {
       label: "已回答",
-      description: "Answered",
+      description: "本次交互已提交回答",
       icon: CheckCircle2Icon,
       variant: "secondary" as const,
     }
@@ -60,7 +60,7 @@ function statusDetails(status: InteractionSummaryStatus) {
   if (status === "cancelled") {
     return {
       label: "已取消",
-      description: "Cancelled",
+      description: "本次交互已取消",
       icon: XCircleIcon,
       variant: "outline" as const,
     }
@@ -68,14 +68,14 @@ function statusDetails(status: InteractionSummaryStatus) {
   if (status === "failed") {
     return {
       label: "失败",
-      description: "Failed",
+      description: "本次交互未完成",
       icon: CircleAlertIcon,
       variant: "destructive" as const,
     }
   }
   return {
-    label: "Interaction",
-    description: "Interaction",
+    label: "状态未知",
+    description: "未记录本次交互的最终状态",
     icon: MessageSquareTextIcon,
     variant: "outline" as const,
   }
@@ -86,11 +86,11 @@ function isMarkdown(request: UserInteractionRequest) {
 }
 
 function requestTitle(request: UserInteractionRequest, index: number) {
-  return request.title || (props.block.requests.length > 1 ? `Question ${index + 1}` : "Interaction")
+  return request.title || (props.block.requests.length > 1 ? `问题 ${index + 1}` : "交互请求")
 }
 
 function requestContent(request: UserInteractionRequest) {
-  return request.content || request.title || "Interaction"
+  return request.content || request.title || "交互请求"
 }
 
 function optionTitle(request: UserInteractionRequest, key: string) {
@@ -134,7 +134,7 @@ function answerLabel(answer: InteractionSummaryAnswer | undefined, request?: Use
         />
         <div class="min-w-0">
           <div class="truncate text-sm font-medium text-foreground">
-            {{ hasRequests ? "交互历史" : "Interaction" }}
+            交互历史
           </div>
           <div class="truncate text-xs text-muted-foreground">
             {{ block.actionType || "interaction" }}
@@ -214,7 +214,7 @@ function answerLabel(answer: InteractionSummaryAnswer | undefined, request?: Use
       class="flex flex-col gap-2 border-t border-border/70 pt-3"
     >
       <div class="text-xs font-medium text-muted-foreground">
-        Answers
+        补充回答
       </div>
       <div
         v-for="(answer, answerIndex) in looseAnswers"

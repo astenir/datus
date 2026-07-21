@@ -1030,6 +1030,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
             final_action = actions[-1]
             assert final_action.status == ActionStatus.FAILED
+            assert final_action.output.get("error_type") == "PERMISSION_DENIED"
             error_text = str(final_action.output.get("error", ""))
             assert "权限受限" in error_text
             assert "当前 Agent 或会话的工具策略不允许直接修改文件" in error_text
