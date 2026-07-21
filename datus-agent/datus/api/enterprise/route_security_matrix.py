@@ -26,6 +26,7 @@ MODEL_POLICY = "model_policy"
 QUOTA = "quota"
 TOOL_PERMISSION = "tool_permission"
 AGENT_ACL = "agent_acl"
+PERMISSION_MODE_RBAC = "permission_mode_rbac"
 
 KNOWN_SECURITY_CATEGORIES = frozenset(
     {
@@ -47,6 +48,7 @@ KNOWN_SECURITY_CATEGORIES = frozenset(
         QUOTA,
         TOOL_PERMISSION,
         AGENT_ACL,
+        PERMISSION_MODE_RBAC,
     }
 )
 
@@ -254,6 +256,7 @@ _add(
     _policy(
         AGENT_ACL,
         TOOL_PERMISSION,
+        PERMISSION_MODE_RBAC,
         SESSION_OWNER,
         DATASOURCE_PROJECTION,
         DATASOURCE_GRANT,
@@ -264,6 +267,10 @@ _add(
         PLATFORM_STATUS_GATE,
         MUTATION_EXECUTION,
         audit_action="chat.stream",
+        note=(
+            "Agent dispatch uses Agent ACL; auto/dangerous permission modes additionally require "
+            "module.chat.permission_mode before execution."
+        ),
         data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, SQL_POLICY},
     ),
 )

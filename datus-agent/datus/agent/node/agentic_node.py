@@ -3799,9 +3799,9 @@ class AgenticNode(Node):
                 profile = cls._permission_profile_label(tool_match.group("profile"))
                 if category == "filesystem_tools" and tool_name in _FILESYSTEM_WRITE_TOOL_NAMES:
                     return (
-                        "权限受限：当前账号不能让 AI 直接修改服务器文件。"
+                        "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
                         f"{tool_name} 已被“{profile}”权限模式拦截，换路径或重试不会绕过限制。"
-                        "如确需执行，请联系管理员授予“高危对话模式”权限。"
+                        "请联系管理员核对该 Agent 的工具策略和最高权限模式。"
                     )
                 return (
                     f"权限受限：当前账号没有执行工具 {tool_name} 的权限，"

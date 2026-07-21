@@ -25,6 +25,7 @@ from datus.api.enterprise.deps import (
     authorize_session_access,
     delete_session_owner,
     project_request_config,
+    require_authorized_module,
     require_platform_active,
 )
 from datus.api.hooks import (
@@ -87,6 +88,7 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 _require_chat_context = api_deps.get_request_app_context
 ChatCtx = Annotated[AppContext, Depends(_require_chat_context)]
 _FILESYSTEM_WRITE_TOOL_NAMES = ("write_file", "edit_file", "delete_file")
+_ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
 SSE_RESPONSE = {
     200: {
         "description": "Server-Sent Events stream",
@@ -131,6 +133,26 @@ def _install_filesystem_write_deny_rules(agent_config: Any) -> None:
     agent_config.permissions_config = hardened_config
 
 
+def _validate_chat_permission_mode_maximum(
+    request: StreamChatInput,
+    *,
+    enterprise_enabled: bool,
+    agent_record: dict[str, Any] | None,
+) -> str | None:
+    """Reject a requested profile above the selected Agent's maximum."""
+
+    if not enterprise_enabled:
+        return None
+    runtime_policy = normalize_runtime_policy(agent_policy_metadata(agent_record)["runtime_policy"])
+    maximum = runtime_policy["max_permission_mode"]
+    if permission_mode_exceeds(request.permission_mode, maximum):
+        raise HTTPException(
+            status_code=403,
+            detail=(f"Permission mode '{request.permission_mode}' exceeds Agent maximum '{maximum}'."),
+        )
+    return maximum
+
+
 def _harden_chat_permission_mode(
     request: StreamChatInput,
     agent_config: Any,
@@ -140,18 +162,35 @@ def _harden_chat_permission_mode(
 ) -> None:
     """Enforce the selected Agent's maximum permission profile."""
 
-    if not enterprise_enabled:
-        return
-    runtime_policy = normalize_runtime_policy(agent_policy_metadata(agent_record)["runtime_policy"])
-    maximum = runtime_policy["max_permission_mode"]
-    if permission_mode_exceeds(request.permission_mode, maximum):
-        raise HTTPException(
-            status_code=403,
-            detail=(f"Permission mode '{request.permission_mode}' exceeds Agent maximum '{maximum}'."),
-        )
+    maximum = _validate_chat_permission_mode_maximum(
+        request,
+        enterprise_enabled=enterprise_enabled,
+        agent_record=agent_record,
+    )
     if maximum == "normal":
         agent_config.active_profile_name = "normal"
         _install_filesystem_write_deny_rules(agent_config)
+
+
+async def _authorize_chat_permission_mode(
+    request: StreamChatInput,
+    ctx: AppContext,
+    *,
+    enterprise_enabled: bool,
+) -> None:
+    """Require user RBAC before an enterprise request raises its tool profile."""
+
+    if not enterprise_enabled or request.permission_mode not in _ELEVATED_PERMISSION_MODES:
+        return
+    try:
+        await require_authorized_module(ctx, "module.chat.permission_mode")
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        raise HTTPException(
+            status_code=403,
+            detail=(f"Permission mode '{request.permission_mode}' requires module.chat.permission_mode."),
+        ) from exc
 
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
@@ -553,6 +592,17 @@ async def stream_chat(
                 media_type="text/event-stream",
                 headers=_sse_headers(),
             )
+
+    _validate_chat_permission_mode_maximum(
+        request,
+        enterprise_enabled=enterprise_extensions.enabled,
+        agent_record=enterprise_agent_record,
+    )
+    await _authorize_chat_permission_mode(
+        request,
+        ctx,
+        enterprise_enabled=enterprise_extensions.enabled,
+    )
 
     try:
         projection = await project_request_config(

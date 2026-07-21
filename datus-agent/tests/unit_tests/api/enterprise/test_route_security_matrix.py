@@ -16,6 +16,7 @@ from datus.api.enterprise.route_security_matrix import (
     LOCAL_COMPATIBLE,
     MODULE_RBAC,
     MUTATION_EXECUTION,
+    PERMISSION_MODE_RBAC,
     PLATFORM_STATUS_EXCEPTION,
     PLATFORM_STATUS_GATE,
     ROUTE_SECURITY_MATRIX,
@@ -63,6 +64,7 @@ def test_route_security_categories_are_known_and_cover_required_dimensions():
         SYSTEM_READONLY,
         LOCAL_COMPATIBLE,
         AGENT_ACL,
+        PERMISSION_MODE_RBAC,
     } <= seen_categories
 
 
@@ -173,6 +175,9 @@ def test_agent_catalog_and_dispatch_use_agent_acl_not_module_rbac():
         assert AGENT_ACL in policy.categories
         assert MODULE_RBAC not in policy.categories
         assert policy.module_permission is None
+
+    chat_stream_policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/chat/stream")]
+    assert PERMISSION_MODE_RBAC in chat_stream_policy.categories
 
 
 def test_datasource_grant_admin_routes_carry_datasource_boundary():

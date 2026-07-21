@@ -85,6 +85,7 @@ MVP 支持两种生产可接受形态：
 
 ```text
 module.chat
+module.chat.permission_mode
 module.sql_executor
 module.datasource_catalog
 module.report.view
@@ -125,6 +126,7 @@ module.system.status
 规则：
 
 - `view` 只表示列表/详情/静态 HTML 可见，不自动包含实时查询、导出、编辑。
+- `module.chat.permission_mode` 只允许请求 `auto` / `dangerous` 对话模式；仍不得超过 Agent 的 `runtime_policy.max_permission_mode`，也不绕过 Agent Tool Policy、文件路径或 Artifact ACL。
 - `query` 表示实时查数或执行保存 SQL，必须叠加 datasource grant、SQL policy、quota、audit。
 - `export` 单独授权，并需要 ACL、quota、审计、脱敏策略。
 - admin 也必须拆成显式 permission，不用硬编码超级用户绕过授权链。

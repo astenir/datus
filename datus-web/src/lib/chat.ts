@@ -810,7 +810,7 @@ export function friendlyToolErrorText(toolName: string, rawError: string): strin
     const profileText = profile ? `“${permissionProfileLabel(profile)}”权限模式` : "当前权限策略";
 
     if (category === "filesystem_tools" && filesystemWriteTools.has(deniedTool)) {
-      return `权限受限：当前账号不能让 AI 直接修改服务器文件。${deniedTool} 已被${profileText}拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。`;
+      return `权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。${deniedTool} 已被${profileText}拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。`;
     }
 
     return `权限受限：当前账号没有执行工具 ${deniedTool} 的权限，已被${profileText}拦截，换参数或重试不会绕过限制。`;

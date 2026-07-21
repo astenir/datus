@@ -232,7 +232,7 @@ describe("tool execution blocks", () => {
         callToolId: "call-1",
         toolName: "write_file",
         errorText:
-          "权限受限：当前账号不能让 AI 直接修改服务器文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。",
+          "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。",
         result: {
           success: 0,
           error: rawError,
@@ -241,6 +241,7 @@ describe("tool execution blocks", () => {
     ]);
     const [block] = parsed.blocks;
     expect(block.type === "tool-result" ? block.errorText : "").not.toContain("STOP retrying");
+    expect(block.type === "tool-result" ? block.errorText : "").not.toContain("授予“高危对话模式”权限");
   });
 
   it("renders permission mode denial as a friendly message", () => {

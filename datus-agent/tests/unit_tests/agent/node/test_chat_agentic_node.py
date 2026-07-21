@@ -1032,7 +1032,9 @@ class TestChatAgenticNodeExecuteStreamErrors:
             assert final_action.status == ActionStatus.FAILED
             error_text = str(final_action.output.get("error", ""))
             assert "权限受限" in error_text
-            assert "不能让 AI 直接修改服务器文件" in error_text
+            assert "当前 Agent 或会话的工具策略不允许直接修改文件" in error_text
+            assert "核对该 Agent 的工具策略和最高权限模式" in error_text
+            assert "授予“高危对话模式”权限" not in error_text
             assert "STOP retrying" not in error_text
             assert "permissions.rules" not in error_text
         finally:
