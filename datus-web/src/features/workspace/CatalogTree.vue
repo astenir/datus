@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue"
-import { Loader2Icon, RefreshCwIcon } from "@lucide/vue"
+import { RefreshCwIcon } from "@lucide/vue"
 import {
   FileTree,
   FileTreeFile,
@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import TreeLoadingIndicator from "@/features/workspace/TreeLoadingIndicator.vue"
 import { buildCatalogTree } from "@/lib/catalog-tree"
 import type { CatalogRecord } from "@/types"
 
@@ -35,6 +36,7 @@ const emit = defineEmits<{
 const expandedPaths = shallowRef<Set<string>>(new Set())
 
 const treeData = computed(() => buildCatalogTree(props.entries))
+const hasCatalogData = computed(() => treeData.value.databases.length > 0)
 const selectedPath = computed(() => props.selectedTable?.trim() || undefined)
 
 watch(
@@ -88,21 +90,21 @@ function handleExpandedChange(paths: Set<string>) {
         <FileTree
           :expanded="expandedPaths"
           :selected-path="selectedPath"
+          :aria-busy="loading"
           class="border-0 bg-transparent p-0 font-sans"
           @expanded-change="handleExpandedChange"
           @update:selected-path="handleSelectedPath"
         >
-          <div
-            v-if="loading"
-            class="flex min-h-24 items-center gap-3 rounded-md border p-4 text-sm text-muted-foreground"
-          >
-            <Loader2Icon
-              data-icon="inline-start"
-              class="animate-spin"
-            />
-            正在加载目录...
-          </div>
-          <template v-else-if="treeData.databases.length > 0">
+          <TreeLoadingIndicator
+            v-if="loading && !hasCatalogData"
+            label="正在加载目录..."
+          />
+          <TreeLoadingIndicator
+            v-if="loading && hasCatalogData"
+            compact
+            label="正在刷新目录..."
+          />
+          <template v-if="hasCatalogData">
             <FileTreeFolder
               v-for="database in treeData.databases"
               :key="database.key"
@@ -126,7 +128,7 @@ function handleExpandedChange(paths: Set<string>) {
             </FileTreeFolder>
           </template>
           <div
-            v-else
+            v-else-if="!loading"
             class="rounded-md border p-4 text-sm text-muted-foreground"
           >
             暂无可浏览表，刷新目录或切换数据范围后重试。

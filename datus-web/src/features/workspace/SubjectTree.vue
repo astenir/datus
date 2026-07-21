@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import SubjectTreeNodeItem from "@/features/workspace/SubjectTreeNodeItem.vue"
+import TreeLoadingIndicator from "@/features/workspace/TreeLoadingIndicator.vue"
 import { buildSubjectTree, type SubjectTreeNode } from "@/lib/subject-tree"
 import type { SubjectNode } from "@/types"
 
@@ -30,6 +31,7 @@ const emit = defineEmits<{
 const expandedPaths = shallowRef<Set<string>>(new Set())
 
 const treeData = computed(() => buildSubjectTree(props.subjects))
+const hasSubjectData = computed(() => treeData.value.nodes.length > 0)
 const selectedTreePath = computed(() => props.selectedPath?.trim() || undefined)
 
 watch(
@@ -85,11 +87,21 @@ function handleExpandedChange(paths: Set<string>) {
         <FileTree
           :expanded="expandedPaths"
           :selected-path="selectedTreePath"
+          :aria-busy="loading"
           class="border-0 bg-transparent p-0 font-sans"
           @expanded-change="handleExpandedChange"
           @update:selected-path="handleSelectedPath"
         >
-          <template v-if="treeData.nodes.length > 0">
+          <TreeLoadingIndicator
+            v-if="loading && !hasSubjectData"
+            label="正在加载主题..."
+          />
+          <TreeLoadingIndicator
+            v-if="loading && hasSubjectData"
+            compact
+            label="正在刷新主题..."
+          />
+          <template v-if="hasSubjectData">
             <SubjectTreeNodeItem
               v-for="node in treeData.nodes"
               :key="node.key"
@@ -97,7 +109,7 @@ function handleExpandedChange(paths: Set<string>) {
             />
           </template>
           <div
-            v-else
+            v-else-if="!loading"
             class="rounded-md border p-4 text-sm text-muted-foreground"
           >
             暂无主题数据，刷新或先运行知识构建。

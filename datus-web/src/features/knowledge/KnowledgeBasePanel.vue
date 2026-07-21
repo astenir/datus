@@ -37,6 +37,7 @@ import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import KnowledgeBootstrapPanel from "@/features/knowledge/KnowledgeBootstrapPanel.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
+import DetailLoadingIndicator from "@/features/workspace/DetailLoadingIndicator.vue"
 import SubjectTree from "@/features/workspace/SubjectTree.vue"
 import { subjectApi } from "@/lib/api"
 import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
@@ -109,6 +110,16 @@ const treePanelDescription = computed(() =>
 const treeRefreshing = computed(() =>
   treeMode.value === "catalog" ? props.workspace.isLoadingCatalog.value : loadingSubjects.value,
 )
+const detailLoading = computed(() =>
+  treeMode.value === "subject" ? loadingSubjectDetail.value : semantic.loadingTable.value,
+)
+const detailLoadingLabel = computed(() =>
+  treeMode.value === "subject" ? "正在加载主题详情..." : "正在加载表详情...",
+)
+const tableDetailTitle = computed(() => {
+  if (semantic.loadingTable.value) return selectedTable.value || "正在加载表"
+  return semantic.tableDetail.value?.name || selectedTable.value || "未加载表"
+})
 
 function switchTreeMode(mode: KnowledgeTreeMode) {
   if (mode === "subject" && !canUseSubjectTree.value) return
@@ -369,7 +380,10 @@ onMounted(() => {
           </CardContent>
         </Card>
 
-        <Card class="flex min-h-0 min-w-0 flex-col">
+        <Card
+          class="flex min-h-0 min-w-0 flex-col"
+          :aria-busy="detailLoading"
+        >
           <CardHeader
             v-if="treeMode === 'subject'"
             class="flex shrink-0 flex-row items-start justify-between gap-3"
@@ -390,18 +404,25 @@ onMounted(() => {
           >
             <div class="min-w-0">
               <CardTitle class="truncate text-lg">
-                {{ semantic.tableDetail.value?.name || selectedTable || "未加载表" }}
+                {{ tableDetailTitle }}
               </CardTitle>
               <CardDescription class="text-sm">
                 {{ selectedTableRow ? `${selectedTableRow.database || "-"} / ${selectedTableRow.schema || "-"}` : "选择左侧表后加载结构与语义模型" }}
               </CardDescription>
             </div>
-            <Badge variant="outline">索引 {{ tableIndexCount }}</Badge>
+            <Badge variant="outline">
+              {{ semantic.loadingTable.value ? "加载中" : `索引 ${tableIndexCount}` }}
+            </Badge>
           </CardHeader>
           <CardContent class="min-h-0 flex-1 p-0">
             <ScrollArea class="h-full overflow-hidden px-6 pb-6">
               <div class="flex min-w-0 flex-col gap-4">
-                <template v-if="treeMode === 'subject'">
+                <DetailLoadingIndicator
+                  v-if="detailLoading"
+                  :label="detailLoadingLabel"
+                />
+
+                <template v-else-if="treeMode === 'subject'">
                   <div
                     v-if="!selectedSubject"
                     class="rounded-md border p-4 text-sm text-muted-foreground"
