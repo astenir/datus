@@ -234,6 +234,50 @@ class ObSessionBodyStore(OceanBaseSchemaMixin):
             )
         ]
 
+    async def append_session_terminal_event(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        session_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        await self._execute(
+            """
+            INSERT INTO enterprise_session_terminal_events
+              (project_id, scope, session_id, event_id, event_type, payload_json)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE event_id=VALUES(event_id)
+            """,
+            (
+                _normalize_project_id(project_id),
+                _normalize_scope(scope),
+                session_id,
+                str(event["event_id"]),
+                str(event["event_type"]),
+                json.dumps(event, ensure_ascii=False),
+            ),
+        )
+
+    async def get_session_terminal_events(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> list[dict[str, Any]]:
+        rows = await self._fetchall(
+            """
+            SELECT payload_json
+            FROM enterprise_session_terminal_events
+            WHERE project_id=%s AND scope=%s AND session_id=%s
+            ORDER BY created_at, id
+            """,
+            (_normalize_project_id(project_id), _normalize_scope(scope), session_id),
+        )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _loads(row["payload_json"])
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
+
     async def get_detailed_usage(self, *, project_id: str, scope: str | None, session_id: str) -> dict[str, Any]:
         session = self.open_session(project_id=project_id, scope=scope, session_id=session_id)
         turns = await session.get_turn_usage()
@@ -419,6 +463,7 @@ class ObSessionBodyStore(OceanBaseSchemaMixin):
                 for table in (
                     "enterprise_session_running_usage",
                     "enterprise_session_system_prompts",
+                    "enterprise_session_terminal_events",
                     "enterprise_session_turn_usage",
                     "enterprise_session_message_structure",
                     "enterprise_session_messages",
@@ -1017,5 +1062,18 @@ CREATE TABLE IF NOT EXISTS enterprise_session_system_prompts (
   snapshot_json LONGTEXT NOT NULL,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (project_id, scope, session_id)
+);
+
+CREATE TABLE IF NOT EXISTS enterprise_session_terminal_events (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  project_id VARCHAR(255) NOT NULL,
+  scope VARCHAR(255) NOT NULL DEFAULT '',
+  session_id VARCHAR(255) NOT NULL,
+  event_id VARCHAR(255) NOT NULL,
+  event_type VARCHAR(64) NOT NULL,
+  payload_json LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_enterprise_session_terminal_events_event (project_id, scope, session_id, event_id),
+  INDEX idx_enterprise_session_terminal_events_session (project_id, scope, session_id, created_at, id)
 );
 """

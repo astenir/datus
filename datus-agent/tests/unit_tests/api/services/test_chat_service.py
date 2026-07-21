@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from datus.api.models.cli_models import ChatSessionTerminalEvent
 from datus.api.services.chat_admission import ChatCapacityError
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
@@ -279,6 +280,30 @@ class TestChatServiceGetHistory:
         result = chat_svc.get_history("empty-hist")
         assert result.success is True
 
+    def test_terminal_events_are_idempotent_and_do_not_enter_model_context(self, chat_svc):
+        """Display-only terminal outcomes survive reload without polluting SDK messages."""
+        session_id = "terminal-event-history"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        session = sm.create_session(session_id)
+        event = ChatSessionTerminalEvent(
+            event_id="run-1-terminal",
+            event_type="error",
+            error="provider failed after the stream started",
+            error_type="PROVIDER_FAILED",
+            created_at="2026-07-21T00:00:00Z",
+        )
+
+        sm.append_terminal_event(session_id, event)
+        sm.append_terminal_event(session_id, event)
+
+        result = chat_svc.get_history(session_id)
+        terminal_messages = [message for message in result.data.messages if message.message_id == event.event_id]
+        assert len(terminal_messages) == 1
+        assert terminal_messages[0].role == "system"
+        assert terminal_messages[0].content[0].type == "error"
+        assert terminal_messages[0].content[0].payload["error_type"] == "PROVIDER_FAILED"
+        assert asyncio.run(session.get_items()) == []
+
     def test_get_history_renders_ask_user_as_read_only_summary(self, chat_svc):
         """Persisted ask_user tool calls render as history summaries, not live controls."""
         import json
@@ -354,6 +379,20 @@ class TestChatServiceGetHistory:
         assert "interactionKey" not in summary.payload
         assert summary.payload["requests"][0]["content"] == "Which county?"
         assert summary.payload["answers"][0]["answer"] == "Los Angeles"
+
+    def test_terminal_sidecar_failure_does_not_hide_sdk_history(self, chat_svc):
+        """The additive sidecar must not become a new availability dependency."""
+        fake = MagicMock()
+        fake.get_session_messages.return_value = [{"role": "user", "content": "kept message"}]
+        fake.get_terminal_events.side_effect = RuntimeError("sidecar unavailable")
+
+        with patch.object(chat_svc, "_session_manager", return_value=fake):
+            result = chat_svc.get_history("sidecar-degraded")
+
+        assert result.success is True
+        assert len(result.data.messages) == 1
+        assert result.data.messages[0].role == "user"
+        assert result.data.messages[0].content[0].payload["content"] == "kept message"
 
 
 class TestChatServiceScopePropagation:

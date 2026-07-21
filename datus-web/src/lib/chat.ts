@@ -189,6 +189,10 @@ const friendlyChatErrors: Record<string, { title: string; message: string }> = {
     title: "请求过于频繁",
     message: "当前请求触发了限流保护。请稍后再试。",
   },
+  CHAT_CANCELLED: {
+    title: "已停止生成",
+    message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+  },
   TIMEOUT: {
     title: "请求超时",
     message: "服务处理时间过长，已停止等待。请稍后重试，或缩小本次问题范围。",
@@ -995,16 +999,7 @@ export function messageFromEvent(event: SseEvent): ParsedMessage | null {
   }
 
   if (event.event === "end") {
-    const usage = typeof data.total_tokens === "number" ? ` · ${data.total_tokens} tokens` : "";
-    const duration = typeof data.duration === "number" ? `${data.duration.toFixed(1)}s` : "完成";
-    return {
-      operation: "createMessage",
-      message: {
-        id: `end-${event.id ?? Date.now()}`,
-        role: "system",
-        content: `本轮完成：${duration}${usage}`
-      }
-    };
+    return null;
   }
 
   const payload = data.payload;

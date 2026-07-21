@@ -70,6 +70,7 @@ export function useChatWorkspace() {
     selectedSession,
     isStreaming,
     streamActivity,
+    transportError,
     isLoadingSessions,
     activeInteractionKey,
     loadSessions,
@@ -82,6 +83,7 @@ export function useChatWorkspace() {
     resumeSession,
     sendInteraction,
     clearMessages,
+    clearTransportError,
     dispose,
   } = useChatState();
   const { modelOptions, defaultModelLabel, isLoadingModels, loadModels } = useModels();
@@ -543,6 +545,7 @@ export function useChatWorkspace() {
     selectedSession,
     isStreaming,
     streamActivity,
+    transportError,
     isLoadingSessions,
     isLoadingAgents,
     isSavingDefaultAgent,
@@ -554,6 +557,7 @@ export function useChatWorkspace() {
     resumeSession,
     sendInteraction,
     clearMessages,
+    clearTransportError,
     agentOptions,
     modelOptions,
     defaultModelLabel,

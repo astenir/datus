@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Opti
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
+    ChatSessionTerminalEvent,
     IMessageContent,
     SSEDataType,
     SSEEndData,
@@ -63,6 +64,7 @@ class ChatBufferLimits:
     max_bytes: int = 16 * 1024 * 1024
     completed_ttl_seconds: int = 300
     cleanup_interval_seconds: int = 60
+    stop_grace_seconds: int = 5
 
     @classmethod
     def from_api_config(cls, api_config: dict[str, Any] | None) -> "ChatBufferLimits":
@@ -74,6 +76,7 @@ class ChatBufferLimits:
             max_bytes=_positive_int(raw.get("max_buffer_bytes"), cls.max_bytes),
             completed_ttl_seconds=_positive_int(raw.get("completed_task_ttl_seconds"), cls.completed_ttl_seconds),
             cleanup_interval_seconds=_positive_int(raw.get("cleanup_interval_seconds"), cls.cleanup_interval_seconds),
+            stop_grace_seconds=_positive_int(raw.get("stop_grace_seconds"), cls.stop_grace_seconds),
         )
 
 
@@ -324,6 +327,11 @@ class ChatTask:
         self.error: Optional[str] = None
         self.consumer_offset: int = 0
         self.admission_token = None
+        self.run_id = uuid.uuid4().hex
+        self.session_established = False
+        self.terminal_event_persisted = False
+        self.terminal_event_type: Optional[str] = None
+        self.stop_requested = False
 
 
 class ChatTaskManager:
@@ -553,14 +561,38 @@ class ChatTaskManager:
         task = self._tasks.get(session_id)
         if not task:
             return False
+        task.stop_requested = True
 
         if task.node:
             try:
                 task.node.interrupt_controller.interrupt()
                 logger.info(f"Interrupted running task: {session_id}")
+                if task.session_established:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(task.asyncio_task),
+                            timeout=self._buffer_limits.stop_grace_seconds,
+                        )
+                    except asyncio.CancelledError:
+                        if not task.asyncio_task.cancelled():
+                            raise
+                    except TimeoutError:
+                        logger.warning(
+                            "Chat task did not stop within %ss; cancelling task: %s",
+                            self._buffer_limits.stop_grace_seconds,
+                            session_id,
+                        )
+                        task.asyncio_task.cancel()
+                        await asyncio.gather(task.asyncio_task, return_exceptions=True)
+                    except Exception:
+                        logger.debug("Stopped chat task finished with an error: %s", session_id, exc_info=True)
+                    return True
             except Exception as e:
                 logger.error(f"Failed to interrupt task {session_id}: {e}")
 
+        # Before the session event is established there is no durable chat run
+        # to interrupt gracefully. Cancellation here intentionally remains
+        # process-local and does not create a terminal history event.
         if task.asyncio_task and not task.asyncio_task.done():
             task.asyncio_task.cancel()
             logger.info(f"Cancelled asyncio task: {session_id}")
@@ -697,6 +729,73 @@ class ChatTaskManager:
     # Background loop (full agentic loop implementation)
     # ------------------------------------------------------------------
 
+    async def _persist_terminal_event(
+        self,
+        *,
+        task: ChatTask,
+        agent_config: AgentConfig,
+        user_id: Optional[str],
+        event_type: Literal["error", "cancelled", "timeout"],
+        error: str,
+        error_type: str,
+    ) -> None:
+        """Best-effort persistence for established-session display outcomes."""
+        if not task.session_established or task.terminal_event_persisted:
+            return
+
+        terminal_event = ChatSessionTerminalEvent(
+            event_id=f"{task.run_id}-terminal",
+            event_type=event_type,
+            error=error,
+            error_type=error_type,
+        )
+        base_dir = getattr(agent_config, "session_dir", None) or str(
+            get_path_manager(agent_config=agent_config).sessions_dir
+        )
+        session_manager = SessionManager(
+            session_dir=base_dir,
+            scope=session_scope_from_user_id(user_id),
+            agent_config=agent_config,
+            project_id=self._project_id,
+            body_store=self._session_body_store,
+        )
+        try:
+            await session_manager.append_terminal_event_async(task.session_id, terminal_event)
+        except Exception:
+            logger.warning(
+                "Failed to persist terminal chat event for session %s",
+                task.session_id,
+                exc_info=True,
+            )
+            return
+        task.terminal_event_persisted = True
+        task.terminal_event_type = event_type
+
+    @staticmethod
+    def _terminal_outcome_from_action(
+        action: Any,
+    ) -> Optional[tuple[Literal["error", "cancelled", "timeout"], str, str]]:
+        if getattr(action, "role", None) != ActionRole.ASSISTANT or getattr(action, "depth", 0) != 0:
+            return None
+        if getattr(action, "action_type", None) == "interrupted":
+            detail = str(getattr(action, "messages", None) or "Execution interrupted by user")
+            return ("cancelled", detail, "CHAT_CANCELLED")
+        if getattr(action, "action_type", None) != "error" or getattr(action, "status", None) != ActionStatus.FAILED:
+            return None
+
+        output = action.output if isinstance(getattr(action, "output", None), dict) else {}
+        detail = str(
+            output.get("error")
+            or output.get("error_message")
+            or output.get("errorMessage")
+            or getattr(action, "messages", None)
+            or "Chat execution failed"
+        )
+        error_type = str(
+            output.get("error_type") or output.get("error_code") or output.get("errorCode") or "CHAT_EXECUTION_ERROR"
+        )
+        return ("error", detail, error_type)
+
     async def _run_loop(
         self,
         task: ChatTask,
@@ -808,6 +907,7 @@ class ChatTaskManager:
                     timestamp=now_utc_iso(),
                 ),
             )
+            task.session_established = True
             event_id += 1
             event_id = await self._push_degraded_capability_warnings(task, node, event_id)
 
@@ -891,6 +991,17 @@ class ChatTaskManager:
                     is_update=bool(is_update),
                     include_final_response=_should_include_final_response(action, assistant_response_sent),
                 )
+                terminal_outcome = self._terminal_outcome_from_action(action)
+                if terminal_outcome is not None:
+                    terminal_type, terminal_error, terminal_error_type = terminal_outcome
+                    await self._persist_terminal_event(
+                        task=task,
+                        agent_config=agent_config,
+                        user_id=user_id,
+                        event_type=terminal_type,
+                        error=terminal_error,
+                        error_type=terminal_error_type,
+                    )
                 if sse:
                     # Per-LLM-call usage event: the converter has no access
                     # to the service-level session ids, so we stamp them
@@ -957,15 +1068,38 @@ class ChatTaskManager:
             )
             event_id += 1
 
-            task.status = "completed"
+            if task.terminal_event_type == "cancelled":
+                task.status = "cancelled"
+            elif task.terminal_event_type in {"error", "timeout"}:
+                task.status = "error"
+            else:
+                task.status = "completed"
 
         except asyncio.CancelledError:
+            if task.stop_requested:
+                await self._persist_terminal_event(
+                    task=task,
+                    agent_config=agent_config,
+                    user_id=user_id,
+                    event_type="cancelled",
+                    error="Execution stopped by user",
+                    error_type="CHAT_CANCELLED",
+                )
             task.status = "cancelled"
 
         except Exception as e:
             logger.error(f"Chat task error for session {session_id}: {e}")
             task.status = "error"
             task.error = str(e)
+            is_timeout = isinstance(e, TimeoutError)
+            await self._persist_terminal_event(
+                task=task,
+                agent_config=agent_config,
+                user_id=user_id,
+                event_type="timeout" if is_timeout else "error",
+                error=str(e),
+                error_type="TIMEOUT" if is_timeout else type(e).__name__,
+            )
             await self._push_event(
                 task,
                 SSEEvent(

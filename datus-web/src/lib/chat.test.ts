@@ -452,6 +452,14 @@ describe("tool execution blocks", () => {
 });
 
 describe("chat error display", () => {
+  it("does not turn terminal usage metadata into a conversation message", () => {
+    expect(messageFromEvent({
+      id: "end-1",
+      event: "end",
+      data: { duration: 1.2, total_tokens: 42 },
+    })).toBeNull();
+  });
+
   it("normalizes quota error codes into friendly copy", () => {
     expect(friendlyChatErrorBlock({ code: "QUATA_EXCEEDED", message: "QUATA_EXCEEDED" })).toEqual({
       type: "error",
@@ -1134,6 +1142,33 @@ describe("mergeMessage", () => {
 });
 
 describe("normalizeHistoryMessages", () => {
+  it("restores a durable terminal event as the same typed error block", () => {
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "run-1-terminal",
+        role: "system",
+        content: [{
+          type: "error",
+          payload: {
+            error: "provider stream failed",
+            error_type: "MODEL_UNAVAILABLE",
+            event_type: "error",
+          },
+        }],
+      },
+    ]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("run-1-terminal");
+    expect(messages[0]?.blocks).toEqual([{
+      type: "error",
+      title: "模型暂时不可用",
+      message: "当前模型服务没有完成请求。请稍后重试，或切换到其他可用模型。",
+      code: "MODEL_UNAVAILABLE",
+      detail: "provider stream failed",
+    }]);
+  });
+
   it("collapses stored thinking and final markdown payloads with the same message id", () => {
     const messages = normalizeHistoryMessages([
       {

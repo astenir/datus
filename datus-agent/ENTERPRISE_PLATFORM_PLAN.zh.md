@@ -281,6 +281,8 @@ store 数量 * max_size * API 进程数 + 业务 datasource + 运维/监控余�
 
 启用 `session_body_store` 后，新 session 正文/history/state 写 PG；历史 SQLite `.db` 不自动迁移。回滚方式是移除该配置并重启，新请求回本地 SQLite，但 PG 中已写正文不会自动回写。
 
+对话终态展示事件（已建立会话后的 error/cancelled/timeout）使用 session body 内的独立 sidecar 表：本地 SQLite 为 `chat_session_terminal_events`，PostgreSQL/OceanBase 为 `enterprise_session_terminal_events`。它只参与 history 展示，不进入 Agent SDK/model 上下文；feedback copy/rewind 不复制旧终态，避免把上一次失败重放到新分支。该表通过 `CREATE TABLE IF NOT EXISTS` 增量引入，滚动发布时旧版本会忽略它；生产发布前应按目标方言预建同构 DDL。回滚应用无需删表，确认不再回滚且完成 session body 备份后才可人工清理。
+
 备份恢复必须分别考虑：
 
 - enterprise metadata

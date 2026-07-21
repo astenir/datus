@@ -17,6 +17,7 @@ from datus.api.models.cli_models import (
     ChatHistoryData,
     ChatSessionData,
     ChatSessionItemInfo,
+    ChatSessionTerminalEvent,
     CompactSessionData,
     CompactSessionInput,
     IMessageContent,
@@ -384,7 +385,16 @@ class ChatService:
             # Use SessionManager to get messages from SQLite
             session_manager = self._session_manager(user_id)
             raw_messages = session_manager.get_session_messages(session_id)
-            return self._history_result_from_raw_messages(session_id, raw_messages)
+            try:
+                terminal_events = session_manager.get_terminal_events(session_id)
+            except Exception:
+                logger.warning("Failed to load terminal events for session %s", session_id, exc_info=True)
+                terminal_events = []
+            return self._history_result_from_raw_messages(
+                session_id,
+                raw_messages,
+                terminal_events=terminal_events,
+            )
 
         except Exception as e:
             logger.error(f"Failed to get history for session {session_id}: {e}")
@@ -406,7 +416,21 @@ class ChatService:
                 session_id=session_id,
             )
             raw_messages = SessionManager._message_rows_to_raw_messages(raw_messages)
-            return self._history_result_from_raw_messages(session_id, raw_messages)
+            try:
+                terminal_rows = await self._session_body_store.get_session_terminal_events(
+                    project_id=self._project_id,
+                    scope=session_scope_from_user_id(user_id),
+                    session_id=session_id,
+                )
+                terminal_events = SessionManager._validate_terminal_events(terminal_rows, session_id=session_id)
+            except Exception:
+                logger.warning("Failed to load terminal events for session %s", session_id, exc_info=True)
+                terminal_events = []
+            return self._history_result_from_raw_messages(
+                session_id,
+                raw_messages,
+                terminal_events=terminal_events,
+            )
         except Exception as e:
             logger.error(f"Failed to get history for session {session_id}: {e}")
             return Result[ChatHistoryData](
@@ -416,9 +440,13 @@ class ChatService:
             )
 
     def _history_result_from_raw_messages(
-        self, session_id: str, raw_messages: List[Dict[str, Any]]
+        self,
+        session_id: str,
+        raw_messages: List[Dict[str, Any]],
+        *,
+        terminal_events: Optional[List[ChatSessionTerminalEvent]] = None,
     ) -> Result[ChatHistoryData]:
-        if not raw_messages:
+        if not raw_messages and not terminal_events:
             return Result[ChatHistoryData](success=True, data=ChatHistoryData())
 
         sse_messages: List[SSEMessagePayload] = []
@@ -476,6 +504,25 @@ class ChatService:
                         )
                     )
                     event_id += 1
+
+        for terminal_event in terminal_events or []:
+            sse_messages.append(
+                SSEMessagePayload(
+                    message_id=terminal_event.event_id,
+                    role="system",
+                    content=[
+                        IMessageContent(
+                            type="error",
+                            payload={
+                                "error": terminal_event.error,
+                                "error_type": terminal_event.error_type,
+                                "event_type": terminal_event.event_type,
+                                "created_at": terminal_event.created_at,
+                            },
+                        )
+                    ],
+                )
+            )
 
         logger.info(f"Retrieved {len(sse_messages)} messages for session {session_id}")
         return Result[ChatHistoryData](success=True, data=ChatHistoryData(messages=sse_messages))

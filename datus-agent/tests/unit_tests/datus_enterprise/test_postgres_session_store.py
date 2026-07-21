@@ -89,6 +89,12 @@ def test_session_body_store_loader_wires_optional_provider(monkeypatch):
         async def get_session_messages(self, **kwargs):
             return []
 
+        async def append_session_terminal_event(self, **kwargs):
+            return None
+
+        async def get_session_terminal_events(self, **kwargs):
+            return []
+
         async def get_detailed_usage(self, **kwargs):
             return {}
 
@@ -137,6 +143,7 @@ def test_pg_session_body_schema_is_additive_and_has_no_tenant_id():
     assert "create table if not exists enterprise_session_turn_usage" in normalized
     assert "create table if not exists enterprise_session_running_usage" in normalized
     assert "create table if not exists enterprise_session_system_prompts" in normalized
+    assert "create table if not exists enterprise_session_terminal_events" in normalized
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized

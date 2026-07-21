@@ -81,6 +81,9 @@ class TestChatTaskInit:
         assert task.error is None
         assert task.consumer_offset == 0
         assert isinstance(task.created_at, datetime)
+        assert task.session_established is False
+        assert task.terminal_event_persisted is False
+        assert task.stop_requested is False
 
 
 class TestChatTaskManagerInit:
@@ -427,6 +430,109 @@ class TestChatTaskManagerBehavior:
         assert isinstance(called_node, FakeNode)
         assert called_patterns == ["write_file", "edit_file", "delete_file"]
         assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_established_stream_error_is_durable_in_fresh_history(self, real_agent_config):
+        """A terminal SSE error must survive destruction of in-memory task state."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+
+        session_id = "durable-terminal-error"
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class FailingNode:
+            session_id = "llm-durable-terminal-error"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                if False:
+                    yield None
+                raise RuntimeError("provider stream failed")
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: FailingNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="hello", session_id=session_id),
+        )
+
+        live_error = next(event for event in task.events if event.event == "error")
+        assert live_error.data.error_type == "RuntimeError"
+        assert live_error.data.error == "provider stream failed"
+
+        history_service = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        )
+        history = history_service.get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["error_type"] == live_error.data.error_type
+        assert history_error.payload["error"] == live_error.data.error
+
+        sdk_items = await SessionManager(session_dir=real_agent_config.session_dir).get_session(session_id).get_items()
+        assert sdk_items == []
+
+    @pytest.mark.asyncio
+    async def test_interrupted_action_is_durable_in_fresh_history(self, real_agent_config):
+        """A graceful user stop is restored as a cancelled terminal block."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        session_id = "durable-terminal-cancelled"
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class InterruptedNode:
+            session_id = "llm-durable-terminal-cancelled"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield ActionHistory(
+                    action_id="interrupted-action",
+                    role=ActionRole.ASSISTANT,
+                    action_type="interrupted",
+                    messages="Execution interrupted by user",
+                    input={},
+                    output=None,
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: InterruptedNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="hello", session_id=session_id),
+        )
+
+        assert task.status == "cancelled"
+        history = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        ).get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["event_type"] == "cancelled"
+        assert history_error.payload["error_type"] == "CHAT_CANCELLED"
 
     def test_include_final_response_rejects_nested_subagent_response(self):
         """Depth>0 sub-agent wrappers must not render as top-level answers."""
@@ -868,6 +974,22 @@ class TestStartChat:
         assert result is True
         mock_node.interrupt_controller.interrupt.assert_called_once()
         await manager.shutdown()
+
+    async def test_stop_established_task_waits_for_graceful_interrupt(self):
+        """Established tasks get a chance to emit their durable interrupted action."""
+        manager = ChatTaskManager()
+        interrupted = asyncio.Event()
+        running = asyncio.create_task(interrupted.wait())
+        task = ChatTask(session_id="graceful-stop", asyncio_task=running)
+        task.session_established = True
+        task.node = MagicMock()
+        task.node.interrupt_controller.interrupt.side_effect = interrupted.set
+        manager._tasks[task.session_id] = task
+
+        assert await manager.stop_task(task.session_id) is True
+        assert running.done() is True
+        assert running.cancelled() is False
+        task.node.interrupt_controller.interrupt.assert_called_once()
 
     async def test_wait_all_tasks_with_running(self, real_agent_config, mock_llm_create):
         """wait_all_tasks waits for running tasks without cancelling."""

@@ -135,6 +135,7 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "create table if not exists enterprise_session_turn_usage" in normalized
     assert "create table if not exists enterprise_session_running_usage" in normalized
     assert "create table if not exists enterprise_session_system_prompts" in normalized
+    assert "create table if not exists enterprise_session_terminal_events" in normalized
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized
