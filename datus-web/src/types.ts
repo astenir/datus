@@ -26,7 +26,15 @@ export type ChatStreamActivity = {
   connectedAt: number | null;
   lastEventAt: number | null;
   lastContentAt: number | null;
-  activeOperation?: string;
+  activeTools: Readonly<Record<string, ChatToolActivity>>;
+  toolCallCount: number;
+  toolCompletedCount: number;
+};
+
+export type ChatToolActivity = {
+  callToolId: string;
+  toolName: string;
+  startedAt: number;
 };
 
 export type MessageOperation = "createMessage" | "appendMessage" | "updateMessage";

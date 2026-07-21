@@ -334,6 +334,12 @@ class AgenticNode(Node):
         self._status_dirty_callback: Optional[Callable[[], None]] = None
         # Lazy single-instance handle — see ``_get_or_create_token_usage_hook``.
         self._token_usage_hook_instance: Optional[Any] = None
+        # True only while ``execute_stream_with_interactions`` is actively
+        # merging ActionBus injections into the caller-visible stream. Direct
+        # ``execute_stream`` callers must keep receiving the model adapter's
+        # ordinary tool completion actions instead of publishing into an
+        # unconsumed bus.
+        self._tool_completion_bus_active: bool = False
 
     def _record_degraded_capability(self, key: str, message: str) -> None:
         """Record a non-fatal capability degradation for API/CLI surfaces."""
@@ -3050,6 +3056,14 @@ class AgenticNode(Node):
             ):
                 for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
                     yield failure_action
+                lifecycle_hook = getattr(self, "_tool_lifecycle_hook_instance", None)
+                if lifecycle_hook is not None and lifecycle_hook.consume_published_completion(stream_action.action_id):
+                    if stream_action.role == ActionRole.TOOL and stream_action.status == ActionStatus.SUCCESS:
+                        tool_output = stream_action.output if isinstance(stream_action.output, dict) else {}
+                        summary = tool_output.get("summary") or tool_output.get("status_message") or ""
+                        if isinstance(summary, str) and summary.strip():
+                            ctx.last_tool_summary = summary.strip()
+                    continue
                 rewritten = self._maybe_rewrite_stream_action(stream_action, ctx)
                 action_to_yield = rewritten or stream_action
 
@@ -3255,6 +3269,7 @@ class AgenticNode(Node):
         broker = self._get_or_create_broker()
 
         action_stream = self.execute_stream(action_history_manager)
+        self._tool_completion_bus_active = True
         try:
             async for action in self.action_bus.merge(
                 action_stream,
@@ -3272,6 +3287,8 @@ class AgenticNode(Node):
                 input_data={},
                 status=ActionStatus.SUCCESS,
             )
+        finally:
+            self._tool_completion_bus_active = False
 
     def _reset_usage_caches(self) -> None:
         """Drop the session-scoped token/context usage caches on reset.
@@ -3859,8 +3876,13 @@ class AgenticNode(Node):
         self._ensure_permission_hooks()
         compact_hook = self._get_or_create_compact_hook()
         token_usage_hook = self._get_or_create_token_usage_hook()
+        tool_lifecycle_hook = self._get_or_create_tool_lifecycle_hook()
 
-        active = [h for h in (extra, self.permission_hooks, compact_hook, token_usage_hook) if h is not None]
+        active = [
+            h
+            for h in (tool_lifecycle_hook, extra, self.permission_hooks, compact_hook, token_usage_hook)
+            if h is not None
+        ]
         if not active:
             return None
         if len(active) == 1:
@@ -3868,6 +3890,21 @@ class AgenticNode(Node):
         from datus.tools.permission.permission_hooks import CompositeHooks
 
         return CompositeHooks(active)
+
+    def _get_or_create_tool_lifecycle_hook(self) -> Any:
+        """Return the live per-tool completion hook while a stream is active."""
+        if getattr(self, "_current_action_history", None) is None or not getattr(
+            self, "_tool_completion_bus_active", False
+        ):
+            return None
+        existing = getattr(self, "_tool_lifecycle_hook_instance", None)
+        if existing is not None:
+            return existing
+        from datus.agent.node.tool_lifecycle_hook import ToolLifecycleHook
+
+        hook = ToolLifecycleHook(self)
+        self._tool_lifecycle_hook_instance = hook
+        return hook
 
     def _get_or_create_token_usage_hook(self) -> Any:
         """Lazily build the per-node ``TokenUsageHook``.
