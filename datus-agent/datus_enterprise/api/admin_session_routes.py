@@ -358,14 +358,15 @@ async def _merge_owner_records_and_tasks(
 
 async def _resolve_session_detail(svc: ServiceDep, session_id: str) -> AdminSessionDetail | None:
     store = deps.get_enterprise_extensions().session_owner_store
-    owner = await store.get_owner(svc.project_id, session_id)
+    record = await _get_owner_record(store, svc.project_id, session_id)
+    owner = _optional_str((record or {}).get("user_id") or (record or {}).get("owner_user_id"))
     task = svc.task_manager.get_task_snapshot(session_id)
     if owner is None and task is None:
         return None
 
     summary = await _summary_from_record_and_task(
         svc,
-        {"session_id": session_id, "user_id": owner},
+        record or {"session_id": session_id, "user_id": owner},
         task,
         owner or _optional_str((task or {}).get("owner_user_id")),
     )
@@ -374,6 +375,21 @@ async def _resolve_session_detail(svc: ServiceDep, session_id: str) -> AdminSess
         consumer_offset=int((task or {}).get("consumer_offset") or 0),
         error=_optional_str((task or {}).get("error")),
     )
+
+
+async def _get_owner_record(store: Any, project_id: str, session_id: str) -> dict[str, Any] | None:
+    """Return full owner metadata when the configured store supports it."""
+
+    get_session = getattr(store, "get_session", None)
+    if callable(get_session):
+        record = await get_session(project_id, session_id)
+        if record is not None:
+            return record
+
+    owner = await store.get_owner(project_id, session_id)
+    if owner is None:
+        return None
+    return {"project_id": project_id, "session_id": session_id, "user_id": owner}
 
 
 async def _resolve_session_detail_or_error(
@@ -412,18 +428,18 @@ async def _summary_from_record_and_task(
         owner_user_id=owner_user_id,
         status=str((task or {}).get("status") or "persisted"),
         is_running=bool((task or {}).get("is_running")),
-        created_at=_optional_str((task or {}).get("created_at") or record.get("created_at")),
+        created_at=_optional_str(record.get("created_at") or (task or {}).get("created_at")),
         updated_at=_optional_str(record.get("updated_at") or (task or {}).get("created_at")),
         event_count=int((task or {}).get("event_count") or 0),
         exists_on_disk=exists_on_disk,
     )
 
 
-async def _safe_session_exists(svc: ServiceDep, session_id: str, owner_user_id: str) -> bool:
+async def _safe_session_exists(svc: ServiceDep, session_id: str, owner_user_id: str) -> bool | None:
     try:
         return bool(await asyncio.to_thread(svc.chat.session_exists, session_id, user_id=owner_user_id))
     except Exception:
-        return False
+        return None
 
 
 async def _audit_session_mutation(

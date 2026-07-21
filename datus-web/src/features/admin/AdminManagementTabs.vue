@@ -53,6 +53,7 @@ import { usePermission } from "@/composables/usePermission"
 import type { AdminManagementTabProps } from "@/features/admin/types"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
+import { adminSessionStatusLabel } from "@/lib/admin-session"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 import type { AdminArtifact, AdminUser } from "@/types/admin"
 import type { AdminViewTab } from "@/features/workspace/types"
@@ -241,6 +242,7 @@ const filteredSessions = computed(() => {
       session.session_id,
       session.owner_user_id,
       session.status,
+      adminSessionStatusLabel(session.status),
       session.event_count,
     ])
   })
@@ -812,8 +814,8 @@ function setPermittedActiveTab(value: unknown): void {
                 <TableHead>Session ID</TableHead>
                 <TableHead>所有者</TableHead>
                 <TableHead class="text-center">状态</TableHead>
-                <TableHead class="text-center">事件数</TableHead>
-                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="text-center">缓冲事件</TableHead>
+                <TableHead class="text-center">记录更新时间</TableHead>
                 <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -826,7 +828,7 @@ function setPermittedActiveTab(value: unknown): void {
                 <TableCell>{{ session.owner_user_id || "-" }}</TableCell>
                 <TableCell class="text-center">
                   <Badge :variant="session.is_running ? 'default' : 'secondary'">
-                    {{ session.status }}
+                    {{ adminSessionStatusLabel(session.status) }}
                   </Badge>
                 </TableCell>
                 <TableCell class="text-center">{{ session.event_count }}</TableCell>

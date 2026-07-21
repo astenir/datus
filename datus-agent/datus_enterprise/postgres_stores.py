@@ -948,6 +948,18 @@ class PgSessionOwnerStore(_PgStoreBase):
         )
         return str(row["user_id"]) if row else None
 
+    async def get_session(self, project_id: str, session_id: str) -> dict[str, Any] | None:
+        row = await self._fetchrow(
+            """
+            SELECT project_id, session_id, user_id, created_at, updated_at
+            FROM session_owners
+            WHERE project_id = $1 AND session_id = $2
+            """,
+            project_id,
+            session_id,
+        )
+        return _session_owner_record(row) if row else None
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         await self._execute(
             "DELETE FROM session_owners WHERE project_id = $1 AND session_id = $2",

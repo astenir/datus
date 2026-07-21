@@ -201,6 +201,27 @@ def test_ob_session_stores_reject_invalid_config():
     assert "Invalid OceanBase identifier" in str(body_exc.value)
 
 
+@pytest.mark.asyncio
+async def test_ob_session_owner_store_returns_full_record():
+    store = ObSessionOwnerStore.__new__(ObSessionOwnerStore)
+    store._fetchone = AsyncMock(
+        return_value={
+            "project_id": "enterprise",
+            "session_id": "s1",
+            "user_id": "alice",
+            "created_at": "2026-07-01T08:00:00+00:00",
+            "updated_at": "2026-07-02T09:30:00+00:00",
+        }
+    )
+
+    session = await store.get_session("enterprise", "s1")
+
+    assert session is not None
+    assert session["user_id"] == "alice"
+    assert session["created_at"] == "2026-07-01T08:00:00Z"
+    assert store._fetchone.await_args.args[1] == ("enterprise", "s1")
+
+
 def test_oceanbase_pool_close_closes_idle_and_borrowed_connections():
     pool = OceanBaseMySQLPool(
         OceanBaseMySQLConfig(
