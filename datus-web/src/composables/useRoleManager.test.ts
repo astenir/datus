@@ -186,6 +186,29 @@ describe("useRoleManager", () => {
     expect(listRoles).not.toHaveBeenCalled();
   });
 
+  it("does not expose unknown role save errors", async () => {
+    upsertRole.mockResolvedValueOnce({
+      success: false,
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: "RuntimeError: /srv/roles.py failed",
+    });
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.openCreateDialog();
+    manager.roleForm.value = {
+      role_id: "analyst",
+      name: "分析员",
+      description: "",
+      permissions: [],
+    };
+
+    await manager.saveRole();
+
+    expect(manager.roleDialogError.value).toBe("保存失败，请重试");
+    expect(toastError).toHaveBeenCalledWith("保存失败，请重试");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("/srv/roles.py");
+  });
+
   it("requires an explicit role id when creating a role", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();

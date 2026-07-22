@@ -177,7 +177,7 @@ describe("useModelCredentials", () => {
     });
   });
 
-  it("keeps failed credential probe details for inline feedback", async () => {
+  it("does not expose failed credential probe details in user feedback", async () => {
     testModelCredential.mockResolvedValueOnce({
       success: true,
       data: { ok: false, message: "Invalid API key" },
@@ -188,16 +188,20 @@ describe("useModelCredentials", () => {
 
     const probe = await manager.testCredential("cred-1");
 
-    expect(probe).toEqual({ ok: false, message: "Invalid API key" });
+    expect(probe).toEqual({
+      ok: false,
+      message: "模型连接失败，请检查配置、凭据和网络后重试",
+    });
     expect(manager.testResults.value["cred-1"]).toEqual({
       ok: false,
-      message: "Invalid API key",
+      message: "模型连接失败，请检查配置、凭据和网络后重试",
     });
-    expect(toastError).toHaveBeenCalledWith("Invalid API key");
+    expect(toastError).toHaveBeenCalledWith("模型连接失败，请检查配置、凭据和网络后重试");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("Invalid API key");
   });
 
-  it("keeps request failures for inline feedback", async () => {
-    testModelCredential.mockRejectedValueOnce(new Error("请求超时"));
+  it("does not expose credential request exceptions in user feedback", async () => {
+    testModelCredential.mockRejectedValueOnce(new Error("ConnectTimeout: https://models.private/v1"));
     const { useModelCredentials } = await import("./useModelCredentials");
     const manager = useModelCredentials();
     await manager.load();
@@ -207,8 +211,9 @@ describe("useModelCredentials", () => {
     expect(probe).toBeNull();
     expect(manager.testResults.value["cred-1"]).toEqual({
       ok: false,
-      message: "请求超时",
+      message: "模型连接失败，请检查配置、凭据和网络后重试",
     });
-    expect(toastError).toHaveBeenCalledWith("请求超时");
+    expect(toastError).toHaveBeenCalledWith("模型连接失败，请检查配置、凭据和网络后重试");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("models.private");
   });
 });

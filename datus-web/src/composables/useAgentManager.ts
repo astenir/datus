@@ -604,7 +604,7 @@ export function useAgentManager() {
       if (err.errorCode === "AGENT_DEFAULT_REQUIRES_PUBLISHED") {
         return "只有已发布的 Agent 才能分配默认用户，请先将状态切换为“已发布”。";
       }
-      return err.message;
+      return fallback;
     }
 
     return fallback;
@@ -725,7 +725,7 @@ export function useAgentManager() {
         mcpToolsByServer.value = Object.fromEntries(servers.map((server) => [server.name, []]));
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
+      const message = agentRouteErrorMessage(err, "读取 MCP Server 失败");
       mcpServers.value = [];
       mcpToolsByServer.value = {};
       mcpCatalogLoaded.value = false;
@@ -774,7 +774,7 @@ export function useAgentManager() {
         || left.manifest.slug.localeCompare(right.manifest.slug)
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取 Agent 可选资源失败";
+      const message = agentRouteErrorMessage(err, "读取 Agent 可选资源失败");
       datasources.value = [];
       artifacts.value = [];
       resourceCatalogError.value = message;
@@ -1002,7 +1002,9 @@ export function useAgentManager() {
     } catch (err) {
       const message = agentRouteErrorMessage(
         err,
-        err instanceof Error ? err.message : "Agent 保存失败",
+        err instanceof Error && err.message === "最大轮次必须是正整数"
+          ? err.message
+          : "Agent 保存失败",
       );
       console.error("保存 Agent 失败:", err);
       toast.error(message);

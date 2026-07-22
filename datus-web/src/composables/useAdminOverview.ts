@@ -477,7 +477,7 @@ export function useAdminOverview() {
       if (!result.success) {
         const message = result.errorCode === "REQUEST_TIMEOUT"
           ? "数据源目录加载超时，请稍后重试"
-          : result.errorMessage?.trim() || "加载数据源目录失败";
+          : "加载数据源目录失败";
         grantCatalogError.value = message;
         grantCatalogDatabases.value = [];
         toast.error(message);

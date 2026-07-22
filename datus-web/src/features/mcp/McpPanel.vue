@@ -29,6 +29,7 @@ import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import { usePermission } from "@/composables/usePermission"
 import { ApiResultError } from "@/lib/chat"
+import { friendlyMcpConnectionError } from "@/lib/mcp"
 import { handleError } from "@/lib/utils"
 import type { McpConnectivityResult, McpServerInfo, McpToolInfo } from "@/types"
 
@@ -98,6 +99,13 @@ function agentReferencesFromError(error: unknown): McpAgentReference[] {
   })
 }
 
+function showMcpConnectionError(context: string, serverName: string, error: unknown) {
+  console.error(`${context} (${serverName})`, error)
+  const friendly = friendlyMcpConnectionError(error, serverName)
+  if (!friendly) return
+  toast.error(friendly.title, { description: friendly.description })
+}
+
 function openDeleteDialog(server: McpServerInfo) {
   deleteBlockedAgents.value = []
   deleteTarget.value = server
@@ -147,7 +155,7 @@ async function loadTools() {
     tools.value = result?.tools ?? []
   } catch (error) {
     tools.value = []
-    handleError("加载 MCP 工具失败", error)
+    showMcpConnectionError("加载 MCP 工具失败", selectedServer.value, error)
   } finally {
     toolsLoading.value = false
   }
@@ -217,7 +225,7 @@ async function checkConnectivity(serverName: string) {
     }
     toast.success(result?.message || "MCP Server 连接正常")
   } catch (error) {
-    handleError("检查 MCP 连接失败", error)
+    showMcpConnectionError("检查 MCP 连接失败", serverName, error)
   } finally {
     checkingServer.value = ""
   }

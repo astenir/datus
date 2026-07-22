@@ -89,7 +89,12 @@ function parseRecordText(text: string, label: string): Record<string, unknown> {
   const trimmed = text.trim();
   if (!trimmed) return {};
 
-  const parsed: unknown = JSON.parse(trimmed);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`${label} 必须是合法的 JSON 对象`);
+  }
   if (!isRecord(parsed)) {
     throw new Error(`${label} 必须是 JSON 对象`);
   }
@@ -116,15 +121,15 @@ function normalizeProbeResult(result: ProbeResult | null): NormalizedProbeResult
     : typeof result?.success === "boolean"
       ? result.success
       : Boolean(result);
+  if (!ok) return { ok: false, message: DEFAULT_PROBE_FAILURE };
+
   const message = typeof result?.message === "string" && result.message.trim()
     ? result.message.trim()
     : typeof result?.errorMessage === "string" && result.errorMessage.trim()
       ? result.errorMessage.trim()
       : typeof result?.error === "string" && result.error.trim()
         ? result.error.trim()
-        : ok
-          ? "连接正常"
-          : DEFAULT_PROBE_FAILURE;
+        : "连接正常";
 
   return { ok, message };
 }

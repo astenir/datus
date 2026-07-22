@@ -113,16 +113,9 @@ function stringField(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isInternalErrorMessage(value: string): boolean {
-  return value.includes("dictionary update sequence element")
-    || value.includes("Traceback")
-    || /\b(TypeError|ValueError|KeyError|AttributeError):/.test(value);
-}
-
 function datasourceTestMessage(ok: boolean, message: string): string {
-  if (!message) return ok ? "连接正常" : DEFAULT_DATASOURCE_TEST_FAILURE;
-  if (!ok && isInternalErrorMessage(message)) return DEFAULT_DATASOURCE_TEST_FAILURE;
-  return message;
+  if (!ok) return DEFAULT_DATASOURCE_TEST_FAILURE;
+  return message || "连接正常";
 }
 
 function normalizeProbeResult(result: ProbeResult | null): NormalizedProbeResult {

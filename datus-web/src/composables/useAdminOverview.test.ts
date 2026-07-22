@@ -422,6 +422,22 @@ describe("useAdminOverview", () => {
     expect(overview.loadingGrantCatalog.value).toBe(false);
   });
 
+  it("does not expose unknown catalog backend errors", async () => {
+    listAdminCatalog.mockResolvedValueOnce({
+      success: false,
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: "RuntimeError: https://db.private failed at /srv/catalog.py",
+    });
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.loadGrantCatalog("fund");
+
+    expect(overview.grantCatalogError.value).toBe("加载数据源目录失败");
+    expect(toastError).toHaveBeenCalledWith("加载数据源目录失败");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("db.private");
+  });
+
   it("surfaces rejected catalog requests both inline and as a toast", async () => {
     listAdminCatalog.mockRejectedValueOnce(new Error("upstream timeout"));
     const { useAdminOverview } = await import("./useAdminOverview");

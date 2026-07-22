@@ -1,8 +1,57 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMcpServerInfo, buildRemoteMcpHeaders, createDefaultMcpServerForm, createMcpServerForm } from "./mcp";
+import {
+  buildMcpServerInfo,
+  buildRemoteMcpHeaders,
+  createDefaultMcpServerForm,
+  createMcpServerForm,
+  friendlyMcpConnectionError,
+} from "./mcp";
 
 describe("MCP helpers", () => {
+  it("explains an expired remote MCP endpoint without exposing the raw URL", () => {
+    const error = new Error(
+      "Failed to list tools on server 'china-stock-mcp': Failed to connect to MCP server "
+      + "'streamable_http: https://mcp.api-inference.modelscope.net/private/mcp': HTTP error 410 (Gone)",
+    );
+
+    const result = friendlyMcpConnectionError(error, "china-stock-mcp");
+
+    expect(result).toEqual({
+      title: "MCP Server 地址已失效",
+      description: "“china-stock-mcp”对应的远程服务已下线或 URL 已过期，请更新配置后重试。",
+    });
+    expect(JSON.stringify(result)).not.toContain("mcp.api-inference.modelscope.net");
+  });
+
+  it("gives actionable guidance for MCP connection timeouts", () => {
+    expect(friendlyMcpConnectionError(new Error("httpcore.ConnectTimeout: Connection timeout"), "quotes")).toEqual({
+      title: "MCP Server 连接超时",
+      description: "暂时无法连接“quotes”，请检查服务地址、网络、代理或防火墙后重试。",
+    });
+  });
+
+  it("describes remote MCP authentication failures without exposing backend details", () => {
+    expect(friendlyMcpConnectionError(new Error("HTTP error 403 (Forbidden) for https://private.example/mcp"), "quotes")).toEqual({
+      title: "MCP Server 认证失败",
+      description: "“quotes”拒绝了连接，请检查 Token、Headers 和远程服务权限。",
+    });
+  });
+
+  it("uses a safe fallback for unknown MCP connection errors", () => {
+    const result = friendlyMcpConnectionError(new Error("RuntimeError: /srv/private/mcp.py failed"), "quotes");
+
+    expect(result).toEqual({
+      title: "无法连接 MCP Server",
+      description: "暂时无法连接“quotes”，请检查服务地址、认证信息和网络连接后重试。",
+    });
+    expect(JSON.stringify(result)).not.toContain("/srv/private/mcp.py");
+  });
+
+  it("leaves expired login feedback to the global authentication handler", () => {
+    expect(friendlyMcpConnectionError({ status: 401 }, "quotes")).toBeNull();
+  });
+
   it("builds an Authorization header from a remote MCP token", () => {
     expect(buildRemoteMcpHeaders({ token: "abc123" })).toEqual({
       headers: { Authorization: "Bearer abc123" },

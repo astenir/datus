@@ -53,18 +53,18 @@ function userFormFromUser(user: AdminUser): AdminUserFormData {
 function userStatusFailureMessage(result: ApiResponse<AdminUser>, enabled: boolean): string {
   if (result.errorCode === "USER_DISABLE_SELF_FORBIDDEN") return "不能禁用当前登录用户";
   if (result.errorCode === "USER_DISABLE_ADMIN_FORBIDDEN") return "不能禁用企业管理员；请先移除管理员角色";
-  return result.errorMessage || (enabled ? "启用失败，请重试" : "禁用失败，请重试");
+  return enabled ? "启用失败，请重试" : "禁用失败，请重试";
 }
 
 function userSaveFailureMessage(result: ApiResponse<AdminUser>): string {
   if (result.errorCode === "USER_DISABLE_SELF_FORBIDDEN") return "不能禁用当前登录用户";
   if (result.errorCode === "USER_DISABLE_ADMIN_FORBIDDEN") return "不能禁用企业管理员；请先移除管理员角色";
-  return result.errorMessage || "保存失败，请重试";
+  return "保存失败，请重试";
 }
 
 function userRoleAssignmentFailureMessage(result: ApiResponse<AdminUserRolesData>): string {
   if (result.errorCode === "USER_ROLES_FORBIDDEN") return "不能分配包含自己尚未拥有权限的角色";
-  return result.errorMessage || "角色分配失败，请重试";
+  return "角色分配失败，请重试";
 }
 
 export function useUserManager() {

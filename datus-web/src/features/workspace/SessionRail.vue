@@ -381,7 +381,7 @@ async function compactSession(sessionId: string) {
       toast.success(`会话已压缩${saved}`)
       return
     }
-    toast.error(result?.error || "会话压缩失败")
+    toast.error("会话压缩失败")
   } catch (error) {
     console.error("压缩会话失败:", error)
     toast.error("会话压缩失败")

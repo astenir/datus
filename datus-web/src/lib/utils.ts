@@ -17,7 +17,13 @@ export function formatDate(iso?: string | null): string {
 
 export function handleError(message: string, error: unknown): void {
   console.error(message, error);
-  toast.error(`${message}：${error instanceof Error ? error.message : String(error)}`);
+  if (errorStatus(error) === 401) return;
+  toast.error(message);
+}
+
+function errorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("status" in error)) return undefined;
+  return typeof error.status === "number" ? error.status : undefined;
 }
 
 export function findCardElement(event: MouseEvent): HTMLElement {

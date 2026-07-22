@@ -375,6 +375,18 @@ describe("useKnowledgeBootstrap", () => {
     expect(toastError).toHaveBeenCalledWith("请上传平台文档文件");
   });
 
+  it("does not expose upload exceptions in a toast", async () => {
+    upload.mockRejectedValueOnce(new Error("RuntimeError: /srv/uploads/private.csv failed"));
+    const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
+    manager.setUploadFiles("docs", [new File(["docs"], "guide.md", { type: "text/markdown" })]);
+
+    await manager.uploadFiles("docs");
+
+    expect(toastError).toHaveBeenCalledWith("文件上传失败");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("/srv/uploads");
+  });
+
   it("uploads selected platform docs before docs bootstrap", async () => {
     upload.mockResolvedValueOnce({
       upload_id: "upload-docs",

@@ -476,7 +476,7 @@ export function useChatWorkspace() {
       return true;
     } catch (error) {
       console.error("Failed to update default Agent preference:", error);
-      toast.error(error instanceof Error ? error.message : "默认 Agent 设置失败");
+      toast.error("默认 Agent 设置失败");
       return false;
     } finally {
       isSavingDefaultAgent.value = false;
