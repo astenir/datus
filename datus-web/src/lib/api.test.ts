@@ -1060,7 +1060,7 @@ describe("api client", () => {
     });
     await agentApi.updatePolicy("http://localhost:8000/", "safe_chat", {
       tool_policy: { mode: "allowlist", allowed: ["filesystem_tools.read_file"], denied: ["bash_tools.*"] },
-      runtime_policy: { max_permission_mode: "normal", allow_subagent_delegation: false, allowed_subagents: [] },
+      runtime_policy: { allow_subagent_delegation: false, allowed_subagents: [] },
     });
     await agentApi.enterpriseDefault("http://localhost:8000/");
     await agentApi.updateEnterpriseDefault("http://localhost:8000/", "safe_chat");

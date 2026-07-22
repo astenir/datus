@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
-from datus.agent.tool_policy import normalize_runtime_policy, permission_mode_exceeds
 from datus.api import deps as api_deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
@@ -59,15 +58,12 @@ from datus.api.models.dashboard_models import DashboardEditSession
 from datus.api.models.report_models import ReportEditSession
 from datus.api.services.background_drain import track_background_task
 from datus.api.services.chat_task_manager import EventBufferExpiredError
-from datus.tools.permission.permission_config import PermissionLevel, PermissionRule
-from datus.tools.permission.profiles import build_effective_config
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.agent_registry import (
-    agent_policy_metadata,
     agent_record_to_runtime_entry,
     list_available_agent_records,
     resolve_effective_default_agent,
@@ -87,7 +83,6 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 _require_chat_context = api_deps.get_request_app_context
 ChatCtx = Annotated[AppContext, Depends(_require_chat_context)]
-_FILESYSTEM_WRITE_TOOL_NAMES = ("write_file", "edit_file", "delete_file")
 _ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
 SSE_RESPONSE = {
     200: {
@@ -117,59 +112,11 @@ _EXTRA_BUILTIN_SUBAGENTS = {"feedback"}
 ArtifactEditSession = ReportEditSession | DashboardEditSession
 
 
-def _filesystem_write_deny_rules() -> list[PermissionRule]:
-    return [
-        PermissionRule(tool="filesystem_tools", pattern=tool_name, permission=PermissionLevel.DENY)
-        for tool_name in _FILESYSTEM_WRITE_TOOL_NAMES
-    ]
+def _default_enterprise_chat_permission_mode(request: StreamChatInput, *, enterprise_enabled: bool) -> None:
+    """Keep omitted enterprise permission modes on the least permissive profile."""
 
-
-def _install_filesystem_write_deny_rules(agent_config: Any) -> None:
-    raw_permissions = getattr(agent_config, "_raw_permissions", {}) or {}
-    raw_user = {key: value for key, value in raw_permissions.items() if key != "profile"}
-    hardened_config = build_effective_config("normal", raw_user).model_copy(deep=True)
-
-    hardened_config.rules.extend(_filesystem_write_deny_rules())
-    agent_config.permissions_config = hardened_config
-
-
-def _validate_chat_permission_mode_maximum(
-    request: StreamChatInput,
-    *,
-    enterprise_enabled: bool,
-    agent_record: dict[str, Any] | None,
-) -> str | None:
-    """Reject a requested profile above the selected Agent's maximum."""
-
-    if not enterprise_enabled:
-        return None
-    runtime_policy = normalize_runtime_policy(agent_policy_metadata(agent_record)["runtime_policy"])
-    maximum = runtime_policy["max_permission_mode"]
-    if permission_mode_exceeds(request.permission_mode, maximum):
-        raise HTTPException(
-            status_code=403,
-            detail=(f"Permission mode '{request.permission_mode}' exceeds Agent maximum '{maximum}'."),
-        )
-    return maximum
-
-
-def _harden_chat_permission_mode(
-    request: StreamChatInput,
-    agent_config: Any,
-    *,
-    enterprise_enabled: bool,
-    agent_record: dict[str, Any] | None,
-) -> None:
-    """Enforce the selected Agent's maximum permission profile."""
-
-    maximum = _validate_chat_permission_mode_maximum(
-        request,
-        enterprise_enabled=enterprise_enabled,
-        agent_record=agent_record,
-    )
-    if maximum == "normal":
-        agent_config.active_profile_name = "normal"
-        _install_filesystem_write_deny_rules(agent_config)
+    if enterprise_enabled and request.permission_mode is None:
+        request.permission_mode = "normal"
 
 
 async def _authorize_chat_permission_mode(
@@ -593,11 +540,7 @@ async def stream_chat(
                 headers=_sse_headers(),
             )
 
-    _validate_chat_permission_mode_maximum(
-        request,
-        enterprise_enabled=enterprise_extensions.enabled,
-        agent_record=enterprise_agent_record,
-    )
+    _default_enterprise_chat_permission_mode(request, enterprise_enabled=enterprise_extensions.enabled)
     await _authorize_chat_permission_mode(
         request,
         ctx,
@@ -638,13 +581,6 @@ async def stream_chat(
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
-
-    _harden_chat_permission_mode(
-        request,
-        projection.config,
-        enterprise_enabled=enterprise_extensions.enabled,
-        agent_record=enterprise_agent_record,
-    )
 
     if enterprise_extensions.enabled:
         available_records = await list_available_agent_records(ctx)

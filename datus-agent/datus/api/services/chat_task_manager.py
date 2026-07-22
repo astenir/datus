@@ -1326,17 +1326,9 @@ class ChatTaskManager:
         permission_manager = getattr(node, "permission_manager", None)
         if permission_manager is None:
             return
-        from datus.agent.tool_policy import normalize_runtime_policy, permission_mode_exceeds
-
-        node_config = getattr(node, "node_config", None)
-        raw_runtime_policy = node_config.get("runtime_policy") if isinstance(node_config, dict) else None
-        if raw_runtime_policy is None and not permission_mode:
+        if not permission_mode:
             return
-        target_mode = permission_mode or getattr(permission_manager, "active_profile", None) or "normal"
-        if raw_runtime_policy is not None:
-            maximum = normalize_runtime_policy(raw_runtime_policy)["max_permission_mode"]
-            if permission_mode_exceeds(target_mode, maximum):
-                target_mode = maximum
+        target_mode = permission_mode
         if getattr(permission_manager, "active_profile", None) == target_mode:
             return
 

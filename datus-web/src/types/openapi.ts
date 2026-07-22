@@ -3044,8 +3044,6 @@ export interface components {
 
         AgentRuntimePolicy: {
 
-            max_permission_mode: string;
-
             allow_subagent_delegation: boolean;
 
             allowed_subagents?: string[];

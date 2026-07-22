@@ -3822,7 +3822,7 @@ class AgenticNode(Node):
                     return (
                         "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
                         f"{tool_name} 已被“{profile}”权限模式拦截，换路径或重试不会绕过限制。"
-                        "请联系管理员核对该 Agent 的工具策略和最高权限模式。"
+                        "请联系管理员核对该 Agent 的工具策略。"
                     )
                 return (
                     f"权限受限：当前账号没有执行工具 {tool_name} 的权限，"

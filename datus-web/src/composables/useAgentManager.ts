@@ -43,7 +43,6 @@ export interface AgentFormState {
   allowedUserIds: string[];
   toolPolicyMode: "inherit" | "allowlist";
   deniedToolsText: string;
-  maxPermissionMode: "normal" | "auto" | "dangerous";
   allowSubagentDelegation: boolean;
   allowedSubagentIds: string[];
   defaultUserIds: string[];
@@ -97,7 +96,6 @@ function emptyForm(): AgentFormState {
     allowedUserIds: [],
     toolPolicyMode: "allowlist",
     deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
-    maxPermissionMode: "normal",
     allowSubagentDelegation: false,
     allowedSubagentIds: [],
     defaultUserIds: [],
@@ -230,9 +228,6 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     allowedUserIds: [...(agent.acl?.allowed_user_ids ?? [])],
     toolPolicyMode: agent.tool_policy?.mode === "inherit" ? "inherit" : "allowlist",
     deniedToolsText: listText(agent.tool_policy?.denied),
-    maxPermissionMode: agent.runtime_policy?.max_permission_mode === "dangerous"
-      ? "dangerous"
-      : agent.runtime_policy?.max_permission_mode === "auto" ? "auto" : "normal",
     allowSubagentDelegation: agent.runtime_policy?.allow_subagent_delegation ?? false,
     allowedSubagentIds: [...(agent.runtime_policy?.allowed_subagents ?? [])],
     defaultUserIds: [],
@@ -267,7 +262,6 @@ function createInputFromForm(form: AgentFormState, supportsMcp: boolean): Create
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
-      max_permission_mode: form.maxPermissionMode ?? "normal",
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
@@ -282,7 +276,6 @@ function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentP
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
-      max_permission_mode: form.maxPermissionMode ?? "normal",
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
@@ -877,7 +870,6 @@ export function useAgentManager() {
       allowedUserIds: [],
       toolPolicyMode: "allowlist",
       deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
-      maxPermissionMode: "normal",
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],

@@ -61,9 +61,8 @@ class AgentToolPolicy(BaseModel):
 
 
 class AgentRuntimePolicy(BaseModel):
-    """Server-enforced Agent runtime ceiling."""
+    """Server-enforced Agent delegation policy."""
 
-    max_permission_mode: str = Field(default="normal", description="normal / auto / dangerous")
     allow_subagent_delegation: bool = False
     allowed_subagents: list[str] = Field(default_factory=list, max_length=100)
 

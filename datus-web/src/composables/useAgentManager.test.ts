@@ -725,7 +725,6 @@ describe("useAgentManager", () => {
       allowedUserIds: ["alice", "bob"],
       toolPolicyMode: "allowlist",
       deniedToolsText: "filesystem_tools.*",
-      maxPermissionMode: "normal",
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
@@ -763,7 +762,6 @@ describe("useAgentManager", () => {
         denied: ["filesystem_tools.*"],
       },
       runtime_policy: {
-        max_permission_mode: "normal",
         allow_subagent_delegation: false,
         allowed_subagents: [],
       },

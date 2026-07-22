@@ -208,6 +208,16 @@ class TestApplyPermissionModeOverride:
         manager._apply_permission_mode_override(node, self._make_agent_config(), "auto")
         node.permission_manager.switch_profile.assert_called_once_with("auto", user_overrides=None)
 
+    def test_legacy_agent_permission_ceiling_does_not_clamp_request_profile(self):
+        """Persisted pre-migration runtime policy must not override an authorized request."""
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="normal")
+        node.node_config = {"runtime_policy": {"max_permission_mode": "normal"}}
+
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "dangerous")
+
+        node.permission_manager.switch_profile.assert_called_once_with("dangerous", user_overrides=None)
+
     def test_switches_profile_with_user_overrides(self):
         """Non-empty _raw_permissions yields a built user_overrides config."""
         from datus.tools.permission.permission_config import PermissionConfig
@@ -493,7 +503,7 @@ class TestChatTaskManagerBehavior:
         error = (
             "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
             "write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。"
-            "请联系管理员核对该 Agent 的工具策略和最高权限模式。"
+            "请联系管理员核对该 Agent 的工具策略。"
         )
         SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
 

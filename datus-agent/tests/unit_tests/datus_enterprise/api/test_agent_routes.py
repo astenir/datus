@@ -752,7 +752,6 @@ def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch)
                     "denied": ["filesystem_tools.*", "bash_tools.*"],
                 },
                 "runtime_policy": {
-                    "max_permission_mode": "normal",
                     "allow_subagent_delegation": False,
                     "allowed_subagents": [],
                 },
@@ -762,6 +761,7 @@ def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch)
     assert status_response.json()["success"] is True
     assert acl_response.json()["data"]["visibility"] == "enterprise"
     assert policy_response.json()["data"]["tool_policy"]["mode"] == "allowlist"
+    assert "max_permission_mode" not in policy_response.json()["data"]["runtime_policy"]
     assert agent_store._agents["gen_sql"]["scoped_context"]["_enterprise_agent_policy"]["tool_policy"]["denied"] == [
         "bash_tools.*",
         "filesystem_tools.*",

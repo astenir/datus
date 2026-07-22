@@ -233,7 +233,7 @@ describe("tool execution blocks", () => {
         callToolId: "call-1",
         toolName: "write_file",
         errorText:
-          "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。",
+          "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。",
         result: {
           success: 0,
           error: rawError,
@@ -1257,7 +1257,7 @@ describe("normalizeHistoryMessages", () => {
   });
 
   it("restores a durable permission denial with the backend user-safe detail", () => {
-    const detail = "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。";
+    const detail = "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。";
     const messages = normalizeHistoryMessages([
       {
         message_id: "permission-terminal",
@@ -1276,7 +1276,7 @@ describe("normalizeHistoryMessages", () => {
     expect(messages[0]?.blocks).toEqual([{
       type: "error",
       title: "权限受限",
-      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略和最高权限模式。",
+      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。",
       tone: "warning",
       code: "PERMISSION_DENIED",
     }]);

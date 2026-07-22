@@ -126,7 +126,7 @@ module.system.status
 规则：
 
 - `view` 只表示列表/详情/静态 HTML 可见，不自动包含实时查询、导出、编辑。
-- `module.chat.permission_mode` 只允许请求 `auto` / `dangerous` 对话模式；仍不得超过 Agent 的 `runtime_policy.max_permission_mode`，也不绕过 Agent Tool Policy、文件路径或 Artifact ACL。
+- `module.chat.permission_mode` 只允许请求 `auto` / `dangerous` 对话模式；该模式只调整本轮工具确认策略，不授予 Agent 新工具，也不绕过 Agent Tool Policy、文件路径或 Artifact ACL。
 - `query` 表示实时查数或执行保存 SQL，必须叠加 datasource grant、SQL policy、quota、audit。
 - `export` 单独授权，并需要 ACL、quota、审计、脱敏策略。
 - admin 也必须拆成显式 permission，不用硬编码超级用户绕过授权链。
@@ -269,9 +269,9 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
 
-用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和委派 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
 
-Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。`runtime_policy.max_permission_mode` 限制用户请求的最高 permission mode，`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
+Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。对话 permission mode 属于用户和本轮会话的确认策略，由 `module.chat.permission_mode` 控制，Agent 不再配置第二套模式上限。`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
 
 每个 PG metadata/body store 独立持有 asyncpg pool。连接预算按：
 
