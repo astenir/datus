@@ -1137,6 +1137,28 @@ class TestParseNodeConfigExtended:
         assert result.get("system_prompt") == "You are a SQL assistant"
         assert result.get("max_turns") == 10
 
+    def test_enterprise_tool_and_runtime_policies_are_extracted(self):
+        node = _make_simple_node()
+        mock_config = MagicMock()
+        mock_config.agentic_nodes = {
+            "chat": {
+                "tool_policy": {
+                    "mode": "allowlist",
+                    "allowed": ["db_tools.*"],
+                    "denied": ["filesystem_tools.*"],
+                },
+                "runtime_policy": {
+                    "allow_subagent_delegation": False,
+                    "allowed_subagents": [],
+                },
+            }
+        }
+
+        result = node._parse_node_config(mock_config, "chat")
+
+        assert result["tool_policy"] == mock_config.agentic_nodes["chat"]["tool_policy"]
+        assert result["runtime_policy"] == mock_config.agentic_nodes["chat"]["runtime_policy"]
+
     def test_rules_dict_normalized_to_string(self):
         node = _make_simple_node()
         mock_config = MagicMock()

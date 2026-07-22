@@ -379,6 +379,49 @@ class SubAgentTaskTool:
                 return mode
         return "interactive"
 
+    def _inherit_parent_permission_profile(self, node: "AgenticNode") -> None:
+        """Apply the request-scoped parent profile to a delegated node.
+
+        API chat switches the freshly-created parent node's PermissionManager
+        without mutating the shared AgentConfig.  A delegated node is created
+        later from that unchanged config, so it must inherit the effective
+        profile explicitly while retaining its own node overrides and tool
+        policy.
+        """
+        parent_manager = getattr(self._parent_node, "permission_manager", None)
+        target_profile = getattr(parent_manager, "active_profile", None)
+        if not isinstance(target_profile, str):
+            return
+
+        from datus.tools.permission.profiles import PROFILE_NAMES, build_user_overrides
+
+        if target_profile not in PROFILE_NAMES:
+            raise RuntimeError(f"Cannot delegate with unknown permission profile {target_profile!r}.")
+
+        child_manager = getattr(node, "permission_manager", None)
+        if child_manager is None or getattr(child_manager, "active_profile", None) == target_profile:
+            return
+
+        raw_permissions = getattr(self.agent_config, "_raw_permissions", {}) or {}
+        if not isinstance(raw_permissions, dict):
+            raise RuntimeError("Cannot inherit permission profile: agent permission configuration is malformed.")
+        raw_user = {key: value for key, value in raw_permissions.items() if key != "profile"}
+
+        try:
+            user_overrides = build_user_overrides(target_profile, raw_user)
+            child_manager.switch_profile(target_profile, user_overrides=user_overrides)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to inherit permission profile {target_profile!r} for delegated Agent."
+            ) from exc
+
+        logger.info(
+            "Inherited permission profile for delegated Agent",
+            profile=target_profile,
+            parent=getattr(self._parent_node, "node_name", None),
+            child=getattr(node, "node_name", None),
+        )
+
     def _create_builtin_node(self, subagent_type: str, session_id: Optional[str] = None):
         """Create a builtin system subagent node with its non-standard constructor."""
         if subagent_type == "gen_semantic_model":
@@ -736,6 +779,7 @@ class SubAgentTaskTool:
                     )
 
             node = self._create_node(subagent_type, session_id=session_id)
+            self._inherit_parent_permission_profile(node)
             from datus.agent.tool_policy import apply_agent_runtime_policy
 
             apply_agent_runtime_policy(node)

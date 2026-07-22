@@ -449,7 +449,7 @@ class ChatAgenticNode(AgenticNode):
             agent_config=self.agent_config,
             workspace_root=self._resolve_workspace_root(),
         )
-        context["has_task_tool"] = bool(self.sub_agent_task_tool)
+        context["has_task_tool"] = "task" in exposed
         context["has_ask_user_tool"] = "ask_user" in exposed
         # Web tools (web_search / web_fetch) are NOT advertised in the system
         # prompt: their own tool-schema descriptions document usage, and prompt

@@ -806,6 +806,39 @@ class TestChatAgenticNodeSystemPrompt:
         assert "Ask user tool (`ask_user`)" in prompt
         assert "call `ask_user` FIRST" in prompt
 
+    def test_disabled_delegation_removes_task_and_prompt_guidance(self, real_agent_config, mock_llm_create):
+        """A persisted enterprise runtime policy must reach and constrain the real chat node."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.agent.tool_policy import apply_agent_runtime_policy
+        from datus.tools.permission.permission_config import PermissionLevel
+
+        chat_config = dict(real_agent_config.agentic_nodes.get("chat", {}))
+        chat_config.update(
+            {
+                "tool_policy": {"mode": "inherit", "allowed": [], "denied": []},
+                "runtime_policy": {
+                    "allow_subagent_delegation": False,
+                    "allowed_subagents": [],
+                },
+            }
+        )
+        real_agent_config.agentic_nodes["chat"] = chat_config
+        node = ChatAgenticNode(
+            node_id="test_disabled_delegation",
+            description="Test disabled delegation policy",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        apply_agent_runtime_policy(node)
+
+        assert node.node_config["runtime_policy"]["allow_subagent_delegation"] is False
+        assert "task" not in {tool.name for tool in node.tools}
+        assert node.sub_agent_task_tool._get_available_types() == []
+        assert node.permission_manager.check_permission("sub_agent_tools", "task", "chat") == PermissionLevel.DENY
+        prompt = node._get_system_prompt()
+        assert "Task delegation tool (`task`)" not in prompt
+
     def test_get_system_prompt_fallback_on_missing_template(self, real_agent_config, mock_llm_create):
         """_get_system_prompt falls back to chat_system when configured template is missing."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode

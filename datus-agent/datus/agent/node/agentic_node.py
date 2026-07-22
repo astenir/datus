@@ -2164,6 +2164,8 @@ class AgenticNode(Node):
             "mcp",
             "skills",  # AgentSkills pattern filter (e.g., "sql-*, data-*")
             "permissions",  # Node-specific permission overrides
+            "tool_policy",  # Enterprise Agent tool exposure and invocation policy
+            "runtime_policy",  # Enterprise Agent delegation policy
             "hooks",
             "rules",
             "max_turns",

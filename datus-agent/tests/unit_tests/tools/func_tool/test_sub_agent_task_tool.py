@@ -59,6 +59,111 @@ class TestInit:
         assert tool.agent_config is mock_agent_config
 
 
+@pytest.mark.ci
+class TestPermissionProfileInheritance:
+    @pytest.mark.parametrize(
+        ("parent_profile", "child_profile"),
+        [("auto", "normal"), ("dangerous", "normal"), ("normal", "dangerous")],
+    )
+    def test_delegated_node_inherits_parent_request_profile_without_mutating_config(
+        self,
+        mock_agent_config,
+        parent_profile,
+        child_profile,
+    ):
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.permission_manager import PermissionManager
+        from datus.tools.permission.profiles import get_profile
+
+        mock_agent_config.active_profile_name = child_profile
+        mock_agent_config._raw_permissions = {
+            "profile": child_profile,
+            "rules": [{"tool": "db_tools", "pattern": "blocked_by_admin", "permission": "deny"}],
+        }
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+        parent = MagicMock()
+        parent.permission_manager = PermissionManager(
+            global_config=get_profile(parent_profile),
+            active_profile=parent_profile,
+        )
+        tool.set_parent_node(parent)
+
+        child_manager = PermissionManager(
+            global_config=get_profile(child_profile),
+            node_overrides={
+                "ask_metrics": {
+                    "rules": [{"tool": "semantic_tools", "pattern": "private_metric", "permission": "deny"}]
+                }
+            },
+            active_profile=child_profile,
+        )
+        child = MagicMock()
+        child.permission_manager = child_manager
+
+        tool._inherit_parent_permission_profile(child)
+
+        assert child_manager.active_profile == parent_profile
+        assert child_manager.check_permission("db_tools", "blocked_by_admin", "ask_metrics") == PermissionLevel.DENY
+        assert child_manager.check_permission("semantic_tools", "private_metric", "ask_metrics") == PermissionLevel.DENY
+        assert mock_agent_config.active_profile_name == child_profile
+
+    def test_profile_inheritance_failure_stops_delegated_node(self, mock_agent_config):
+        from datus.tools.permission.permission_manager import PermissionManager
+        from datus.tools.permission.profiles import get_profile
+
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+        parent = MagicMock()
+        parent.permission_manager = PermissionManager(
+            global_config=get_profile("dangerous"),
+            active_profile="dangerous",
+        )
+        tool.set_parent_node(parent)
+        child = MagicMock()
+        child.permission_manager.active_profile = "normal"
+        child.permission_manager.switch_profile.side_effect = RuntimeError("switch failed")
+
+        with pytest.raises(RuntimeError, match="Failed to inherit permission profile 'dangerous'"):
+            tool._inherit_parent_permission_profile(child)
+
+    @pytest.mark.asyncio
+    async def test_task_applies_parent_request_profile_to_created_child(self, mock_agent_config):
+        from datus.tools.permission.permission_manager import PermissionManager
+        from datus.tools.permission.profiles import get_profile
+
+        mock_agent_config._raw_permissions = {}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+        parent = MagicMock()
+        parent.permission_manager = PermissionManager(
+            global_config=get_profile("dangerous"),
+            active_profile="dangerous",
+        )
+        parent.proxy_tool_patterns = []
+        parent.session_id = None
+        tool.set_parent_node(parent)
+
+        action = Mock(spec=ActionHistory)
+        action.status = ActionStatus.SUCCESS
+        action.role = ActionRole.ASSISTANT
+        action.output = {"response": "ok", "success": True}
+        child = MagicMock()
+        child.permission_manager = PermissionManager(
+            global_config=get_profile("normal"),
+            active_profile="normal",
+        )
+
+        async def stream(_history):
+            yield action
+
+        child.execute_stream_with_interactions = stream
+
+        with patch.object(tool, "_create_node", return_value=child):
+            with patch.object(tool, "_build_node_input", return_value=Mock()):
+                result = await tool.task(type="gen_sql", prompt="query")
+
+        assert result.success == 1
+        assert child.permission_manager.active_profile == "dangerous"
+
+
 # ── available_tools ────────────────────────────────────────────────
 
 
