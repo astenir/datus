@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
 
+from datus.api.models.cli_models import ChatSessionSubagentEvent
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.inherited_memory_overrides import inherited_memory
 from datus.configuration.node_type import NodeType
@@ -779,6 +780,9 @@ class SubAgentTaskTool:
                     )
 
             node = self._create_node(subagent_type, session_id=session_id)
+            parent_scope = getattr(self._parent_node, "scope", None)
+            if isinstance(parent_scope, str) and parent_scope and not getattr(node, "scope", None):
+                node.scope = parent_scope
             self._inherit_parent_permission_profile(node)
             from datus.agent.tool_policy import apply_agent_runtime_policy
 
@@ -809,6 +813,34 @@ class SubAgentTaskTool:
                         "main session. It may have been cleaned up or never existed."
                     ),
                 )
+
+            if isinstance(parent_sid, str) and parent_sid and call_id:
+                event_arguments = {
+                    "type": subagent_type,
+                    "prompt": prompt,
+                    "description": description,
+                }
+                if session_id is not None:
+                    event_arguments["session_id"] = session_id
+                delegation_event = ChatSessionSubagentEvent(
+                    event_id=f"subagent-{call_id}",
+                    parent_action_id=call_id,
+                    child_session_id=node.session_id,
+                    subagent_type=subagent_type,
+                    arguments=event_arguments,
+                )
+                try:
+                    await self._parent_node.session_manager.append_subagent_event_async(
+                        parent_sid,
+                        delegation_event,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist sub-agent delegation for parent %s task %s",
+                        parent_sid,
+                        call_id,
+                        exc_info=True,
+                    )
 
             # Set input on the node, then refresh DB-backed tools so connector
             # routing follows the inherited physical database as well.

@@ -4,7 +4,7 @@
 
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -2588,6 +2588,7 @@ class TestSessionPersistence:
         subagent .db nests under {sessions_dir}/{user_scope}/{parent_id}/."""
         parent = MagicMock()
         parent.session_id = "chat_session_parent01"
+        parent.scope = "alice"
         parent.proxy_tool_patterns = None
         task_tool.set_parent_node(parent)
 
@@ -2598,6 +2599,75 @@ class TestSessionPersistence:
 
         assert result.success == 1
         assert node.session_subdir == "chat_session_parent01"
+
+    @pytest.mark.asyncio
+    async def test_persists_delegation_before_child_stream_starts(self, task_tool):
+        """The parent sidecar gets the child link before any child action runs."""
+        parent = MagicMock()
+        parent.session_id = "chat_session_parent01"
+        parent.scope = "alice"
+        parent.proxy_tool_patterns = None
+        parent.session_manager.append_subagent_event_async = AsyncMock()
+        task_tool.set_parent_node(parent)
+
+        node = _build_persistent_mock_node(session_id_to_assign="gen_sql_session_child01")
+        node.scope = None
+
+        async def _stream(_ahm):
+            assert parent.session_manager.append_subagent_event_async.await_count == 1
+            assert node.scope == "alice"
+            yield Mock(
+                spec=ActionHistory,
+                status=ActionStatus.SUCCESS,
+                role=ActionRole.TOOL,
+                output={"sql": "SELECT 1", "response": "ok", "tokens_used": 1},
+            )
+
+        node.execute_stream = _stream
+        node.execute_stream_with_interactions = _stream
+        with patch.object(task_tool, "_create_node", return_value=node):
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(
+                    type="gen_sql",
+                    prompt="inspect orders",
+                    description="inspect schema",
+                    call_id="task-call-1",
+                )
+
+        assert result.success == 1
+        parent.session_manager.append_subagent_event_async.assert_awaited_once()
+        session_id, event = parent.session_manager.append_subagent_event_async.await_args.args
+        assert session_id == "chat_session_parent01"
+        assert event.parent_action_id == "task-call-1"
+        assert event.child_session_id == "gen_sql_session_child01"
+        assert event.subagent_type == "gen_sql"
+        assert event.arguments == {
+            "type": "gen_sql",
+            "prompt": "inspect orders",
+            "description": "inspect schema",
+        }
+
+    @pytest.mark.asyncio
+    async def test_delegation_sidecar_failure_does_not_stop_child(self, task_tool):
+        """Display-sidecar availability must not become an execution dependency."""
+        parent = MagicMock()
+        parent.session_id = "chat_session_parent01"
+        parent.proxy_tool_patterns = None
+        parent.session_manager.append_subagent_event_async = AsyncMock(side_effect=RuntimeError("store down"))
+        task_tool.set_parent_node(parent)
+
+        node = _build_persistent_mock_node(session_id_to_assign="gen_sql_session_child01")
+        with patch.object(task_tool, "_create_node", return_value=node):
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(
+                    type="gen_sql",
+                    prompt="inspect orders",
+                    description="inspect schema",
+                    call_id="task-call-1",
+                )
+
+        assert result.success == 1
+        parent.session_manager.append_subagent_event_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_no_parent_session_falls_back_to_flat_path(self, task_tool):

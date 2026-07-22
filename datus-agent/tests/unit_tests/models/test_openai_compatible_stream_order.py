@@ -413,6 +413,86 @@ class TestStreamActionOrdering:
         assert actions[1].output["raw_output"]["result"]["results"] == []
         assert actions[1].output["summary"] == 'searched: "q"'
 
+    @pytest.mark.asyncio
+    async def test_interrupt_after_completed_task_waits_for_turn_persistence(self):
+        """A completed delegated task must reach the session before interruption wins."""
+        from datus.cli.execution_state import ExecutionInterrupted
+        from datus.models.openai_compatible import OpenAICompatibleModel
+
+        class SessionStub:
+            def __init__(self):
+                self.items: list[dict[str, str]] = []
+
+            async def get_items(self):
+                return list(self.items)
+
+        class InterruptControllerStub:
+            is_interrupted = False
+
+        session = SessionStub()
+        interrupt_controller = InterruptControllerStub()
+
+        class ResultStub:
+            def __init__(self):
+                self.is_complete = False
+                self.final_output = ""
+                self.cancel_modes: list[str] = []
+
+            def cancel(self, mode="immediate"):
+                self.cancel_modes.append(mode)
+
+            async def stream_events(self):
+                yield _make_tool_call_event(call_id="task-call", tool_name="task")
+                yield _make_tool_output_event(call_id="task-call", output="delegated result")
+                interrupt_controller.is_interrupted = True
+                yield _make_raw_other_event()
+                if self.cancel_modes == ["after_turn"]:
+                    session.items.append({"type": "function_call_output", "call_id": "task-call"})
+                self.is_complete = True
+
+        model = object.__new__(OpenAICompatibleModel)
+        model.model_name = "test-model"
+        model._format_tool_result = lambda content, tool_name="": f"result: {content[:20]}"
+        model._format_tool_result_from_dict = lambda data, tool_name="": f"result: {str(data)[:20]}"
+        model._setup_custom_json_encoder = lambda: None
+        model._extract_and_distribute_token_usage = AsyncMock()
+        model.model_config = MagicMock(max_retry=1, retry_interval=0)
+        model.default_headers = None
+        model.base_url = None
+        model.litellm_adapter = MagicMock(
+            provider="openai",
+            is_thinking_model=False,
+            reasoning_effort_level=None,
+        )
+        result = ResultStub()
+
+        with (
+            patch("datus.models.openai_compatible.Runner") as mock_runner,
+            patch("datus.models.openai_compatible.Agent"),
+            patch("datus.models.openai_compatible.multiple_mcp_servers") as mock_mcp,
+        ):
+            mock_runner.run_streamed.return_value = result
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            with pytest.raises(ExecutionInterrupted):
+                async for _ in model._generate_with_tools_stream_internal(
+                    prompt="test prompt",
+                    mcp_servers=None,
+                    tools=None,
+                    instruction="test instruction",
+                    output_type=str,
+                    strict_json_schema=False,
+                    max_turns=10,
+                    session=session,
+                    action_history_manager=ActionHistoryManager(),
+                    interrupt_controller=interrupt_controller,
+                ):
+                    pass
+
+        assert result.cancel_modes == ["after_turn"]
+        assert session.items == [{"type": "function_call_output", "call_id": "task-call"}]
+
 
 # ---------------------------------------------------------------------------
 # Tests: Raw event early capture (real SDK event ordering)

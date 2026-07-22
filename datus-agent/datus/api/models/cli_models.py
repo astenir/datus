@@ -628,6 +628,18 @@ class ChatSessionTerminalEvent(BaseModel):
     created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
 
 
+class ChatSessionSubagentEvent(BaseModel):
+    """Durable display-only link from a parent task call to a child session."""
+
+    event_id: str = Field(..., description="Stable idempotency key for the delegation event")
+    event_type: Literal["subagent"] = Field(default="subagent", description="Display sidecar event type")
+    parent_action_id: str = Field(..., description="Parent task function call id")
+    child_session_id: str = Field(..., description="Persisted nested sub-agent session id")
+    subagent_type: str = Field(..., description="Delegated sub-agent type")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Original task display arguments")
+    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
+
+
 class ChatHistoryData(BaseModel):
     """Chat history data."""
 

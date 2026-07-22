@@ -281,7 +281,7 @@ store 数量 * max_size * API 进程数 + 业务 datasource + 运维/监控余�
 
 启用 `session_body_store` 后，新 session 正文/history/state 写 PG；历史 SQLite `.db` 不自动迁移。回滚方式是移除该配置并重启，新请求回本地 SQLite，但 PG 中已写正文不会自动回写。
 
-对话终态展示事件（已建立会话后的 error/cancelled/timeout）使用 session body 内的独立 sidecar 表：本地 SQLite 为 `chat_session_terminal_events`，PostgreSQL/OceanBase 为 `enterprise_session_terminal_events`。它只参与 history 展示，不进入 Agent SDK/model 上下文；feedback copy/rewind 不复制旧终态，避免把上一次失败重放到新分支。该表通过 `CREATE TABLE IF NOT EXISTS` 增量引入，滚动发布时旧版本会忽略它；生产发布前应按目标方言预建同构 DDL。回滚应用无需删表，确认不再回滚且完成 session body 备份后才可人工清理。
+对话展示 sidecar 事件使用 session body 内的独立表：本地 SQLite 为 `chat_session_terminal_events`，PostgreSQL/OceanBase 为 `enterprise_session_terminal_events`。当前保存两类展示事实：已建立会话后的终态（error/cancelled/timeout），以及父 `task` 调用与嵌套子 Agent session 的委派关联。后者在子 Agent 启动前落库，使父 turn 尚未提交就被停止时，history 仍能恢复子 session 中已经持久化的 reasoning summary、assistant message、工具调用和结果。企业 child session 的标准 scope 为 `<user_scope>__<parent_session_id>`；history 对早期只写入 `<parent_session_id>` 的记录保留只读回退。两类 sidecar 事件都只参与 history 展示，不进入 Agent SDK/model 上下文；feedback copy/rewind 不复制旧 sidecar，避免把上一次失败或委派关系重放到新分支。该表通过 `CREATE TABLE IF NOT EXISTS` 增量引入，新增事件类型不需要 schema migration，滚动发布时旧版本会忽略它；生产发布前应按目标方言预建同构 DDL。回滚应用无需删表，确认不再回滚且完成 session body 备份后才可人工清理。
 
 备份恢复必须分别考虑：
 

@@ -25,6 +25,7 @@ from datus.configuration.agent_config import ModelConfig
 from datus.models.base import LLMBaseModel
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
+from datus.models.stream_interrupt import handle_stream_interrupt
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.tool_summary import detect_tool_failure
@@ -581,19 +582,27 @@ class CodexModel(LLMBaseModel):
             early_assistant_yielded = False
             thinking_stream_id: Optional[str] = None
             thinking_accumulated = ""
+            completed_task_call_ids: set[str] = set()
+            graceful_interrupt_requested = False
 
             try:
                 while not result.is_complete:
-                    if interrupt_controller and interrupt_controller.is_interrupted:
-                        from datus.cli.execution_state import ExecutionInterrupted
-
-                        raise ExecutionInterrupted("Interrupted by user")
+                    graceful_interrupt_requested = await handle_stream_interrupt(
+                        interrupt_controller=interrupt_controller,
+                        result=result,
+                        session=session,
+                        completed_task_call_ids=completed_task_call_ids,
+                        graceful_interrupt_requested=graceful_interrupt_requested,
+                    )
 
                     async for event in _stream_events_with_trace_baggage(result, agent_kwargs["name"]):
-                        if interrupt_controller and interrupt_controller.is_interrupted:
-                            from datus.cli.execution_state import ExecutionInterrupted
-
-                            raise ExecutionInterrupted("Interrupted by user")
+                        graceful_interrupt_requested = await handle_stream_interrupt(
+                            interrupt_controller=interrupt_controller,
+                            result=result,
+                            session=session,
+                            completed_task_call_ids=completed_task_call_ids,
+                            graceful_interrupt_requested=graceful_interrupt_requested,
+                        )
 
                         # Handle assistant text from raw response events (streaming)
                         if hasattr(event, "type") and event.type == "raw_response_event":
@@ -782,6 +791,13 @@ class CodexModel(LLMBaseModel):
                                 )
                                 action_history_manager.add_action(action)
                                 yield action
+                                if tool_name == "task":
+                                    completed_task_call_ids.add(call_id)
+
+                if graceful_interrupt_requested:
+                    from datus.cli.execution_state import ExecutionInterrupted
+
+                    raise ExecutionInterrupted("Interrupted by user")
 
             except MaxTurnsExceeded as e:
                 raise DatusException(ErrorCode.MODEL_MAX_TURNS_EXCEEDED, message_args={"max_turns": max_turns}) from e

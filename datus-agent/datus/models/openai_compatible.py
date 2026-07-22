@@ -32,6 +32,7 @@ from datus.models.base import LLMBaseModel
 from datus.models.litellm_adapter import LiteLLMAdapter, is_known_non_thinking_model, is_official_openai_endpoint
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
+from datus.models.stream_interrupt import handle_stream_interrupt
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure
@@ -1336,6 +1337,8 @@ class OpenAICompatibleModel(LLMBaseModel):
                 tool_output_seen = False
                 final_assistant_yielded = False
                 last_assistant_text = ""
+                completed_task_call_ids: set[str] = set()
+                graceful_interrupt_requested = False
 
                 # Streaming thinking state: accumulate text deltas for real-time output
                 thinking_stream_id: Optional[str] = None
@@ -1349,15 +1352,21 @@ class OpenAICompatibleModel(LLMBaseModel):
                         final_assistant_yielded = True
 
                 while not result.is_complete:
-                    if interrupt_controller and interrupt_controller.is_interrupted:
-                        from datus.cli.execution_state import ExecutionInterrupted
-
-                        raise ExecutionInterrupted("Interrupted by user")
+                    graceful_interrupt_requested = await handle_stream_interrupt(
+                        interrupt_controller=interrupt_controller,
+                        result=result,
+                        session=session,
+                        completed_task_call_ids=completed_task_call_ids,
+                        graceful_interrupt_requested=graceful_interrupt_requested,
+                    )
                     async for event in _stream_events_with_trace_baggage(result, agent_name):
-                        if interrupt_controller and interrupt_controller.is_interrupted:
-                            from datus.cli.execution_state import ExecutionInterrupted
-
-                            raise ExecutionInterrupted("Interrupted by user")
+                        graceful_interrupt_requested = await handle_stream_interrupt(
+                            interrupt_controller=interrupt_controller,
+                            result=result,
+                            session=session,
+                            completed_task_call_ids=completed_task_call_ids,
+                            graceful_interrupt_requested=graceful_interrupt_requested,
+                        )
 
                         # Capture assistant text from raw response events for streaming output.
                         # We process three raw event types:
@@ -1621,6 +1630,9 @@ class OpenAICompatibleModel(LLMBaseModel):
                                 action_history_manager.add_action(complete_action)
                                 yield complete_action
 
+                                if tool_name == "task":
+                                    completed_task_call_ids.add(call_id)
+
                                 # Remove from temp storage to avoid duplicates
                                 del temp_tool_calls[call_id]
 
@@ -1679,6 +1691,11 @@ class OpenAICompatibleModel(LLMBaseModel):
                                     action_history_manager.add_action(thinking_action)
                                     yield thinking_action
                                     mark_assistant_response(text_content, is_thinking)
+
+                if graceful_interrupt_requested:
+                    from datus.cli.execution_state import ExecutionInterrupted
+
+                    raise ExecutionInterrupted("Interrupted by user")
 
                 final_output = getattr(result, "final_output", "") or ""
                 if not isinstance(final_output, str):
