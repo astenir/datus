@@ -94,6 +94,8 @@ export function useChatWorkspace() {
     schema,
     schemaOptions,
     isLoadingCatalog,
+    isLoadingDatabases,
+    isLoadingSchemas,
     datasourceStatuses,
     prewarmingDatasources,
     selectCatalogDatasource,
@@ -208,6 +210,7 @@ export function useChatWorkspace() {
     return Boolean(datasource && prewarmingDatasources.value.has(datasource));
   });
   let initializePromise: Promise<void> | null = null;
+  let agentOptionsPromise: Promise<boolean> | null = null;
   const statusRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
 
   function clearStatusRefreshTimers() {
@@ -383,33 +386,33 @@ export function useChatWorkspace() {
     return true;
   }
 
-  async function loadAgentOptions(): Promise<boolean> {
+  function loadAgentOptions(): Promise<boolean> {
+    if (agentOptionsPromise) return agentOptionsPromise;
+
     isLoadingAgents.value = true;
-    try {
-      const loadedAgents = await agentApi.availableList(effectiveBase());
-      availableAgents.value = loadedAgents ?? [];
-      if (selectedAgent.value && !isArtifactEditAgent(selectedAgent.value) && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
-        selectedAgent.value = "";
+    agentOptionsPromise = (async () => {
+      try {
+        const loadedAgents = await agentApi.availableList(effectiveBase());
+        availableAgents.value = loadedAgents ?? [];
+        if (selectedAgent.value && !isArtifactEditAgent(selectedAgent.value) && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
+          selectedAgent.value = "";
+        }
+        if (defaultAgentId.value && !agentOptions.value.some((option) => option.value === defaultAgentId.value)) {
+          defaultAgentId.value = "";
+        }
+        if (userDefaultAgentId.value && !agentOptions.value.some((option) => option.value === userDefaultAgentId.value)) {
+          userDefaultAgentId.value = "";
+        }
+        return true;
+      } catch (error) {
+        console.error("Failed to load chat agent options:", error);
+        return false;
+      } finally {
+        isLoadingAgents.value = false;
+        agentOptionsPromise = null;
       }
-      if (defaultAgentId.value && !agentOptions.value.some((option) => option.value === defaultAgentId.value)) {
-        defaultAgentId.value = "";
-      }
-      if (userDefaultAgentId.value && !agentOptions.value.some((option) => option.value === userDefaultAgentId.value)) {
-        userDefaultAgentId.value = "";
-      }
-      return true;
-    } catch (error) {
-      console.error("Failed to load chat agent options:", error);
-      availableAgents.value = [];
-      defaultAgentId.value = "";
-      userDefaultAgentId.value = "";
-      if (!isArtifactEditAgent(selectedAgent.value)) {
-        selectedAgent.value = "";
-      }
-      return false;
-    } finally {
-      isLoadingAgents.value = false;
-    }
+    })();
+    return agentOptionsPromise;
   }
 
   function preferenceData(response: ApiResponse<AgentPreferenceSummary>): AgentPreferenceSummary {
@@ -566,6 +569,8 @@ export function useChatWorkspace() {
     catalogEntries,
     schemaOptions,
     isLoadingCatalog,
+    isLoadingDatabases,
+    isLoadingSchemas,
     datasourceStatuses,
     currentDatasourceStatus,
     isPrewarmingCurrentDatasource,

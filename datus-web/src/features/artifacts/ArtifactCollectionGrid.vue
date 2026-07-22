@@ -33,9 +33,13 @@ const emit = defineEmits<{
 
 <template>
   <div
-    v-if="props.loading"
+    v-if="props.loading && props.items.length === 0"
+    role="status"
+    aria-live="polite"
+    aria-busy="true"
     class="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
   >
+    <span class="sr-only">正在加载产物列表...</span>
     <Card
       v-for="index in 3"
       :key="index"
@@ -62,8 +66,17 @@ const emit = defineEmits<{
 
   <div
     v-else
+    :aria-busy="props.loading"
     class="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
   >
+    <span
+      v-if="props.loading"
+      role="status"
+      aria-live="polite"
+      class="sr-only"
+    >
+      正在刷新产物列表...
+    </span>
     <Card
       v-for="item in props.items"
       :key="item.slug"

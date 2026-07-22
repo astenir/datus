@@ -45,11 +45,12 @@ describe("useChatWorkspace", () => {
     const checkConnection = vi.fn(async () => {});
     const loadSessions = vi.fn(async () => {});
     const loadModels = vi.fn(async () => {});
-    const loadAgentOptions = vi.fn(async () => [
+    const initialAgents = [
       { agent_id: "chat", name: "chat", node_class: "chat", status: "published", source: "builtin" },
       { agent_id: "research", name: "Research", node_class: "chat", status: "published", source: "enterprise" },
       { agent_id: "draft_bot", name: "Draft Bot", node_class: "chat", status: "draft", source: "enterprise" },
-    ]);
+    ];
+    const loadAgentOptions = vi.fn(async () => initialAgents);
     const loadCatalog = vi.fn(async () => true);
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => false);
@@ -202,6 +203,29 @@ describe("useChatWorkspace", () => {
     expect(workspace.defaultAgentId.value).toBe("research");
     expect(workspace.userDefaultAgentId.value).toBe("research");
     expect(workspace.selectedAgent.value).toBe("");
+
+    let resolveAgentRefresh: ((value: typeof initialAgents) => void) | undefined;
+    loadAgentOptions.mockImplementationOnce(() => new Promise<typeof initialAgents>((resolve) => {
+      resolveAgentRefresh = resolve;
+    }));
+
+    const firstAgentRefresh = workspace.loadAgentOptions();
+    const secondAgentRefresh = workspace.loadAgentOptions();
+    expect(loadAgentOptions).toHaveBeenCalledTimes(2);
+    expect(workspace.isLoadingAgents.value).toBe(true);
+
+    resolveAgentRefresh?.(initialAgents);
+    await Promise.all([firstAgentRefresh, secondAgentRefresh]);
+    expect(workspace.isLoadingAgents.value).toBe(false);
+    expect(loadAgentOptions).toHaveBeenCalledTimes(2);
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    loadAgentOptions.mockRejectedValueOnce(new Error("network unavailable"));
+    await expect(workspace.loadAgentOptions()).resolves.toBe(false);
+    expect(workspace.agentOptions.value).toEqual([
+      { value: "chat", label: "chat" },
+      { value: "research", label: "Research" },
+    ]);
 
     workspace.startNewSession();
     expect(workspace.selectedAgent.value).toBe("");

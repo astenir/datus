@@ -227,8 +227,11 @@ watch(
           :disabled="artifacts.listLoading.value"
           @click="artifacts.loadArtifacts(props.tab)"
         >
-          <RefreshCwIcon data-icon="inline-start" />
-          刷新
+          <RefreshCwIcon
+            data-icon="inline-start"
+            :class="artifacts.listLoading.value && 'animate-spin'"
+          />
+          {{ artifacts.listLoading.value ? "刷新中" : "刷新" }}
         </Button>
       </div>
 

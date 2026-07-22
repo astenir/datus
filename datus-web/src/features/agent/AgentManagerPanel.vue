@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -76,6 +77,9 @@ const emptyAgentListMessage = computed(() => {
   if (agentSourceFilter.value === "builtin") return "暂无系统内置 Agent。"
   return "暂无 Agent。点击新建创建第一个可复用 Agent。"
 })
+const agentListLoadingLabel = computed(() =>
+  manager.agents.value.length > 0 ? "正在刷新 Agent..." : "正在加载 Agent..."
+)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
@@ -270,7 +274,7 @@ onMounted(() => {
                     <TableHead class="w-32 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
+                <TableBody :aria-busy="manager.loading.value">
                   <TableRow
                     v-for="agent in visibleAgents"
                     :key="agent.agent_id"
@@ -351,7 +355,22 @@ onMounted(() => {
                       </div>
                     </TableCell>
                   </TableRow>
-                  <TableRow v-if="visibleAgents.length === 0">
+                  <TableRow v-if="manager.loading.value && visibleAgents.length === 0">
+                    <TableCell
+                      colspan="3"
+                      class="h-24 text-center text-sm text-muted-foreground"
+                    >
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        class="flex items-center justify-center gap-2"
+                      >
+                        <Spinner aria-hidden="true" />
+                        {{ agentListLoadingLabel }}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow v-else-if="visibleAgents.length === 0">
                     <TableCell
                       colspan="3"
                       class="h-24 text-center text-sm text-muted-foreground"
