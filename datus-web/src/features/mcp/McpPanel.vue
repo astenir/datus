@@ -15,6 +15,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
@@ -50,6 +57,7 @@ const toolsLoading = shallowRef(false)
 const submittingServer = shallowRef(false)
 const deleting = shallowRef(false)
 const checkingServer = shallowRef("")
+const mobileDetailOpen = shallowRef(false)
 const serverDialogOpen = shallowRef(false)
 const serverDialogMode = shallowRef<"create" | "edit">("create")
 const editingServer = shallowRef<McpServerInfo | null>(null)
@@ -162,8 +170,14 @@ async function loadTools() {
 }
 
 function selectServer(serverName: string) {
+  if (selectedServer.value === serverName) return
   selectedServer.value = serverName
   void loadTools()
+}
+
+function openMobileServerDetail(serverName: string) {
+  selectServer(serverName)
+  mobileDetailOpen.value = true
 }
 
 function serverTarget(server: McpServerInfo) {
@@ -300,7 +314,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 xl:grid-cols-[380px_1fr] xl:grid-rows-none">
+      <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[380px_1fr]">
         <Card class="min-h-0">
           <CardHeader class="shrink-0">
             <div class="flex items-center justify-between gap-3">
@@ -323,7 +337,22 @@ onMounted(() => {
                   <div class="flex items-start gap-2">
                     <Button
                       variant="ghost"
-                      class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left"
+                      class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:hidden"
+                      @click="openMobileServerDetail(server.name)"
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="flex items-center justify-between gap-2">
+                          <span class="truncate font-medium">{{ server.name }}</span>
+                          <Badge variant="secondary">{{ server.type }}</Badge>
+                        </span>
+                        <span class="mt-1 block break-all text-xs text-muted-foreground">
+                          {{ serverTarget(server) }}
+                        </span>
+                      </span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      class="hidden h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:flex"
                       @click="selectServer(server.name)"
                     >
                       <span class="min-w-0 flex-1">
@@ -395,7 +424,7 @@ onMounted(() => {
           </CardContent>
         </Card>
 
-        <Card class="min-h-0">
+        <Card class="hidden min-h-0 xl:flex">
           <CardHeader class="shrink-0">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
@@ -446,6 +475,60 @@ onMounted(() => {
         </Card>
       </div>
     </div>
+
+    <Sheet v-model:open="mobileDetailOpen">
+      <SheetContent
+        side="right"
+        class="gap-0 data-[side=right]:w-full sm:data-[side=right]:max-w-xl xl:hidden"
+      >
+        <SheetHeader class="border-b">
+          <SheetTitle>{{ selected?.name || "MCP Server 详情" }}</SheetTitle>
+          <SheetDescription class="break-all">
+            {{ selectedConnectivity ? connectivityLabel(selectedConnectivity) : (selected ? serverTarget(selected) : "未选择 Server") }}
+          </SheetDescription>
+        </SheetHeader>
+        <div class="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-sm font-medium">可用工具</span>
+            <Badge
+              v-if="selected?.status"
+              variant="outline"
+            >
+              {{ selected.status }}
+            </Badge>
+          </div>
+          <ScrollArea class="min-h-0 flex-1">
+            <div class="pr-3">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Tool</TableHead>
+                    <TableHead>Description</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow
+                    v-for="tool in tools"
+                    :key="tool.name"
+                  >
+                    <TableCell class="font-medium">{{ tool.name }}</TableCell>
+                    <TableCell class="whitespace-normal">{{ tool.description || "-" }}</TableCell>
+                  </TableRow>
+                  <TableRow v-if="tools.length === 0">
+                    <TableCell
+                      class="h-24 text-center text-muted-foreground"
+                      colspan="2"
+                    >
+                      {{ toolsEmptyLabel }}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </ScrollArea>
+        </div>
+      </SheetContent>
+    </Sheet>
 
     <McpServerDialog
       v-model:open="serverDialogOpen"

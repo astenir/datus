@@ -62,6 +62,7 @@ const agentStatusOptions = [
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 const agentSourceFilter = shallowRef<AgentSourceFilter>("all")
+const mobileWorkspaceTab = shallowRef("agents")
 
 const visibleAgents = computed(() =>
   filterAgentsBySource(manager.agents.value, agentSourceFilter.value)
@@ -220,10 +221,25 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
-      <div class="-m-1 grid min-h-0 flex-1 auto-cols-[calc(100vw-2rem)] grid-flow-col gap-4 overflow-x-auto p-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
-        <Card
-          size="sm"
-          class="min-h-0 min-w-0"
+      <Tabs
+        v-model="mobileWorkspaceTab"
+        class="flex min-h-0 flex-1 flex-col gap-3"
+      >
+        <TabsList class="grid h-auto shrink-0 grid-cols-2 xl:hidden">
+          <TabsTrigger value="agents">Agent 列表</TabsTrigger>
+          <TabsTrigger value="tools">工具参考</TabsTrigger>
+        </TabsList>
+
+        <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)]">
+          <TabsContent
+            value="agents"
+            force-mount
+            class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
+          >
+            <Card
+              size="sm"
+              class="h-full min-h-0 min-w-0"
+            >
         >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
@@ -382,12 +398,18 @@ onMounted(() => {
               </Table>
             </ScrollArea>
           </CardContent>
-        </Card>
+            </Card>
+          </TabsContent>
 
-        <Card
-          size="sm"
-          class="min-h-0 min-w-0"
-        >
+          <TabsContent
+            value="tools"
+            force-mount
+            class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
+          >
+            <Card
+              size="sm"
+              class="h-full min-h-0 min-w-0"
+            >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
               <div class="min-w-0 flex-1">
@@ -497,8 +519,10 @@ onMounted(() => {
               </TabsContent>
             </Tabs>
           </CardContent>
-        </Card>
-      </div>
+            </Card>
+          </TabsContent>
+        </div>
+      </Tabs>
 
     </div>
 
