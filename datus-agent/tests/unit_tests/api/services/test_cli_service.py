@@ -1,7 +1,10 @@
 """Tests for datus.api.services.cli_service — CLI command operations."""
 
 import asyncio
+import json
 import uuid
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -132,6 +135,47 @@ class TestCLIServiceExecuteSQL:
         assert result.success is True
 
     @pytest.mark.asyncio
+    async def test_execute_sql_json_normalizes_list_rows_with_date_and_decimal(self):
+        """JSON responses use a connector-supported format and serialize typed cells."""
+
+        class FakeConnector:
+            dialect = "postgresql"
+
+            def execute(self, input_params, result_format):
+                assert input_params == {"sql_query": "SELECT nav_date, avg_total_nav FROM fund_nav"}
+                assert result_format == "list"
+                return SimpleNamespace(
+                    success=True,
+                    sql_return=[
+                        {
+                            "nav_date": date(2026, 5, 21),
+                            "avg_total_nav": Decimal("0.00"),
+                        }
+                    ],
+                    row_count=1,
+                )
+
+        svc = CLIService(agent_config=None, chat_service=None)
+        svc.current_db_connector = FakeConnector()
+        svc.current_db_name = "fund"
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(
+                sql_query="SELECT nav_date, avg_total_nav FROM fund_nav",
+                result_format="json",
+            )
+        )
+
+        assert result.success is True
+        assert result.data.result_format == "json"
+        assert json.loads(result.data.sql_return) == [
+            {
+                "nav_date": "2026-05-21",
+                "avg_total_nav": "0.00",
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_execute_sql_invalid_sql_returns_error(self, cli_svc):
         """execute_sql with invalid SQL returns error."""
         request = ExecuteSQLInput(sql_query="SELCT INVALID SYNTAX")
@@ -204,7 +248,7 @@ class TestCLIServiceExecuteSQL:
 
             def execute(self, input_params, result_format):
                 assert input_params == {"sql_query": "SELECT 1"}
-                assert result_format == "json"
+                assert result_format == "list"
                 return SimpleNamespace(success=True, sql_return="1", row_count=1)
 
         connector = FakeConnector()

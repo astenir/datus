@@ -38,6 +38,7 @@ from datus.tools.db_tools.db_manager import DBManager
 from datus.tools.func_tool.database import DBFuncTool
 from datus.utils.constants import SQLType
 from datus.utils.exceptions import DatusException
+from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
@@ -254,9 +255,10 @@ class CLIService:
 
                 # Execute the query
                 start_time = time.time()
+                connector_result_format = "list" if request.result_format == "json" else request.result_format
                 result = connector.execute(
                     input_params={"sql_query": sql_query},
-                    result_format=request.result_format,
+                    result_format=connector_result_format,
                 )
                 end_time = time.time()
                 exec_time = end_time - start_time
@@ -292,17 +294,18 @@ class CLIService:
                                 writer.writerows(rows)
                             sql_return = output.getvalue()
                         elif request.result_format == "json":
-                            import json
-
                             rows = result.sql_return.to_pylist()
-                            sql_return = json.dumps(rows)
+                            sql_return = to_str(rows) or "[]"
                         else:
                             sql_return = str(result.sql_return)
 
                         row_count = result.sql_return.num_rows
                         columns = result.sql_return.column_names
                     else:
-                        sql_return = str(result.sql_return) if result.sql_return else ""
+                        if request.result_format == "json":
+                            sql_return = to_str(result.sql_return) or ""
+                        else:
+                            sql_return = str(result.sql_return) if result.sql_return else ""
                         row_count = result.row_count
 
                     actions.update_action_by_id(

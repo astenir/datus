@@ -77,6 +77,20 @@ describe("useSqlExecution", () => {
     expect(execution.displayRows.value).toEqual([]);
   });
 
+  it("renders normalized date and decimal JSON values as table cells", async () => {
+    execute.mockResolvedValue(sqlResult({
+      sql_return: '[{"nav_date":"2026-05-21","fund_count":722,"avg_total_nav":"0.00"}]',
+    }));
+    const { useSqlExecution } = await import("./useSqlExecution");
+    const execution = useSqlExecution();
+
+    await execution.executeSql("select nav_date, fund_count, avg_total_nav from fund_nav");
+
+    expect(execution.columns.value).toEqual(["nav_date", "fund_count", "avg_total_nav"]);
+    expect(execution.displayRows.value).toEqual([["2026-05-21", "722", "0.00"]]);
+    expect(execution.rawResult.value).toContain('"nav_date":"2026-05-21"');
+  });
+
   it("surfaces execution errors without leaving loading active", async () => {
     execute.mockRejectedValue(new Error("permission denied"));
     const { useSqlExecution } = await import("./useSqlExecution");
