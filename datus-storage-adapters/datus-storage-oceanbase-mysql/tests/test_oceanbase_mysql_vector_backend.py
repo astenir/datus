@@ -293,6 +293,35 @@ def test_rows_to_arrow_restores_json_list_fields_from_schema():
     assert result.column("vector")[0].as_py() == pytest.approx([0.1, 0.2, 0.3, 0.4])
 
 
+@pytest.mark.parametrize("rows", [[], [{"id": "a", "_distance": 0.125}]])
+def test_search_vector_includes_distance_for_empty_and_non_empty_results(rows):
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = rows
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        embedding_fn=MockEmbeddingFunction(),
+        vector_column="vector",
+        source_column="description",
+        vector_dim=4,
+        column_names=list(_schema().names),
+        schema=_schema(),
+    )
+
+    result = table.search_vector("alpha query", "vector", 2, select_fields=["id"])
+
+    assert result.column_names == ["id", "_distance"]
+    assert result.schema.field("_distance").type == pa.float64()
+    if rows:
+        assert result.column("_distance")[0].as_py() == pytest.approx(0.125)
+    executed_sql, params = cursor.execute.call_args.args
+    assert "cosine_distance(`vector`, %s) AS `_distance`" in executed_sql
+    assert "ORDER BY `_distance`" in executed_sql
+    assert params == ("[0.1,0.2,0.3,0.4]", 2)
+
+
 def test_open_table_uses_registered_schema_and_ensures_hnsw_index():
     db = OceanBaseMySQLVectorDb.__new__(OceanBaseMySQLVectorDb)
     db._pool = MagicMock()
@@ -458,6 +487,7 @@ def test_real_oceanbase_vector_crud_search_and_indexes(backend):
     result = table.search_vector("alpha query", "vector", 2, select_fields=["id", "vector"])
     assert result.column("id")[0].as_py() == "a"
     assert result.column("vector")[0].as_py() == pytest.approx([0.1, 0.2, 0.3, 0.4])
+    assert result.column("_distance")[0].as_py() >= 0
 
     table.create_scalar_index("category")
     table.delete(eq("id", "b"))
