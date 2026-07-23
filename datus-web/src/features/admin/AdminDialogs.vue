@@ -34,9 +34,8 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
-import AdminRoleDropdown from "@/features/admin/AdminRoleDropdown.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 import { usePermission } from "@/composables/usePermission"
 import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
 import { userDisableBlockedReason } from "@/features/admin/user-disable-guard"
@@ -730,12 +729,14 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
           >
             {{ users.roleAssignmentError.value }}
           </div>
-          <AdminRoleDropdown
+          <SearchableMultiSelect
             v-else-if="users.roleOptions.value.length"
             :options="users.roleOptions.value"
             :selected-values="users.selectedRoleIds.value"
             placeholder="选择用户角色"
+            search-placeholder="搜索角色..."
             empty-text="未分配角色"
+            no-results-text="没有匹配角色"
             @toggle="users.toggleSelectedRole"
           />
           <p
@@ -1586,7 +1587,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         </Field>
         <Field>
           <FieldLabel>允许角色</FieldLabel>
-          <AdminAclMultiCombobox
+          <SearchableMultiSelect
             :options="artifactRoleOptions"
             :selected-values="overview.artifactAclForm.value.allowed_roles"
             placeholder="选择角色"
@@ -1598,7 +1599,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         </Field>
         <Field>
           <FieldLabel>允许用户</FieldLabel>
-          <AdminAclMultiCombobox
+          <SearchableMultiSelect
             :options="artifactUserOptions"
             :selected-values="overview.artifactAclForm.value.allowed_user_ids"
             placeholder="选择用户"

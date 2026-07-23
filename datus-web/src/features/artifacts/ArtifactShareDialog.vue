@@ -22,7 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import ArtifactShareMultiSelect from "@/features/artifacts/ArtifactShareMultiSelect.vue"
+import { normalizeArtifactShareGrants } from "@/features/artifacts/artifactSharePolicy"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 import type { ArtifactSharePrincipalOption } from "@/composables/useArtifacts"
 import type { ArtifactShare, ArtifactShareUpdate, ArtifactVisibility } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
@@ -55,7 +56,7 @@ const emit = defineEmits<{
 
 const visibilityOptions = [
   { value: "private", label: "私有" },
-  { value: "role", label: "指定角色" },
+  { value: "role", label: "指定用户或角色" },
   { value: "enterprise", label: "企业可见" },
 ] as const
 
@@ -67,6 +68,18 @@ const kindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘"
 const ownerLabel = computed(() => props.share?.owner_user_id || "-")
 const selectedVisibilityLabel = computed(() => {
   return visibilityOptions.find(option => option.value === visibility.value)?.label ?? visibility.value
+})
+const canSelectAllowedUsers = computed(() => visibility.value === "role")
+const canSelectAllowedRoles = computed(() => visibility.value === "role")
+const allowedUserDescription = computed(() => {
+  if (visibility.value === "role") return "用于给所有者之外的指定用户开放访问。"
+  if (visibility.value === "enterprise") return "企业可见时无需额外指定用户。"
+  return "私有时仅所有者可访问，不能额外指定用户。"
+})
+const allowedRoleDescription = computed(() => {
+  if (visibility.value === "role") return "这些角色可以访问该产物。"
+  if (visibility.value === "enterprise") return "企业可见时无需额外指定角色。"
+  return "私有时仅所有者可访问，不能额外指定角色。"
 })
 const effectiveUserOptions = computed(() => withSelectedFallbackOptions(props.userOptions, allowedUserIds.value))
 const effectiveRoleOptions = computed(() => withSelectedFallbackOptions(props.roleOptions, allowedRoleIds.value))
@@ -86,9 +99,25 @@ function withSelectedFallbackOptions(
 }
 
 function syncFormFromShare() {
-  visibility.value = props.share?.visibility ?? "private"
-  allowedUserIds.value = [...(props.share?.allowed_user_ids ?? [])]
-  allowedRoleIds.value = [...(props.share?.allowed_roles ?? [])]
+  const nextVisibility = props.share?.visibility ?? "private"
+  const grants = normalizeArtifactShareGrants(
+    nextVisibility,
+    props.share?.allowed_user_ids ?? [],
+    props.share?.allowed_roles ?? [],
+  )
+  visibility.value = nextVisibility
+  allowedUserIds.value = grants.allowedUserIds
+  allowedRoleIds.value = grants.allowedRoleIds
+}
+
+function syncGrantsWithVisibility() {
+  const grants = normalizeArtifactShareGrants(
+    visibility.value,
+    allowedUserIds.value,
+    allowedRoleIds.value,
+  )
+  allowedUserIds.value = grants.allowedUserIds
+  allowedRoleIds.value = grants.allowedRoleIds
 }
 
 function toggleListValue(values: readonly string[], value: string): string[] {
@@ -106,12 +135,19 @@ function toggleAllowedRole(roleId: string) {
 }
 
 function saveShare() {
+  const grants = normalizeArtifactShareGrants(
+    visibility.value,
+    allowedUserIds.value,
+    allowedRoleIds.value,
+  )
   emit("save", {
     visibility: visibility.value,
-    allowed_user_ids: allowedUserIds.value,
-    allowed_roles: allowedRoleIds.value,
+    allowed_user_ids: grants.allowedUserIds,
+    allowed_roles: grants.allowedRoleIds,
   })
 }
+
+watch(visibility, syncGrantsWithVisibility)
 
 watch(
   () => [props.open, props.tab, props.slug, props.share] as const,
@@ -127,7 +163,7 @@ watch(
     :open="props.open"
     @update:open="emit('update:open', $event)"
   >
-    <DialogContent class="max-h-[88vh] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+    <DialogContent class="max-h-[88vh] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[34rem]">
       <DialogHeader>
         <DialogTitle>{{ kindLabel }}分享</DialogTitle>
         <DialogDescription class="truncate">
@@ -163,64 +199,76 @@ watch(
           <AlertDescription>{{ props.directoryError }}</AlertDescription>
         </Alert>
 
-        <Field>
-          <FieldLabel>所有者</FieldLabel>
-          <div class="truncate rounded-md border px-3 py-2 text-sm font-medium">
-            {{ ownerLabel }}
-          </div>
-        </Field>
+        <FieldGroup class="grid gap-4 sm:grid-cols-2">
+          <Field class="min-w-0">
+            <FieldLabel>所有者</FieldLabel>
+            <div class="truncate rounded-md border px-3 py-2 text-sm font-medium">
+              {{ ownerLabel }}
+            </div>
+          </Field>
 
-        <Field>
-          <FieldLabel>可见性</FieldLabel>
-          <Select v-model="visibility">
-            <SelectTrigger class="w-full">
-              <SelectValue placeholder="可见性">
-                {{ selectedVisibilityLabel }}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem
-                  v-for="option in visibilityOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
+          <Field class="min-w-0">
+            <FieldLabel>可见性</FieldLabel>
+            <Select v-model="visibility">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="可见性">
+                  {{ selectedVisibilityLabel }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="option in visibilityOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+        </FieldGroup>
 
-        <Field>
-          <FieldLabel>允许用户</FieldLabel>
-          <ArtifactShareMultiSelect
-            :options="effectiveUserOptions"
-            :selected-values="allowedUserIds"
-            :loading="props.directoryLoading"
-            placeholder="选择用户"
-            search-placeholder="搜索用户..."
-            empty-text="未选择额外用户"
-            no-results-text="没有匹配用户"
-            @toggle="toggleAllowedUser"
-          />
-          <FieldDescription>用于给所有者之外的指定用户开放访问。</FieldDescription>
-        </Field>
+        <FieldGroup class="grid gap-4 sm:grid-cols-2">
+          <Field
+            class="min-w-0"
+            :data-disabled="!canSelectAllowedUsers"
+          >
+            <FieldLabel>额外允许用户</FieldLabel>
+            <SearchableMultiSelect
+              :options="effectiveUserOptions"
+              :selected-values="allowedUserIds"
+              :loading="props.directoryLoading"
+              :disabled="!canSelectAllowedUsers"
+              placeholder="选择用户"
+              search-placeholder="搜索用户..."
+              empty-text="未选择额外用户"
+              no-results-text="没有匹配用户"
+              @toggle="toggleAllowedUser"
+            />
+            <FieldDescription>{{ allowedUserDescription }}</FieldDescription>
+          </Field>
 
-        <Field>
-          <FieldLabel>允许角色</FieldLabel>
-          <ArtifactShareMultiSelect
-            :options="effectiveRoleOptions"
-            :selected-values="allowedRoleIds"
-            :loading="props.directoryLoading"
-            placeholder="选择角色"
-            search-placeholder="搜索角色..."
-            empty-text="未选择角色"
-            no-results-text="没有匹配角色"
-            @toggle="toggleAllowedRole"
-          />
-          <FieldDescription>可见性为指定角色时，这些角色可访问该产物。</FieldDescription>
-        </Field>
+          <Field
+            class="min-w-0"
+            :data-disabled="!canSelectAllowedRoles"
+          >
+            <FieldLabel>允许角色</FieldLabel>
+            <SearchableMultiSelect
+              :options="effectiveRoleOptions"
+              :selected-values="allowedRoleIds"
+              :loading="props.directoryLoading"
+              :disabled="!canSelectAllowedRoles"
+              placeholder="选择角色"
+              search-placeholder="搜索角色..."
+              empty-text="未选择角色"
+              no-results-text="没有匹配角色"
+              @toggle="toggleAllowedRole"
+            />
+            <FieldDescription>{{ allowedRoleDescription }}</FieldDescription>
+          </Field>
+        </FieldGroup>
       </FieldGroup>
 
       <DialogFooter>

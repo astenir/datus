@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { AgentManagerController } from "@/composables/useAgentManager"
-import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -66,7 +66,7 @@ const policyModeLabel = computed(() =>
         class="md:col-span-2"
       >
         <FieldLabel>允许工具</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.toolOptions.value"
           :selected-values="props.manager.selectedTools.value"
           placeholder="选择 Agent 可以调用的工具"
@@ -80,7 +80,7 @@ const policyModeLabel = computed(() =>
 
       <Field class="md:col-span-2">
         <FieldLabel>拒绝工具</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.toolOptions.value"
           :selected-values="props.manager.deniedTools.value"
           placeholder="选择必须禁止的工具"
@@ -111,7 +111,7 @@ const policyModeLabel = computed(() =>
         class="md:col-span-2"
       >
         <FieldLabel>允许委派的 Agent</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.subagentOptions.value"
           :selected-values="props.manager.form.value.allowedSubagentIds"
           placeholder="选择可委派的 Agent"

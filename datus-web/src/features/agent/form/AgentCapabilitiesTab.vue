@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import type { AgentManagerController } from "@/composables/useAgentManager"
-import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -63,7 +63,7 @@ function addCustomSkill() {
               使用默认值
             </Button>
           </div>
-          <AgentMultiOptionPicker
+          <SearchableMultiSelect
             :options="props.manager.toolOptions.value"
             :selected-values="props.manager.selectedTools.value"
             :disabled="props.readonly || props.manager.toolsLoading.value"
@@ -79,7 +79,7 @@ function addCustomSkill() {
 
         <Field>
           <FieldLabel>Skills</FieldLabel>
-          <AgentMultiOptionPicker
+          <SearchableMultiSelect
             :options="props.manager.skillOptions.value"
             :selected-values="props.manager.selectedSkills.value"
             :disabled="props.readonly || props.manager.skillOptions.value.length === 0"
