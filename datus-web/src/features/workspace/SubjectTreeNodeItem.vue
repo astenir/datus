@@ -50,5 +50,6 @@ const nodeIcon = computed(() => {
     :name="node.name"
     :icon="nodeIcon"
     :aria-label="`加载 ${node.subjectPath.join('/')}`"
+    class="min-w-0 [&>span:first-child]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1"
   />
 </template>

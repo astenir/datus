@@ -123,6 +123,7 @@ function handleExpandedChange(paths: Set<string>) {
                   :path="table.fullName"
                   :name="table.table"
                   :aria-label="`加载 ${table.fullName}`"
+                  class="min-w-0 [&>span:first-child]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1"
                 />
               </FileTreeFolder>
             </FileTreeFolder>

@@ -47,6 +47,20 @@ describe("knowledge tree loading states", () => {
     expect(html).toContain("fund_nav")
   })
 
+  it("keeps table leaf indentation stable for short and long names", async () => {
+    const html = await renderTree(CatalogTree, {
+      entries: [{
+        ...catalogEntries[0],
+        tables: ["nav", "fund_nav_daily_snapshot_with_a_very_long_table_name"],
+      }],
+      embedded: true,
+    })
+
+    expect(html.match(/\[&amp;&gt;span:first-child\]:shrink-0/g)).toHaveLength(2)
+    expect(html.match(/\[&amp;&gt;span:last-child\]:min-w-0/g)).toHaveLength(2)
+    expect(html.match(/\[&amp;&gt;span:last-child\]:flex-1/g)).toHaveLength(2)
+  })
+
   it("shows a subject loading state instead of an empty message", async () => {
     const html = await renderTree(SubjectTree, { subjects: [], loading: true, embedded: true })
 

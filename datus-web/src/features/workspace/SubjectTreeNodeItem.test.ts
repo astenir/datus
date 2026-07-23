@@ -47,6 +47,9 @@ describe("SubjectTreeNodeItem", () => {
     expect(html).toContain('aria-label="加载 fund/risk/nav"')
     expect(html).toContain("lucide-chart-no-axes-combined")
     expect(html).toContain("text-emerald-500")
+    expect(html).toContain("[&amp;&gt;span:first-child]:shrink-0")
+    expect(html).toContain("[&amp;&gt;span:last-child]:min-w-0")
+    expect(html).toContain("[&amp;&gt;span:last-child]:flex-1")
   })
 
   it("uses a terminal icon for reference SQL", async () => {
