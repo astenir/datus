@@ -116,18 +116,42 @@ When the AI generates a SQL query that works well:
 
 1. Review the generated SQL
 2. Click the "Save to success story" button
-3. The query is saved to `~/.datus/benchmark/[subagent]/success_story.csv`
+3. The server recovers the actual datasource from that `execute_sql` / `read_query` execution in session history
+4. The query is saved to `{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv`
+
+The page URL and currently selected datasource do not determine the storage directory. For example, SQL that actually
+ran on `ccks_fund` is saved under `{agent.home}/benchmark/ccks_fund/{subagent}/success_story.csv` even if the page currently
+shows `datus_enterprise`. Saving fails closed when history has no datasource or its start/completion events conflict;
+the server does not fall back to a default datasource.
+
+The storage root comes from the active `agent.home`. Set `agent.home` in `agent.yml`, or use `--config` to select another
+configuration.
 
 ![Save Generated SQL](../assets/geneated_sql_save.png)
 
 **CSV Format**:
 
 ```csv
-session_link,session_id,subagent_name,user_message,sql,timestamp
-http://localhost:8501?session=...,abc123...,chatbot,"Show revenue by category",SELECT ...,2025-01-15 10:30:00
+question,sql,datasource_id,source_id,session_id,session_link,subagent_name,timestamp
+"Show revenue by category",SELECT ...,ccks_fund,ss_...,abc123...,http://localhost:8501?session=...,chat,2025-01-15T02:30:00Z
 ```
 
-This helps track effective queries for benchmarking and improvement.
+The API returns a benchmark-relative `storage_key`, such as `ccks_fund/chat/success_story.csv`; it does not expose an
+absolute server path.
+
+Legacy CSV files are never moved or deleted automatically. After confirming that every row belongs to one datasource,
+copy one explicitly into the isolated layout:
+
+```bash
+datus-agent migrate-success-stories \
+  --source ~/.datus/benchmark/chat/success_story.csv \
+  --datasource ccks_fund \
+  --subagent chat
+```
+
+Migration deduplicates by `source_id`, is safe to repeat, and leaves the source untouched. It rejects a newer CSV that
+declares a different `datasource_id`. The resulting file can be used as the `success_story` input for semantic-model or
+metrics KB bootstrap; new-format files must match the bootstrap request's `datasource_id`.
 
 ## Summary
 

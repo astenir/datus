@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   displayValueForTool,
   isSqlExecutionTool,
+  isSuccessStoryEligibleToolExecution,
   shouldShowChartRecommendation,
   sqlExecutionContextFromToolValue,
   sqlFromToolValue,
@@ -239,6 +240,17 @@ describe("isSqlExecutionTool", () => {
   it("does not mark metadata tools as runnable SQL actions", () => {
     expect(isSqlExecutionTool("describe_table")).toBe(false);
     expect(isSqlExecutionTool("semantic_tools.search_metrics")).toBe(false);
+  });
+});
+
+describe("isSuccessStoryEligibleToolExecution", () => {
+  it("accepts only successful execute_sql/read_query results", () => {
+    expect(isSuccessStoryEligibleToolExecution("execute_sql", "success")).toBe(true);
+    expect(isSuccessStoryEligibleToolExecution("db_tools.read_query", "success")).toBe(true);
+    expect(isSuccessStoryEligibleToolExecution("execute_sql", "error")).toBe(false);
+    expect(isSuccessStoryEligibleToolExecution("execute_sql", "success", "failed")).toBe(false);
+    expect(isSuccessStoryEligibleToolExecution("describe_table", "success")).toBe(false);
+    expect(isSuccessStoryEligibleToolExecution("execute_sql", undefined)).toBe(false);
   });
 });
 

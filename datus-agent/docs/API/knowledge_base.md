@@ -27,6 +27,18 @@ metrics, and reference SQL.
 The endpoint rejects a missing, blank, unknown, or unauthorized `datasource_id`; it does not fall back to the server's
 global default datasource.
 
+For `semantic_model` or `metrics` components, prefer the datasource-isolated success-story layout:
+
+```text
+{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv
+```
+
+A new-format CSV contains a `datasource_id` column with exactly one non-empty datasource, and that value must match the
+request body's `datasource_id`. Empty, mixed, or mismatched values return `422`. A legacy CSV without this column remains
+temporarily accepted for compatibility, but the server emits a warning and an audit event. Use
+`datus-agent migrate-success-stories --source <file> --datasource <id> --subagent <name>` to copy a legacy file into the
+isolated layout explicitly; migration never deletes the source.
+
 **Response**: `text/event-stream`. See [SSE event format](#sse-event-format) below.
 
 ### `POST /api/v1/kb/bootstrap/{stream_id}/cancel`

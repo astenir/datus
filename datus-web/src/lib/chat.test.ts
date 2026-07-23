@@ -203,7 +203,34 @@ describe("tool execution blocks", () => {
         callToolId: "call-1",
         toolName: "read_query",
         errorText: "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+        resultStatus: "error",
         result: { rows: [] },
+      },
+    ]);
+  });
+
+  it("preserves successful tool status after unwrapping the rendered result", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-1",
+          toolName: "execute_sql",
+          result: {
+            success: 1,
+            result: { original_rows: 1, compressed_data: "value\n1" },
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-1",
+        toolName: "execute_sql",
+        resultStatus: "success",
+        result: { original_rows: 1, compressed_data: "value\n1" },
       },
     ]);
   });
@@ -233,6 +260,7 @@ describe("tool execution blocks", () => {
         toolName: "write_file",
         errorText:
           "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。",
+        resultStatus: "error",
         result: {
           success: 0,
           error: rawError,
@@ -303,7 +331,7 @@ describe("tool execution blocks", () => {
         id: "result-message",
         role: "assistant",
         content: "工具结果 read_query",
-        blocks: [{ type: "tool-result", callToolId: "call-1", toolName: "read_query", duration: 0.5, result: { rows: [[1]] } }],
+        blocks: [{ type: "tool-result", callToolId: "call-1", toolName: "read_query", duration: 0.5, resultStatus: "success", result: { rows: [[1]] } }],
       },
       {
         id: "final",
@@ -325,6 +353,7 @@ describe("tool execution blocks", () => {
             toolName: "read_query",
             params: { sql: "select 1" },
             duration: 0.5,
+            resultStatus: "success",
             result: { rows: [[1]] },
           },
         ],

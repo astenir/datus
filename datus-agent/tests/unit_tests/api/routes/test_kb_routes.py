@@ -408,6 +408,91 @@ class TestKbUploads:
         assert request.success_story == upload["files"][0]["relative_path"]
         assert project_files_root == str(tmp_path / "files")
 
+    @pytest.mark.parametrize(
+        ("csv_body", "error_code"),
+        [
+            (
+                b"question,sql,datasource_id\nq,select 1,datus_enterprise\n",
+                "KB_SUCCESS_STORY_DATASOURCE_MISMATCH",
+            ),
+            (
+                b"question,sql,datasource_id\nq1,select 1,ccks_fund\nq2,select 2,datus_enterprise\n",
+                "KB_SUCCESS_STORY_MIXED_DATASOURCES",
+            ),
+            (
+                b"question,sql,datasource_id\nq,select 1,\n",
+                "KB_SUCCESS_STORY_DATASOURCE_NOT_FOUND",
+            ),
+        ],
+    )
+    def test_success_story_datasource_must_match_bootstrap(
+        self,
+        mock_datus_service,
+        tmp_path,
+        csv_body,
+        error_code,
+    ):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("story.csv", csv_body, "text/csv"))],
+            ).json()
+            response = test_client.post(
+                "/api/v1/kb/bootstrap",
+                json={
+                    "datasource_id": "ccks_fund",
+                    "components": ["semantic_model"],
+                    "upload_id": upload["upload_id"],
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == error_code
+        mock_datus_service.kb.bootstrap_stream.assert_not_called()
+
+    def test_matching_success_story_datasource_can_bootstrap(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        async def mock_stream(request, stream_id, cancel_event, project_files_root, *, agent_config=None):  # noqa: ARG001
+            yield BootstrapKbEvent(
+                stream_id=stream_id,
+                component="semantic_model",
+                stage="task_completed",
+                timestamp="2025-01-01T00:00:00",
+            )
+
+        mock_datus_service.kb.bootstrap_stream = mock_stream
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[
+                    (
+                        "files",
+                        (
+                            "story.csv",
+                            b"question,sql,datasource_id\nq,select 1,ccks_fund\n",
+                            "text/csv",
+                        ),
+                    )
+                ],
+            ).json()
+            response = test_client.post(
+                "/api/v1/kb/bootstrap",
+                json={
+                    "datasource_id": "ccks_fund",
+                    "components": ["semantic_model"],
+                    "upload_id": upload["upload_id"],
+                },
+            )
+
+        assert response.status_code == 200
+
     def test_reference_sql_can_bootstrap_from_upload_id(self, mock_datus_service, tmp_path):
         mock_datus_service.agent_config.home = str(tmp_path)
         ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})

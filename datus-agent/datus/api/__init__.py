@@ -6,6 +6,8 @@
 Datus Agent FastAPI service package.
 """
 
+from typing import Any
+
 from .legacy_models import (
     FeedbackRequest,
     FeedbackResponse,
@@ -14,7 +16,14 @@ from .legacy_models import (
     RunWorkflowResponse,
     TokenResponse,
 )
-from .service import create_app, service
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"create_app", "service"}:
+        from .service import create_app, service
+
+        return {"create_app": create_app, "service": service}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "create_app",

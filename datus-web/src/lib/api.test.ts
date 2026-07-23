@@ -973,9 +973,7 @@ describe("api client", () => {
     );
     await successStoryApi.save("http://localhost:8000/", {
       session_id: "session-1",
-      sql: "select 1",
-      user_message: "查一下样例",
-      subagent_id: "gen_sql",
+      call_tool_id: "call-sql-1",
       session_link: "http://example.test/sessions/session-1",
     });
     await toolApi.execute("http://localhost:8000/", "db_tools.read_query", {
@@ -995,9 +993,7 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/success-stories");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       session_id: "session-1",
-      sql: "select 1",
-      user_message: "查一下样例",
-      subagent_id: "gen_sql",
+      call_tool_id: "call-sql-1",
       session_link: "http://example.test/sessions/session-1",
     });
     expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/tools/db_tools.read_query");

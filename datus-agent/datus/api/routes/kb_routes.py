@@ -1,6 +1,7 @@
 """API routes for knowledge base bootstrap with SSE streaming."""
 
 import asyncio
+import csv
 import json
 import os
 import uuid
@@ -33,6 +34,9 @@ from datus.api.utils.stream_cancellation import (
     create_cancel_token,
 )
 from datus.utils.exceptions import DatusException
+from datus.utils.loggings import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/kb", tags=["knowledge-base"])
 _require_kb_module = require_module("module.kb")
@@ -213,6 +217,20 @@ async def bootstrap_kb(
     except DatusException as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
+    is_legacy_success_story = _validate_success_story_datasource(request, project_files_root)
+    if is_legacy_success_story:
+        logger.warning(
+            "Bootstrapping datasource %s from legacy success-story CSV without datasource_id",
+            request.datasource_id,
+        )
+        await _audit_kb_event(
+            _ctx,
+            action="kb.bootstrap.legacy_success_story",
+            resource_id=request.success_story,
+            decision="allow",
+            metadata={"datasource_id": request.datasource_id},
+        )
+
     stream_id, cancel_event = _create_stream_cancel_token(_ctx)
 
     async def generate_sse():
@@ -266,6 +284,41 @@ def _validate_paths(request: BootstrapKbInput, project_root: str) -> None:
         safe_resolve(base, request.success_story)
     if request.sql_dir:
         safe_resolve(base, request.sql_dir)
+
+
+def _validate_success_story_datasource(request: BootstrapKbInput, project_root: str) -> bool:
+    """Validate datasource provenance for semantic-model/metrics CSV inputs.
+
+    Returns ``True`` for compatible legacy CSVs without a datasource column.
+    """
+    components = {
+        component.value if hasattr(component, "value") else str(component) for component in request.components
+    }
+    needs_success_story = bool(components & {KbComponent.SEMANTIC_MODEL.value, KbComponent.METRICS.value})
+    if not needs_success_story or not request.success_story:
+        return False
+
+    csv_path = safe_resolve(FilePath(project_root), request.success_story)
+    try:
+        with open(csv_path, newline="", encoding="utf-8-sig") as source_file:
+            reader = csv.DictReader(source_file)
+            if "datasource_id" not in (reader.fieldnames or []):
+                return True
+            datasource_ids = set()
+            for row in reader:
+                value = row.get("datasource_id")
+                if isinstance(value, str) and value.strip():
+                    datasource_ids.add(value.strip())
+    except (OSError, csv.Error, UnicodeError) as exc:
+        raise HTTPException(status_code=422, detail="KB_SUCCESS_STORY_INVALID") from exc
+
+    if not datasource_ids:
+        raise HTTPException(status_code=422, detail="KB_SUCCESS_STORY_DATASOURCE_NOT_FOUND")
+    if len(datasource_ids) > 1:
+        raise HTTPException(status_code=422, detail="KB_SUCCESS_STORY_MIXED_DATASOURCES")
+    if datasource_ids != {request.datasource_id.strip()}:
+        raise HTTPException(status_code=422, detail="KB_SUCCESS_STORY_DATASOURCE_MISMATCH")
+    return False
 
 
 async def _resolve_kb_upload_sources(

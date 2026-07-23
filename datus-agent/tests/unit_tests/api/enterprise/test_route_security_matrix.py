@@ -20,6 +20,7 @@ from datus.api.enterprise.route_security_matrix import (
     PLATFORM_STATUS_EXCEPTION,
     PLATFORM_STATUS_GATE,
     ROUTE_SECURITY_MATRIX,
+    SESSION_OWNER,
     SYSTEM_READONLY,
     TABLE_SCOPE,
     route_key,
@@ -128,6 +129,21 @@ def test_kb_bootstrap_declares_request_scoped_datasource_boundaries():
 
     assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.categories
     assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.data_boundaries
+
+
+def test_success_story_save_uses_live_kb_session_and_audit_policy():
+    policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/success-stories")]
+
+    assert {
+        MODULE_RBAC,
+        SESSION_OWNER,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        AUDIT,
+    } <= policy.categories
+    assert LEGACY_DISABLED not in policy.categories
+    assert policy.module_permission == "module.kb"
+    assert policy.audit_action == "knowledge.success_story.save"
 
 
 def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_policy():

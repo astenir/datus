@@ -41,7 +41,8 @@ import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
-import type { MessageDisplayBlock, SelectOption, ToolChildMessage } from "@/types"
+import { isSuccessStoryEligibleToolExecution } from "@/lib/tool-display"
+import type { MessageDisplayBlock, SelectOption, SuccessStorySource, ToolChildMessage } from "@/types"
 
 const props = defineProps<{
   block: MessageDisplayBlock
@@ -52,11 +53,18 @@ const props = defineProps<{
   datasourceName?: string
   datasourceOptions?: readonly SelectOption[]
   databaseName?: string
+  successStorySessionId?: string
+  successStorySessionLink?: string
+  canSaveSuccessStory?: boolean
+  successStoryVersion?: number
+  isSuccessStorySaving?: (source: SuccessStorySource) => boolean
+  isSuccessStorySaved?: (source: SuccessStorySource) => boolean
 }>()
 
 const emit = defineEmits<{
   submitInteraction: [interactionKey: string, answers: string[][]]
   openArtifact: [kind: string, slug: string]
+  saveSuccessStory: [source: SuccessStorySource]
 }>()
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
@@ -66,6 +74,30 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
 function openArtifact(kind: string, slug: string) {
   if (!slug) return
   emit("openArtifact", kind, slug)
+}
+
+function successStorySource(block: MessageDisplayBlock): SuccessStorySource | undefined {
+  if (block.type !== "tool-execution") return undefined
+  if (!props.canSaveSuccessStory || !props.successStorySessionId || !block.callToolId) return undefined
+  if (!isSuccessStoryEligibleToolExecution(block.toolName, block.resultStatus, block.errorText)) return undefined
+
+  return {
+    sessionId: props.successStorySessionId,
+    callToolId: block.callToolId,
+    ...(props.successStorySessionLink ? { sessionLink: props.successStorySessionLink } : {}),
+  }
+}
+
+function saveSuccessStory(source: SuccessStorySource) {
+  emit("saveSuccessStory", source)
+}
+
+function successStorySaving(source?: SuccessStorySource) {
+  return source ? props.isSuccessStorySaving?.(source) === true : false
+}
+
+function successStorySaved(source?: SuccessStorySource) {
+  return source ? props.isSuccessStorySaved?.(source) === true : false
 }
 
 function toolOutputState(errorText?: string) {
@@ -199,8 +231,15 @@ function readOnlyInteractionDescription() {
                 :datasource-name="datasourceName"
                 :datasource-options="datasourceOptions"
                 :database-name="databaseName"
+                :success-story-session-id="successStorySessionId"
+                :success-story-session-link="successStorySessionLink"
+                :can-save-success-story="canSaveSuccessStory"
+                :success-story-version="successStoryVersion"
+                :is-success-story-saving="isSuccessStorySaving"
+                :is-success-story-saved="isSuccessStorySaved"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
+                @save-success-story="saveSuccessStory"
               />
             </template>
             <MessageResponse
@@ -253,6 +292,10 @@ function readOnlyInteractionDescription() {
         :datasource-name="datasourceName"
         :datasource-options="datasourceOptions"
         :database-name="databaseName"
+        :success-story-source="successStorySource(block)"
+        :success-story-saving="successStorySaving(successStorySource(block))"
+        :success-story-saved="successStorySaved(successStorySource(block))"
+        @save-success-story="saveSuccessStory"
       />
       <div
         v-if="block.childMessages?.length"
@@ -279,8 +322,15 @@ function readOnlyInteractionDescription() {
                 :datasource-name="datasourceName"
                 :datasource-options="datasourceOptions"
                 :database-name="databaseName"
+                :success-story-session-id="successStorySessionId"
+                :success-story-session-link="successStorySessionLink"
+                :can-save-success-story="canSaveSuccessStory"
+                :success-story-version="successStoryVersion"
+                :is-success-story-saving="isSuccessStorySaving"
+                :is-success-story-saved="isSuccessStorySaved"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
+                @save-success-story="saveSuccessStory"
               />
             </template>
             <MessageResponse

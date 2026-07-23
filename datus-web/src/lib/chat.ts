@@ -14,6 +14,7 @@ import type {
   SseMessagePayload
 } from "@/types";
 import { request } from "@/lib/request";
+import { toolResultStatus } from "@/lib/tool-display";
 
 export type ChatStreamRequestInput = {
   message: string;
@@ -458,6 +459,7 @@ function mergeToolCallWithResult(
   if (result.duration != null) mergedBlock.duration = result.duration;
   if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
   if (result.errorText) mergedBlock.errorText = result.errorText;
+  if (result.resultStatus) mergedBlock.resultStatus = result.resultStatus;
   if (childMessages.length > 0) mergedBlock.childMessages = childMessages;
   return mergedBlock;
 }
@@ -820,6 +822,7 @@ export function contentFromPayloadBlocks(
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
       const errorText = toolErrorText(payload, toolName);
+      const resultStatus = toolResultStatus(payload.result);
       const block: Extract<MessageBlock, { type: "tool-result" }> = {
         type: "tool-result",
         toolName,
@@ -829,6 +832,7 @@ export function contentFromPayloadBlocks(
       if (duration != null) block.duration = duration;
       if (shortDesc) block.shortDesc = shortDesc;
       if (errorText) block.errorText = errorText;
+      if (resultStatus !== "unknown") block.resultStatus = resultStatus;
       blocks.push(block);
     } else if (type === "error") {
       blocks.push(friendlyChatErrorBlock({

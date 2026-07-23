@@ -58,6 +58,7 @@ export type ToolResultBlock = {
   duration?: number;
   shortDesc?: string;
   errorText?: string;
+  resultStatus?: "success" | "error";
   result?: unknown;
 };
 export type ToolExecutionBlock = {
@@ -68,6 +69,7 @@ export type ToolExecutionBlock = {
   duration?: number;
   shortDesc?: string;
   errorText?: string;
+  resultStatus?: "success" | "error";
   result?: unknown;
   childMessages?: readonly ToolChildMessage[];
 };
@@ -798,18 +800,24 @@ export type AgentToolsData = {
 
 export type SuccessStoryInput = {
   session_id: string;
-  sql: string;
-  user_message: string;
-  subagent_id?: string;
+  call_tool_id: string;
   session_link?: string;
 };
 
 export type SuccessStoryResult = {
-  csv_path: string;
+  story_id: string;
+  created: boolean;
+  datasource_id: string;
   subagent_name: string;
+  storage_key: string;
   session_id: string;
-  session_link?: string;
   timestamp: string;
+};
+
+export type SuccessStorySource = {
+  sessionId: string;
+  callToolId: string;
+  sessionLink?: string;
 };
 
 // ─── Support-Only Legacy / Compatibility APIs ───────────────────────────────

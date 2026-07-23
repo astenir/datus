@@ -5577,13 +5577,17 @@ export interface components {
 
         SuccessStoryData: {
 
-            csv_path: string;
+            story_id: string;
+
+            created: boolean;
+
+            datasource_id: string;
 
             subagent_name: string;
 
-            session_id: string;
+            storage_key: string;
 
-            session_link?: string | null;
+            session_id: string;
 
             timestamp: string;
         };
@@ -5592,11 +5596,7 @@ export interface components {
 
             session_id: string;
 
-            sql: string;
-
-            user_message: string;
-
-            subagent_id?: string | null;
+            call_tool_id: string;
 
             session_link?: string | null;
         };

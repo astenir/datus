@@ -159,6 +159,19 @@ _CHAT_CONTROL_EXCEPTION_POLICY = _policy(
     MUTATION_EXECUTION,
     note="Operational stop/cancel control remains available during readonly/maintenance.",
 )
+_SUCCESS_STORY_WRITE_POLICY = _policy(
+    MODULE_RBAC,
+    SESSION_OWNER,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    AUDIT,
+    module_permission="module.kb",
+    audit_action="knowledge.success_story.save",
+    note=(
+        "Server resolves the successful read-only SQL and datasource from owner-scoped canonical session history, "
+        "then stores it in a datasource-isolated benchmark file."
+    ),
+)
 _CATALOG_READ_POLICY = _policy(
     MODULE_RBAC,
     DATASOURCE_PROJECTION,
@@ -476,11 +489,12 @@ _add_many(
         "/api/v1/agent/edit",
         "/api/v1/data_visualization",
         "/api/v1/tools/{tool_name}",
-        "/api/v1/success-stories",
     ],
     _LEGACY_DISABLED_POLICY,
 )
 _add_many("DELETE", ["/api/v1/subject/delete", "/api/v1/agent/delete"], _LEGACY_DISABLED_POLICY)
+
+_add("POST", "/api/v1/success-stories", _SUCCESS_STORY_WRITE_POLICY)
 
 _add(
     "GET",

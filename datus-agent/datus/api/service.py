@@ -54,7 +54,6 @@ _ROUTE_DISABLED_OPERATIONS = {
     "explorer": "explorer.legacy",
     "visualization": "visualization.legacy",
     "tool": "tools.direct_dispatch",
-    "success_story": "success_stories.write_legacy",
 }
 
 
