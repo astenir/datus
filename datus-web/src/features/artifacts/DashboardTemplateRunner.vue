@@ -124,10 +124,10 @@ watch(
 </script>
 
 <template>
-  <div class="flex flex-col gap-3">
+  <section class="flex min-w-0 flex-col gap-3">
     <div class="flex items-center justify-between gap-3">
-      <div class="text-xs font-medium text-muted-foreground">查询模板</div>
-      <Badge variant="secondary">{{ props.templates.length }}</Badge>
+      <h2 class="text-sm font-semibold">运行查询</h2>
+      <Badge variant="secondary">{{ props.templates.length }} 个模板</Badge>
     </div>
 
     <Alert v-if="props.templates.length === 0">
@@ -140,48 +140,68 @@ watch(
       class="flex flex-col gap-3 rounded-md border p-3"
     >
       <FieldGroup class="gap-4">
-        <Field>
-          <FieldLabel for="dashboard-query-template">模板</FieldLabel>
-          <Select
-            :model-value="selectedSlug"
-            @update:model-value="setSelectedSlug"
-          >
-            <SelectTrigger
-              id="dashboard-query-template"
-              class="w-full"
+        <div class="grid gap-3 sm:grid-cols-[minmax(12rem,18rem)_1fr] sm:items-end">
+          <Field>
+            <FieldLabel for="dashboard-query-template">模板</FieldLabel>
+            <Select
+              :model-value="selectedSlug"
+              @update:model-value="setSelectedSlug"
             >
-              <SelectValue placeholder="选择模板" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem
-                  v-for="template in props.templates"
-                  :key="template.slug"
-                  :value="template.slug"
-                >
-                  {{ template.slug }}
-                </SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <FieldDescription v-if="selectedTemplate">
-            {{ selectedTemplate.description || "使用样例参数运行该模板。" }}
-          </FieldDescription>
-        </Field>
+              <SelectTrigger
+                id="dashboard-query-template"
+                class="w-full"
+              >
+                <SelectValue placeholder="选择模板" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="template in props.templates"
+                    :key="template.slug"
+                    :value="template.slug"
+                  >
+                    {{ template.slug }}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
 
-        <div
-          v-if="selectedTemplate"
-          class="grid gap-2 text-xs"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-muted-foreground">数据源</span>
-            <span class="truncate font-medium">{{ selectedTemplate.datasource }}</span>
-          </div>
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-muted-foreground">样例行数</span>
-            <span class="font-medium">{{ selectedTemplate.sample_row_count }}</span>
-          </div>
+          <Button
+            class="w-fit justify-self-end"
+            size="sm"
+            :disabled="props.loading || !selectedTemplate"
+            @click="runSelectedTemplate"
+          >
+            <Spinner
+              v-if="selectedIsRunning"
+              data-icon="inline-start"
+            />
+            <PlayIcon
+              v-else
+              data-icon="inline-start"
+            />
+            运行样例查询
+          </Button>
         </div>
+
+        <FieldDescription v-if="selectedTemplate">
+          {{ selectedTemplate.description || "使用样例参数运行该模板。" }}
+        </FieldDescription>
+
+        <dl
+          v-if="selectedTemplate"
+          class="flex flex-wrap gap-x-6 gap-y-2 text-xs"
+        >
+          <div class="flex min-w-0 items-center gap-2">
+            <dt class="text-muted-foreground">数据源</dt>
+            <dd class="truncate font-medium">{{ selectedTemplate.datasource }}</dd>
+          </div>
+          <div class="flex items-center gap-2">
+            <dt class="text-muted-foreground">样例行数</dt>
+            <dd class="font-medium">{{ selectedTemplate.sample_row_count }}</dd>
+          </div>
+        </dl>
 
         <div
           v-if="selectedTemplate"
@@ -223,22 +243,6 @@ watch(
         <AlertTitle>查询不可用</AlertTitle>
         <AlertDescription>{{ localError || props.error }}</AlertDescription>
       </Alert>
-
-      <Button
-        size="sm"
-        :disabled="props.loading || !selectedTemplate"
-        @click="runSelectedTemplate"
-      >
-        <Spinner
-          v-if="selectedIsRunning"
-          data-icon="inline-start"
-        />
-        <PlayIcon
-          v-else
-          data-icon="inline-start"
-        />
-        运行样例查询
-      </Button>
 
       <div
         v-if="visibleResult"
@@ -298,9 +302,9 @@ watch(
             <DatabaseIcon />
             SQL
           </div>
-          <pre class="max-h-40 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs">{{ visibleResult.sql }}</pre>
+          <pre class="whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-xs">{{ visibleResult.sql }}</pre>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 </template>
