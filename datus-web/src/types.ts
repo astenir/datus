@@ -637,6 +637,8 @@ export type ArtifactManifest = {
   updated_at?: string;
   datasources?: string[];
   key_tables?: string[];
+  owner_user_id?: string | null;
+  owner_display_name?: string | null;
   can_manage_share?: boolean;
   can_edit?: boolean;
 };

@@ -78,6 +78,8 @@ describe("useArtifacts", () => {
         slug: "fund-overview",
         name: "Fund Overview",
         description: "Dashboard",
+        owner_user_id: "owner-1",
+        owner_display_name: "Owner User",
         can_manage_share: true,
         can_edit: false,
       },
@@ -202,6 +204,8 @@ describe("useArtifacts", () => {
     expect(reportList).toHaveBeenCalledWith("http://api.test");
     expect(artifacts.dashboards.value).toHaveLength(1);
     expect(artifacts.reports.value).toHaveLength(1);
+    expect(artifacts.dashboards.value[0]?.owner_user_id).toBe("owner-1");
+    expect(artifacts.dashboards.value[0]?.owner_display_name).toBe("Owner User");
     expect(artifacts.dashboards.value[0]?.can_manage_share).toBe(true);
     expect(artifacts.dashboards.value[0]?.can_edit).toBe(false);
     expect(artifacts.reports.value[0]?.can_manage_share).toBe(false);

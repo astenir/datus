@@ -93,6 +93,8 @@ class ArtifactShareRoleSummary(BaseModel):
 class ArtifactListItem(ArtifactManifest):
     """User-visible artifact list item with current-user UI capabilities."""
 
+    owner_user_id: str | None = None
+    owner_display_name: str | None = None
     can_manage_share: bool = False
     can_edit: bool = False
 
@@ -751,14 +753,22 @@ async def _artifact_list_items(
     manifests: List[ArtifactManifest],
 ) -> List[ArtifactListItem]:
     store = get_artifact_acl_store()
+    owner_display_names: dict[str, str | None] = {}
     items: list[ArtifactListItem] = []
     for manifest in manifests:
+        owner_user_id = None
+        owner_display_name = None
         can_manage_share = False
         can_edit = False
         if store is not None:
             try:
                 raw_acl = await store.get_acl(artifact_type=artifact_type, slug=manifest.slug)
                 acl = ArtifactAcl(**raw_acl)
+                owner_user_id = acl.owner_user_id
+                owner_display_name = await _artifact_owner_display_name(
+                    owner_user_id,
+                    cache=owner_display_names,
+                )
                 can_manage_share = await _can_manage_artifact_share(ctx, acl)
                 can_edit = await _can_edit_artifact(
                     ctx,
@@ -772,11 +782,32 @@ async def _artifact_list_items(
         items.append(
             ArtifactListItem(
                 **manifest.model_dump(),
+                owner_user_id=owner_user_id,
+                owner_display_name=owner_display_name,
                 can_manage_share=can_manage_share,
                 can_edit=can_edit,
             )
         )
     return items
+
+
+async def _artifact_owner_display_name(
+    owner_user_id: str,
+    *,
+    cache: dict[str, str | None],
+) -> str | None:
+    if owner_user_id in cache:
+        return cache[owner_user_id]
+
+    try:
+        record = await deps.get_enterprise_extensions().user_store.get_user(owner_user_id)
+        display_name = _optional_str(record.get("display_name")) if record is not None else None
+    except Exception:
+        logger.warning("Artifact owner lookup failed for user_id=%s", owner_user_id, exc_info=True)
+        display_name = None
+
+    cache[owner_user_id] = display_name
+    return display_name
 
 
 async def _require_share_directory_access(

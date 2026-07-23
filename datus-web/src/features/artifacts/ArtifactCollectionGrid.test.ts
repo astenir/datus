@@ -44,6 +44,43 @@ describe("ArtifactCollectionGrid", () => {
     expect(html).toContain("编辑");
   });
 
+  it("shows the artifact owner display name", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+      owner_display_name: "Owner User",
+    }]);
+
+    expect(html).toContain("作者");
+    expect(html).toContain("Owner User");
+    expect(html).toContain("作者：Owner User（owner-1）");
+  });
+
+  it("falls back to the owner id when the display name is unavailable", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+    }]);
+
+    expect(html).toContain("owner-1");
+    expect(html).toContain("作者：owner-1");
+  });
+
+  it("shows an honest fallback when the artifact has no owner metadata", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+    }]);
+
+    expect(html).toContain("未知作者");
+    expect(html).toContain("作者：未知");
+  });
+
   it("shows a loading state instead of the empty state during the initial request", async () => {
     const html = await renderGrid([], true);
 

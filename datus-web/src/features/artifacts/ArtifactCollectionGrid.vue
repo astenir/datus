@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { EyeIcon, FilePenLineIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
+import { EyeIcon, FilePenLineIcon, FileSearchIcon, Share2Icon, UserRoundIcon } from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -36,6 +36,21 @@ const emit = defineEmits<{
   share: [slug: string]
   edit: [slug: string]
 }>()
+
+function authorLabel(item: ReadonlyArtifactManifest): string {
+  return item.owner_display_name?.trim() || item.owner_user_id?.trim() || "未知作者"
+}
+
+function authorTitle(item: ReadonlyArtifactManifest): string {
+  const displayName = item.owner_display_name?.trim()
+  const userId = item.owner_user_id?.trim()
+
+  if (displayName && userId && displayName !== userId) {
+    return `作者：${displayName}（${userId}）`
+  }
+
+  return `作者：${displayName || userId || "未知"}`
+}
 </script>
 
 <template>
@@ -55,12 +70,11 @@ const emit = defineEmits<{
     >
       <CardHeader class="min-w-0">
         <Skeleton class="h-5 w-36" />
-        <div class="flex min-h-24 flex-col gap-2">
+        <Skeleton class="h-3 w-24" />
+        <div class="flex min-h-16 flex-col gap-2">
           <Skeleton class="h-3 w-full" />
           <Skeleton class="h-3 w-full" />
           <Skeleton class="h-3 w-full" />
-          <Skeleton class="h-3 w-full" />
-          <Skeleton class="h-3 w-2/3" />
         </div>
       </CardHeader>
       <CardFooter class="mt-auto grid h-8 shrink-0 grid-cols-4 gap-1">
@@ -108,8 +122,21 @@ const emit = defineEmits<{
         >
           {{ item.name }}
         </CardTitle>
+        <div
+          class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+          :title="authorTitle(item)"
+        >
+          <UserRoundIcon
+            class="size-3.5 shrink-0"
+            aria-hidden="true"
+          />
+          <span class="shrink-0">作者</span>
+          <span class="truncate font-medium">
+            {{ authorLabel(item) }}
+          </span>
+        </div>
         <CardDescription
-          class="line-clamp-5 min-h-24"
+          class="line-clamp-3 min-h-16"
           :title="item.description"
         >
           {{ item.description }}
