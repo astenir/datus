@@ -975,6 +975,28 @@ class TestReportFilesystemFuncTool:
         assert result.success == 1
         assert result.result["files"] == ["reports/allowed"]
 
+    def test_unbound_enterprise_create_glob_explains_acl_filtering(self, project_root: Path):
+        (project_root / "reports" / "existing" / "render").mkdir(parents=True)
+        (project_root / "subject" / "sales").mkdir(parents=True)
+        fs = ReportFilesystemFuncTool(
+            root_path=str(project_root),
+            require_authorized_artifact=True,
+        )
+
+        before_bind = fs.glob("reports/*")
+        unrelated = fs.glob("subject/*")
+        fs.bind_authorized_artifact("existing")
+        after_bind = fs.glob("reports/*")
+
+        assert before_bind.success == 1
+        assert before_bind.result["files"] == []
+        assert before_bind.result["visibility_filtered"] is True
+        assert "No report is bound" in before_bind.result["message"]
+        assert unrelated.result["files"] == ["subject/sales"]
+        assert "visibility_filtered" not in unrelated.result
+        assert after_bind.result["files"] == ["reports/existing"]
+        assert after_bind.result["visibility_filtered"] is True
+
     def test_locked_edit_session_bypasses_generic_artifact_protection(self, project_root: Path):
         for slug in ("allowed", "other"):
             render = project_root / "reports" / slug / "render"

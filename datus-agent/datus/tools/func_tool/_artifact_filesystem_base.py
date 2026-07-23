@@ -260,6 +260,49 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
             return self._locked_artifact_not_found(path)
         return super().read_file(path, offset, limit)
 
+    def glob(self, pattern: str, path: str = ".") -> FuncToolResult:  # type: ignore[override]
+        """Find files while marking ACL-filtered artifact results.
+
+        Args:
+            pattern: Glob pattern to match.
+            path: Starting directory for the search. Defaults to the workspace root.
+
+        Returns:
+            The normal Glob result, plus ``visibility_filtered`` and a safe
+            explanatory message when the search targets an ACL-scoped
+            report/dashboard tree.
+        """
+        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
+        normalized_path = path.replace("\\", "/").strip("./")
+        targets_artifact_tree = normalized_pattern == self.ARTIFACT_ROOT_DIR_NAME or normalized_pattern.startswith(
+            f"{self.ARTIFACT_ROOT_DIR_NAME}/"
+        )
+        targets_artifact_tree = (
+            targets_artifact_tree
+            or normalized_path == self.ARTIFACT_ROOT_DIR_NAME
+            or (normalized_path.startswith(f"{self.ARTIFACT_ROOT_DIR_NAME}/"))
+        )
+        result = super().glob(pattern, path)
+        if result.success != 1 or not isinstance(result.result, dict):
+            return result
+        if not targets_artifact_tree or not (self._require_authorized_artifact or self._locked_artifact_slug):
+            return result
+
+        scoped_result = dict(result.result)
+        scoped_result["visibility_filtered"] = True
+        if self._locked_artifact_slug:
+            scoped_result["message"] = (
+                f"Results are limited to the ACL-authorized {self.ARTIFACT_KIND} "
+                f"{self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}."
+            )
+        else:
+            scoped_result["message"] = (
+                f"No {self.ARTIFACT_KIND} is bound yet; existing {self.ARTIFACT_ROOT_DIR_NAME}/ paths "
+                "are intentionally hidden. An empty list does not prove that no artifact exists on disk."
+            )
+        result.result = scoped_result
+        return result
+
     def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:  # type: ignore[override]
         for path in super()._walk_files(seed, include_pattern, include_dirs):
             if self._require_authorized_artifact or self._locked_artifact_slug:

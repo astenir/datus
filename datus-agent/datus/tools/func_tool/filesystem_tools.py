@@ -764,7 +764,17 @@ class FilesystemFuncTool(BaseTool):
             if seed.zone == PathZone.HIDDEN:
                 return FuncToolResult(result={"files": [], "truncated": False})
             if self._is_protected_artifact_path(seed):
-                return FuncToolResult(result={"files": [], "truncated": False})
+                return FuncToolResult(
+                    result={
+                        "files": [],
+                        "truncated": False,
+                        "visibility_filtered": True,
+                        "message": (
+                            "Results are hidden by the current artifact authorization scope; "
+                            "an empty list does not prove that no artifact exists on disk."
+                        ),
+                    }
+                )
             if self._strict and seed.zone == PathZone.EXTERNAL:
                 return self._strict_reject(seed)
 

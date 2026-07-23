@@ -52,6 +52,25 @@ def _make_node(real_agent_config, **overrides):
     return GenVisualDashboardAgenticNode(**kwargs)
 
 
+def _render_prompt(real_agent_config, *, access_mode: str, version: str | None = None) -> str:
+    from datus.prompts.prompt_manager import get_prompt_manager
+
+    return get_prompt_manager(agent_config=real_agent_config).render_template(
+        template_name="gen_visual_dashboard_system",
+        version=version,
+        artifact_access_mode=access_mode,
+        has_semantic_tools=False,
+        has_db_tools=False,
+        has_context_search_tools=False,
+        has_ask_user_tool=False,
+        has_task_tool=False,
+        agent_config=real_agent_config,
+        dashboard_slug=None,
+        rules=[],
+        agent_description="",
+    )
+
+
 def _seed_dashboard_on_disk(project_root: Path, dashboard_slug: str) -> None:
     """Seed a minimal dashboard layout for end-to-end tests."""
     dash_dir = project_root / "dashboards" / dashboard_slug
@@ -134,6 +153,13 @@ class TestGenVisualDashboardInit:
         )
         assert result.success == 0
         assert "ACL-authorized binding" in (result.error or "")
+
+    def test_enterprise_create_prompt_does_not_require_slug_discovery(self, real_agent_config):
+        prompt = _render_prompt(real_agent_config, access_mode="create")
+
+        assert "Enterprise create-only dashboard session" in prompt
+        assert "always** run `glob('dashboards/*')`" not in prompt
+        assert "Use `glob('dashboards/*')` to discover existing slugs" not in prompt
 
     def test_tool_registry_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
         """Same contract as the visual report node: filesystem tools must
