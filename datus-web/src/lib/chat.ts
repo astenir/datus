@@ -14,7 +14,7 @@ import type {
   SseMessagePayload
 } from "@/types";
 import { request } from "@/lib/request";
-import { toolResultStatus } from "@/lib/tool-display";
+import { isSqlExecutionTool, toolResultStatus } from "@/lib/tool-display";
 
 export type ChatStreamRequestInput = {
   message: string;
@@ -934,6 +934,10 @@ function unwrapToolResult(value: unknown): unknown {
 const permissionDeniedToolPattern =
   /PERMISSION_DENIED:\s*Tool\s+'([^']+)'\s+\(([^)]+)\)\s+is blocked by the\s+'([^']+)'\s+permission profile/i;
 const permissionModeDeniedPattern = /Permission mode '([^']+)' requires module\.chat\.permission_mode/i;
+const datusSqlExecutionErrorPattern =
+  /error_code=(500005|500006),\s*error_message=(?:Invalid SQL syntax in query|Failed to execute query on database)\.\s*Error details:\s*([\s\S]+)$/i;
+const unsafeDatabaseDiagnosticPattern =
+  /(?:https?:\/\/|(?:postgres(?:ql)?|mysql|oracle):\/\/|traceback\s+\(most recent call last\)|(?:password|passwd|credential|secret|token)\s*[=:]|(?:^|\s)\/(?:[^/\s]+\/){2,}[^/\s]+)/i;
 const filesystemWriteTools = new Set(["write_file", "edit_file", "delete_file"]);
 
 function permissionProfileLabel(profile: string) {
@@ -943,6 +947,29 @@ function permissionProfileLabel(profile: string) {
     dangerous: "危险",
   };
   return labels[profile] ?? profile;
+}
+
+function friendlyDatusSqlExecutionError(rawError: string): string | undefined {
+  const match = rawError.match(datusSqlExecutionErrorPattern);
+  const errorCode = match?.[1];
+  const details = match?.[2]?.trim();
+  if (!errorCode || !details) return undefined;
+
+  const hintMatch = details.match(/\bHINT:\s*([\s\S]*)$/i);
+  const hint = hintMatch?.[1]?.trim() ?? "";
+  const detailsBeforeHint = details.slice(0, hintMatch?.index ?? details.length).trim();
+  const lineMatch = detailsBeforeHint.match(/\bLINE\s+(\d+):/i);
+  const primary = detailsBeforeHint.replace(/\bLINE\s+\d+:[\s\S]*$/i, "").trim();
+
+  if (!primary || primary.length > 800 || hint.length > 800) return undefined;
+  if (unsafeDatabaseDiagnosticPattern.test(primary) || unsafeDatabaseDiagnosticPattern.test(hint)) {
+    return undefined;
+  }
+
+  const parts = [`SQL 执行失败（错误码 ${errorCode}）：${primary}`];
+  if (lineMatch?.[1]) parts.push(`错误位置：第 ${lineMatch[1]} 行`);
+  if (hint) parts.push(`数据库提示：${hint}`);
+  return parts.join("；");
 }
 
 export function friendlyToolErrorText(toolName: string, rawError: string): string {
@@ -967,6 +994,11 @@ export function friendlyToolErrorText(toolName: string, rawError: string): strin
   if (modeDenied) {
     const mode = modeDenied[1] || "高危";
     return `权限受限：当前账号不能切换到 ${permissionProfileLabel(mode)} 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。`;
+  }
+
+  if (isSqlExecutionTool(toolName)) {
+    const sqlExecutionError = friendlyDatusSqlExecutionError(error);
+    if (sqlExecutionError) return sqlExecutionError;
   }
 
   return friendlyInlineErrorText(

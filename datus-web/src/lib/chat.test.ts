@@ -279,6 +279,62 @@ describe("tool execution blocks", () => {
     )).toBe("权限受限：当前账号不能切换到 自动 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。");
   });
 
+  it("keeps actionable database diagnostics for SQL execution failures", () => {
+    const rawError = [
+      "error_code=500006, error_message=Failed to execute query on database. Error details: function round(double precision, integer) does not exist",
+      "LINE 7: ROUND(a.foundedsize / 100000000.0, 2) AS 成立规模_亿份,",
+      "        ^",
+      "HINT: No function matches the given name and argument types. You might need to add explicit type casts.",
+    ].join("\n");
+
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-sql-1",
+          toolName: "execute_sql",
+          result: {
+            success: 0,
+            error: rawError,
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-sql-1",
+        toolName: "execute_sql",
+        errorText:
+          "SQL 执行失败（错误码 500006）：function round(double precision, integer) does not exist；错误位置：第 7 行；数据库提示：No function matches the given name and argument types. You might need to add explicit type casts.",
+        resultStatus: "error",
+        result: {
+          success: 0,
+          error: rawError,
+        },
+      },
+    ]);
+  });
+
+  it("does not expose SQL-shaped diagnostics from unrelated tools", () => {
+    const rawError =
+      "error_code=500006, error_message=Failed to execute query on database. Error details: function secret() does not exist";
+
+    expect(friendlyToolErrorText("write_file", rawError)).toBe(
+      "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+    );
+  });
+
+  it("keeps connection details out of SQL tool errors", () => {
+    const rawError =
+      "error_code=500006, error_message=Failed to execute query on database. Error details: request to postgresql://db.internal.example/fund failed";
+
+    expect(friendlyToolErrorText("execute_sql", rawError)).toBe(
+      "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+    );
+  });
+
   it("merges matching tool calls and results into a single display block", () => {
     const displayBlocks = mergeToolExecutionBlocks([
       { type: "tool-call", callToolId: "call-1", toolName: "read_query", params: { sql: "select 1" } },
