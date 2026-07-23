@@ -105,8 +105,8 @@ def is_thinking_only_content(content_items) -> bool:
     return bool(content_items) and all(getattr(item, "type", "") == "thinking" for item in content_items)
 
 
-def _is_thinking_delta(event: SSEEvent) -> bool:
-    """Return True if *event* is a thinking delta (consecutive-mergeable)."""
+def _is_stream_delta(event: SSEEvent) -> bool:
+    """Return True if *event* is a consecutive-mergeable text delta."""
     if event.event != "message":
         return False
     data = event.data
@@ -114,17 +114,25 @@ def _is_thinking_delta(event: SSEEvent) -> bool:
         return False
     if data.type not in (SSEDataType.CREATE_MESSAGE, SSEDataType.APPEND_MESSAGE):
         return False
-    return is_thinking_only_content(data.payload.content)
+    content_types = {getattr(item, "type", "") for item in data.payload.content}
+    return bool(content_types) and content_types <= {"thinking", "markdown"} and len(content_types) == 1
 
 
 def _delta_message_id(event: SSEEvent) -> str:
-    """Extract the message_id from a thinking-delta event.
+    """Extract the message_id from a text-delta event.
 
-    Callers must ensure *event* passes ``_is_thinking_delta`` first.
+    Callers must ensure *event* passes ``_is_stream_delta`` first.
     """
     data = event.data
     if isinstance(data, SSEMessageData):
         return data.payload.message_id
+    return ""
+
+
+def _delta_content_type(event: SSEEvent) -> str:
+    data = event.data
+    if isinstance(data, SSEMessageData) and data.payload.content:
+        return data.payload.content[0].type
     return ""
 
 
@@ -200,7 +208,11 @@ def _is_visible_assistant_response(action, event: SSEEvent, *, tool_result_seen:
     """
     if action.role != ActionRole.ASSISTANT or action.status != ActionStatus.SUCCESS:
         return False
-    if not action.action_type or action.action_type == "thinking_delta" or action.action_type.endswith("_response"):
+    if (
+        not action.action_type
+        or action.action_type in {"thinking", "thinking_delta", "response_delta"}
+        or action.action_type.endswith("_response")
+    ):
         return False
     if not _has_visible_content(event):
         return False
@@ -209,7 +221,7 @@ def _is_visible_assistant_response(action, event: SSEEvent, *, tool_result_seen:
 
 
 def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
-    """Merge consecutive thinking-delta events **for the same message** into single events.
+    """Merge consecutive text deltas for the same message and content type.
 
     Non-delta events pass through unchanged and break any ongoing run of deltas.
     A change in ``message_id`` between adjacent deltas also breaks the run so
@@ -221,18 +233,22 @@ def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
     result: list[SSEEvent] = []
     run_start: int | None = None  # index of first delta in the current run
     run_msg_id: str = ""  # message_id of the current run
+    run_content_type: str = ""
 
     for i, ev in enumerate(events):
-        if _is_thinking_delta(ev):
+        if _is_stream_delta(ev):
             msg_id = _delta_message_id(ev)
+            content_type = _delta_content_type(ev)
             if run_start is None:
                 run_start = i
                 run_msg_id = msg_id
-            elif msg_id != run_msg_id:
-                # Different message — flush the current run and start a new one
+                run_content_type = content_type
+            elif msg_id != run_msg_id or content_type != run_content_type:
+                # Different message or presentation — start a separate run.
                 result.append(_merge_delta_run(events[run_start:i]))
                 run_start = i
                 run_msg_id = msg_id
+                run_content_type = content_type
         else:
             # Flush any accumulated delta run before emitting this non-delta
             if run_start is not None:
@@ -248,7 +264,7 @@ def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
 
 
 def _merge_delta_run(run: list[SSEEvent]) -> SSEEvent:
-    """Merge a non-empty run of thinking-delta events into a single event."""
+    """Merge a non-empty run of homogeneous text-delta events."""
     if len(run) == 1:
         return run[0]
 
@@ -963,7 +979,7 @@ class ChatTaskManager:
                 )
 
                 is_first_delta = True
-                if action.action_type == "thinking_delta":
+                if action.action_type in {"thinking_delta", "response_delta"}:
                     is_first_delta = action.action_id not in seen_delta_action_ids
                     seen_delta_action_ids.add(action.action_id)
 
@@ -977,7 +993,7 @@ class ChatTaskManager:
 
                 is_update = is_finalize_progress_update or (
                     effective_stream
-                    and action.action_type == "response"
+                    and action.action_type in {"response", "thinking"}
                     and isinstance(action.output, dict)
                     and action.action_id in seen_delta_action_ids
                 )

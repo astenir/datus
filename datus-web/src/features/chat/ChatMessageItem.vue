@@ -2,7 +2,6 @@
 import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
-import { shouldRenderThinkingAsAnswer } from "@/lib/chat"
 import type { ChatDisplayMessage, SelectOption } from "@/types"
 
 const props = defineProps<{
@@ -25,9 +24,6 @@ const isUserMessage = computed(() => props.message.role === "user")
 const isSystemMessage = computed(() => props.message.role === "system")
 const hasErrorBlock = computed(() => props.message.blocks?.some((block) => block.type === "error") ?? false)
 const messageFrom = computed(() => isUserMessage.value ? "user" : "assistant")
-const thinkingDisplay = computed(() =>
-  shouldRenderThinkingAsAnswer(props.message) ? "answer" : "reasoning",
-)
 const messageClass = computed(() =>
   hasErrorBlock.value
     ? "mx-auto w-full !max-w-3xl justify-center"
@@ -74,7 +70,6 @@ function openArtifact(kind: string, slug: string) {
             :key="`${message.id}-${index}`"
             :block="block"
             :streaming="streaming"
-            :thinking-display="thinkingDisplay"
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
             :docked-interaction-key="dockedInteractionKey"

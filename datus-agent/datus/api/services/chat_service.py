@@ -548,7 +548,7 @@ class ChatService:
                         sse_event = action_to_history_sse_event(
                             action,
                             event_id,
-                            str(uuid.uuid4()),
+                            action.action_id,
                             include_user_message=True,
                             include_final_response=include_final_response,
                         )

@@ -21,7 +21,7 @@ from datus.api.services.chat_task_manager import (
     ChatTaskManager,
     _coalesce_deltas,
     _fill_database_context,
-    _is_thinking_delta,
+    _is_stream_delta,
     _should_include_final_response,
 )
 
@@ -1453,7 +1453,7 @@ def _make_thinking_delta(event_id: int, text: str, message_id: str = "m1", data_
 
 
 def _make_markdown_event(event_id: int, text: str, message_id: str = "m1"):
-    """Create a non-delta markdown message SSEEvent."""
+    """Create a markdown-delta SSEEvent."""
     return SSEEvent(
         id=event_id,
         event="message",
@@ -1474,27 +1474,27 @@ def _make_ping_event(event_id: int = -1):
 
 
 # ---------------------------------------------------------------------------
-# _is_thinking_delta tests
+# _is_stream_delta tests
 # ---------------------------------------------------------------------------
 
 
-class TestIsThinkingDelta:
-    """Tests for _is_thinking_delta identification."""
+class TestIsStreamDelta:
+    """Tests for streamed text-delta identification."""
 
     def test_positive_append(self):
         """Correctly identifies APPEND_MESSAGE thinking delta."""
         ev = _make_thinking_delta(0, "hello")
-        assert _is_thinking_delta(ev) is True
+        assert _is_stream_delta(ev) is True
 
     def test_positive_create(self):
         """Correctly identifies CREATE_MESSAGE thinking delta."""
         ev = _make_thinking_delta(0, "hello", data_type=SSEDataType.CREATE_MESSAGE)
-        assert _is_thinking_delta(ev) is True
+        assert _is_stream_delta(ev) is True
 
-    def test_negative_markdown(self):
-        """Markdown content is not a thinking delta."""
+    def test_positive_markdown(self):
+        """Markdown response chunks are stream deltas too."""
         ev = _make_markdown_event(0, "hello")
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is True
 
     def test_negative_update_message(self):
         """UPDATE_MESSAGE is not a thinking delta."""
@@ -1511,12 +1511,12 @@ class TestIsThinkingDelta:
             ),
             timestamp="t",
         )
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
     def test_negative_ping_event(self):
         """Ping event is not a thinking delta."""
         ev = _make_ping_event()
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
     def test_negative_empty_content(self):
         """Empty content list is not a thinking delta."""
@@ -1529,7 +1529,7 @@ class TestIsThinkingDelta:
             ),
             timestamp="t",
         )
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1562,8 +1562,8 @@ class TestCoalesceDeltas:
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "part0part1part2"
 
-    def test_preserves_non_delta(self):
-        """Non-delta events pass through unchanged."""
+    def test_preserves_single_markdown_delta_and_non_delta(self):
+        """A lone markdown delta and a ping pass through unchanged."""
         md = _make_markdown_event(0, "hello")
         ping = _make_ping_event(1)
         result = _coalesce_deltas([md, ping])
@@ -1571,8 +1571,8 @@ class TestCoalesceDeltas:
         assert result[0] is md
         assert result[1] is ping
 
-    def test_mixed_sequence(self):
-        """delta + non-delta + delta → 3 events (non-delta breaks run)."""
+    def test_mixed_presentations_are_not_merged(self):
+        """Thinking and markdown runs remain separate even with one message id."""
         d1 = _make_thinking_delta(0, "a")
         md = _make_markdown_event(1, "break")
         d2 = _make_thinking_delta(2, "b")
@@ -1585,9 +1585,9 @@ class TestCoalesceDeltas:
         # Third is the lone delta (unchanged)
         assert result[2] is d2
 
-    def test_trailing_delta_run(self):
-        """Non-delta followed by multiple deltas → 2 events."""
-        md = _make_markdown_event(0, "start")
+    def test_markdown_run_followed_by_thinking_run(self):
+        """Markdown and thinking deltas form separate coalesced runs."""
+        md = _make_markdown_event(0, "start", message_id="answer")
         d1 = _make_thinking_delta(1, "x")
         d2 = _make_thinking_delta(2, "y")
         result = _coalesce_deltas([md, d1, d2])

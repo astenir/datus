@@ -46,7 +46,6 @@ import type { MessageDisplayBlock, SelectOption, ToolChildMessage } from "@/type
 const props = defineProps<{
   block: MessageDisplayBlock
   streaming?: boolean
-  thinkingDisplay?: "answer" | "reasoning"
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
@@ -136,12 +135,6 @@ function readOnlyInteractionDescription() {
     :block="block"
   />
 
-  <MessageResponse
-    v-else-if="block.type === 'thinking' && thinkingDisplay === 'answer'"
-    :content="block.content"
-    :streaming="streaming"
-  />
-
   <Reasoning
     v-else-if="block.type === 'thinking'"
     :is-streaming="streaming"
@@ -200,7 +193,6 @@ function readOnlyInteractionDescription() {
                 :key="`${child.id}-${index}`"
                 :block="childBlock"
                 :streaming="streaming"
-                :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
                 :docked-interaction-key="dockedInteractionKey"
@@ -281,7 +273,6 @@ function readOnlyInteractionDescription() {
                 :key="`${child.id}-${index}`"
                 :block="childBlock"
                 :streaming="streaming"
-                :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
                 :docked-interaction-key="dockedInteractionKey"

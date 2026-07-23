@@ -1396,6 +1396,38 @@ class TestActionToSSEEvent:
         assert content.type == "thinking"
         assert content.payload["content"] == "world"
 
+    def test_response_delta_uses_markdown_content(self):
+        """Normal assistant response chunks stream as markdown, not reasoning."""
+        action = _make_action(
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.PROCESSING,
+            action_type="response_delta",
+            output={"delta": "Normal answer"},
+        )
+        event = action_to_sse_event(
+            action,
+            event_id=22,
+            message_id="response-22",
+            stream_thinking=True,
+            is_first_delta=True,
+        )
+        event = _assert_sse_event(event)
+        assert event.data.type == SSEDataType.CREATE_MESSAGE
+        assert event.data.payload.content[0].type == "markdown"
+        assert event.data.payload.content[0].payload["content"] == "Normal answer"
+
+    def test_markdown_content_type_overrides_internal_phase_flag(self):
+        """Pre-tool assistant text remains markdown even when it is not the final turn response."""
+        action = _make_action(
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            action_type="response",
+            output={"raw_output": "I will inspect the schema.", "is_thinking": True, "content_type": "markdown"},
+        )
+        event = action_to_sse_event(action, event_id=23, message_id="response-23")
+        event = _assert_sse_event(event)
+        assert event.data.payload.content[0].type == "markdown"
+
     def test_thinking_delta_skipped_when_stream_disabled(self):
         """thinking_delta returns None when stream_thinking=False (default)."""
         action = _make_action(

@@ -640,14 +640,6 @@ function latestUserInteractionBlock(message: ChatMessage | undefined) {
   return block?.type === "user-interaction" ? block : null;
 }
 
-export function shouldRenderThinkingAsAnswer(message: Pick<ChatDisplayMessage, "role" | "depth" | "blocks">) {
-  const blocks = message.blocks ?? [];
-  return message.role === "assistant"
-    && !message.depth
-    && blocks.some((block) => block.type === "thinking")
-    && !blocks.some((block) => block.type === "markdown");
-}
-
 export function shouldResetConversationOnAgentChange() {
   return false;
 }

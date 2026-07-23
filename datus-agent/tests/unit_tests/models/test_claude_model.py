@@ -2409,8 +2409,8 @@ class _FakeAsyncStreamManager:
 
 class TestGenerateWithMcpStreamTextDeltas:
     @pytest.mark.asyncio
-    async def test_streams_text_deltas_as_thinking_delta_actions(self):
-        """When async_anthropic_client is set, yield thinking_delta per text_delta event."""
+    async def test_streams_text_deltas_as_response_delta_actions(self):
+        """When async_anthropic_client is set, yield response_delta per text_delta event."""
         from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
 
         cfg = _make_model_config(use_native_api=True)
@@ -2456,8 +2456,8 @@ class TestGenerateWithMcpStreamTextDeltas:
         # Stream invoked once
         async_client.messages.stream.assert_called_once()
 
-        # Exactly two thinking_delta events with incremental accumulation, both transient.
-        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        # Exactly two response_delta events with incremental accumulation, both transient.
+        delta_actions = [a for a in actions if a.action_type == "response_delta"]
         assert len(delta_actions) == 2
         assert all(a.role == ActionRole.ASSISTANT for a in delta_actions)
         assert all(a.status == ActionStatus.PROCESSING for a in delta_actions)
@@ -2479,6 +2479,7 @@ class TestGenerateWithMcpStreamTextDeltas:
         # Shares stream id with deltas so CLI dedup matches the paired turn.
         assert responses[0].action_id == delta_actions[0].action_id
         assert responses[0].output["is_thinking"] is False
+        assert responses[0].output["content_type"] == "markdown"
 
         # Final assistant action carries the assembled text.
         finals = [a for a in actions if a.action_type == "final_response"]
@@ -2491,9 +2492,75 @@ class TestGenerateWithMcpStreamTextDeltas:
         # action is also transient (yield-only, like delta) so it should not
         # land in the manager either.
         persisted_types = {a.action_type for a in ahm.actions}
-        assert "thinking_delta" not in persisted_types
+        assert "response_delta" not in persisted_types
         assert "response" not in persisted_types
         assert "final_response" in persisted_types
+
+    @pytest.mark.asyncio
+    async def test_streams_native_thinking_separately_from_normal_text(self):
+        """Claude thinking blocks use thinking actions while text stays markdown."""
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        thinking_block_start = MagicMock()
+        thinking_block_start.type = "thinking"
+        thinking_delta = MagicMock()
+        thinking_delta.type = "thinking_delta"
+        thinking_delta.thinking = "Inspecting the request."
+        text_block_start = MagicMock()
+        text_block_start.type = "text"
+        text_delta = MagicMock()
+        text_delta.type = "text_delta"
+        text_delta.text = "Here is the answer."
+        events = [
+            _FakeStreamEvent("content_block_start", content_block=thinking_block_start),
+            _FakeStreamEvent("content_block_delta", delta=thinking_delta),
+            _FakeStreamEvent("content_block_stop"),
+            _FakeStreamEvent("content_block_start", content_block=text_block_start),
+            _FakeStreamEvent("content_block_delta", delta=text_delta),
+            _FakeStreamEvent("content_block_stop"),
+        ]
+        final_msg = _make_response([_make_text_block("Here is the answer.")])
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        actions = []
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for action in model._generate_with_mcp_stream(
+                prompt="test",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ActionHistoryManager(),
+            ):
+                actions.append(action)
+
+        reasoning_deltas = [a for a in actions if a.action_type == "thinking_delta"]
+        reasoning_actions = [a for a in actions if a.action_type == "thinking"]
+        response_deltas = [a for a in actions if a.action_type == "response_delta"]
+        responses = [a for a in actions if a.action_type == "response"]
+
+        assert len(reasoning_deltas) == 1
+        assert reasoning_deltas[0].output["delta"] == "Inspecting the request."
+        assert len(reasoning_actions) == 1
+        assert reasoning_actions[0].action_id == reasoning_deltas[0].action_id
+        assert reasoning_actions[0].output == {
+            "thinking": "Inspecting the request.",
+            "content_type": "thinking",
+        }
+        assert len(response_deltas) == 1
+        assert response_deltas[0].output["delta"] == "Here is the answer."
+        assert len(responses) == 1
+        assert responses[0].action_id == response_deltas[0].action_id
+        assert responses[0].output["content_type"] == "markdown"
+        assert reasoning_actions[0].action_id != responses[0].action_id
 
     @pytest.mark.asyncio
     async def test_stream_null_id_server_tool_pairs_with_generated_id(self):
@@ -2644,7 +2711,7 @@ class TestGenerateWithMcpStreamTextDeltas:
     async def test_non_text_delta_event_is_skipped(self):
         """A ``content_block_delta`` whose ``delta.type`` is not ``text_delta``
         (e.g. ``input_json_delta`` from tool argument streaming) must be ignored
-        — no ``thinking_delta`` should be emitted for it.
+        — no assistant stream delta should be emitted for it.
         """
         from datus.schemas.action_history import ActionHistoryManager
 
@@ -2686,7 +2753,7 @@ class TestGenerateWithMcpStreamTextDeltas:
             ):
                 actions.append(action)
 
-        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        delta_actions = [a for a in actions if a.action_type == "response_delta"]
         assert len(delta_actions) == 1
         assert delta_actions[0].output["delta"] == "kept"
 
@@ -2735,7 +2802,7 @@ class TestGenerateWithMcpStreamTextDeltas:
             ):
                 actions.append(action)
 
-        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        delta_actions = [a for a in actions if a.action_type == "response_delta"]
         assert len(delta_actions) == 1
         assert delta_actions[0].output["delta"] == "real"
 
@@ -2774,11 +2841,11 @@ class TestGenerateWithMcpStreamTextDeltas:
             ):
                 actions.append(action)
 
-        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        delta_actions = [a for a in actions if a.action_type == "response_delta"]
         assert len(delta_actions) == 1
         # The stream id was minted on the delta path (no prior content_block_start
         # set one), proving the fallback at line 549 fired.
-        assert delta_actions[0].action_id.startswith("thinking_stream_")
+        assert delta_actions[0].action_id.startswith("response_stream_")
 
 
 # ---------------------------------------------------------------------------

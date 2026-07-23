@@ -21,7 +21,6 @@ import {
   normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
-  shouldRenderThinkingAsAnswer,
   shouldResetConversationOnAgentChange,
   visibleMessageActionTargetId
 } from "./chat";
@@ -973,7 +972,7 @@ describe("contentFromPayloadBlocks", () => {
   });
 });
 
-describe("streaming thinking display compatibility", () => {
+describe("streaming message tracking", () => {
   it("tracks only the latest message as actively streaming", () => {
     expect(activeStreamingMessageId([])).toBeNull();
     expect(activeStreamingMessageId([
@@ -982,28 +981,6 @@ describe("streaming thinking display compatibility", () => {
     ])).toBe("thinking_stream_1");
   });
 
-  it("renders top-level assistant thinking-only messages as visible answer text", () => {
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      blocks: [{ type: "thinking", content: "partial answer" }],
-    })).toBe(true);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      blocks: [{ type: "markdown", content: "final answer" }],
-    })).toBe(false);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      depth: 1,
-      blocks: [{ type: "thinking", content: "internal reasoning" }],
-    })).toBe(false);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "user",
-      blocks: [{ type: "thinking", content: "not an assistant answer" }],
-    })).toBe(false);
-  });
 });
 
 describe("activeUserInteractionKey", () => {
@@ -1319,6 +1296,26 @@ describe("normalizeHistoryMessages", () => {
         ],
         depth: undefined
       }
+    ]);
+  });
+
+  it("preserves reasoning and final answers when history gives them distinct message ids", () => {
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "response-1:reasoning",
+        role: "assistant",
+        content: [{ type: "thinking", payload: { content: "检查上下文" } }],
+      },
+      {
+        message_id: "response-1:response",
+        role: "assistant",
+        content: [{ type: "markdown", payload: { content: "这是正常回答" } }],
+      },
+    ]);
+
+    expect(messages.map((message) => message.blocks)).toEqual([
+      [{ type: "thinking", content: "检查上下文" }],
+      [{ type: "markdown", content: "这是正常回答" }],
     ]);
   });
 });

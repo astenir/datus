@@ -1607,10 +1607,14 @@ class SessionManager:
                         assistant_progress.append(f"💭Thinking: {reasoning_text}")
                         provider_data = message_json.get("provider_data")
                         provider_data = provider_data if isinstance(provider_data, dict) else {}
-                        response_id = provider_data.get("response_id") or message_json.get("id") or str(uuid.uuid4())
+                        response_id = (
+                            provider_data.get("response_id")
+                            or message_json.get("id")
+                            or f"assistant_{uuid.uuid5(uuid.NAMESPACE_URL, f'{created_at}|{message_data}').hex}"
+                        )
                         current_actions.append(
                             ActionHistory(
-                                action_id=response_id,
+                                action_id=f"{response_id}:reasoning",
                                 role=ActionRole.ASSISTANT,
                                 messages=reasoning_text,
                                 action_type="thinking",
@@ -1715,6 +1719,13 @@ class SessionManager:
                 if role == "assistant":
                     # Assistant message - aggregate consecutive ones
                     content_array = message_json.get("content", [])
+                    provider_data = message_json.get("provider_data")
+                    provider_data = provider_data if isinstance(provider_data, dict) else {}
+                    response_id = (
+                        provider_data.get("response_id")
+                        or message_json.get("id")
+                        or f"assistant_{uuid.uuid5(uuid.NAMESPACE_URL, f'{created_at}|{message_data}').hex}"
+                    )
 
                     for item in content_array:
                         if not isinstance(item, dict):
@@ -1722,6 +1733,42 @@ class SessionManager:
 
                         item_type = item.get("type", "")
                         text = item.get("text", "")
+
+                        # Anthropic native responses persist reasoning inside
+                        # the assistant content array rather than as a top-level
+                        # OpenAI ``type=reasoning`` item.
+                        if item_type == "thinking":
+                            thinking_text = str(item.get("thinking", "") or "").strip()
+                            if thinking_text:
+                                if not current_assistant_group:
+                                    current_assistant_group = {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "timestamp": created_at_iso,
+                                        "created_at": created_at_iso,
+                                    }
+                                assistant_progress.append(f"💭Thinking: {thinking_text}")
+                                current_actions.append(
+                                    ActionHistory(
+                                        action_id=f"{response_id}:reasoning",
+                                        role=ActionRole.ASSISTANT,
+                                        messages=thinking_text,
+                                        action_type="thinking",
+                                        input=None,
+                                        output={"thinking": thinking_text, "content_type": "thinking"},
+                                        status=ActionStatus.SUCCESS,
+                                        start_time=(
+                                            datetime.fromisoformat(str(created_at))
+                                            if created_at
+                                            else datetime.now()
+                                        ),
+                                        end_time=(
+                                            datetime.fromisoformat(str(created_at))
+                                            if created_at
+                                            else datetime.now()
+                                        ),
+                                    )
+                                )
 
                         # Accept both OpenAI-style ``output_text`` and Anthropic-style ``text`` blocks.
                         if item_type in ("output_text", "text") and text:
@@ -1734,25 +1781,22 @@ class SessionManager:
                                     "created_at": created_at_iso,
                                 }
 
-                            # Add to progress
-                            assistant_progress.append(f"💭Thinking: {text}")
+                            assistant_progress.append(text)
 
-                            # Create ActionHistory for thinking (use response_id from provider)
-                            response_id = message_json.get("provider_data", {}).get(
-                                "response_id", message_json.get("id", str(uuid.uuid4()))
-                            )
-                            thinking_action = ActionHistory(
-                                action_id=response_id,
+                            # Create the normal assistant response action using
+                            # the same provider identity as its reasoning block.
+                            response_action = ActionHistory(
+                                action_id=f"{response_id}:response",
                                 role=ActionRole.ASSISTANT,
                                 messages=text,
-                                action_type="thinking",
+                                action_type="response",
                                 input=None,
-                                output={"raw_output": text},
+                                output={"raw_output": text, "is_thinking": False, "content_type": "markdown"},
                                 status=ActionStatus.SUCCESS,
                                 start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
                                 end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
                             )
-                            current_actions.append(thinking_action)
+                            current_actions.append(response_action)
 
                         # Native Claude tool calls live inside assistant content
                         # as tool_use / server_tool_use blocks.

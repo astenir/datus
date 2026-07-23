@@ -777,13 +777,18 @@ class ClaudeModel(OpenAICompatibleModel):
                     # ``complete_None`` (which ActionHistoryManager would dedupe away).
                     last_server_tool_id: Optional[str] = None
                     if self.async_anthropic_client is not None:
-                        # Streaming path: yield text deltas as ``thinking_delta``
+                        # Streaming path: keep provider reasoning separate from
+                        # normal assistant text so clients can render each with
+                        # the correct presentation.
                         # ActionHistory in real time (parity with
                         # OpenAICompatibleModel.generate_with_tools_stream), then
                         # rehydrate the final ``Message`` to reuse the existing
                         # tool-use / usage / session logic below unchanged.
-                        thinking_stream_id: Optional[str] = None
-                        thinking_accumulated = ""
+                        active_block_type: Optional[str] = None
+                        response_stream_id: Optional[str] = None
+                        response_accumulated = ""
+                        reasoning_stream_id: Optional[str] = None
+                        reasoning_accumulated = ""
                         async with self._anthropic_messages_stream(**request_kwargs) as stream:
                             async for event in stream:
                                 if interrupt_controller and interrupt_controller.is_interrupted:
@@ -796,8 +801,13 @@ class ClaudeModel(OpenAICompatibleModel):
                                     block_start = getattr(event, "content_block", None)
                                     bs_type = getattr(block_start, "type", None) if block_start is not None else None
                                     if bs_type == "text":
-                                        thinking_stream_id = f"thinking_stream_{uuid.uuid4().hex[:8]}"
-                                        thinking_accumulated = ""
+                                        active_block_type = "text"
+                                        response_stream_id = f"response_stream_{uuid.uuid4().hex[:8]}"
+                                        response_accumulated = ""
+                                    elif bs_type == "thinking":
+                                        active_block_type = "thinking"
+                                        reasoning_stream_id = f"reasoning_stream_{uuid.uuid4().hex[:8]}"
+                                        reasoning_accumulated = ""
                                     elif bs_type == "server_tool_use":
                                         # Server-side web tool call — surface it in real
                                         # time (interleaved where it happens) instead of
@@ -854,21 +864,40 @@ class ClaudeModel(OpenAICompatibleModel):
                                         yield complete
                                 elif event_type == "content_block_delta":
                                     delta = getattr(event, "delta", None)
-                                    if delta is None or getattr(delta, "type", None) != "text_delta":
+                                    if delta is None:
                                         continue
-                                    delta_text = getattr(delta, "text", "") or ""
+                                    delta_type = getattr(delta, "type", None)
+                                    if delta_type == "thinking_delta":
+                                        delta_text = getattr(delta, "thinking", "") or ""
+                                        action_type = "thinking_delta"
+                                        stream_id = reasoning_stream_id
+                                    elif delta_type == "text_delta":
+                                        delta_text = getattr(delta, "text", "") or ""
+                                        action_type = "response_delta"
+                                        stream_id = response_stream_id
+                                    else:
+                                        continue
                                     if not delta_text:
                                         continue
-                                    if thinking_stream_id is None:
-                                        thinking_stream_id = f"thinking_stream_{uuid.uuid4().hex[:8]}"
-                                    thinking_accumulated += delta_text
+                                    if action_type == "thinking_delta":
+                                        if stream_id is None:
+                                            reasoning_stream_id = f"reasoning_stream_{uuid.uuid4().hex[:8]}"
+                                            stream_id = reasoning_stream_id
+                                        reasoning_accumulated += delta_text
+                                        accumulated = reasoning_accumulated
+                                    else:
+                                        if stream_id is None:
+                                            response_stream_id = f"response_stream_{uuid.uuid4().hex[:8]}"
+                                            stream_id = response_stream_id
+                                        response_accumulated += delta_text
+                                        accumulated = response_accumulated
                                     delta_action = ActionHistory(
-                                        action_id=thinking_stream_id,
+                                        action_id=stream_id,
                                         role=ActionRole.ASSISTANT,
                                         messages="",
-                                        action_type="thinking_delta",
+                                        action_type=action_type,
                                         input={},
-                                        output={"delta": delta_text, "accumulated": thinking_accumulated},
+                                        output={"delta": delta_text, "accumulated": accumulated},
                                         status=ActionStatus.PROCESSING,
                                     )
                                     yield delta_action
@@ -883,20 +912,39 @@ class ClaudeModel(OpenAICompatibleModel):
                                     # paragraph stays visible while ``__exit__``
                                     # also flushes it to scrollback, producing a
                                     # visible duplicate of the closing paragraph.
-                                    if thinking_accumulated.strip():
-                                        full_text = thinking_accumulated.strip()
-                                        text_preview = full_text if len(full_text) <= 200 else f"{full_text[:200]}..."
+                                    if active_block_type == "thinking" and reasoning_accumulated.strip():
+                                        full_text = reasoning_accumulated.strip()
                                         yield ActionHistory(
-                                            action_id=thinking_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
+                                            action_id=reasoning_stream_id
+                                            or f"reasoning_{uuid.uuid4().hex[:8]}",
                                             role=ActionRole.ASSISTANT,
-                                            messages=f"Thinking: {text_preview}",
-                                            action_type="response",
+                                            messages=full_text,
+                                            action_type="thinking",
                                             input={},
-                                            output={"raw_output": full_text, "is_thinking": False},
+                                            output={"thinking": full_text, "content_type": "thinking"},
                                             status=ActionStatus.SUCCESS,
                                         )
-                                    thinking_stream_id = None
-                                    thinking_accumulated = ""
+                                        reasoning_stream_id = None
+                                        reasoning_accumulated = ""
+                                    elif active_block_type == "text" and response_accumulated.strip():
+                                        full_text = response_accumulated.strip()
+                                        text_preview = full_text if len(full_text) <= 200 else f"{full_text[:200]}..."
+                                        yield ActionHistory(
+                                            action_id=response_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
+                                            role=ActionRole.ASSISTANT,
+                                            messages=text_preview,
+                                            action_type="response",
+                                            input={},
+                                            output={
+                                                "raw_output": full_text,
+                                                "is_thinking": False,
+                                                "content_type": "markdown",
+                                            },
+                                            status=ActionStatus.SUCCESS,
+                                        )
+                                        response_stream_id = None
+                                        response_accumulated = ""
+                                    active_block_type = None
                             response = await stream.get_final_message()
                     else:
                         # Fallback non-streaming path (kept so existing tests that
@@ -1386,8 +1434,8 @@ class ClaudeModel(OpenAICompatibleModel):
             if not partial:
                 # On a mid-stream failure ``final_content`` is still empty, but
                 # the partial text the user already saw lives in
-                # ``thinking_accumulated`` — prefer it over the placeholder.
-                partial = (frame_locals.get("thinking_accumulated") or "").strip()
+                # ``response_accumulated`` — prefer it over the placeholder.
+                partial = (frame_locals.get("response_accumulated") or "").strip()
             assistant_text = partial or f"[Turn interrupted before completion: {type(error).__name__}]"
             # Preserve any completed tool_use/tool_result rounds from this turn
             # too, not just a placeholder — ``_replay_safe_turn_items`` drops a

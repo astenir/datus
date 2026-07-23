@@ -283,6 +283,99 @@ class TestChatServiceGetHistory:
         result = chat_svc.get_history("empty-hist")
         assert result.success is True
 
+    def test_history_keeps_provider_reasoning_separate_from_final_answer(self, chat_svc):
+        """Reasoning rebuilds as thinking while assistant output rebuilds as markdown."""
+        import json
+        import os
+        import sqlite3
+
+        session_id = "history-reasoning-and-answer"
+        response_id = "response-123"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            (
+                json.dumps({"role": "user", "content": "Which model are you?"}),
+                "2026-01-01T00:00:00",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Identify the active model."}],
+                        "provider_data": {"response_id": response_id},
+                    }
+                ),
+                "2026-01-01T00:00:01",
+            ),
+            (
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "I am the configured model."}],
+                        "provider_data": {"response_id": response_id},
+                    }
+                ),
+                "2026-01-01T00:00:02",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, data, created_at) for data, created_at in rows],
+            )
+
+        result = chat_svc.get_history(session_id)
+
+        assert result.success is True
+        assistant_messages = [message for message in result.data.messages if message.role == "assistant"]
+        assert [message.message_id for message in assistant_messages] == [
+            f"{response_id}:reasoning",
+            f"{response_id}:response",
+        ]
+        assert [message.content[0].type for message in assistant_messages] == ["thinking", "markdown"]
+        assert assistant_messages[0].content[0].payload["content"] == "Identify the active model."
+        assert assistant_messages[1].content[0].payload["content"] == "I am the configured model."
+
+    def test_history_rebuilds_anthropic_thinking_block_separately(self, chat_svc):
+        """Claude-native thinking content rebuilds beside its normal text answer."""
+        import json
+        import os
+        import sqlite3
+
+        session_id = "history-anthropic-reasoning-and-answer"
+        response_id = "claude-response-123"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        message = {
+            "id": response_id,
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Check the requested identity."},
+                {"type": "text", "text": "I am the configured Claude model."},
+            ],
+        }
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                (session_id, json.dumps(message), "2026-01-01T00:00:01"),
+            )
+
+        result = chat_svc.get_history(session_id)
+
+        assert result.success is True
+        assistant_messages = [message for message in result.data.messages if message.role == "assistant"]
+        assert [message.message_id for message in assistant_messages] == [
+            f"{response_id}:reasoning",
+            f"{response_id}:response",
+        ]
+        assert [message.content[0].type for message in assistant_messages] == ["thinking", "markdown"]
+        assert assistant_messages[0].content[0].payload["content"] == "Check the requested identity."
+        assert assistant_messages[1].content[0].payload["content"] == "I am the configured Claude model."
+
     def test_terminal_events_are_idempotent_and_do_not_enter_model_context(self, chat_svc):
         """Display-only terminal outcomes survive reload without polluting SDK messages."""
         session_id = "terminal-event-history"
