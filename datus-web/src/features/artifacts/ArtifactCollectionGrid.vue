@@ -2,7 +2,14 @@
 import { EyeIcon, FilePenLineIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ArtifactManifest } from "@/types"
 
@@ -43,15 +50,26 @@ const emit = defineEmits<{
     <Card
       v-for="index in 3"
       :key="index"
+      size="sm"
+      class="h-52"
     >
-      <CardHeader>
+      <CardHeader class="min-w-0">
         <Skeleton class="h-5 w-36" />
+        <div class="flex min-h-24 flex-col gap-2">
+          <Skeleton class="h-3 w-full" />
+          <Skeleton class="h-3 w-full" />
+          <Skeleton class="h-3 w-full" />
+          <Skeleton class="h-3 w-full" />
+          <Skeleton class="h-3 w-2/3" />
+        </div>
       </CardHeader>
-      <CardContent class="flex flex-col gap-3">
-        <Skeleton class="h-4 w-full" />
-        <Skeleton class="h-4 w-2/3" />
-        <Skeleton class="h-8 w-24" />
-      </CardContent>
+      <CardFooter class="mt-auto grid h-8 shrink-0 grid-cols-4 gap-1">
+        <Skeleton
+          v-for="actionIndex in 4"
+          :key="actionIndex"
+          class="h-8 w-full"
+        />
+      </CardFooter>
     </Card>
   </div>
 
@@ -80,52 +98,66 @@ const emit = defineEmits<{
     <Card
       v-for="item in props.items"
       :key="item.slug"
+      size="sm"
+      class="h-52"
     >
-      <CardHeader>
-        <CardTitle class="text-base">{{ item.name }}</CardTitle>
+      <CardHeader class="min-w-0">
+        <CardTitle
+          class="truncate text-base font-semibold"
+          :title="item.name"
+        >
+          {{ item.name }}
+        </CardTitle>
+        <CardDescription
+          class="line-clamp-5 min-h-24"
+          :title="item.description"
+        >
+          {{ item.description }}
+        </CardDescription>
       </CardHeader>
-      <CardContent class="flex flex-col gap-3">
-        <p class="min-h-10 text-sm text-muted-foreground">{{ item.description }}</p>
-        <div class="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            @click="emit('select', item.slug)"
-          >
-            <FileSearchIcon data-icon="inline-start" />
-            详情
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="props.openingSlug === item.slug"
-            @click="emit('openPreview', item.slug)"
-          >
-            <EyeIcon data-icon="inline-start" />
-            {{ props.openingSlug === item.slug ? "加载中" : "查看" }}
-          </Button>
-          <Button
-            v-if="item.can_manage_share"
-            variant="outline"
-            size="sm"
-            :disabled="props.sharingSlug === item.slug"
-            @click="emit('share', item.slug)"
-          >
-            <Share2Icon data-icon="inline-start" />
-            {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
-          </Button>
-          <Button
-            v-if="props.editEnabled && item.can_edit"
-            variant="outline"
-            size="sm"
-            :disabled="Boolean(props.editingSlug)"
-            @click="emit('edit', item.slug)"
-          >
-            <FilePenLineIcon data-icon="inline-start" />
-            {{ props.editingSlug === item.slug ? "创建中" : "编辑" }}
-          </Button>
-        </div>
-      </CardContent>
+      <CardFooter class="mt-auto grid h-8 shrink-0 grid-cols-4 gap-1">
+        <Button
+          class="col-start-1 w-full min-w-0"
+          variant="outline"
+          size="sm"
+          @click="emit('select', item.slug)"
+        >
+          <FileSearchIcon data-icon="inline-start" />
+          详情
+        </Button>
+        <Button
+          class="col-start-2 w-full min-w-0"
+          variant="outline"
+          size="sm"
+          :disabled="props.openingSlug === item.slug"
+          @click="emit('openPreview', item.slug)"
+        >
+          <EyeIcon data-icon="inline-start" />
+          {{ props.openingSlug === item.slug ? "加载中" : "查看" }}
+        </Button>
+        <Button
+          v-if="item.can_manage_share"
+          class="col-start-3 w-full min-w-0"
+          variant="outline"
+          size="sm"
+          :disabled="props.sharingSlug === item.slug"
+          @click="emit('share', item.slug)"
+        >
+          <Share2Icon data-icon="inline-start" />
+          {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
+        </Button>
+        <Button
+          v-if="props.editEnabled && item.can_edit"
+          class="col-start-4 w-full min-w-0"
+          variant="outline"
+          size="sm"
+          :disabled="Boolean(props.editingSlug)"
+          @click="emit('edit', item.slug)"
+        >
+          <FilePenLineIcon data-icon="inline-start" />
+          {{ props.editingSlug === item.slug ? "创建中" : "编辑" }}
+        </Button>
+      </CardFooter>
     </Card>
   </div>
 </template>
