@@ -71,7 +71,6 @@ let subjectDetailRequestId = 0
 
 const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
 const currentDatasource = computed(() => props.workspace.currentDatasource.value.trim())
-const tableIndexCount = computed(() => semantic.tableDetail.value?.indexes.length ?? 0)
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
 const currentDatasourceLabel = computed(() =>
@@ -413,7 +412,6 @@ onMounted(() => {
           :reference-sql="referenceSql"
           :table-detail-title="tableDetailTitle"
           :table-detail-description="tableDetailDescription"
-          :table-index-count="tableIndexCount"
           :semantic="semantic"
         />
       </div>
@@ -441,7 +439,6 @@ onMounted(() => {
           :reference-sql="referenceSql"
           :table-detail-title="tableDetailTitle"
           :table-detail-description="tableDetailDescription"
-          :table-index-count="tableIndexCount"
           :semantic="semantic"
           :show-header="false"
         />

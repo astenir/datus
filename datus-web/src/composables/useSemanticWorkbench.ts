@@ -66,10 +66,16 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
   const tableName = shallowRef("");
   const tableDetail = ref<TableDetail | null>(null);
   const semanticYaml = shallowRef("");
+  const originalSemanticYaml = shallowRef("");
+  const validatedSemanticYaml = shallowRef<string | null>(null);
   const validation = ref<SemanticModelValidation | null>(null);
   let tableLoadRequestId = 0;
 
   const semanticInvalidMessages = computed(() => validation.value?.invalid_message ?? []);
+  const isSemanticDirty = computed(() => semanticYaml.value !== originalSemanticYaml.value);
+  const isValidationCurrent = computed(() =>
+    validation.value !== null && validatedSemanticYaml.value === semanticYaml.value,
+  );
   const canLoadTable = computed(() => tableName.value.trim().length > 0);
 
   async function loadTableDetails(name = tableName.value) {
@@ -82,6 +88,7 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     tableName.value = target;
     loadingTable.value = true;
     validation.value = null;
+    validatedSemanticYaml.value = null;
     const requestId = ++tableLoadRequestId;
     const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
@@ -101,9 +108,12 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
       }
 
       if (semanticResult.status === "fulfilled") {
-        semanticYaml.value = semanticResult.value?.yaml ?? "";
+        const loadedYaml = semanticResult.value?.yaml ?? "";
+        semanticYaml.value = loadedYaml;
+        originalSemanticYaml.value = loadedYaml;
       } else {
         semanticYaml.value = "";
+        originalSemanticYaml.value = "";
         failures.push({ resource: "语义模型", error: semanticResult.reason });
         console.error(`加载语义模型失败 (${datasourceId ?? "default"}:${target}):`, semanticResult.reason);
       }
@@ -125,14 +135,16 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     }
 
     validating.value = true;
+    const yamlToValidate = semanticYaml.value;
     const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
       validation.value = await tableApi.validateSemanticModel(
         connection.effectiveBase(),
         target,
-        semanticYaml.value,
+        yamlToValidate,
         datasourceId,
       );
+      validatedSemanticYaml.value = validation.value ? yamlToValidate : null;
       toast.success(validation.value?.valid ? "语义模型校验通过" : "语义模型校验未通过");
     } catch (error) {
       console.error("校验语义模型失败:", error);
@@ -182,6 +194,8 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     semanticYaml,
     validation: readonly(validation),
     semanticInvalidMessages,
+    isSemanticDirty,
+    isValidationCurrent,
     canLoadTable,
     loadTableDetails,
     validateSemanticModel,
