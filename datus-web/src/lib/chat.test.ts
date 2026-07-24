@@ -146,6 +146,49 @@ describe("message action visibility", () => {
 });
 
 describe("tool execution blocks", () => {
+  it("preserves whether the backend expects a client-proxied tool execution", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool",
+        payload: {
+          callToolId: "call-proxy",
+          toolName: "write_file",
+          toolParams: { path: "report.md" },
+          proxied: false,
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-call",
+        callToolId: "call-proxy",
+        toolName: "write_file",
+        params: { path: "report.md" },
+        proxied: false,
+      },
+    ]);
+
+    expect(mergeToolExecutionBlocks([
+      parsed.blocks[0],
+      {
+        type: "tool-result",
+        callToolId: "call-proxy",
+        toolName: "write_file",
+        result: { success: true },
+      },
+    ])).toEqual([
+      {
+        type: "tool-execution",
+        callToolId: "call-proxy",
+        toolName: "write_file",
+        params: { path: "report.md" },
+        proxied: false,
+        result: { success: true },
+      },
+    ]);
+  });
+
   it("preserves backend tool call ids from call and result payloads", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -615,6 +658,24 @@ describe("chat error display", () => {
       title: "无法使用当前 Agent",
       code: "AGENT_FORBIDDEN",
     });
+  });
+
+  it.each([
+    ["UPSTREAM_RATE_LIMITED", "模型请求过于频繁"],
+    ["UPSTREAM_TIMEOUT", "模型服务响应超时"],
+    ["UPSTREAM_UNAVAILABLE", "模型服务暂时不可用"],
+    ["UPSTREAM_ERROR", "模型服务请求失败"],
+    ["CONTEXT_LENGTH_EXCEEDED", "对话内容超出模型限制"],
+    ["UPSTREAM_AUTH_ERROR", "模型服务认证失败"],
+    ["CONTENT_POLICY_VIOLATION", "请求被内容策略拦截"],
+    ["UPSTREAM_BAD_REQUEST", "模型无法处理当前请求"],
+    ["INTERNAL_ERROR", "服务内部错误"],
+  ])("maps v0.3.8 stream error %s to actionable copy", (code, title) => {
+    const block = friendlyChatErrorBlock({ code, message: `${code}: private upstream detail` });
+
+    expect(block).toMatchObject({ type: "error", title, code });
+    expect(block.message).not.toContain("private upstream detail");
+    expect(block.message).not.toContain("当前前端还没有对应说明");
   });
 
   it("uses structured HTTP codes and safe network copy for transport failures", () => {

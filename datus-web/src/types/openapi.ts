@@ -3283,7 +3283,7 @@ export interface components {
 
             components: components["schemas"]["KbComponent"][];
 
-            strategy: "overwrite" | "check" | "incremental";
+            strategy: "overwrite" | "check" | "incremental" | "refresh-profile";
 
             schema_linking_type: string;
 
@@ -3298,6 +3298,8 @@ export interface components {
             success_story_upload_id?: string | null;
 
             success_story_file_id?: string | null;
+
+            semantic_yaml?: string | null;
 
             subject_tree?: string[] | null;
 

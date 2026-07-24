@@ -215,6 +215,43 @@ const friendlyChatErrors: Record<string, { title: string; message: string; tone?
     title: "请求过于频繁",
     message: "当前请求触发了限流保护。请稍后再试。",
   },
+  UPSTREAM_RATE_LIMITED: {
+    title: "模型请求过于频繁",
+    message: "上游模型服务当前触发了限流保护。请稍后重试，或切换到其他可用模型。",
+  },
+  UPSTREAM_TIMEOUT: {
+    title: "模型服务响应超时",
+    message: "上游模型服务未能在规定时间内完成请求。请稍后重试，或缩小本次问题范围。",
+  },
+  UPSTREAM_UNAVAILABLE: {
+    title: "模型服务暂时不可用",
+    message: "上游模型服务当前无法访问。请稍后重试，或切换到其他可用模型。",
+  },
+  UPSTREAM_ERROR: {
+    title: "模型服务请求失败",
+    message: "上游模型服务未能完成本次请求。请稍后重试；若问题持续，请联系管理员检查模型配置。",
+  },
+  CONTEXT_LENGTH_EXCEEDED: {
+    title: "对话内容超出模型限制",
+    message: "本次请求包含的上下文过长。请精简问题、减少引用内容，或新建会话后重试。",
+  },
+  UPSTREAM_AUTH_ERROR: {
+    title: "模型服务认证失败",
+    message: "上游模型凭证无效或已失效。请选择其他可用模型，或联系管理员检查模型凭证。",
+  },
+  CONTENT_POLICY_VIOLATION: {
+    title: "请求被内容策略拦截",
+    message: "本次请求不符合上游模型的内容安全策略。请调整问题内容后重试。",
+    tone: "warning",
+  },
+  UPSTREAM_BAD_REQUEST: {
+    title: "模型无法处理当前请求",
+    message: "上游模型认为本次请求参数或内容无效。请调整问题内容后重试；若问题持续，请联系管理员。",
+  },
+  INTERNAL_ERROR: {
+    title: "服务内部错误",
+    message: "服务在处理本次请求时遇到内部错误。请稍后重试；若问题持续，请联系管理员查看后台日志。",
+  },
   CHAT_CANCELLED: {
     title: "已停止生成",
     message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
@@ -456,6 +493,7 @@ function mergeToolCallWithResult(
     params: block.params,
     result: result.result,
   };
+  if (block.proxied !== undefined) mergedBlock.proxied = block.proxied;
   if (result.duration != null) mergedBlock.duration = result.duration;
   if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
   if (result.errorText) mergedBlock.errorText = result.errorText;
@@ -815,7 +853,14 @@ export function contentFromPayloadBlocks(
       const callToolId = callToolIdFromPayload(payload);
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
       const toolParams = payload.toolParams ?? payload.tool_params ?? {};
-      blocks.push({ type: "tool-call", callToolId, toolName, params: toolParams });
+      const proxied = typeof payload.proxied === "boolean" ? payload.proxied : undefined;
+      blocks.push({
+        type: "tool-call",
+        callToolId,
+        toolName,
+        params: toolParams,
+        ...(proxied !== undefined ? { proxied } : {}),
+      });
     } else if (type === "call-tool-result") {
       const callToolId = callToolIdFromPayload(payload);
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");

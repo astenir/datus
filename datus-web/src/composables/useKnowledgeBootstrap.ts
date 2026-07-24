@@ -45,6 +45,7 @@ function defaultKbForm(): KnowledgeBootstrapKbForm {
     schemaLinkingType: "full",
     catalog: "",
     databaseName: "",
+    semanticYamlPath: "",
     subjectTreeText: "",
   };
 }
@@ -215,6 +216,9 @@ function buildKbBootstrapInput(
     throw new Error("请选择数据源");
   }
   const component = KB_COMPONENTS.includes(form.component) ? form.component : "metadata";
+  if (form.strategy === "refresh-profile" && component !== "semantic_model") {
+    throw new Error("刷新画像策略仅支持语义模型");
+  }
   const input: BootstrapKbInput = {
     datasource_id: selectedDatasource,
     components: [component],
@@ -233,6 +237,11 @@ function buildKbBootstrapInput(
     if (successStoryUpload) {
       input.success_story_upload_id = successStoryUpload.uploadId;
       if (successStoryUpload.fileId) input.success_story_file_id = successStoryUpload.fileId;
+      if (form.strategy === "refresh-profile") {
+        const semanticYamlPath = form.semanticYamlPath.trim();
+        if (!semanticYamlPath) throw new Error("请填写语义模型 YAML 路径");
+        input.semantic_yaml = semanticYamlPath;
+      }
       if (component === "metrics") input.subject_tree = parseLines(form.subjectTreeText);
       return input;
     }

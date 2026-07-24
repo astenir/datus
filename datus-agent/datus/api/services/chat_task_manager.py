@@ -959,32 +959,19 @@ class ChatTaskManager:
                 # always the executor, whatever the permission profile.
                 apply_proxy_tools(node, ["filesystem_tools.*"])
             elif effective_source == "web":
-                # The active profile (not request.permission_mode) is checked
-                # because a failed ``switch_profile`` silently keeps the
-                # node's original profile — proxying must follow what will
-                # actually gate execution.
+                # Browsers do not own a workspace filesystem executor. Keep
+                # filesystem tools server-side for every permission profile;
+                # normal mode still asks through the existing permission
+                # interaction before the approved server-side execution.
                 active_profile = getattr(getattr(node, "permission_manager", None), "active_profile", None)
-                if active_profile in ("auto", "dangerous"):
-                    # These profiles ALLOW workspace writes without asking and
-                    # the web client skips its confirmation UI for them, so a
-                    # browser round-trip buys nothing and only adds failure
-                    # modes (hidden/closed tab, dropped SSE → the proxy-result
-                    # wait timing out after 600s). Run filesystem tools
-                    # server-side. The empty set reaches the SSE converter so
-                    # call-tool frames carry ``proxied: false`` and the client
-                    # knows not to execute them itself.
-                    # Mutate in place like ``apply_proxy_tools`` does —
-                    # PermissionHooks may hold a shared reference to the set.
-                    existing_proxied = getattr(node, "proxied_tool_names", None)
-                    if isinstance(existing_proxied, set):
-                        existing_proxied.clear()
-                    else:
-                        node.proxied_tool_names = set()
-                    logger.info(
-                        "Filesystem tools run server-side for session=%s (profile=%s)", session_id, active_profile
-                    )
+                # Mutate in place like ``apply_proxy_tools`` does because
+                # PermissionHooks may hold a shared reference to the set.
+                existing_proxied = getattr(node, "proxied_tool_names", None)
+                if isinstance(existing_proxied, set):
+                    existing_proxied.clear()
                 else:
-                    apply_proxy_tools(node, ["write_file", "edit_file", "delete_file"])
+                    node.proxied_tool_names = set()
+                logger.info("Filesystem tools run server-side for session=%s (profile=%s)", session_id, active_profile)
             elif effective_source:
                 logger.warning("Unsupported source '%s'; skipping proxy shortcut", effective_source)
 

@@ -49,6 +49,7 @@ export type ToolCallBlock = {
   callToolId?: string;
   toolName: string;
   params: unknown;
+  proxied?: boolean;
   childMessages?: readonly ToolChildMessage[];
 };
 export type ToolResultBlock = {
@@ -66,6 +67,7 @@ export type ToolExecutionBlock = {
   callToolId: string;
   toolName: string;
   params: unknown;
+  proxied?: boolean;
   duration?: number;
   shortDesc?: string;
   errorText?: string;
@@ -516,7 +518,7 @@ export type McpToolFilter = {
 
 export type BootstrapComponent = "metadata" | "semantic_model" | "metrics" | "reference_sql";
 
-export type BootstrapStrategy = "overwrite" | "check" | "incremental";
+export type BootstrapStrategy = "overwrite" | "check" | "incremental" | "refresh-profile";
 
 export type BootstrapBuildMode = "overwrite" | "check";
 
@@ -531,6 +533,7 @@ export type BootstrapKbInput = {
   upload_id?: string | null;
   success_story_upload_id?: string | null;
   success_story_file_id?: string | null;
+  semantic_yaml?: string | null;
   subject_tree?: string[] | null;
   sql_dir?: string | null;
   reference_sql_upload_id?: string | null;
@@ -598,6 +601,7 @@ export type KnowledgeBootstrapKbForm = {
   schemaLinkingType: "table" | "view" | "mv" | "full";
   catalog: string;
   databaseName: string;
+  semanticYamlPath: string;
   subjectTreeText: string;
 };
 
