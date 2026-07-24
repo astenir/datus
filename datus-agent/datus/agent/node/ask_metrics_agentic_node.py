@@ -9,7 +9,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import re
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 if TYPE_CHECKING:
@@ -89,6 +88,7 @@ class AskMetricsAgenticNode(AgenticNode):
         self.subject_tree_mode: str = "none"
         self.subject_tree_prompt: str = ""
         self._metric_catalog_cache: Optional[Dict[str, Dict[str, Any]]] = None
+        self._failed_query_signatures: set[tuple] = set()
         self._selected_final_metric_result_id: Optional[str] = None
         self.startup_error: Optional[str] = None
 
@@ -122,11 +122,9 @@ class AskMetricsAgenticNode(AgenticNode):
         return self.configured_node_name or self.NODE_NAME
 
     def _resolve_adapter_type(self) -> Optional[str]:
-        adapter_type = self.node_config.get("adapter_type") or self.node_config.get("semantic_adapter") or "metricflow"
-        resolver = getattr(self.agent_config, "resolve_semantic_adapter", None)
-        if callable(resolver):
-            return resolver(adapter_type)
-        return adapter_type
+        from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
+
+        return resolve_semantic_adapter_type(self.agent_config)
 
     def _resolve_subject_tree_prompt_limit(self) -> int:
         raw_limit = self.node_config.get("subject_tree_prompt_limit", self.SUBJECT_TREE_PROMPT_LIMIT)
@@ -447,9 +445,10 @@ class AskMetricsAgenticNode(AgenticNode):
         N/Bottom N, also pass order_by so the truncation has stable business
         meaning.
 
-        For period-over-period and window metrics, AskMetrics expands the
-        request to include related executable metrics when they are already
-        present in the catalog.
+        For fixed period-over-period metrics such as month-over-month or
+        year-over-year, query the dedicated catalog metric directly. For window
+        metrics, AskMetrics expands the request to include related executable
+        metrics when they are already present in the catalog.
 
         For joined dimensions, use semantic join policies instead of SQL join
         types: match_only for normal matched dimension grouping,
@@ -471,12 +470,23 @@ class AskMetricsAgenticNode(AgenticNode):
             )
         normalized_dimensions = None if dimensions is None else self._normalize_string_list(dimensions)
         normalized_order_by = None if order_by is None else self._normalize_string_list(order_by)
-        normalized_dimensions, time_granularity, normalized_order_by = self._apply_window_time_grouping(
-            expanded_metrics,
-            normalized_dimensions,
-            time_granularity,
-            normalized_order_by,
-        )
+        # metric_time grouping is derived from each metric's definition and
+        # applied by the semantic adapter; the node no longer injects it here.
+
+        # De-duplicate deterministic validation failures: once a metric/dimension/
+        # granularity combination has been rejected, do not re-issue the identical
+        # query — return actionable guidance so the planner adjusts instead of looping.
+        signature = self._query_signature(expanded_metrics, normalized_dimensions, time_granularity, where)
+        if signature in self._failed_query_signatures:
+            return FuncToolResult(
+                success=0,
+                error=(
+                    "query_metrics already failed for this metric/dimension/granularity "
+                    "combination. Adjust the metrics, dimensions, or granularity — or split "
+                    "the query into compatible metric groups — instead of retrying identical "
+                    "arguments."
+                ),
+            )
         query_kwargs = {
             "metrics": expanded_metrics,
             "dimensions": normalized_dimensions,
@@ -494,7 +504,36 @@ class AskMetricsAgenticNode(AgenticNode):
         if zero_fill:
             query_kwargs["zero_fill"] = zero_fill
         result = self.semantic_tools.query_metrics(**query_kwargs)
+        if self._is_deterministic_validation_failure(result):
+            self._failed_query_signatures.add(signature)
         return self._apply_query_result_column_aliases(result)
+
+    @staticmethod
+    def _query_signature(
+        metrics: List[str],
+        dimensions: Optional[List[str]],
+        time_granularity: Optional[str],
+        where: Optional[str],
+    ) -> tuple:
+        """Stable key for a query_metrics invocation used to suppress identical retries."""
+        return (
+            tuple(sorted(metrics or [])),
+            tuple(sorted(dimensions or [])),
+            str(time_granularity or "").strip().lower(),
+            str(where or "").strip(),
+        )
+
+    @staticmethod
+    def _is_deterministic_validation_failure(result: FuncToolResult) -> bool:
+        """True when query_metrics failed for a deterministic semantic validation reason.
+
+        Transient/infra failures are excluded so a retry with the same arguments is
+        only suppressed when re-issuing it cannot succeed.
+        """
+        if not isinstance(result, FuncToolResult) or result.success != 0:
+            return False
+        payload = result.result if isinstance(result.result, dict) else {}
+        return payload.get("error_type") == "semantic_validation_error"
 
     def select_final_metric_result(self, result_id: str) -> FuncToolResult:
         """
@@ -516,30 +555,8 @@ class AskMetricsAgenticNode(AgenticNode):
         self._selected_final_metric_result_id = result_id
         return FuncToolResult(result={"result_id": result_id})
 
-    def _expand_period_over_period_metrics(self, metrics: Optional[List[str]]) -> List[str]:
-        requested_metrics = self._normalize_string_list(metrics)
-        if not requested_metrics:
-            return []
-
-        catalog = self._metric_catalog()
-        if not catalog:
-            return requested_metrics
-
-        expanded: List[str] = []
-        for metric_name in requested_metrics:
-            metric = catalog.get(metric_name)
-            if not metric:
-                self._append_unique(expanded, metric_name)
-                continue
-
-            for bundled_metric in self._period_over_period_metric_bundle(metric_name, metric, catalog):
-                self._append_unique(expanded, bundled_metric)
-
-        return expanded
-
     def _expand_metric_dependencies(self, metrics: Optional[List[str]]) -> List[str]:
-        expanded_metrics = self._expand_period_over_period_metrics(metrics)
-        return self._expand_window_metrics(expanded_metrics)
+        return self._expand_window_metrics(metrics)
 
     def _expand_window_metrics(self, metrics: Optional[List[str]]) -> List[str]:
         requested_metrics = self._normalize_string_list(metrics)
@@ -561,44 +578,6 @@ class AskMetricsAgenticNode(AgenticNode):
                 self._append_unique(expanded, bundled_metric)
 
         return expanded
-
-    def _apply_window_time_grouping(
-        self,
-        metrics: List[str],
-        dimensions: Optional[List[str]],
-        time_granularity: Optional[str],
-        order_by: Optional[List[str]],
-    ) -> tuple[Optional[List[str]], Optional[str], Optional[List[str]]]:
-        catalog = self._metric_catalog()
-        if not catalog:
-            return dimensions, time_granularity, order_by
-
-        time_dimension = ""
-        inferred_grain = self._normalize_time_grain(time_granularity)
-        for metric_name in metrics:
-            metric = catalog.get(metric_name)
-            if not metric:
-                continue
-            metadata = self._metric_metadata(metric)
-            if not self._is_window_metric(metadata):
-                continue
-            inferred_grain = inferred_grain or self._infer_window_time_grain(metadata)
-            if inferred_grain:
-                time_dimension = f"metric_time__{inferred_grain}"
-                break
-
-        if not time_dimension:
-            return dimensions, time_granularity, order_by
-
-        updated_dimensions = list(dimensions or [])
-        if not any(str(dimension).startswith("metric_time__") for dimension in updated_dimensions):
-            self._append_unique(updated_dimensions, time_dimension)
-
-        updated_order_by = list(order_by or [])
-        if not updated_order_by:
-            updated_order_by = [time_dimension]
-
-        return updated_dimensions, time_granularity or inferred_grain, updated_order_by
 
     @classmethod
     def _window_metric_bundle(
@@ -750,33 +729,6 @@ class AskMetricsAgenticNode(AgenticNode):
             return True
         return metric_kind in {"aggregate", "measure_proxy", "simple"}
 
-    @classmethod
-    def _infer_window_time_grain(cls, metadata: Dict[str, Any]) -> str:
-        for key in ("time_granularity", "time_grain", "grain_to_date"):
-            grain = cls._normalize_time_grain(cls._metadata_text(metadata, key))
-            if grain:
-                return grain
-
-        time_dimension = cls._metadata_text(metadata, "time_dimension")
-        if time_dimension.startswith("metric_time__"):
-            grain = cls._normalize_time_grain(time_dimension.split("__", 1)[1])
-            if grain:
-                return grain
-
-        window = cls._metadata_text(metadata, "window")
-        if window:
-            parts = re.findall(r"[a-zA-Z]+", window.lower())
-            if parts:
-                return cls._normalize_time_grain(parts[-1])
-        return ""
-
-    @staticmethod
-    def _normalize_time_grain(value: Optional[str]) -> str:
-        grain = str(value or "").strip().lower()
-        if grain.endswith("s"):
-            grain = grain[:-1]
-        return grain if grain in {"day", "week", "month", "quarter", "year"} else ""
-
     @staticmethod
     def _metric_metadata(metric: Dict[str, Any]) -> Dict[str, Any]:
         metadata = metric.get("metadata") if isinstance(metric, dict) else {}
@@ -816,82 +768,6 @@ class AskMetricsAgenticNode(AgenticNode):
             if value:
                 return value
         return ""
-
-    @classmethod
-    def _period_over_period_metric_bundle(
-        cls,
-        metric_name: str,
-        metric: Dict[str, Any],
-        catalog: Dict[str, Dict[str, Any]],
-    ) -> List[str]:
-        metadata = metric.get("metadata") if isinstance(metric, dict) else {}
-        if not isinstance(metadata, dict):
-            return [metric_name]
-
-        inputs = metadata.get("inputs")
-        if not isinstance(inputs, list):
-            return [metric_name]
-
-        base_metrics: List[str] = []
-        previous_metrics: List[str] = []
-        has_current_input = False
-        has_offset_input = False
-        for item in inputs:
-            if not isinstance(item, dict):
-                continue
-
-            base_name = item.get("name")
-            if not isinstance(base_name, str) or base_name not in catalog:
-                continue
-
-            if item.get("offset_window"):
-                has_offset_input = True
-                alias = item.get("alias")
-                if isinstance(alias, str) and alias in catalog:
-                    cls._append_unique(previous_metrics, alias)
-                for equivalent_metric in cls._equivalent_offset_identity_metrics(base_name, item, catalog):
-                    cls._append_unique(previous_metrics, equivalent_metric)
-            else:
-                has_current_input = True
-                cls._append_unique(base_metrics, base_name)
-
-        if not has_current_input or not has_offset_input:
-            return [metric_name]
-
-        return [*base_metrics, *previous_metrics, metric_name]
-
-    @classmethod
-    def _equivalent_offset_identity_metrics(
-        cls,
-        base_name: str,
-        offset_input: Dict[str, Any],
-        catalog: Dict[str, Dict[str, Any]],
-    ) -> List[str]:
-        offset_window = str(offset_input.get("offset_window") or "").strip()
-        offset_to_grain = str(offset_input.get("offset_to_grain") or "").strip()
-        if not offset_window:
-            return []
-
-        equivalent_metrics: List[str] = []
-        for candidate_name, candidate in catalog.items():
-            metadata = candidate.get("metadata") if isinstance(candidate, dict) else {}
-            inputs = metadata.get("inputs") if isinstance(metadata, dict) else None
-            if not isinstance(inputs, list) or len(inputs) != 1:
-                continue
-            candidate_input = inputs[0]
-            if not isinstance(candidate_input, dict):
-                continue
-            if candidate_input.get("name") != base_name:
-                continue
-            if str(candidate_input.get("offset_window") or "").strip() != offset_window:
-                continue
-            if str(candidate_input.get("offset_to_grain") or "").strip() != offset_to_grain:
-                continue
-            alias = candidate_input.get("alias")
-            expr = metadata.get("expr")
-            if isinstance(alias, str) and isinstance(expr, str) and expr.strip() == alias and candidate_name == alias:
-                cls._append_unique(equivalent_metrics, candidate_name)
-        return equivalent_metrics
 
     @staticmethod
     def _normalize_string_list(value: Optional[List[str]]) -> List[str]:

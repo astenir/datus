@@ -1,73 +1,176 @@
-"""OSI-mode generation prompt templates render and stay backend-agnostic.
+"""Shared generation prompt templates render both authoring formats.
 
-These also assert that adding the OSI templates does not change which template
-the default (metricflow) mode resolves to.
+Both formats resolve to one `{node}_system` template; the format-specific
+authoring specification lives in required skills (see
+tests/unit_tests/tools/skill_tools and test_semantic_authoring.py), so these
+tests cover the orchestration layer only: role boundary, dynamic OSI values,
+profiler gate, and the final JSON contract.
 """
+
+import pytest
 
 from datus.prompts.prompt_manager import get_prompt_manager
 
+COMMON_VARS = {
+    "native_tools": "get_table_ddl, write_file",
+    "mcp_tools": "None",
+    "has_ask_user_tool": True,
+    "knowledge_base_dir": "/kb",
+    "semantic_model_dir": "/kb/semantic_models/duckdb",
+    "kind_subdir": "subject/semantic_models/duckdb",
+    "default_osi_semantic_model_name": "sales_domain",
+    "default_osi_semantic_model_file": "subject/semantic_models/duckdb/sales_domain.yml",
+}
 
-def test_osi_metrics_template_is_backend_agnostic():
+
+def _render(
+    template_name: str,
+    authoring_format: str,
+    datasource: str = "duckdb",
+    datasource_dialect: str | None = None,
+) -> str:
     pm = get_prompt_manager()
-    text = pm.render_template(template_name="gen_metrics_osi_system")
-    assert "OSI" in text
-    # explicit boundary: the LLM must not emit execution-engine syntax
-    assert "do NOT write MetricFlow YAML" in text
-    assert "version: 0.2.0.dev0" in text
-    assert "semantic_model:" in text
-    assert "metrics:" in text
-    assert "dialects:" in text
-    assert "custom_extensions" in text
-    assert '"dataset"' in text
-    assert "not OSI core top-level metric fields" in text
-    assert "metric:" in text  # only mentioned as a forbidden MetricFlow block
-    assert '"status": "skipped"' in text
-    assert "No metric generated" in text
-    assert "from_columns" in text
-    assert "to_columns" in text
-    assert "Never put `relationships` inside a dataset" in text
-    assert "analyze_metric_candidates_from_history" in text
-    assert "metric_generation_skips" in text
-    assert "offset_window" in text
-    assert "window_aggregation" in text
-    assert "Allowed values are `sum`, `avg`, `min`, `max`, `count`, and `row_count`" in text
-    assert "ROW_NUMBER()`, `RANK() OVER`, TopN per group" in text
-    assert "Target semantic model file: `subject/semantic_models/<datasource>/<model_name>.yml`" in text
-    assert '"metric_file": "subject/semantic_models/<datasource>/<model_name>.yml"' in text
-    assert "a separate metric file is allowed" not in text
+    return pm.render_template(
+        template_name=template_name,
+        authoring_format=authoring_format,
+        current_datasource=datasource,
+        current_datasource_dialect=datasource if datasource_dialect is None else datasource_dialect,
+        **COMMON_VARS,
+    )
 
 
-def test_osi_semantic_model_template_is_backend_agnostic():
+@pytest.mark.parametrize("template_name", ["gen_semantic_model_system", "gen_metrics_system"])
+def test_templates_reference_required_skill_spec(template_name):
+    for authoring_format in ("metricflow", "osi"):
+        text = _render(template_name, authoring_format)
+        assert "<required_skill>" in text, (template_name, authoring_format)
+
+
+def test_semantic_model_template_metricflow_mode():
+    text = _render("gen_semantic_model_system", "metricflow")
+    assert "MetricFlow expert" in text
+    assert "OSI expression dialect" not in text
+    assert '"semantic_model_files"' in text
+    assert "validate_semantic" in text
+    assert "end_semantic_model_generation" in text
+
+
+def test_semantic_model_template_osi_mode():
+    text = _render("gen_semantic_model_system", "osi")
+    assert "OSI (Open Semantic Interchange) core schema" in text
+    assert "never write backend YAML" in text
+    assert "Target semantic model file: `subject/semantic_models/duckdb/sales_domain.yml`" in text
+    assert '"semantic_model_files"' in text  # same publish contract as metricflow
+
+
+@pytest.mark.parametrize("template_name", ["gen_semantic_model_system", "gen_metrics_system"])
+@pytest.mark.parametrize(
+    "datasource, expected_dialect",
+    [
+        ("starrocks", "STARROCKS"),
+        ("mysql", "MYSQL"),
+        ("postgresql", "POSTGRESQL"),
+        ("snowflake", "SNOWFLAKE"),
+        ("databricks", "DATABRICKS"),
+    ],
+)
+def test_osi_mode_expression_dialect_derivation(template_name, datasource, expected_dialect):
+    # The OSI dialect label is the active datasource's own dialect (uppercased).
+    text = _render(template_name, "osi", datasource_dialect=datasource)
+    assert f"OSI expression dialect for this run: `{expected_dialect}`" in text
+
+
+@pytest.mark.parametrize("template_name", ["gen_semantic_model_system", "gen_metrics_system"])
+def test_osi_dialect_label_uses_datasource_type_not_config_name(template_name):
+    # The label is derived from the datasource dialect/type, not the config name:
+    # a snowflake datasource named "prod_wh" must yield SNOWFLAKE, not PROD_WH.
+    text = _render(template_name, "osi", datasource="prod_wh", datasource_dialect="snowflake")
+    assert "- Active datasource: `prod_wh`" in text
+    assert "OSI expression dialect for this run: `SNOWFLAKE`" in text
+
+
+@pytest.mark.parametrize("template_name", ["gen_semantic_model_system", "gen_metrics_system"])
+def test_osi_mode_expression_dialect_falls_back_to_ansi_when_no_datasource(template_name):
+    # With no datasource dialect, the label falls back to ANSI_SQL.
+    text = _render(template_name, "osi", datasource="", datasource_dialect="")
+    assert "OSI expression dialect for this run: `ANSI_SQL`" in text
+
+
+def test_semantic_model_template_renders_adapter_authoring_spec():
+    # The adapter-derived spec document is injected with its dialect placeholder
+    # substituted from the active datasource's dialect.
     pm = get_prompt_manager()
-    text = pm.render_template(template_name="gen_semantic_model_osi_system")
-    assert "OSI" in text
-    assert "version: 0.2.0.dev0" in text
-    assert "semantic_model:" in text
-    assert "datasets:" in text
-    assert "fields:" in text
-    assert "dialects:" in text
-    assert "custom_extensions" in text
-    assert "Dataset `source` is a string" in text
-    assert "Dataset description and AI context are required for every dataset" in text
-    assert "ai_context" in text
-    assert "row grain" in text
-    assert "relationships:" in text
-    assert "from_columns" in text
-    assert "to_columns" in text
-    assert "do NOT write MetricFlow" in text
-    assert "never inside a dataset" in text
-    assert "business domain / semantic model scope" in text
-    assert "Target semantic model file: `subject/semantic_models/<datasource>/<model_name>.yml`" in text
-    assert '"semantic_model_files": ["subject/semantic_models/<datasource>/<model_name>.yml"]' in text
-    assert "One canonical dataset per physical table" not in text
-    assert "<table_name>.yml" not in text
+    text = pm.render_template(
+        template_name="gen_semantic_model_system",
+        authoring_format="osi",
+        current_datasource="warehouse",
+        current_datasource_dialect="postgresql",
+        osi_authoring_spec="# spec for dialect __OSI_DIALECT__\nversion: 0.2.0.dev0",
+        **COMMON_VARS,
+    )
+    assert "OSI Core Authoring Specification" in text
+    assert "# spec for dialect POSTGRESQL" in text
+    assert "__OSI_DIALECT__" not in text
 
 
-def test_default_metricflow_templates_are_unchanged():
+def test_semantic_model_template_omits_spec_section_when_unavailable():
+    # Adapters without authoring_spec leave the variable empty.
+    text = _render("gen_semantic_model_system", "osi")
+    assert "OSI Core Authoring Specification" not in text
+
+
+def test_metrics_template_metricflow_mode_contract():
+    text = _render("gen_metrics_system", "metricflow")
+    assert "MetricFlow metric definition expert" in text
+    assert '"semantic_model_files"' in text
+    assert '"metric_file"' in text
+    assert "locked_metadata.tags" in text
+    assert "OSI expression dialect" not in text
+    assert "end_metric_generation" in text
+
+
+def test_metrics_template_osi_mode_contract():
+    text = _render("gen_metrics_system", "osi")
+    assert "OSI (Open Semantic Interchange) core semantic model" in text
+    assert '"semantic_model_files": []' in text
+    assert "upsert_osi_metrics" in text
+    assert "subject_path" in text
+    assert "locked_metadata.tags" not in text.split("Record the classification")[1].split("\n")[0]
+    assert "Covered by an existing base metric" in text
+
+
+def test_semantic_model_template_includes_profiler_gate_both_formats():
+    for authoring_format in ("metricflow", "osi"):
+        text = _render("gen_semantic_model_system", authoring_format)
+        assert "Optional SQL History & Distribution Profiling" in text, authoring_format
+        assert 'load_skill("semantic-sql-history-profiler")' in text, authoring_format
+        # Explicit-ask trigger: providing SQL alone must not trigger profiling.
+        assert "Providing SQL alone is NOT a trigger" in text, authoring_format
+        assert "still use it directly as modeling context" in text, authoring_format
+
+
+def test_metrics_template_has_no_profiler_gate():
+    for authoring_format in ("metricflow", "osi"):
+        text = _render("gen_metrics_system", authoring_format)
+        assert "semantic-sql-history-profiler" not in text, authoring_format
+
+
+def test_latest_versions_resolve_to_shared_templates():
     pm = get_prompt_manager()
-    # The default metricflow mode still resolves to its existing latest versions,
-    # unaffected by the new OSI templates (separate template name).
-    assert pm.get_latest_version("gen_metrics_system") == "1.2"
-    assert pm.get_latest_version("gen_semantic_model_system") == "1.1"
-    # OSI templates have their own independent versioning.
-    assert pm.get_latest_version("gen_metrics_osi_system") == "1.0"
+    assert pm.get_latest_version("gen_semantic_model_system") == "2.0"
+    assert pm.get_latest_version("gen_metrics_system") == "2.0"
+
+
+def test_legacy_osi_templates_are_removed():
+    pm = get_prompt_manager()
+    for template_name in ("gen_semantic_model_osi_system", "gen_metrics_osi_system"):
+        assert not pm.list_template_versions(template_name), template_name
+
+
+def test_rollback_anchor_versions_still_render():
+    """Pinning prompt_version to the pre-refactor templates must keep working."""
+    pm = get_prompt_manager()
+    old_semantic = pm.render_template(template_name="gen_semantic_model_system", version="1.1")
+    assert "MetricFlow" in old_semantic
+    old_metrics = pm.render_template(template_name="gen_metrics_system", version="1.2")
+    assert "MetricFlow" in old_metrics

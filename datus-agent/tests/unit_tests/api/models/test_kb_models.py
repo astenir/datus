@@ -20,6 +20,20 @@ class TestBootstrapKbInput:
         with pytest.raises(ValidationError):
             BootstrapKbInput(datasource_id="   ", components=["metadata"])
 
+    """Tests for BootstrapKbInput validation."""
+
+    def test_refresh_profile_strategy_accepts_semantic_yaml(self):
+        inp = BootstrapKbInput(
+            datasource_id="demo",
+            components=["semantic_model"],
+            strategy="refresh-profile",
+            success_story="stories.csv",
+            semantic_yaml="semantic/orders.yml",
+        )
+
+        assert inp.strategy == "refresh-profile"
+        assert inp.semantic_yaml == "semantic/orders.yml"
+
 
 class TestBootstrapDocInput:
     """Tests for BootstrapDocInput validation."""

@@ -9,11 +9,12 @@ from typing import Any, Dict, List, Optional, Set
 
 import pyarrow as pa
 import yaml
-from datus_storage_base.conditions import WhereExpr, and_, in_
+from datus_storage_base.conditions import WhereExpr, and_, eq, in_, not_
 
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.base import EmbeddingModel
 from datus.storage.datasource_scope import datasource_condition, resolve_datasource_id
+from datus.storage.fts import FtsField, FtsSpec
 from datus.storage.knowledge_provenance import enrich_metric_results, is_knowledge_provenance_enabled
 from datus.storage.subject_tree.store import BaseSubjectEmbeddingStore, base_schema_columns
 from datus.utils.loggings import get_logger
@@ -162,7 +163,7 @@ class MetricStorage(BaseSubjectEmbeddingStore):
         self._create_scalar_index("schema_name")
 
         self.create_subject_index()
-        self.create_fts_index(["description", "name"])
+        self.create_fts_index(FtsSpec((FtsField("name", boost=3.0), FtsField("description"))))
 
     def _scope_column_migration_exprs(self) -> Dict[str, str]:
         # Also backfill the Hub uid column on pre-existing metric tables (empty
@@ -726,6 +727,41 @@ class MetricRAG:
     def truncate(self) -> None:
         """Delete all metrics for this datasource."""
         self.storage.delete_datasource_rows(self.datasource_id)
+
+    def delete_artifact_rows(self, yaml_path: str) -> None:
+        """Delete metric rows projected from a single YAML artifact."""
+        if not yaml_path:
+            return
+        self.storage._delete_rows(and_(eq("yaml_path", yaml_path), *self._sub_agent_conditions()))
+
+    def delete_artifact_rows_except(self, yaml_path: str, keep_ids: List[str]) -> None:
+        """Delete stale metric rows for one YAML artifact after replacement succeeds."""
+        if not yaml_path:
+            return
+        normalized_keep_ids = [row_id for row_id in keep_ids if row_id]
+        if not normalized_keep_ids:
+            self.delete_artifact_rows(yaml_path)
+            return
+        self.storage._delete_rows(
+            and_(eq("yaml_path", yaml_path), not_(in_("id", normalized_keep_ids)), *self._sub_agent_conditions())
+        )
+
+    def list_artifact_rows(self, yaml_path: str) -> List[Dict[str, Any]]:
+        """Return metric rows projected from a single YAML artifact."""
+        if not yaml_path:
+            return []
+        return self.storage._search_all(
+            where=and_(eq("yaml_path", yaml_path), *self._sub_agent_conditions())
+        ).to_pylist()
+
+    def restore_artifact_rows(self, yaml_path: str, rows: List[Dict[str, Any]]) -> None:
+        """Restore one YAML artifact to a previously captured row snapshot."""
+        if not yaml_path:
+            return
+        self.delete_artifact_rows(yaml_path)
+        if rows:
+            self.upsert_batch(rows)
+        self.create_indices()
 
     def store_batch(self, metrics: List[Dict[str, Any]]):
         logger.info(f"store metrics: {metrics}")

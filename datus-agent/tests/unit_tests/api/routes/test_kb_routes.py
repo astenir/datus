@@ -892,7 +892,7 @@ class TestBootstrapKb:
         mock_datus_service.kb.bootstrap_stream.assert_not_called()
 
     def test_bootstrap_kb_invalid_strategy_returns_422(self, client):
-        """strategy must be one of overwrite/check/incremental → 422 for invalid."""
+        """strategy must be one of the supported bootstrap modes."""
         response = client.post(
             "/api/v1/kb/bootstrap",
             json={

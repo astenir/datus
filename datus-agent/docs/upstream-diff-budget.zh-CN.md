@@ -4,39 +4,60 @@
 
 ## 当前基线
 
-基线采样日期：2026-07-07
+基线采样日期：2026-07-24
 
-说明：这是完成公开文档、配置示例、legacy route gate 和两轮测试迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
+说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复和真实企业 auth/catalog/SQL smoke 后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
 
 对比口径：
 
 ```bash
 cd /home/astenir/Code/work/datus
-git diff --shortstat v0.3.7 HEAD:datus-agent
-git diff --name-status -M v0.3.7 HEAD:datus-agent
+git diff --shortstat v0.3.8 HEAD:datus-agent
+git diff --name-status -M v0.3.8 HEAD:datus-agent
 ```
 
 当前结果：
 
 ```text
-199 files changed, 49279 insertions(+), 2844 deletions(-)
-107 added
-88 modified
+335 files changed, 76308 insertions(+), 6843 deletions(-)
+149 added
+182 modified
 4 deleted
 ```
 
 修改的上游既有文件按类型拆分：
 
 ```text
-55 production/package files
-30 tests
-0 docs
-3 config/meta files
+97 production/package files
+63 tests
+12 docs
+10 config/meta files
 ```
+
+分类口径：只统计 `modified`；`datus/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 29 个 production、68 个 tests、11 个 docs 和 41 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-24：升级到正式 v0.3.8
+
+处理方式：通过 GitHub 镜像获取并校验正式 annotated tag，以 `v0.3.7` 为显式三方合并基线，将 `v0.3.8` release tree 合入隔离分支；冲突处理同时保留上游 plugin、metadata FTS、OSI authoring 和 prompt 更新，以及下游企业 runtime/tool policy、datasource grant、存储和安全边界。
+
+本轮额外修复的交叉回归：
+
+```text
+canonical history 的模型 JSON envelope 展示
+qualified datasource tree scope 与 catalog 过滤
+direct SQL 的 tree-scope database 祖先可达性
+CLI 临时 DB guard 的 request principal
+reference SQL 缺省 ID 与非空 storage_key 兼容
+KB bootstrap datasource_id 测试契约
+```
+
+依赖边界：`datus-agent` 更新为 `0.3.8`，CI 组要求的 `datus-semantic-metricflow>=0.2.9` 已与相邻 workspace 的实际包版本对齐到 `0.2.9`，两个锁文件均重新解析。没有通过降低约束掩盖本地 source 版本不一致。
+
+数字变化说明：本文旧快照来自 `v0.3.7` 时期的历史采样；本轮统一改为正式 `v0.3.8` tag tree 口径，并把当前仍存在的全部下游新增模块和上游既有文件修改纳入统计，因此不能把 `335` 与旧文档中的 `199` 简单解释为本次 release 新增了 136 个业务改动。后续 release 应持续使用同一 tag-tree 和分类口径比较趋势。
 
 ### 2026-07-07：公开文档低风险迁移
 
@@ -305,9 +326,9 @@ tests/unit_tests/scripts/
 1. 从 monorepo 根目录刷新上游对比：
 
    ```bash
-   git diff --shortstat v0.3.7 HEAD:datus-agent
-   git diff --name-status -M v0.3.7 HEAD:datus-agent
-   git diff --name-status -M v0.3.7 HEAD:datus-agent | awk '$1=="M"{print $2}'
+   git diff --shortstat v0.3.8 HEAD:datus-agent
+   git diff --name-status -M v0.3.8 HEAD:datus-agent
+   git diff --name-status -M v0.3.8 HEAD:datus-agent | awk '$1=="M"{print $2}'
    ```
 
 2. 对新增或仍保留的上游原文件修改标注分类：核心 hook、迁移候选、上游化候选、文档/示例、测试。

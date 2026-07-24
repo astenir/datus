@@ -2,7 +2,7 @@
 
 ## 概览
 
-语义模型生成功能帮助你通过 AI 助手从数据库表创建语义模型。具体 YAML authoring format 由配置的 semantic adapter 决定：`metricflow` 生成 MetricFlow YAML，`osi` 生成 strict OSI core YAML。助手会分析表结构，并按所选适配器生成配置文件。
+语义模型生成功能帮助你通过 AI 助手从数据库表创建语义模型。具体 YAML 格式由配置的 semantic adapter 决定：`metricflow` 生成 MetricFlow YAML，`osi` 生成 strict OSI core YAML。助手会分析表结构，并按所选适配器生成配置文件。
 
 ## 什么是语义模型？
 
@@ -62,7 +62,50 @@ agent:
 
 完整配置项见 [语义层配置](../configuration/semantic_layer.zh.md)。
 
-OSI authoring 见 [OSI 语义适配器](../adapters/osi_semantic_adapter.zh.md)。
+OSI 生成见 [OSI 语义适配器](../adapters/osi_semantic_adapter.zh.md)。
+
+### Skills（自动装配）
+
+你无需配置 `skills:`——助手会根据当前激活的 semantic adapter 自动选择：
+
+- 对应格式的建模规范（`metricflow-semantic-authoring` 或 `osi-semantic-authoring`）始终生效。
+- 一个历史 SQL profiler 按需可用（见下文）。
+
+如需自定义：设置 `skills: ""` 关闭可选 profiler；或在 `./.datus/skills/` 下放一个同名目录，用你自己的规范替换内置的。
+
+### 触发历史 SQL profiling
+
+默认情况下，助手只根据表的 DDL 和列注释建模——快、无需额外步骤。当你希望它同时挖掘历史查询或采样真实数据分布时，**在请求里直接说出来即可**：
+
+| 你想要 | 请求示例 |
+|---|---|
+| 仅按 DDL 建模（默认） | `/gen_semantic_model 为 orders 生成语义模型` |
+| 用历史查询作为建模证据 | `/gen_semantic_model 为 orders 及其 join 建模；先分析这些查询：<粘贴 SQL>` |
+| 采样真实值分布 | `/gen_semantic_model 为 orders 建模，写模型前先 profile 一下列的统计信息` |
+
+仅粘贴 SQL **不会**触发 profiling——助手仍会把它当作上下文阅读，但只有你明确要求分析或 profile 时才会真正运行 profiler。这让日常生成保持快速。
+
+profiling 运行时，其发现（取值范围、空值率、去重基数、常见过滤、join 可靠性）会被融入字段 description。例如，助手原本会写成：
+
+```yaml
+- name: amount
+  expression:
+    dialects:
+      - dialect: ANSI_SQL
+        expression: amount
+  dimension:
+    is_time: false
+  description: "订单金额"
+  custom_extensions:
+    - vendor_name: DATUS
+      data: '{"type":"numeric"}'
+```
+
+profiling 后，会带上观测证据、自解释：
+
+```yaml
+  description: "订单金额；观测范围 0–9999，p50 ≈ 120；约 0.3% 为空"
+```
 
 **内置配置**（自动启用）：
 - **工具**：数据库工具、生成工具和文件系统工具

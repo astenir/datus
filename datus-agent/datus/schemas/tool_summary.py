@@ -282,20 +282,28 @@ def _fmt_list_schemas(result: Any) -> str:
     return ""
 
 
+def search_table_result_counts(result: Any) -> tuple[int, int]:
+    """Return table and sample-row counts from the current search_table result shape."""
+    if not isinstance(result, dict):
+        return 0, 0
+
+    metadata = result.get("metadata")
+    if not isinstance(metadata, list):
+        return 0, 0
+
+    sample_count = sum(
+        len(sample_rows)
+        for item in metadata
+        if isinstance(item, dict) and isinstance((sample_rows := item.get("sample_rows")), list)
+    )
+
+    return len(metadata), sample_count
+
+
 def _fmt_search_table(result: Any) -> str:
     if not isinstance(result, dict):
         return ""
-    metadata = result.get("metadata") or []
-    if not isinstance(metadata, list):
-        return ""
-    n = len(metadata)
-    sample = result.get("sample_data")
-    if isinstance(sample, dict):
-        sample_rows = sample.get("original_rows", 0) or 0
-    elif isinstance(sample, list):
-        sample_rows = len(sample)
-    else:
-        sample_rows = 0
+    n, sample_rows = search_table_result_counts(result)
     if n == 0 and sample_rows == 0:
         return "no matches"
     tbl_label = "tbl" if n == 1 else "tbls"
@@ -628,6 +636,19 @@ def _fmt_analyze_column_usage_patterns(result: Any) -> str:
         if isinstance(patterns, dict) and patterns:
             n = len(patterns)
             return f"{n} col analyzed" if n == 1 else f"{n} cols analyzed"
+        summary = result.get("summary")
+        if isinstance(summary, str) and summary:
+            return summary
+    return ""
+
+
+def _fmt_profile_semantic_model_evidence(result: Any) -> str:
+    if isinstance(result, dict):
+        tables = result.get("tables")
+        if isinstance(tables, dict):
+            n = len(tables)
+            suffix = " + data" if result.get("data_profiled") else ""
+            return (f"{n} table profiled" if n == 1 else f"{n} tables profiled") + suffix
         summary = result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
@@ -1234,6 +1255,7 @@ def _register_builtins(registry: ToolSummaryRegistry) -> None:
         "generate_sql_summary_id": _fmt_generate_sql_summary_id,
         "analyze_table_relationships": _fmt_analyze_table_relationships,
         "analyze_column_usage_patterns": _fmt_analyze_column_usage_patterns,
+        "profile_semantic_model_evidence": _fmt_profile_semantic_model_evidence,
         "analyze_metric_candidates_from_history": _fmt_analyze_metric_candidates_from_history,
         "get_multiple_tables_ddl": _fmt_get_multiple_tables_ddl,
         # Scheduler tools

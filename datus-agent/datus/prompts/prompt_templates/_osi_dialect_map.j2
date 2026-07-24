@@ -1,0 +1,3 @@
+{% macro expression_dialect(datasource_type) -%}
+{{- (datasource_type | default('', true) | trim | upper) or 'ANSI_SQL' -}}
+{%- endmacro %}

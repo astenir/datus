@@ -6,7 +6,7 @@ chat-history retrieval can share the same conversion logic.
 """
 
 import json
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Set
 
 from datus.agent.node.compact_archive import parse_archived_marker
 from datus.api.models.cli_models import (
@@ -52,14 +52,26 @@ def _extract_function(action: ActionHistory) -> tuple[str, dict]:
     return function_name, arguments
 
 
-def _build_tool_call_content(action: ActionHistory) -> List[IMessageContent]:
-    """Build content for tool call started event."""
+def _build_tool_call_content(
+    action: ActionHistory, proxied_tool_names: Optional[Set[str]] = None
+) -> List[IMessageContent]:
+    """Build content for tool call started event.
+
+    ``proxied_tool_names`` — names of tools the client must execute and
+    report back (see ``apply_proxy_tools``). When provided, the payload
+    carries ``proxied`` so the web client knows whether to run the tool
+    (True) or the server already ran it (False). Omitted for converters
+    without a live node (history retrieval): absent means the client
+    falls back to its legacy heuristic.
+    """
     function_name, arguments = _extract_function(action)
     payload_data = {
         "callToolId": action.action_id,
         "toolName": function_name,
         "toolParams": arguments,
     }
+    if proxied_tool_names is not None:
+        payload_data["proxied"] = function_name in proxied_tool_names
     return [IMessageContent(type="call-tool", payload=payload_data)]
 
 
@@ -303,12 +315,23 @@ def _build_response_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for final response event."""
     contents = []
     action_output = action.output if isinstance(action.output, dict) else {}
-    if "sql" in action_output and action_output["sql"]:
+    response = action_output.get("response") or action_output.get("content") or action_output.get("raw_output") or ""
+    parsed_response = llm_result2json(response) if isinstance(response, str) else None
+    if isinstance(parsed_response, dict):
+        sql = action_output.get("sql") or parsed_response.get("sql")
+        response = (
+            parsed_response.get("response")
+            or parsed_response.get("output")
+            or parsed_response.get("explanation")
+            or response
+        )
+    else:
         sql = action_output.get("sql")
+
+    if sql:
         sql_payload = {"codeType": "sql", "content": sql}
         contents.append(IMessageContent(type="code", payload=sql_payload))
 
-    response = action_output.get("response") or action_output.get("content") or action_output.get("raw_output") or ""
     if response:
         resp_payload = {"content": str(response)}
         contents.append(IMessageContent(type="markdown", payload=resp_payload))
@@ -562,6 +585,7 @@ def action_to_sse_event(
     is_first_delta: bool = True,
     is_update: bool = False,
     include_final_response: bool = False,
+    proxied_tool_names: Optional[Set[str]] = None,
 ) -> Optional[SSEEvent]:
     """Convert an ActionHistory object to an SSEEvent.
 
@@ -589,6 +613,10 @@ def action_to_sse_event(
         If True, convert node wrapper actions such as chat_response to markdown.
         Streaming callers should only set this when no plain assistant response
         has already been emitted for the turn.
+    proxied_tool_names : Optional[Set[str]]
+        Tool names proxied to the client for execution; stamps ``proxied``
+        on call-tool payloads (see ``_build_tool_call_content``). Pass None
+        when no live node is available (history retrieval).
     """
     try:
         role = action.role
@@ -654,7 +682,7 @@ def action_to_sse_event(
         elif action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
             contents = _build_subagent_complete_content(action)
         elif role == ActionRole.TOOL and status == ActionStatus.PROCESSING:
-            contents = _build_tool_call_content(action)
+            contents = _build_tool_call_content(action, proxied_tool_names)
         elif role == ActionRole.TOOL:
             contents = _build_tool_result_content(action)
         elif role == ActionRole.INTERACTION and status == ActionStatus.PROCESSING:

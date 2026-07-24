@@ -37,6 +37,7 @@ from datus.tools.db_tools import db_manager as db_manager_module
 from datus.tools.db_tools.db_manager import DBManager
 from datus.tools.func_tool.database import DBFuncTool
 from datus.utils.constants import SQLType
+from datus.utils.datasource_scope import datasource_field_order, datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException
 from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
@@ -222,7 +223,7 @@ class CLIService:
 
             try:
                 effective_database = request.database_name or current_db_name
-                denial = self._database_grant_denial(agent_config, effective_database)
+                denial = self._database_grant_denial(agent_config, effective_database, connector)
                 if denial:
                     return Result(
                         success=False,
@@ -513,7 +514,9 @@ class CLIService:
         return f"{target}.*"
 
     @staticmethod
-    def _database_grant_denial(agent_config: Optional[AgentConfig], database_name: Optional[str]) -> Optional[str]:
+    def _database_grant_denial(
+        agent_config: Optional[AgentConfig], database_name: Optional[str], connector=None
+    ) -> Optional[str]:
         datasource, grant = CLIService._current_datasource_grant(agent_config)
         if grant is True:
             return None
@@ -528,6 +531,20 @@ class CLIService:
         requested_database = (database_name or "").strip()
         if not requested_database:
             return None
+        dialect = str(getattr(connector, "dialect", "") or "")
+        field_order = CLIService._field_order_for_grant(
+            datasource_field_order(dialect),
+            agent_config,
+            dialect=dialect,
+        )
+        if "database" in field_order and grant_uses_tree_scope(grant, field_order):
+            if datasource_scope_matches(
+                grant,
+                coordinate={"catalog": "", "database": requested_database, "schema": "", "table": ""},
+                target_field="database",
+                field_order=field_order,
+            ):
+                return None
         if patterns and any(fnmatchcase(requested_database, pattern) for pattern in patterns):
             return None
         return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
@@ -680,6 +697,11 @@ class CLIService:
         guard = object.__new__(DBFuncTool)
         guard._primary_connector = connector
         guard.agent_config = agent_config
+        principal = getattr(agent_config, "principal", {}) if agent_config else {}
+        guard.principal = dict(principal) if isinstance(principal, dict) else {}
+        guard._default_datasource = str(
+            guard.principal.get("datasource") or getattr(agent_config, "current_datasource", "") or ""
+        )
         guard.sub_agent_name = None
         guard._field_order = CLIService._field_order_for_grant(
             guard._determine_field_order(),

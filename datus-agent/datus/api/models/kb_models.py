@@ -88,11 +88,12 @@ class BootstrapKbInput(BaseModel):
             "`reference_sql` indexes reusable SQL files."
         ),
     )
-    strategy: Literal["overwrite", "check", "incremental"] = Field(
+    strategy: Literal["overwrite", "check", "incremental", "refresh-profile"] = Field(
         default="incremental",
         description=(
             "Update strategy. `check` inspects existing data without rebuilding where supported, "
-            "`overwrite` clears and rebuilds, and `incremental` appends or updates changed entries."
+            "`overwrite` clears and rebuilds, `incremental` appends or updates changed entries, "
+            "and `refresh-profile` updates profile-derived descriptions in an existing semantic YAML."
         ),
     )
 
@@ -142,6 +143,13 @@ class BootstrapKbInput(BaseModel):
     success_story_file_id: Optional[str] = Field(
         default=None,
         description="Optional file id inside the success-story upload. If omitted, the first CSV is used.",
+    )
+    semantic_yaml: Optional[str] = Field(
+        default=None,
+        description=(
+            "Project-root-relative semantic model YAML path. Required by `semantic_model` with "
+            "`strategy=refresh-profile` so profile descriptions can be refreshed in place."
+        ),
     )
     subject_tree: Optional[list[str]] = Field(
         default=None,

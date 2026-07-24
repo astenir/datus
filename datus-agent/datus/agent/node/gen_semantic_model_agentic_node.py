@@ -43,7 +43,6 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
     NODE_NAME = "gen_semantic_model"
     result_class = SemanticNodeResult
-    DEFAULT_SKILLS = "gen-semantic-model"
 
     def __init__(
         self,
@@ -156,23 +155,37 @@ class GenSemanticModelAgenticNode(AgenticNode):
                 logger.warning("DBFuncTool not initialized, skipping semantic discovery tools setup")
                 return
 
-            self.semantic_discovery_tools = SemanticDiscoveryTools(self.db_func_tool)
+            self.semantic_discovery_tools = SemanticDiscoveryTools(
+                self.db_func_tool,
+                enable_semantic_model_profiler=self._semantic_sql_history_profiler_enabled(),
+            )
             self.tools.extend(self.semantic_discovery_tools.available_tools())
             logger.debug("Added semantic discovery tools from SemanticDiscoveryTools")
         except Exception as e:
             logger.error(f"Failed to setup semantic discovery tools: {e}")
 
+    def _semantic_sql_history_profiler_enabled(self) -> bool:
+        """Return true when the optional profiler skill is visible to this node."""
+        if not self.skill_manager:
+            return False
+        skill_patterns_str = self.node_config.get("skills", "")
+        if not skill_patterns_str:
+            return False
+        skill_patterns = self.skill_manager.parse_skill_patterns(skill_patterns_str)
+        skills = self.skill_manager.get_available_skills(
+            self.get_node_name(),
+            patterns=skill_patterns,
+            node_class=self.get_node_class_name(),
+        )
+        return any(skill.name == "semantic-sql-history-profiler" for skill in skills)
+
     def _setup_semantic_tools(self):
         """Setup semantic function tools (for querying metrics via adapters)."""
         try:
+            from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
             from datus.tools.func_tool.semantic_tools import SemanticTools
 
-            adapter_type = None
-            if hasattr(self.agent_config, "agentic_nodes") and self.NODE_NAME in self.agent_config.agentic_nodes:
-                node_config = self.agent_config.agentic_nodes[self.NODE_NAME]
-                if isinstance(node_config, dict) and node_config.get("semantic_adapter"):
-                    adapter_type = node_config.get("semantic_adapter")
-            adapter_type = self.agent_config.resolve_semantic_adapter(adapter_type)
+            adapter_type = resolve_semantic_adapter_type(self.agent_config)
 
             # Initialize semantic func tool
             self.semantic_func_tool = SemanticTools(
@@ -212,7 +225,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
             self.generation_tools = GenerationTools(
                 self.agent_config,
                 generation_evidence=self.generation_evidence,
-                authoring_format=resolve_authoring_format(self.agent_config, self.node_config),
+                authoring_format=resolve_authoring_format(self.agent_config),
             )
 
             self.tools.append(trans_to_function_tool(self.generation_tools.check_semantic_object_exists))
@@ -223,14 +236,19 @@ class GenSemanticModelAgenticNode(AgenticNode):
             logger.error(f"Failed to setup generation tools: {e}")
 
     def _setup_skill_func_tools(self) -> None:
-        """Avoid injecting MetricFlow authoring skills into OSI workflows."""
-        from datus.agent.node.semantic_authoring import is_osi_authoring
+        """Default the optional skill set from the active authoring format."""
+        from datus.agent.node.semantic_authoring import default_optional_skills
 
-        node_config = getattr(self, "node_config", None) or {}
-        if is_osi_authoring(self.agent_config, node_config) and "skills" not in node_config:
-            logger.info("Skipping default MetricFlow skills for OSI semantic-model authoring")
-            return
+        if self.node_config.get("skills") is None:
+            self.node_config["skills"] = default_optional_skills(self.agent_config, self.NODE_NAME)
         super()._setup_skill_func_tools()
+
+    def _get_required_skills(self) -> list:
+        """Host-inject the authoring format specification skill."""
+        from datus.agent.node.semantic_authoring import required_authoring_skills
+
+        patterns = required_authoring_skills(self.agent_config, self.NODE_NAME)
+        return [pattern.strip() for pattern in patterns.split(",") if pattern.strip()]
 
     def _setup_hooks(self):
         """Setup hooks for interactive mode."""
@@ -291,10 +309,24 @@ class GenSemanticModelAgenticNode(AgenticNode):
         from datus.agent.node.semantic_authoring import (
             default_osi_semantic_model_file,
             default_osi_semantic_model_name,
+            resolve_authoring_format,
         )
 
+        context["authoring_format"] = resolve_authoring_format(self.agent_config)
         context["default_osi_semantic_model_name"] = default_osi_semantic_model_name(self.agent_config)
         context["default_osi_semantic_model_file"] = default_osi_semantic_model_file(self.agent_config)
+        context["osi_authoring_spec"] = ""
+        if context["authoring_format"] == "osi":
+            # The OSI core spec document ships with the adapter package so the
+            # contract the LLM is shown and the schema the adapter validates
+            # against cannot drift. The dialect placeholder is substituted at
+            # template render time from the active datasource's dialect map.
+            try:
+                from datus_semantic_osi.authoring_spec import authoring_spec_text
+
+                context["osi_authoring_spec"] = authoring_spec_text("__OSI_DIALECT__")
+            except ImportError:
+                logger.debug("datus_semantic_osi.authoring_spec unavailable; skipping spec injection")
 
         logger.debug(f"Prepared template context: {context}")
         return context
@@ -315,25 +347,12 @@ class GenSemanticModelAgenticNode(AgenticNode):
         Returns:
             System prompt string loaded from the template
         """
-        from datus.agent.node.semantic_authoring import (
-            AUTHORING_FORMAT_OSI,
-            osi_prompt_version,
-            osi_template_name,
-            resolve_authoring_format,
-        )
-
         # ``prompt_version`` kwarg wins over the config default; preserves the
-        # template's signature parity with the other nodes.
-        # OSI mode uses a separate template name so the default metricflow
-        # template and its latest-version scan are left untouched.
-        authoring_format = resolve_authoring_format(self.agent_config, self.node_config)
-        if authoring_format == AUTHORING_FORMAT_OSI:
-            template_name = osi_template_name(self.NODE_NAME)
-            requested = prompt_version or self.node_config.get("prompt_version")
-            version = osi_prompt_version(self.agent_config, self.NODE_NAME, requested)
-        else:
-            template_name = f"{self.NODE_NAME}_system"
-            version = prompt_version or self.node_config.get("prompt_version")
+        # template's signature parity with the other nodes. Both authoring
+        # formats share one template; the format-specific spec is injected as a
+        # required skill.
+        template_name = f"{self.NODE_NAME}_system"
+        version = prompt_version or self.node_config.get("prompt_version")
 
         try:
             # Prepare template variables
@@ -553,7 +572,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
             from datus.agent.node.semantic_authoring import is_osi_authoring
 
-            if is_osi_authoring(self.agent_config, self.node_config):
+            if is_osi_authoring(self.agent_config):
                 if not self.generation_tools:
                     logger.error("Generation tools unavailable for OSI semantic sync")
                     return False

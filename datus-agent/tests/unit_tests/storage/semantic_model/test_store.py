@@ -6,6 +6,7 @@
 
 import os
 import tempfile
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -917,3 +918,244 @@ class TestSemanticModelRAGCreateIndices:
         sem_rag.create_indices()
         # Verify data is still accessible
         assert sem_rag.get_size() >= 1
+
+
+class TestSemanticModelRAGArtifactRows:
+    """Tests for artifact-scoped semantic row replacement helpers."""
+
+    class _Rows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def to_pylist(self):
+            return self._rows
+
+    def test_delete_artifact_rows_ignores_empty_yaml_path(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.storage = Mock()
+        rag._sub_agent_conditions = Mock(return_value=[])
+
+        rag.delete_artifact_rows("")
+
+        rag._sub_agent_conditions.assert_not_called()
+        rag.storage._delete_rows.assert_not_called()
+
+    def test_delete_artifact_rows_uses_sub_agent_scope(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.storage = Mock()
+        rag._sub_agent_conditions = Mock(return_value=[])
+
+        rag.delete_artifact_rows("semantic/orders.yml")
+
+        rag._sub_agent_conditions.assert_called_once_with()
+        rag.storage._delete_rows.assert_called_once()
+
+    def test_delete_artifact_rows_except_deletes_all_when_keep_ids_empty(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.delete_artifact_rows = Mock()
+
+        rag.delete_artifact_rows_except("semantic/orders.yml", ["", None])
+
+        rag.delete_artifact_rows.assert_called_once_with("semantic/orders.yml")
+
+    def test_delete_artifact_rows_except_keeps_current_ids(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.storage = Mock()
+        rag._sub_agent_conditions = Mock(return_value=[])
+
+        rag.delete_artifact_rows_except("semantic/orders.yml", ["table:orders"])
+
+        rag._sub_agent_conditions.assert_called_once_with()
+        rag.storage._delete_rows.assert_called_once()
+
+    def test_list_artifact_rows_handles_empty_and_non_empty_paths(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.storage = Mock()
+        rag._sub_agent_conditions = Mock(return_value=[])
+        rag.storage._search_all.return_value = self._Rows([{"id": "table:orders"}])
+
+        assert rag.list_artifact_rows("") == []
+        assert rag.list_artifact_rows("semantic/orders.yml") == [{"id": "table:orders"}]
+
+        rag._sub_agent_conditions.assert_called_once_with()
+        rag.storage._search_all.assert_called_once()
+
+    def test_restore_artifact_rows_handles_empty_and_non_empty_paths(self):
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.delete_artifact_rows = Mock()
+        rag.upsert_batch = Mock()
+        rag.create_indices = Mock()
+        rows = [{"id": "table:orders"}]
+
+        rag.restore_artifact_rows("", rows)
+        rag.restore_artifact_rows("semantic/orders.yml", rows)
+
+        rag.delete_artifact_rows.assert_called_once_with("semantic/orders.yml")
+        rag.upsert_batch.assert_called_once_with(rows)
+        rag.create_indices.assert_called_once_with()
+
+
+# ============================================================
+# Issue #1084: same-named tables in different databases/schemas
+# ============================================================
+
+
+def _fq_table_object(
+    database_name: str,
+    schema_name: str = "public",
+    table_name: str = "orders",
+    description: str = "A table",
+    catalog_name: str = "default",
+) -> dict:
+    """Table object whose id is the fully qualified name, matching the fixed write path."""
+    obj = _make_table_object(
+        table_name,
+        description=description,
+        catalog_name=catalog_name,
+        database_name=database_name,
+        schema_name=schema_name,
+    )
+    # Same construction as the production write path: empty parts skipped.
+    fq = ".".join(p for p in [catalog_name, database_name, schema_name, table_name] if p)
+    obj["id"] = f"table:{fq}"
+    obj["fq_name"] = fq
+    return obj
+
+
+class TestSameNameDifferentDatabaseCollision:
+    """The headline defect: distinct-scope same-named tables must not overwrite each other."""
+
+    def test_fq_ids_keep_both_tables(self, sem_rag):
+        """With fully qualified ids, db1.orders and db2.orders both survive independently."""
+        sem_rag.upsert_batch([_fq_table_object("db1", description="DB1 orders")])
+        sem_rag.upsert_batch([_fq_table_object("db2", description="DB2 orders")])
+
+        assert sem_rag.get_size() == 2
+        r1 = sem_rag.get_semantic_model(database_name="db1", schema_name="public", table_name="orders")
+        r2 = sem_rag.get_semantic_model(database_name="db2", schema_name="public", table_name="orders")
+        assert r1["description"] == "DB1 orders"
+        assert r2["description"] == "DB2 orders"
+
+    def test_simple_ids_collide_and_lose_data(self, sem_rag):
+        """Regression guard: identical simple ids share a storage_key, so the second write wins.
+
+        This is exactly the pre-fix data loss and justifies the qualified-id scheme.
+        """
+        first = _make_table_object("orders", description="DB1", database_name="db1")  # id == table:orders
+        second = _make_table_object("orders", description="DB2", database_name="db2")  # id == table:orders
+        sem_rag.upsert_batch([first])
+        sem_rag.upsert_batch([second])
+
+        assert sem_rag.get_size() == 1
+
+
+class TestSemanticModelRAGTableExists:
+    """Tests for the hierarchy-aware table_exists existence check."""
+
+    def test_absent_table_returns_false(self, sem_rag):
+        assert sem_rag.table_exists("orders") is False
+
+    def test_empty_table_name_returns_false(self, sem_rag):
+        assert sem_rag.table_exists("") is False
+
+    def test_matches_same_hierarchy(self, sem_rag):
+        sem_rag.store_batch([_make_table_object("orders", database_name="db1", schema_name="public")])
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+    def test_same_name_other_database_not_matched(self, sem_rag):
+        sem_rag.store_batch([_make_table_object("orders", database_name="db1", schema_name="public")])
+        assert sem_rag.table_exists("orders", database_name="db2", schema_name="public") is False
+
+    def test_legacy_empty_hierarchy_row_is_compatible(self, sem_rag):
+        """A legacy row stored without hierarchy still satisfies a populated query."""
+        sem_rag.store_batch([_make_table_object("orders", catalog_name="", database_name="", schema_name="")])
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+    def test_case_insensitive_table_name_match(self, sem_rag):
+        """A row stored uppercase (e.g. Snowflake) matches a lowercase reference."""
+        sem_rag.store_batch([_make_table_object("ORDERS", database_name="db1", schema_name="public")])
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+    def test_mixed_case_stored_name_matches(self, sem_rag):
+        """A MixedCase stored name that escapes the case-variant filter still matches."""
+        sem_rag.store_batch([_make_table_object("Orders", database_name="db1", schema_name="public")])
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+    def test_other_scope_fast_hit_does_not_mask_mixed_case_row(self, sem_rag):
+        """A same-named fast-path hit in another database must not skip the fallback scan."""
+        sem_rag.store_batch(
+            [
+                _make_table_object("orders", database_name="db1", schema_name="public"),
+                _make_table_object("Orders", database_name="db2", schema_name="sales"),
+            ]
+        )
+        # Fast path returns db1's row (hierarchy mismatch); db2's MixedCase row
+        # must still be found via the fallback.
+        assert sem_rag.table_exists("orders", database_name="db2", schema_name="sales") is True
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+    def test_quoted_stored_name_matches(self, sem_rag):
+        """A stored name kept with identifier quotes still matches the bare reference."""
+        sem_rag.store_batch([_make_table_object('"Orders"', database_name="db1", schema_name="public")])
+        assert sem_rag.table_exists("orders", database_name="db1", schema_name="public") is True
+
+
+class TestSemanticModelRAGDeleteShadowedTableRows:
+    """Tests for delete_shadowed_table_rows cleanup (legacy / cross-yaml duplicates)."""
+
+    def test_removes_legacy_simple_id_row_in_same_scope(self, sem_rag):
+        """A legacy simple-id row is dropped in favour of the freshly written qualified row."""
+        legacy = _make_table_object("orders", description="legacy", database_name="db1", schema_name="public")
+        sem_rag.store_batch([legacy])  # id == table:orders
+        fresh = _fq_table_object("db1", description="fresh")  # id == table:default.db1.public.orders
+        sem_rag.upsert_batch([fresh])
+        assert sem_rag.get_size() == 2  # both coexist until cleanup
+
+        sem_rag.delete_shadowed_table_rows([fresh])
+
+        remaining = sem_rag.search_all()
+        assert len(remaining) == 1
+        assert remaining[0]["description"] == "fresh"
+
+    def test_does_not_touch_other_database_scope(self, sem_rag):
+        """Cleanup for db1 must leave the same-named table in db2 untouched."""
+        db1 = _fq_table_object("db1", description="db1 orders")
+        db2 = _fq_table_object("db2", description="db2 orders")
+        sem_rag.store_batch([db1, db2])
+
+        sem_rag.delete_shadowed_table_rows([db1])
+
+        assert sem_rag.get_size() == 2
+        db2_model = sem_rag.get_semantic_model(database_name="db2", schema_name="public", table_name="orders")
+        assert db2_model["description"] == "db2 orders"
+        db1_model = sem_rag.get_semantic_model(database_name="db1", schema_name="public", table_name="orders")
+        assert db1_model["description"] == "db1 orders"
+
+    def test_empty_hierarchy_scope_is_not_a_wildcard(self, sem_rag):
+        """A fresh row whose hierarchy did not resolve must not delete same-named tables in other databases."""
+        db1 = _fq_table_object("db1", description="db1 orders")
+        db2 = _fq_table_object("db2", description="db2 orders")
+        sem_rag.store_batch([db1, db2])
+        bare = _fq_table_object("", schema_name="", catalog_name="", description="bare")  # id == table:orders
+        sem_rag.upsert_batch([bare])
+        assert sem_rag.get_size() == 3
+
+        sem_rag.delete_shadowed_table_rows([bare])
+
+        # Empty scope matches only empty-hierarchy rows; db1/db2 must survive.
+        assert sem_rag.get_size() == 3
+        db1_model = sem_rag.get_semantic_model(database_name="db1", schema_name="public", table_name="orders")
+        assert db1_model["description"] == "db1 orders"
+        db2_model = sem_rag.get_semantic_model(database_name="db2", schema_name="public", table_name="orders")
+        assert db2_model["description"] == "db2 orders"
+
+    def test_cleanup_failure_does_not_raise(self):
+        """A storage error during cleanup is swallowed (post-commit, best-effort)."""
+        rag = SemanticModelRAG.__new__(SemanticModelRAG)
+        rag.storage = Mock()
+        rag.storage._delete_rows.side_effect = RuntimeError("delete conflict")
+        rag._sub_agent_conditions = Mock(return_value=[])
+
+        rag.delete_shadowed_table_rows([_fq_table_object("db1")])  # must not raise
+
+        rag.storage._delete_rows.assert_called_once()

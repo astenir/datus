@@ -401,6 +401,28 @@ class TestCLIServiceExecuteSQL:
         assert connector.executed is False
         assert svc._sql_tasks == {}
 
+    def test_database_grant_allows_ancestor_of_qualified_table_branch(self):
+        """A qualified table leaf keeps its database ancestor usable for direct SQL."""
+
+        projected_config = SimpleNamespace(
+            current_datasource="ccks_fund",
+            principal={
+                "datasource": "ccks_fund",
+                "datasource_grants": {
+                    "ccks_fund": {
+                        "effect": "allow",
+                        "databases": ["postgres"],
+                        "schemas": ["ccks_fund.test"],
+                        "tables": ["ccks_fund.public.mf_benchmarkgrowthrate"],
+                    }
+                },
+            },
+        )
+        connector = SimpleNamespace(dialect="postgresql")
+
+        assert CLIService._database_grant_denial(projected_config, "ccks_fund", connector) is None
+        assert CLIService._database_grant_denial(projected_config, "payroll", connector) is not None
+
     @pytest.mark.asyncio
     async def test_execute_sql_rejects_ungranted_table_scope(self, monkeypatch):
         """Table-level datasource grants apply before raw direct SQL execution."""

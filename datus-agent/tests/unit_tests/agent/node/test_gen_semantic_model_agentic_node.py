@@ -33,6 +33,11 @@ from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
 from datus.tools.func_tool import DBFuncTool, FilesystemFuncTool, SemanticDiscoveryTools
 from tests.unit_tests.mock_llm_model import MockToolCall, build_simple_response, build_tool_then_response
 
+
+def _set_global_semantic_adapter(agent_config, adapter: str) -> None:
+    agent_config.resolve_semantic_adapter = MagicMock(return_value=adapter)
+
+
 # ---------------------------------------------------------------------------
 # Initialization Tests
 # ---------------------------------------------------------------------------
@@ -97,8 +102,49 @@ class TestGenSemanticModelAgenticNodeInit:
         assert "check_semantic_object_exists" in tool_names
         assert "end_semantic_model_generation" in tool_names
 
-        # SemanticDiscoveryTools should be present
+        # SemanticDiscoveryTools should be present; the profiler tool is
+        # registered by default (the optional skill is in the default set).
         assert isinstance(node.semantic_discovery_tools, SemanticDiscoveryTools)
+        assert "profile_semantic_model_evidence" in tool_names
+
+    def test_semantic_sql_history_profiler_tool_opt_out(self, real_agent_config, mock_llm_create):
+        """An explicit empty skills entry removes the profiler tool."""
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+
+        original = dict(real_agent_config.agentic_nodes.get("gen_semantic_model", {}))
+        try:
+            real_agent_config.agentic_nodes["gen_semantic_model"] = {
+                **original,
+                "skills": "",
+            }
+            node = GenSemanticModelAgenticNode(
+                agent_config=real_agent_config,
+                execution_mode="workflow",
+            )
+            tool_names = [tool.name for tool in node.tools]
+            assert "profile_semantic_model_evidence" not in tool_names
+        finally:
+            real_agent_config.agentic_nodes["gen_semantic_model"] = original
+
+    def test_semantic_sql_history_profiler_tool_with_explicit_skills(self, real_agent_config, mock_llm_create):
+        """An explicit skills entry naming the profiler keeps the tool exposed."""
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+
+        original = dict(real_agent_config.agentic_nodes.get("gen_semantic_model", {}))
+        try:
+            real_agent_config.agentic_nodes["gen_semantic_model"] = {
+                **original,
+                "skills": "metricflow-semantic-authoring, semantic-sql-history-profiler",
+            }
+            node = GenSemanticModelAgenticNode(
+                agent_config=real_agent_config,
+                execution_mode="workflow",
+            )
+        finally:
+            real_agent_config.agentic_nodes["gen_semantic_model"] = original
+
+        tool_names = {tool.name for tool in node.tools}
+        assert "profile_semantic_model_evidence" in tool_names
 
     def test_semantic_model_max_turns(self, real_agent_config, mock_llm_create):
         """Test max_turns is read from agentic_nodes config."""
@@ -345,7 +391,7 @@ class TestGenSemanticModelAgenticNodeExecution:
         async def _raise_interrupted(*args, **kwargs):
             """Async generator that raises ExecutionInterrupted."""
             raise ExecutionInterrupted("User pressed ESC")
-            yield  # noqa: makes this an async generator
+            yield  # noqa
 
         node = GenSemanticModelAgenticNode(
             agent_config=real_agent_config,
@@ -466,22 +512,40 @@ class TestPrepareTemplateContext:
 
 
 class TestGetSystemPrompt:
-    def test_osi_authoring_uses_osi_prompt_template(self, real_agent_config, mock_llm_create):
+    def test_osi_authoring_uses_shared_template_with_osi_context(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
         node = _make_node(real_agent_config, mock_llm_create)
-        node.node_config["authoring_format"] = "osi"
 
-        with (
-            patch("datus.agent.node.semantic_authoring.osi_prompt_version", return_value="osi-latest") as version_mock,
-            patch("datus.prompts.prompt_manager.get_prompt_manager") as mock_pm,
-        ):
+        with patch("datus.prompts.prompt_manager.get_prompt_manager") as mock_pm:
             mock_pm.return_value.render_template.return_value = "osi prompt"
 
-            node._get_system_prompt(prompt_version="1.2", template_context={})
+            template_context = node._prepare_template_context(None)
+            node._get_system_prompt(prompt_version="1.2", template_context=template_context)
 
-        version_mock.assert_called_once_with(real_agent_config, "gen_semantic_model", "1.2")
         call_kwargs = mock_pm.return_value.render_template.call_args.kwargs
-        assert call_kwargs["template_name"] == "gen_semantic_model_osi_system"
-        assert call_kwargs["version"] == "osi-latest"
+        # Both formats share one template; the format travels in the context.
+        assert call_kwargs["template_name"] == "gen_semantic_model_system"
+        assert call_kwargs["version"] == "1.2"
+        assert call_kwargs["authoring_format"] == "osi"
+
+    def test_osi_authoring_injects_osi_required_skill(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
+        node = _make_node(real_agent_config, mock_llm_create)
+
+        prompt = node._get_system_prompt(template_context=node._prepare_template_context(None))
+
+        assert '<required_skill name="osi-semantic-authoring">' in prompt
+        assert "OSI core semantics only" in prompt
+        assert '<required_skill name="metricflow-semantic-authoring">' not in prompt
+
+    def test_metricflow_authoring_injects_metricflow_required_skill(self, real_agent_config, mock_llm_create):
+        node = _make_node(real_agent_config, mock_llm_create)
+
+        prompt = node._get_system_prompt(template_context=node._prepare_template_context(None))
+
+        assert '<required_skill name="metricflow-semantic-authoring">' in prompt
+        assert "MetricFlow semantic model structure specification" in prompt
+        assert '<required_skill name="osi-semantic-authoring">' not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -521,9 +585,9 @@ class TestExecutionModeGenSemanticModel:
         # in all modes), so _compose_hooks may return CompositeHooks. Check
         # the permission gate on the node so the test stays robust.
         hooks = node._compose_hooks()
-        assert hooks is not None
-        assert node.permission_hooks is not None
         assert node.permission_hooks.non_interactive is True
+        hooks_list = getattr(hooks, "hooks_list", [hooks])
+        assert node.permission_hooks in hooks_list
         # Permission manager must be loaded with the dangerous profile, not the
         # user's profile, so workflow flows always operate against a known
         # baseline.
@@ -781,8 +845,8 @@ class TestSaveToDb:
             sync_mock.assert_not_called()
 
     def test_osi_save_to_db_uses_generation_tools_sync(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
         node = _make_node(real_agent_config, mock_llm_create)
-        node.node_config["authoring_format"] = "osi"
         datasource = real_agent_config.current_datasource
         semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
         semantic_dir.mkdir(parents=True, exist_ok=True)
@@ -796,8 +860,8 @@ class TestSaveToDb:
         assert node.generation_evidence.semantic_kb_sync_passed is True
 
     def test_osi_save_to_db_fails_without_generation_tools(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
         node = _make_node(real_agent_config, mock_llm_create)
-        node.node_config["authoring_format"] = "osi"
         datasource = real_agent_config.current_datasource
         semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
         semantic_dir.mkdir(parents=True, exist_ok=True)
@@ -807,8 +871,8 @@ class TestSaveToDb:
         assert node._save_to_db(f"subject/semantic_models/{datasource}/orders.yml") is False
 
     def test_osi_save_to_db_reports_sync_failure(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
         node = _make_node(real_agent_config, mock_llm_create)
-        node.node_config["authoring_format"] = "osi"
         datasource = real_agent_config.current_datasource
         semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
         semantic_dir.mkdir(parents=True, exist_ok=True)

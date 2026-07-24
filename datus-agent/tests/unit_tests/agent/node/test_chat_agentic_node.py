@@ -295,13 +295,13 @@ class TestChatAgenticNodeToolSetup:
         assert isinstance(node.bash_tool, BashTool)
 
         # ``["*"]`` pattern: tool is exposed; per-call gating is handled by
-        # the PermissionManager ``bash_tools.execute_command`` ASK rule.
+        # the PermissionManager ``bash_tools.bash`` ASK rule.
         tool_names = [t.name for t in node.tools]
-        assert "execute_command" in tool_names
+        assert "bash" in tool_names
 
         # Permission category mapping is mandatory — without it, the ASK rule
         # added in ``profiles._NORMAL_RULES`` would never fire.
-        assert node.tool_registry.get("execute_command") == "bash_tools"
+        assert node.tool_registry.get("bash") == "bash_tools"
 
     def test_context_search_failure_does_not_remove_db_tools(self, real_agent_config, mock_llm_create):
         """Embedding/context setup failures should only remove context tools."""
@@ -1003,7 +1003,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def raising_stream(*args, **kwargs):
             raise RuntimeError("Simulated LLM failure")
-            yield  # noqa: unreachable - makes this an async generator
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = raising_stream
 
@@ -1172,7 +1172,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def cancel_stream(*args, **kwargs):
             raise ExecutionInterrupted("Ctrl+C")
-            yield  # noqa: unreachable
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = cancel_stream
 
@@ -1203,7 +1203,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def interrupt_stream(*args, **kwargs):
             raise ExecutionInterrupted("Ctrl+C pressed")
-            yield  # noqa: unreachable
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = interrupt_stream
 
@@ -1909,6 +1909,24 @@ class TestChatAgenticNodeRebuildTools:
         tool_names = [t.name for t in node.tools]
         assert "ask_user" in tool_names
 
+    def test_rebuild_tools_resets_transformer_flag(self, real_agent_config, mock_llm_create):
+        """Rebuilding replaces wrapped FunctionTools with fresh unwrapped ones,
+        so plugin tool transformers must re-apply on the next hook composition
+        (e.g. after a mid-session task-database switch)."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_rebuild_flag",
+            description="Test rebuild resets transformer flag",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node._tool_transformers_applied = True
+
+        node._rebuild_tools()
+
+        assert node._tool_transformers_applied is False
+
     def test_rebuild_tools_with_no_optional_components(self, real_agent_config, mock_llm_create):
         """_rebuild_tools works when optional tool components are None."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -2045,20 +2063,6 @@ class TestChatAgenticNodeExecutionMode:
 class TestChatAgenticNodeNoBITools:
     """Verify ChatAgenticNode no longer has BI tools (moved to GenDashboardAgenticNode)."""
 
-    def test_no_bi_func_tool_attribute(self, real_agent_config, mock_llm_create):
-        """Chat node should not have a bi_func_tool attribute."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.configuration.node_type import NodeType
-
-        node = ChatAgenticNode(
-            node_id="test_no_bi",
-            description="Test no BI tools",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "bi_func_tool")
-
     def test_no_bi_tool_names_in_tools_list(self, real_agent_config, mock_llm_create):
         """Chat node tools list should not contain any BI tool names."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -2091,20 +2095,6 @@ class TestChatAgenticNodeNoBITools:
         tool_names = {tool.name for tool in node.tools}
         assert tool_names.isdisjoint(bi_tool_names), f"Chat node still has BI tools: {tool_names & bi_tool_names}"
 
-    def test_no_setup_bi_tools_method(self, real_agent_config, mock_llm_create):
-        """Chat node should not have _setup_bi_tools method."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.configuration.node_type import NodeType
-
-        node = ChatAgenticNode(
-            node_id="test_no_method",
-            description="Test no BI method",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "_setup_bi_tools")
-
 
 # ===========================================================================
 # Scheduler Tools Removed from Chat Node Tests
@@ -2113,19 +2103,6 @@ class TestChatAgenticNodeNoBITools:
 
 class TestChatAgenticNodeNoSchedulerTools:
     """Verify ChatAgenticNode no longer has scheduler tools (moved to SchedulerAgenticNode)."""
-
-    def test_no_scheduler_tools_attribute(self, real_agent_config, mock_llm_create):
-        """Chat node should not have a scheduler_tools attribute."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_no_scheduler",
-            description="Test no scheduler tools",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "scheduler_tools")
 
     def test_no_scheduler_tool_names_in_tools_list(self, real_agent_config, mock_llm_create):
         """Chat node tools list should not contain any scheduler tool names."""
@@ -2156,16 +2133,3 @@ class TestChatAgenticNodeNoSchedulerTools:
         assert tool_names.isdisjoint(scheduler_tool_names), (
             f"Chat node still has scheduler tools: {tool_names & scheduler_tool_names}"
         )
-
-    def test_no_setup_scheduler_tools_method(self, real_agent_config, mock_llm_create):
-        """Chat node should not have _setup_scheduler_tools method."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_no_scheduler_method",
-            description="Test no scheduler method",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "_setup_scheduler_tools")

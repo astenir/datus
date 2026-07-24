@@ -602,6 +602,85 @@ class TestChatTaskManagerBehavior:
         assert history_error.payload["event_type"] == "cancelled"
         assert history_error.payload["error_type"] == "CHAT_CANCELLED"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("profile", ["auto", "dangerous"])
+    async def test_run_loop_web_source_skips_proxy_for_auto_and_dangerous(self, real_agent_config, profile):
+        """auto/dangerous web sessions run filesystem tools server-side."""
+        from types import SimpleNamespace
+
+        from datus.api.models.cli_models import StreamChatInput
+
+        class FakeNode:
+            session_id = f"s-web-{profile}"
+            permission_manager = SimpleNamespace(active_profile=profile)
+
+            def __init__(self):
+                self.proxied_tool_names = {"write_file"}
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                return
+                yield  # pragma: no cover - makes this an async generator
+
+            async def get_last_turn_usage(self):
+                return None
+
+        node = FakeNode()
+        shared_ref = node.proxied_tool_names
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: node  # type: ignore[method-assign]
+        task = ChatTask(session_id=f"s-web-{profile}", asyncio_task=MagicMock())
+
+        with patch("datus.api.services.chat_task_manager.apply_proxy_tools") as mock_apply:
+            await manager._run_loop(
+                task,
+                real_agent_config,
+                StreamChatInput(message="hi", source="web", session_id=f"s-web-{profile}"),
+            )
+
+        mock_apply.assert_not_called()
+        assert task.node.proxied_tool_names is shared_ref
+        assert shared_ref == set()
+        assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_run_loop_web_source_normal_profile_still_proxies(self, real_agent_config):
+        """The normal profile keeps browser-owned filesystem tools proxied."""
+        from types import SimpleNamespace
+
+        from datus.api.models.cli_models import StreamChatInput
+
+        class FakeNode:
+            session_id = "s-web-normal"
+            permission_manager = SimpleNamespace(active_profile="normal")
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                return
+                yield  # pragma: no cover - makes this an async generator
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-web-normal", asyncio_task=MagicMock())
+
+        with patch("datus.api.services.chat_task_manager.apply_proxy_tools") as mock_apply:
+            await manager._run_loop(
+                task,
+                real_agent_config,
+                StreamChatInput(message="hi", source="web", session_id="s-web-normal"),
+            )
+
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args.args[1] == ["write_file", "edit_file", "delete_file"]
+        assert task.status == "completed"
+
     def test_include_final_response_rejects_nested_subagent_response(self):
         """Depth>0 sub-agent wrappers must not render as top-level answers."""
         from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus

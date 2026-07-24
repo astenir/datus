@@ -2,7 +2,7 @@
 
 ## Overview
 
-The semantic model generation feature helps you create semantic models from database tables through an AI-powered assistant. The authored YAML format is selected by the configured semantic adapter: `metricflow` generates MetricFlow YAML, while `osi` generates strict OSI core YAML. The assistant analyzes your table structure and generates configuration files for the selected adapter.
+The semantic model generation feature helps you create semantic models from database tables through an AI-powered assistant. The YAML format is selected by the configured semantic adapter: `metricflow` generates MetricFlow YAML, while `osi` generates strict OSI core YAML. The assistant analyzes your table structure and generates configuration files for the selected adapter.
 
 ## What is a Semantic Model?
 
@@ -64,7 +64,50 @@ agent:
 
 See [Semantic Layer Configuration](../configuration/semantic_layer.md) for the full set of options.
 
-For OSI authoring, see [OSI Semantic Adapter](../adapters/osi_semantic_adapter.md).
+For OSI generation, see [OSI Semantic Adapter](../adapters/osi_semantic_adapter.md).
+
+### Skills (automatic)
+
+You never configure `skills:` — the assistant picks the right ones from the active semantic adapter:
+
+- The matching authoring guide (`metricflow-semantic-authoring` or `osi-semantic-authoring`) is always applied.
+- A historical-SQL profiler is available on demand (see below).
+
+To customize: set `skills: ""` to disable the optional profiler, or drop a folder with the same name under `./.datus/skills/` to replace a built-in guide with your own.
+
+### Triggering historical-SQL profiling
+
+By default the assistant models a table from its DDL and column comments — fast, no extra steps. When you want it to also mine your historical queries or sample real data distributions, **just ask for it in your request**:
+
+| What you want | Example request |
+|---|---|
+| Model from DDL only (default) | `/gen_semantic_model generate a semantic model for orders` |
+| Use past queries as modeling evidence | `/gen_semantic_model model orders and its joins; analyze these queries first: <paste SQL>` |
+| Sample real value distributions | `/gen_semantic_model model orders and profile its column statistics before writing the model` |
+
+Pasting SQL alone does **not** trigger profiling — the assistant still reads it as context, but only runs the profiler when you explicitly ask to analyze or profile. This keeps everyday generation quick.
+
+When profiling runs, its findings (value ranges, null rates, distinct counts, common filters, join reliability) are folded into the field descriptions. For example, a field the assistant would normally write as:
+
+```yaml
+- name: amount
+  expression:
+    dialects:
+      - dialect: ANSI_SQL
+        expression: amount
+  dimension:
+    is_time: false
+  description: "Order amount"
+  custom_extensions:
+    - vendor_name: DATUS
+      data: '{"type":"numeric"}'
+```
+
+becomes, after profiling, self-documenting with observed evidence:
+
+```yaml
+  description: "Order amount; observed range 0–9,999, p50 ≈ 120; ~0.3% null"
+```
 
 **Built-in configurations** (automatically enabled):
 - **Tools**: Database tools, generation tools, and filesystem tools

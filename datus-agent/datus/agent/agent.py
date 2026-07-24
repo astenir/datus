@@ -19,17 +19,20 @@ from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.batch_events import BatchEvent, BatchStage
 from datus.schemas.node_models import SqlTask
+from datus.storage.kb_retrieval import KbSearchMode, metadata_fts_enabled, resolve_kb_search_mode
 from datus.storage.metric.metric_init import init_semantic_yaml_metrics, init_success_story_metrics
 from datus.storage.metric.store import MetricRAG
-from datus.storage.schema_metadata import SchemaWithValueRAG
+from datus.storage.schema_metadata import SchemaWithValueRAG, create_metadata_rag
 from datus.storage.schema_metadata.benchmark_init import init_snowflake_schema
 from datus.storage.schema_metadata.benchmark_init_bird import init_dev_schema
 from datus.storage.schema_metadata.local_init import init_local_schema
 from datus.storage.semantic_model.semantic_model_init import (
     init_semantic_yaml_semantic_model,
     init_success_story_semantic_model,
+    refresh_success_story_semantic_model_profile,
 )
 from datus.storage.semantic_model.store import SemanticModelRAG
+from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.utils.benchmark_utils import load_benchmark_tasks
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -395,6 +398,11 @@ class Agent:
         selected_components = self.args.components
 
         kb_update_strategy = self.args.kb_update_strategy
+        if kb_update_strategy == "refresh-profile" and set(selected_components) != {"semantic_model"}:
+            return {
+                "status": "failed",
+                "message": "kb_update_strategy=refresh-profile is only supported with --components semantic_model",
+            }
         benchmark_platform = self.args.benchmark
         pool_size = 4 if not self.args.pool_size else self.args.pool_size
         dir_path = self.global_config.rag_storage_path()
@@ -410,26 +418,46 @@ class Agent:
             # db_name = component_dirs[component]``
             # Initialize corresponding stores
             if component == "metadata":
+                use_fts_metadata = metadata_fts_enabled(self.global_config)
+                search_mode = resolve_kb_search_mode(self.global_config)
+                needs_database_storage = not use_fts_metadata
                 if kb_update_strategy == "check":
                     if not os.path.exists(dir_path):
                         raise ValueError("metadata is not built, please run bootstrap_kb with overwrite strategy first")
                     else:
-                        self.global_config.check_init_storage_config("database")
+                        if needs_database_storage:
+                            self.global_config.check_init_storage_config("database")
 
-                        self.metadata_store = SchemaWithValueRAG(self.global_config)
-                        return {
+                        self.metadata_store = (
+                            create_metadata_rag(self.global_config)
+                            if use_fts_metadata
+                            else SchemaWithValueRAG(self.global_config)
+                        )
+                        if use_fts_metadata:
+                            self.metadata_store.check_ready()
+                        result = {
                             "status": "success",
                             "message": f"current metadata is already built, "
                             f"dir_path={dir_path},"
+                            f"search_mode={search_mode}, "
                             f"schema_size={self.metadata_store.get_schema_size()}, "
                             f"value_size={self.metadata_store.get_value_size()}",
                         }
+                        results[component] = result
+                        continue
 
-                if kb_update_strategy == "overwrite":
-                    self.global_config.save_storage_config("database")
-                else:
-                    self.global_config.check_init_storage_config("database")
-                self.metadata_store = SchemaWithValueRAG(self.global_config)
+                if needs_database_storage:
+                    if kb_update_strategy == "overwrite":
+                        self.global_config.save_storage_config("database")
+                    else:
+                        self.global_config.check_init_storage_config("database")
+                self.metadata_store = (
+                    create_metadata_rag(self.global_config)
+                    if use_fts_metadata
+                    else SchemaWithValueRAG(self.global_config)
+                )
+                if use_fts_metadata and kb_update_strategy == "incremental":
+                    self.metadata_store.check_ready()
                 if kb_update_strategy == "overwrite":
                     self.metadata_store.truncate()
 
@@ -479,16 +507,58 @@ class Agent:
                 result = {
                     "status": "success",
                     "message": f"metadata bootstrap completed, "
+                    f"search_mode={search_mode}, "
                     f"schema_size={self.metadata_store.get_schema_size()}, "
                     f"value_size={self.metadata_store.get_value_size()}",
                 }
-                return result
+                results[component] = result
+                continue
 
             elif component == "semantic_model":
+                uses_adapter = hasattr(self.args, "from_adapter") and self.args.from_adapter
+                uses_semantic_yaml = hasattr(self.args, "semantic_yaml") and self.args.semantic_yaml
+                if kb_update_strategy == "check":
+                    temp_rag = SemanticModelRAG(self.global_config)
+                    profile_rag = TableSemanticProfileRAG(self.global_config)
+                    result = {
+                        "status": "success",
+                        "message": (
+                            "semantic_model check completed, "
+                            f"semantic_object_count={temp_rag.get_size()}, "
+                            f"table_semantic_profile_count={profile_rag.get_size()}"
+                        ),
+                    }
+                    results[component] = result
+                    continue
+
+                if kb_update_strategy == "refresh-profile":
+                    self.global_config.check_init_storage_config("semantic_model")
+                    temp_rag = SemanticModelRAG(self.global_config)
+                    profile_rag = TableSemanticProfileRAG(self.global_config)
+                    successful, error_message, changed = refresh_success_story_semantic_model_profile(
+                        self.global_config,
+                        self.args.semantic_yaml,
+                        self.args.success_story,
+                    )
+                    if successful:
+                        result = {
+                            "status": "success",
+                            "message": (
+                                "semantic_model profile refresh completed, "
+                                f"changed_description_count={changed}, "
+                                f"semantic_object_count={temp_rag.get_size()}, "
+                                f"table_semantic_profile_count={profile_rag.get_size()}"
+                            ),
+                            "error": error_message,
+                        }
+                    else:
+                        result = {"status": "failed", "message": error_message}
+                    results[component] = result
+                    continue
+
                 if kb_update_strategy == "overwrite":
-                    # Only clear semantic_models/{datasource} directory when NOT using --from_adapter
-                    # because MetricFlow adapter needs to read YAML files from this directory
-                    if not (hasattr(self.args, "from_adapter") and self.args.from_adapter):
+                    # Adapter and explicit YAML imports need their source files intact.
+                    if not (uses_adapter or uses_semantic_yaml):
                         semantic_yaml_dir = self.global_config.path_manager.semantic_model_path(
                             self.global_config.current_datasource
                         )
@@ -504,24 +574,25 @@ class Agent:
                 else:
                     self.global_config.check_init_storage_config("semantic_model")
                 temp_rag = SemanticModelRAG(self.global_config)
-                if kb_update_strategy == "overwrite":
+                if kb_update_strategy == "overwrite" and (uses_adapter or uses_semantic_yaml):
                     temp_rag.truncate()
+                    TableSemanticProfileRAG(self.global_config).truncate()
 
                 # Initialize semantic model
-                if hasattr(self.args, "from_adapter") and self.args.from_adapter:
+                if uses_adapter:
                     # Pull from semantic adapter
                     from datus.storage.semantic_model.adapter_init import init_from_adapter
 
                     successful, error_message = asyncio.run(
                         init_from_adapter(self.global_config, self.args.from_adapter)
                     )
-                elif hasattr(self.args, "semantic_yaml") and self.args.semantic_yaml:
+                elif uses_semantic_yaml:
                     successful, error_message = init_semantic_yaml_semantic_model(
                         self.args.semantic_yaml, self.global_config
                     )
                 else:
                     successful, error_message = init_success_story_semantic_model(
-                        self.global_config, self.args.success_story
+                        self.global_config, self.args.success_story, build_mode=kb_update_strategy
                     )
 
                 if successful:
@@ -532,27 +603,39 @@ class Agent:
                     }
                 else:
                     result = {"status": "failed", "message": error_message}
-                return result
+                results[component] = result
+                continue
 
             elif component == "metrics":
+                uses_adapter = hasattr(self.args, "from_adapter") and self.args.from_adapter
+                uses_semantic_yaml = hasattr(self.args, "semantic_yaml") and self.args.semantic_yaml
+                if kb_update_strategy == "check":
+                    self.metrics_store = MetricRAG(self.global_config)
+                    result = {
+                        "status": "success",
+                        "message": f"metrics check completed, metrics_count={self.metrics_store.get_metrics_size()}",
+                    }
+                    results[component] = result
+                    continue
+
                 if kb_update_strategy == "overwrite":
                     self.global_config.save_storage_config("metric")  # Keep compatibility
                 else:
                     self.global_config.check_init_storage_config("metric")
                 self.metrics_store = MetricRAG(self.global_config)
-                if kb_update_strategy == "overwrite":
+                if kb_update_strategy == "overwrite" and uses_adapter:
                     self.metrics_store.truncate()
                 self._reset_metrics_stream_state()
 
                 # Initialize metrics
-                if hasattr(self.args, "from_adapter") and self.args.from_adapter:
+                if uses_adapter:
                     # Pull from semantic adapter
                     from datus.storage.metric.adapter_init import init_from_adapter
 
                     successful, error_message = asyncio.run(
                         init_from_adapter(self.global_config, self.args.from_adapter, subject_path=subject_tree)
                     )
-                elif hasattr(self.args, "semantic_yaml") and self.args.semantic_yaml:
+                elif uses_semantic_yaml:
                     successful, error_message = init_semantic_yaml_metrics(self.args.semantic_yaml, self.global_config)
                 else:
                     successful, error_message, _ = init_success_story_metrics(
@@ -560,6 +643,7 @@ class Agent:
                         self.args.success_story,
                         subject_tree,
                         emit=self._emit_metrics_event,
+                        build_mode=kb_update_strategy,
                         batch_size=getattr(self.args, "metrics_batch_size", 5),
                     )
 
@@ -573,7 +657,8 @@ class Agent:
                     }
                 else:
                     result = {"status": "failed", "message": error_message}
-                return result
+                results[component] = result
+                continue
             elif component == "reference_sql":
                 if kb_update_strategy == "overwrite":
                     # Also clear the sql_summaries directory (YAML files)
@@ -605,7 +690,8 @@ class Agent:
                     subject_tree=subject_tree,
                     emit=self._emit_reference_sql_event,
                 )
-                return result
+                results[component] = result
+                continue
             elif component == "reference_template":
                 if kb_update_strategy == "overwrite":
                     self.global_config.save_storage_config("reference_template")
@@ -629,7 +715,8 @@ class Agent:
                     subject_tree=subject_tree,
                     emit=self._emit_reference_template_event,
                 )
-                return result
+                results[component] = result
+                continue
             results[component] = True
 
         # Initialize success story storage (always created)
@@ -639,10 +726,21 @@ class Agent:
         results["success_story"] = True
 
         logger.info(f"Knowledge base components initialized successfully: {', '.join(selected_components)}")
+        component_results = {key: value for key, value in results.items() if key != "success_story"}
+        if len(component_results) == 1:
+            return next(iter(component_results.values()))
+        failed = {
+            key: value
+            for key, value in component_results.items()
+            if isinstance(value, dict) and value.get("status") not in {"success", "skipped"}
+        }
+        overall_status = "failed" if failed else "success"
         return {
-            "status": "success",
-            "message": "Knowledge base initialized",
-            "components": results,
+            "status": overall_status,
+            "message": (
+                "Knowledge base initialized" if overall_status == "success" else "Knowledge base initialization failed"
+            ),
+            "components": component_results,
         }
 
     def benchmark(self, run_id: Optional[str] = None):
@@ -670,7 +768,8 @@ class Agent:
             self.global_config.check_init_storage_config("metric")
             result = self.benchmark_semantic_layer(benchmark_path, target_task_ids, run_id=run_id)
         else:
-            self.global_config.check_init_storage_config("database")
+            if resolve_kb_search_mode(self.global_config) == KbSearchMode.VECTOR:
+                self.global_config.check_init_storage_config("database")
             self.global_config.check_init_storage_config("metric")
             result = self.do_benchmark(benchmark_platform, target_task_ids, run_id=run_id)
         end = time.perf_counter()

@@ -206,9 +206,12 @@ def create_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument(
         "--kb_update_strategy",
         type=str,
-        choices=["check", "overwrite", "incremental"],
+        choices=["check", "overwrite", "incremental", "refresh-profile"],
         default="check",
-        help="Knowledge base update strategy: check (verify paths and data), overwrite (careful!), or incremental",
+        help=(
+            "Knowledge base update strategy: check (verify paths and data), overwrite (careful!), "
+            "incremental, or refresh-profile (semantic_model only; update profile descriptions in an existing YAML)"
+        ),
     )
     bootstrap_parser.add_argument(
         "--components",
@@ -252,6 +255,13 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Number of threads to initialize bootstrap-kb, default is 4",
+    )
+    bootstrap_parser.add_argument(
+        "--kb_search_mode",
+        type=str,
+        choices=["vector", "fts"],
+        default="",
+        help="Knowledge-base search mode for metadata indexing and runtime retrieval (default: config or vector)",
     )
     bootstrap_parser.add_argument(
         "--success_story",

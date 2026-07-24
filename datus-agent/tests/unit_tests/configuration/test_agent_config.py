@@ -23,6 +23,7 @@ from datus.configuration.agent_config import (
     DatasetDbConfig,
     DbConfig,
     DocumentConfig,
+    KbSearchConfig,
     ModelConfig,
     NodeConfig,
     ServicesConfig,
@@ -854,6 +855,27 @@ class TestAgentConfigServiceSelectors:
         assert config["type"] == "metricflow"
         assert config["datasource"] == "demo"
 
+    def test_build_semantic_adapter_config_defaults_osi_execution_backend_to_metricflow(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            services={
+                "datasources": {
+                    "demo": {
+                        "type": "duckdb",
+                        "uri": "duckdb:///:memory:",
+                        "default": True,
+                    }
+                },
+                "semantic_layer": {"osi": {}},
+            },
+        )
+
+        config = cfg.build_semantic_adapter_config()
+
+        assert config["type"] == "osi"
+        assert config["execution_backend"] == "metricflow"
+        assert config["datasource"] == "demo"
+
     def test_build_semantic_adapter_config_preserves_snowflake_key_pair_fields(self, tmp_path):
         cfg = self._make(
             tmp_path,
@@ -1550,7 +1572,7 @@ class TestAgentConfigApiSection:
 
 
 class TestAgentConfigKnowledgeBase:
-    def _make(self, tmp_path, knowledge_base=None):
+    def _make(self, tmp_path, knowledge_base=None, kb=None):
         kwargs = dict(
             nodes={"test": NodeConfig(model="test-model", input=None)},
             home=str(tmp_path / "h"),
@@ -1567,6 +1589,8 @@ class TestAgentConfigKnowledgeBase:
         )
         if knowledge_base is not None:
             kwargs["knowledge_base"] = knowledge_base
+        if kb is not None:
+            kwargs["kb"] = kb
         return AgentConfig(**kwargs)
 
     def test_knowledge_base_config_resolves_nested_env_values(self, tmp_path, monkeypatch):
@@ -1582,6 +1606,46 @@ class TestAgentConfigKnowledgeBase:
         cfg = self._make(tmp_path, knowledge_base="bad")
 
         assert cfg.knowledge_base == {}
+
+    def test_kb_config_rejects_non_dict(self, tmp_path):
+        cfg = self._make(tmp_path, kb="bad")
+
+        assert cfg.kb_search == KbSearchConfig(mode="vector")
+        assert cfg.kb_search_mode == "vector"
+
+    def test_kb_search_defaults_to_vector(self, tmp_path):
+        cfg = self._make(tmp_path)
+
+        assert cfg.kb_search == KbSearchConfig(mode="vector")
+        assert cfg.kb_search_mode == "vector"
+
+    def test_kb_search_ignores_removed_enabled_flag(self, tmp_path):
+        cfg = self._make(tmp_path, kb={"search": {"enabled": "false", "mode": "fts"}})
+
+        assert cfg.kb_search == KbSearchConfig(mode="fts")
+        assert cfg.kb_search_mode == "fts"
+
+    def test_kb_search_accepts_explicit_fts_mode(self, tmp_path):
+        cfg = self._make(tmp_path, kb={"search": {"mode": "fts"}})
+
+        assert cfg.kb_search_mode == "fts"
+
+    def test_kb_search_keeps_legacy_knowledge_base_search_compatibility(self, tmp_path):
+        cfg = self._make(tmp_path, knowledge_base={"search": {"mode": "fts"}})
+
+        assert cfg.kb_search_mode == "fts"
+
+    def test_kb_search_rejects_hybrid_mode(self, tmp_path):
+        with pytest.raises(DatusException):
+            self._make(tmp_path, kb={"search": {"mode": "hybrid"}})
+
+    def test_override_kb_search_mode(self, tmp_path):
+        cfg = self._make(tmp_path)
+
+        cfg.override_by_args(kb_search_mode="fts")
+
+        assert cfg.kb_search == KbSearchConfig(mode="fts")
+        assert cfg.kb_search_mode == "fts"
 
 
 class TestAgentConfigChannels:
@@ -2757,3 +2821,240 @@ class TestAgentConfigModelExtras:
     def test_get_extra_unknown_name_returns_empty(self, tmp_path):
         cfg = self._make(tmp_path, model_extras={"primary": {"foo": "bar"}})
         assert cfg.get_model_extra("custom/unknown") == {}
+
+
+class TestPluginProfiles:
+    """``init_plugin_services`` parsing + ``get_plugin_profile`` resolution."""
+
+    def _make(self, tmp_path, plugins=None, active_plugins=None):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            plugins=plugins or {},
+            active_plugins=active_plugins,
+            skip_init_dirs=True,
+        )
+
+    def test_parses_profiles_and_interpolates_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("AF_PW", "s3cret")
+        cfg = self._make(
+            tmp_path,
+            plugins={
+                "hello": {
+                    "prod": {"api_base_url": "http://h/api/v1", "password": "${AF_PW}"},
+                    "staging": {"api_base_url": "http://s/api/v1"},
+                }
+            },
+        )
+        assert set(cfg.plugin_services["hello"]) == {"prod", "staging"}
+        # ``name`` is defaulted to the profile key; ``${VAR}`` is expanded.
+        assert cfg.plugin_services["hello"]["prod"]["name"] == "prod"
+        assert cfg.plugin_services["hello"]["prod"]["password"] == "s3cret"
+
+    def test_skips_malformed_entries(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={"hello": {"good": {"api_base_url": "x"}, "bad": "not-a-mapping"}, "junk": "nope"},
+        )
+        assert set(cfg.plugin_services["hello"]) == {"good"}
+        # A non-mapping plugin section is skipped entirely.
+        assert "junk" not in cfg.plugin_services
+
+    def test_explicit_profile_wins(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={"hello": {"prod": {"api_base_url": "p"}, "staging": {"api_base_url": "s"}}},
+        )
+        assert cfg.get_plugin_profile("hello", "staging")["api_base_url"] == "s"
+
+    def test_explicit_missing_profile_raises(self, tmp_path):
+        cfg = self._make(tmp_path, plugins={"hello": {"prod": {"api_base_url": "p"}}})
+        with pytest.raises(DatusException):
+            cfg.get_plugin_profile("hello", "nope")
+
+    def test_project_pin_between_flag_and_default(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={"hello": {"prod": {"api_base_url": "p"}, "staging": {"api_base_url": "s"}}},
+            active_plugins={"hello": "staging"},
+        )
+        # No explicit profile → project pin selects ``staging``.
+        assert cfg.get_plugin_profile("hello")["api_base_url"] == "s"
+
+    def test_default_flag_selected(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={
+                "hello": {
+                    "prod": {"api_base_url": "p", "default": True},
+                    "staging": {"api_base_url": "s"},
+                }
+            },
+        )
+        assert cfg.get_plugin_profile("hello")["api_base_url"] == "p"
+
+    def test_multiple_defaults_raises(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={
+                "hello": {
+                    "a": {"api_base_url": "a", "default": True},
+                    "b": {"api_base_url": "b", "default": True},
+                }
+            },
+        )
+        with pytest.raises(DatusException):
+            cfg.get_plugin_profile("hello")
+
+    def test_sole_profile_selected(self, tmp_path):
+        cfg = self._make(tmp_path, plugins={"hello": {"only": {"api_base_url": "o"}}})
+        assert cfg.get_plugin_profile("hello")["api_base_url"] == "o"
+
+    def test_ambiguous_without_default_raises(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={"hello": {"a": {"api_base_url": "a"}, "b": {"api_base_url": "b"}}},
+        )
+        with pytest.raises(DatusException):
+            cfg.get_plugin_profile("hello")
+
+    def test_no_config_returns_empty_dict(self, tmp_path):
+        cfg = self._make(tmp_path, plugins={})
+        # A plugin with no ``agent.plugins`` section → config-free, returns {}.
+        assert cfg.get_plugin_profile("hello") == {}
+
+    def test_stale_pin_falls_back_to_default(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins={"hello": {"prod": {"api_base_url": "p", "default": True}}},
+            active_plugins={"hello": "deleted"},
+        )
+        # Pin points at a profile that no longer exists → fall back to default.
+        assert cfg.get_plugin_profile("hello")["api_base_url"] == "p"
+
+
+class TestPluginsEnabledSwitch:
+    """``agent.plugins_enabled`` master switch for the plugin system."""
+
+    def _make(self, tmp_path, **extra):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            skip_init_dirs=True,
+            **extra,
+        )
+
+    def test_defaults_to_enabled(self, tmp_path):
+        cfg = self._make(tmp_path)
+        assert cfg.plugins_enabled is True
+
+    @pytest.mark.parametrize("value", [False, "false", "no", "off", "0"])
+    def test_disabled_values(self, tmp_path, value):
+        cfg = self._make(tmp_path, plugins_enabled=value)
+        assert cfg.plugins_enabled is False
+
+    @pytest.mark.parametrize("value", [True, "true", "yes", "on", "1"])
+    def test_enabled_values(self, tmp_path, value):
+        cfg = self._make(tmp_path, plugins_enabled=value)
+        assert cfg.plugins_enabled is True
+
+    def test_disabled_ignores_plugins_section(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugins_enabled=False,
+            plugins={"hello": {"prod": {"api_base_url": "p", "default": True}}},
+        )
+        # The whole ``agent.plugins`` section is ignored when disabled.
+        assert cfg.plugin_services == {}
+        assert cfg.get_plugin_profile("hello") == {}
+
+
+class TestPromptManagerAttribute:
+    """``AgentConfig.prompt_manager`` — the runtime prompt-template override.
+
+    It is an instance attribute rather than a dataclass field on purpose; these
+    tests pin the two properties that choice buys, so a future refactor that
+    promotes it to a field fails loudly instead of silently degrading the SaaS
+    service cache.
+    """
+
+    @staticmethod
+    def _make(tmp_path):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            skip_init_dirs=True,
+        )
+
+    def test_defaults_to_none(self, tmp_path):
+        """Unset means "derive the template dir from home" — the CLI path."""
+        assert self._make(tmp_path).prompt_manager is None
+
+    def test_get_prompt_manager_falls_back_to_path_manager_when_unset(self, tmp_path):
+        from datus.prompts.prompt_manager import get_prompt_manager
+
+        cfg = self._make(tmp_path)
+        pm = get_prompt_manager(agent_config=cfg)
+
+        assert pm.user_templates_dir == cfg.path_manager.template_dir
+
+    def test_attached_manager_overrides_the_home_derived_one(self, tmp_path):
+        """A host whose templates live outside ``home`` attaches its own manager."""
+        from datus.prompts.prompt_manager import PromptManager, get_prompt_manager
+        from datus.utils.path_manager import DatusPathManager
+
+        cfg = self._make(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        cfg.prompt_manager = PromptManager(path_manager=DatusPathManager(str(elsewhere)))
+
+        pm = get_prompt_manager(agent_config=cfg)
+
+        assert pm is cfg.prompt_manager
+        assert pm.user_templates_dir == elsewhere.resolve() / "template"
+        assert pm.user_templates_dir != cfg.path_manager.template_dir
+
+    def test_excluded_from_asdict_so_the_fingerprint_stays_stable(self, tmp_path):
+        """``DatusService.compute_fingerprint`` hashes ``dataclasses.asdict``.
+
+        A PromptManager stringifies to a memory address, so if it ever entered the
+        payload the fingerprint would differ on every rebuild and the cached service
+        would be evicted mid-session.
+        """
+        import dataclasses
+
+        from datus.prompts.prompt_manager import PromptManager
+        from datus.utils.path_manager import DatusPathManager
+
+        cfg = self._make(tmp_path)
+        before = dataclasses.asdict(cfg)
+
+        cfg.prompt_manager = PromptManager(path_manager=DatusPathManager(str(tmp_path / "elsewhere")))
+        after = dataclasses.asdict(cfg)
+
+        assert "prompt_manager" not in after
+        assert "prompt_manager" not in AgentConfig.__dataclass_fields__
+        assert after == before
+
+    def test_survives_deepcopy(self, tmp_path):
+        """Hosts clone the config per request (e.g. chat_task_manager)."""
+        import copy
+
+        from datus.prompts.prompt_manager import PromptManager, get_prompt_manager
+        from datus.utils.path_manager import DatusPathManager
+
+        cfg = self._make(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        cfg.prompt_manager = PromptManager(path_manager=DatusPathManager(str(elsewhere)))
+
+        cloned = copy.deepcopy(cfg)
+
+        assert isinstance(cloned.prompt_manager, PromptManager)
+        # A real clone, not a shared reference back into the original config.
+        assert cloned.prompt_manager is not cfg.prompt_manager
+        assert get_prompt_manager(agent_config=cloned).user_templates_dir == elsewhere.resolve() / "template"

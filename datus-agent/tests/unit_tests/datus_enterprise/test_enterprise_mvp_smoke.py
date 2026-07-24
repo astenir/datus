@@ -288,6 +288,10 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
         assert enterprise[key]["kwargs"]["min_size"] == 1
         assert enterprise[key]["kwargs"]["max_size"] == 2
 
+    for key in ("user_model_credential_store", "user_datasource_store"):
+        enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
+        enterprise[key]["kwargs"]["encryption_secret"] = "test-only-enterprise-credential-secret"
+
     extensions = load_enterprise_extensions(enterprise)
 
     assert extensions.enabled is True

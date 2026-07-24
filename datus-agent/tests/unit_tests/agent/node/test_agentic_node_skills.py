@@ -746,7 +746,7 @@ class TestSkillIntegrationEdgeCases:
         """Test that finalize_system_prompt preserves existing tools."""
         mock_agent_config.agentic_nodes = {"test_node": {"skills": "sql-*"}}
         # BashTool is fail-closed when no permission manager exists; wire a
-        # permissive config so the lazy injector includes ``execute_command``.
+        # permissive config so the lazy injector includes ``bash``.
         mock_agent_config.permissions_config = PermissionConfig(default_permission=PermissionLevel.ALLOW)
         mock_agent_config.active_profile_name = "normal"
         # Local web_search is mounted only when a Tavily key resolves; pin one so
@@ -781,7 +781,7 @@ class TestSkillIntegrationEdgeCases:
         assert "tool1" in tool_names
         assert "tool2" in tool_names
         assert "load_skill" in tool_names
-        assert "execute_command" in tool_names
+        assert "bash" in tool_names
         assert "add_memory" in tool_names
         assert "edit_memory" in tool_names
         assert "web_search" in tool_names
@@ -884,15 +884,20 @@ class TestBuiltinNodeDefaultSkills:
 
         assert GenTableAgenticNode.DEFAULT_SKILLS == "gen-table"
 
-    def test_gen_metrics_defaults(self):
+    def test_gen_metrics_defaults_derive_from_authoring_format(self):
+        """gen_metrics derives skills dynamically: DEFAULT_SKILLS stays unset, the
+        optional set comes from the authoring format and the spec skill is
+        host-injected via REQUIRED_SKILLS (see test_semantic_authoring.py)."""
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
 
-        assert GenMetricsAgenticNode.DEFAULT_SKILLS == "gen-metrics, gen-semantic-model"
+        assert GenMetricsAgenticNode.DEFAULT_SKILLS is None
+        assert GenMetricsAgenticNode.REQUIRED_SKILLS is None
 
-    def test_gen_semantic_model_defaults(self):
+    def test_gen_semantic_model_defaults_derive_from_authoring_format(self):
         from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
 
-        assert GenSemanticModelAgenticNode.DEFAULT_SKILLS == "gen-semantic-model"
+        assert GenSemanticModelAgenticNode.DEFAULT_SKILLS is None
+        assert GenSemanticModelAgenticNode.REQUIRED_SKILLS is None
 
     def test_gen_dashboard_leaves_defaults_unset(self):
         """gen_dashboard injects {platform}-dashboard dynamically in setup, not via DEFAULT_SKILLS."""
@@ -962,8 +967,8 @@ class TestSkillAllowedAgentsConsistency:
         [
             ("gen_job", ["gen-table", "table-validation", "data-migration"]),
             ("gen_table", ["gen-table", "table-validation"]),
-            ("gen_semantic_model", ["gen-semantic-model"]),
-            ("gen_metrics", ["gen-metrics", "gen-semantic-model"]),
+            ("gen_semantic_model", ["metricflow-semantic-authoring"]),
+            ("gen_metrics", ["gen-metrics", "metricflow-semantic-authoring"]),
             ("gen_dashboard", ["bi-validation", "grafana-dashboard", "superset-dashboard"]),
             ("gen_skill", ["create-skill", "optimize-skill"]),
             ("scheduler", ["airflow-workflow", "scheduler-validation"]),
@@ -974,6 +979,31 @@ class TestSkillAllowedAgentsConsistency:
             fm = self._read_skill_frontmatter(skill)
             allowed = fm.get("allowed_agents") or []
             assert node_name in allowed, f"Skill '{skill}' must list '{node_name}' in allowed_agents — got {allowed}"
+
+    def test_semantic_sql_history_profiler_is_optional_and_scoped(self):
+        import pathlib
+
+        project_root = pathlib.Path(__file__).resolve().parents[4]
+        skills_dir = project_root / "datus" / "resources" / "skills"
+        manager = SkillManager(config=SkillConfig(directories=[str(skills_dir)]))
+
+        semantic_names = {
+            skill.name
+            for skill in manager.get_available_skills(
+                "gen_semantic_model",
+                patterns=["semantic-sql-history-profiler"],
+            )
+        }
+        metric_names = {
+            skill.name
+            for skill in manager.get_available_skills(
+                "gen_metrics",
+                patterns=["semantic-sql-history-profiler"],
+            )
+        }
+
+        assert semantic_names == {"semantic-sql-history-profiler"}
+        assert metric_names == set()
 
     def test_dashboard_router_skill_is_not_exposed_to_chat(self):
         """Dashboard routing is handled by task(type="gen_dashboard"), not a chat-visible skill."""
@@ -1019,9 +1049,11 @@ class TestBashToolToggle:
             agent_config=mock_agent_config,
         )
 
-        assert node.bash_tool is not None
+        from datus.tools.func_tool.bash_tool import BashTool
+
+        assert isinstance(node.bash_tool, BashTool)
         bash_names = {t.name for t in node.bash_tool.available_tools()}
-        assert "execute_command" in bash_names
+        assert "bash" in bash_names
 
     def test_bash_tool_disabled_via_config(self, mock_agent_config):
         """``bash_tool_enabled=False`` keeps ``BashTool`` out of the node."""
@@ -1050,7 +1082,7 @@ class TestBashToolToggle:
         """Without permission enforcement, BashTool must NOT be created.
 
         ``_ensure_permission_hooks`` is a no-op when ``permission_manager``
-        is ``None``, so creating an ``execute_command`` tool would expose
+        is ``None``, so creating an ``bash`` tool would expose
         unrestricted shell execution to the model. Fail closed instead.
         """
         # ``permissions_config = None`` short-circuits ``_setup_permission_manager``,
@@ -1070,3 +1102,59 @@ class TestBashToolToggle:
         node.tools = []
         node._ensure_bash_tool_in_tools()
         assert node.tools == []
+
+
+class TestRequiredSkillsInjection:
+    """``REQUIRED_SKILLS`` host-injection primitive (``_inject_required_skills``)."""
+
+    def _make_node(self, mock_agent_config, skill_manager, required):
+        node = MinimalAgenticNode(
+            node_id="required_skills_node",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+        node.skill_manager = skill_manager
+        node.__class__ = type(
+            "RequiredSkillsNode",
+            (MinimalAgenticNode,),
+            {"REQUIRED_SKILLS": required, "get_node_name": lambda self: "test_node"},
+        )
+        return node
+
+    def test_required_skill_content_is_injected(self, mock_agent_config, skill_manager, monkeypatch):
+        node = self._make_node(mock_agent_config, skill_manager, "sql-analysis")
+        monkeypatch.setattr(node, "_inject_memory_context", lambda p, override_node_name=None: p)
+        monkeypatch.setattr(node, "_inject_response_language", lambda p: p)
+
+        result = node._finalize_system_prompt("base prompt")
+
+        assert '<required_skill name="sql-analysis">' in result
+        assert "SQL analysis techniques" in result
+        assert "</required_skill>" in result
+
+    def test_multiple_required_skills_all_injected(self, mock_agent_config, skill_manager):
+        node = self._make_node(mock_agent_config, skill_manager, "sql-analysis, data-profiler")
+
+        result = node._inject_required_skills("base prompt")
+
+        assert '<required_skill name="sql-analysis">' in result
+        assert '<required_skill name="data-profiler">' in result
+
+    def test_missing_required_skill_raises(self, mock_agent_config, skill_manager):
+        from datus.utils.exceptions import DatusException
+
+        node = self._make_node(mock_agent_config, skill_manager, "no-such-skill")
+
+        with pytest.raises(DatusException, match="no-such-skill"):
+            node._inject_required_skills("base prompt")
+
+    def test_no_required_skills_leaves_prompt_unchanged(self, mock_agent_config, skill_manager):
+        node = self._make_node(mock_agent_config, skill_manager, None)
+
+        assert node._inject_required_skills("base prompt") == "base prompt"
+
+    def test_get_required_skills_parses_comma_separated_string(self, mock_agent_config, skill_manager):
+        node = self._make_node(mock_agent_config, skill_manager, " sql-analysis ,, data-profiler ")
+
+        assert node._get_required_skills() == ["sql-analysis", "data-profiler"]

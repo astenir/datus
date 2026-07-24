@@ -901,8 +901,8 @@ class MetricFlowAdapter(BaseSemanticAdapter):
             metrics: List of metric names
             dimensions: List of dimensions to group by
             path: Optional subject area filter
-            time_start: Start time in ISO format, such as '2024-01-01'
-            time_end: End time in ISO format, such as '2024-01-31'
+            time_start: Start time (ISO format like '2024-01-01' or relative like '-7d')
+            time_end: End time (ISO format like '2024-01-31' or relative like 'now')
             time_granularity: Time granularity for aggregation ('day', 'week', 'month', 'quarter', 'year')
             where: Optional WHERE clause
             limit: Result limit

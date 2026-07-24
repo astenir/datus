@@ -339,12 +339,13 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             return
         if not getattr(self, "semantic_tools", None):
             try:
+                from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
                 from datus.tools.func_tool.semantic_tools import SemanticTools
 
                 self.semantic_tools = SemanticTools(
                     agent_config=self.agent_config,
                     sub_agent_name=self.node_config.get("system_prompt"),
-                    adapter_type=self.node_config.get("adapter_type", "metricflow"),
+                    adapter_type=resolve_semantic_adapter_type(self.agent_config),
                     runtime_db_context_provider=self._semantic_runtime_db_context,
                 )
             except Exception as exc:
@@ -449,7 +450,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
     def _ensure_bash_tool_in_tools(self) -> None:
         """Gate :class:`AgenticNode`'s lazy bash re-injection on the whitelist.
 
-        ``_finalize_system_prompt`` re-adds ``execute_command`` to
+        ``_finalize_system_prompt`` re-adds ``bash`` to
         ``self.tools`` on every prompt build — AFTER ``setup_tools()`` already
         pruned it — which silently re-exposes bash on an ask_* agent whose
         ``tools`` never granted ``bash_tools`` (the model then sees it in its

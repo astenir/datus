@@ -46,7 +46,7 @@ pip install -e "../datus-semantic-adapter/datus-semantic-osi[metricflow]"
 
 ## 配置
 
-在 `agent.yml` 里把 semantic layer 配成 `osi`，并让相关节点使用 `semantic_adapter: osi`。
+在 `agent.yml` 里把 semantic layer 配成 `osi`。语义层选择是全局的，会同时作用于 semantic model、metric 和 metric query 工作流。
 
 ```yaml
 agent:
@@ -63,27 +63,17 @@ agent:
 
     semantic_layer:
       osi:
-        execution_backend: metricflow
         default: true
-
-  agentic_nodes:
-    gen_semantic_model:
-      semantic_adapter: osi
-      # authoring_format 可省略；semantic_adapter=osi 时会自动使用 OSI authoring。
-      # authoring_format: osi
-
-    gen_metrics:
-      semantic_adapter: osi
-
-    ask_metrics:
-      semantic_adapter: osi
 ```
 
-`datus-agent` 的 authoring format 解析规则是：
+`execution_backend` 默认是 `metricflow`；只有需要换 OSI 执行后端时才需要显式配置。
 
-1. 如果节点显式配置 `authoring_format: osi`，使用 OSI。
-2. 如果节点使用的 `semantic_adapter` 解析为 `osi`，自动使用 OSI。
-3. 否则保持默认 MetricFlow authoring。
+`datus-agent` 会从全局 active semantic adapter 推导 authoring format：
+
+1. 当 `agent.services.semantic_layer.osi` 是 active adapter 时，使用 OSI authoring。
+2. 否则保持 MetricFlow authoring。
+
+旧的 node 级 `semantic_adapter` 和 `authoring_format` 字段会被忽略。
 
 ## 生成语义模型
 
@@ -113,12 +103,8 @@ semantic_model:
               dialects:
                 - dialect: ANSI_SQL
                   expression: channel
-            dimension:
-              is_time: false
+            dimension: {}
             description: "Order channel"
-            custom_extensions:
-              - vendor_name: DATUS
-                data: '{"type":"categorical"}'
 ```
 
 关键规则：
@@ -126,9 +112,15 @@ semantic_model:
 - 一个物理表对应一个 canonical dataset。不要为不同 SQL 或不同指标重复声明同一张表。
 - dataset 使用 OSI core 的 `fields`，不是 MetricFlow 的 `dimensions`。
 - dataset `source` 是表名字符串，不是 `{table: ...}`。
-- 主键写在 `primary_key`。
-- 时间字段用 `dimension.is_time: true` 标记，Datus 的时间粒度写进 `custom_extensions`。
+- **字段角色由结构决定。** 带 `dimension:` 块的 field 是可用于分组/筛选的维度；不带块的 field 是行级表达式,用于记录列语义并支撑 metric 表达式。只被指标聚合的列（余额、金额、预计算比率）声明为不带块的普通 field,`get_dimensions` 不会把它们列为维度。字段级 `type` hint 不属于 authoring 契约。
+- **键只转录、不推断。** 只有数据库显式声明了约束才写 `primary_key` / `unique_keys`；数仓表通常没有约束声明，此时不写 `primary_key`，行粒度写进 `ai_context` 说明。
+- 复合主键包含时间维度列（月度快照表）是合法的：编译器在 lowering 时保留时间维度并自动消解 identifier 冲突。
+- 时间字段用 `dimension.is_time: true` 标记，Datus 的 `time_granularity` hint 写进 `custom_extensions`。
 - 关系写在 semantic model 对象的 `relationships` 下，不要写进 dataset。
+
+### 重新生成某张表的模型
+
+对该表重跑一次 `gen_semantic_model`，然后执行 `/build-kb` 重建向量 KB，使目录中的 `is_dimension` 等事实反映当前模型。
 
 ## 生成指标
 
@@ -288,5 +280,5 @@ OSI adapter 返回的 metric metadata 会包含 Datus hints，例如：
 - OSI adapter 当前默认执行后端是 MetricFlow。
 - relationship 当前执行 profile 支持单列 join。多列复合 join 需要后续扩展。
 - SQL 窗口函数不能直接写进 OSI metric expression；周期对比使用 `offset_window`，排名/TopN 明细需要 query layer 或预计算数据集。
-- 当 semantic model 包含多个 dataset 时，metric 必须通过 DATUS custom extension 明确 `dataset`。
+- 当 semantic model 包含多个 dataset 时，metric 的所属 dataset 从表达式中的限定列名解析（`SUM(orders.amount)`）；仅当表达式不含限定列名时才需要 DATUS `dataset` hint。
 - OSI core 之外的 Datus 执行信息必须写入 `custom_extensions[{vendor_name: DATUS}]`，不要写成 OSI core 顶层字段。
