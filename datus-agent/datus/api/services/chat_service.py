@@ -61,6 +61,7 @@ class SuccessStorySourceError(ValueError):
         super().__init__(message)
         self.code = code
 
+
 if TYPE_CHECKING:
     from datus.api.enterprise.protocols import SessionBodyStore
 
@@ -614,7 +615,10 @@ class ChatService:
                 if action.action_id == call_tool_id and action.status == ActionStatus.PROCESSING:
                     start_action = action
                     start_question = latest_question
-                elif action.action_id in {f"complete_{call_tool_id}", call_tool_id} and action.status != ActionStatus.PROCESSING:
+                elif (
+                    action.action_id in {f"complete_{call_tool_id}", call_tool_id}
+                    and action.status != ActionStatus.PROCESSING
+                ):
                     completion_action = action
 
         if start_action is None:

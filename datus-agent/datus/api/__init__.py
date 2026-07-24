@@ -25,6 +25,7 @@ def __getattr__(name: str) -> Any:
         return {"create_app": create_app, "service": service}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
     "create_app",
     "service",

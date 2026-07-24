@@ -1758,14 +1758,10 @@ class SessionManager:
                                         output={"thinking": thinking_text, "content_type": "thinking"},
                                         status=ActionStatus.SUCCESS,
                                         start_time=(
-                                            datetime.fromisoformat(str(created_at))
-                                            if created_at
-                                            else datetime.now()
+                                            datetime.fromisoformat(str(created_at)) if created_at else datetime.now()
                                         ),
                                         end_time=(
-                                            datetime.fromisoformat(str(created_at))
-                                            if created_at
-                                            else datetime.now()
+                                            datetime.fromisoformat(str(created_at)) if created_at else datetime.now()
                                         ),
                                     )
                                 )

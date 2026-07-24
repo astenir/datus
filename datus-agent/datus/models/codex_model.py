@@ -635,13 +635,10 @@ class CodexModel(LLMBaseModel):
                                 "response.reasoning_summary_text.done",
                                 "response.reasoning_text.done",
                             }:
-                                full_reasoning = (
-                                    getattr(raw_data, "text", None) or reasoning_accumulated
-                                ).strip()
+                                full_reasoning = (getattr(raw_data, "text", None) or reasoning_accumulated).strip()
                                 if full_reasoning:
                                     reasoning_action = ActionHistory(
-                                        action_id=reasoning_stream_id
-                                        or f"reasoning_{uuid.uuid4().hex[:8]}",
+                                        action_id=reasoning_stream_id or f"reasoning_{uuid.uuid4().hex[:8]}",
                                         role=ActionRole.ASSISTANT,
                                         messages=full_reasoning,
                                         action_type="thinking",

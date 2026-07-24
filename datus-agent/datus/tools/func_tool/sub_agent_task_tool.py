@@ -412,9 +412,7 @@ class SubAgentTaskTool:
             user_overrides = build_user_overrides(target_profile, raw_user)
             child_manager.switch_profile(target_profile, user_overrides=user_overrides)
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to inherit permission profile {target_profile!r} for delegated Agent."
-            ) from exc
+            raise RuntimeError(f"Failed to inherit permission profile {target_profile!r} for delegated Agent.") from exc
 
         logger.info(
             "Inherited permission profile for delegated Agent",

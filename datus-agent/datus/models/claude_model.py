@@ -915,8 +915,7 @@ class ClaudeModel(OpenAICompatibleModel):
                                     if active_block_type == "thinking" and reasoning_accumulated.strip():
                                         full_text = reasoning_accumulated.strip()
                                         yield ActionHistory(
-                                            action_id=reasoning_stream_id
-                                            or f"reasoning_{uuid.uuid4().hex[:8]}",
+                                            action_id=reasoning_stream_id or f"reasoning_{uuid.uuid4().hex[:8]}",
                                             role=ActionRole.ASSISTANT,
                                             messages=full_text,
                                             action_type="thinking",
