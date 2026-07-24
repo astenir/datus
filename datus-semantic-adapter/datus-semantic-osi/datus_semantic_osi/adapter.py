@@ -14,6 +14,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, datetime, timedelta
 import os
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -25,11 +26,15 @@ from datus_semantic_core.models import (
     DimensionInfo,
     MetricDefinition,
     QueryResult,
+    SemanticModelInfo,
     SemanticValidationError,
     ValidationIssue,
     ValidationResult,
 )
 
+from datus_semantic_core.authoring import MetricMutationResult, MetricSource
+
+from datus_semantic_osi.authoring import OSIMetricAuthor
 from datus_semantic_osi.backend import make_backend
 from datus_semantic_osi.compiler import compile_document
 from datus_semantic_osi.config import DatusOSIConfig
@@ -53,7 +58,7 @@ from datus_semantic_osi.metricflow_backend import (
     period_over_period_base_metric_name,
 )
 from datus_semantic_osi.normalizer import NormalizationResult, normalize_document
-from datus_semantic_osi.profile import OSIDocument, load_osi_path
+from datus_semantic_osi.profile import OSIDocument, load_osi_model, load_osi_path
 from datus_semantic_osi.query_join import apply_join_policy, normalize_join_policy
 from datus_semantic_osi.query_utils import (
     dimension_output_column,
@@ -66,6 +71,7 @@ from datus_semantic_osi.query_window import (
     query_window_metrics,
 )
 from datus_semantic_osi.validator import (
+    detect_measure_columns_modeled_as_dimensions,
     detect_nonportable_functions,
     validate_authoring_quality,
     validate_capabilities,
@@ -144,29 +150,129 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             datasource=config.datasource,
             timeout=config.timeout,
         )
-        self._model_cache: Optional[SemanticModelIR] = None
+        self._documents_signature: Optional[tuple] = None
+        self._document_results_cache: Dict[str, NormalizationResult] = {}
+        self._model_cache: Dict[str, SemanticModelIR] = {}
+        self._metric_to_model: Dict[str, str] = {}
 
     # ---- OSI loading / compilation -------------------------------------
 
-    def _load_document(self) -> OSIDocument:
-        return self._load_document_result().document
-
-    def _load_document_result(self) -> NormalizationResult:
+    def _semantic_models_path(self) -> str:
         path = self.config.semantic_models_path
         if not path or not os.path.isdir(path):
             raise OSIError(f"semantic_models_path is not a directory: {path}")
-        result = normalize_document(load_osi_path(path))
+        return path
+
+    def _path_signature(self) -> tuple:
+        root = Path(self._semantic_models_path())
+        files = sorted((*root.rglob("*.yaml"), *root.rglob("*.yml")))
+        return tuple(
+            (str(path), path.stat().st_mtime_ns, path.stat().st_size)
+            for path in files
+            if path.is_file()
+        )
+
+    def _load_document_results(self) -> Dict[str, NormalizationResult]:
+        signature = self._path_signature()
+        if signature == self._documents_signature:
+            return self._document_results_cache
+
+        documents = load_osi_path(self._semantic_models_path())
+        results = {name: normalize_document(doc) for name, doc in documents.items()}
+        metric_to_model: Dict[str, str] = {}
+        for model_name, result in results.items():
+            for metric in result.document.metrics:
+                owner = metric_to_model.get(metric.name)
+                if owner is not None and owner != model_name:
+                    raise OSIValidationError(
+                        f"Metric `{metric.name}` is declared in semantic models "
+                        f"`{owner}` and `{model_name}`. Metric names must be unique "
+                        "within a datasource until model-qualified metric names are supported."
+                    )
+                metric_to_model[metric.name] = model_name
+
+        self._documents_signature = signature
+        self._document_results_cache = results
+        self._model_cache = {}
+        self._metric_to_model = metric_to_model
+        return results
+
+    def _load_document_result(self, semantic_model_name: str) -> NormalizationResult:
+        results = self._load_document_results()
+        try:
+            result = results[semantic_model_name]
+        except KeyError as exc:
+            candidates = ", ".join(sorted(results)) or "<none>"
+            raise OSIValidationError(
+                f"Semantic model `{semantic_model_name}` was not found. "
+                f"Available models: {candidates}."
+            ) from exc
         if result.errors:
             raise OSIValidationError(" ".join(result.errors))
         return result
 
-    def _model(self) -> SemanticModelIR:
-        if self._model_cache is None:
-            self._model_cache = compile_document(self._load_document(), dialect=self._dialect)
-        return self._model_cache
+    def _load_target_document_result(
+        self, semantic_model_name: str
+    ) -> NormalizationResult:
+        """Load one model without letting unrelated invalid files block validation."""
+        document = load_osi_model(
+            self._semantic_models_path(),
+            semantic_model_name=semantic_model_name,
+        )
+        return normalize_document(document)
 
-    def _find_metric(self, name: str) -> Optional[MetricIR]:
-        return next((m for m in self._model().metrics if m.name == name), None)
+    def _load_document(self, semantic_model_name: str) -> OSIDocument:
+        return self._load_document_result(semantic_model_name).document
+
+    def _model(self, semantic_model_name: str) -> SemanticModelIR:
+        self._load_document_results()
+        if semantic_model_name not in self._model_cache:
+            self._model_cache[semantic_model_name] = compile_document(
+                self._load_document(semantic_model_name), dialect=self._dialect
+            )
+        return self._model_cache[semantic_model_name]
+
+    def _metric_model_name(self, metric_name: str) -> Optional[str]:
+        self._load_document_results()
+        return self._metric_to_model.get(metric_name)
+
+    def _resolve_query_model(self, metrics: List[str]) -> SemanticModelIR:
+        if not metrics:
+            raise ValueError("At least one metric is required.")
+        unknown = [
+            name for name in self._dedupe(metrics) if not self._metric_model_name(name)
+        ]
+        if unknown:
+            raise ValueError(f"Unknown metric(s): {', '.join(unknown)}.")
+        owners = {
+            owner
+            for name in metrics
+            if (owner := self._metric_model_name(name)) is not None
+        }
+        if len(owners) != 1:
+            details = ", ".join(
+                f"{name} -> {self._metric_model_name(name)}"
+                for name in self._dedupe(metrics)
+            )
+            raise ValueError(
+                "Metrics belong to multiple semantic models: "
+                f"{details}. Cross-semantic-model queries are not supported."
+            )
+        return self._model(next(iter(owners)))
+
+    @staticmethod
+    def _find_metric_in_model(model: SemanticModelIR, name: str) -> Optional[MetricIR]:
+        return next((metric for metric in model.metrics if metric.name == name), None)
+
+    def _find_metric(
+        self, name: str, model: Optional[SemanticModelIR] = None
+    ) -> Optional[MetricIR]:
+        if model is None:
+            model_name = self._metric_model_name(name)
+            if model_name is None:
+                return None
+            model = self._model(model_name)
+        return self._find_metric_in_model(model, name)
 
     @staticmethod
     def _parse_date_boundary(
@@ -193,6 +299,22 @@ class DatusOSIAdapter(BaseSemanticAdapter):
     @staticmethod
     def _format_date_boundary(value: date) -> str:
         return value.isoformat()
+
+    @classmethod
+    def _exclusive_end_to_inclusive(cls, time_end: Optional[str]) -> Optional[str]:
+        """Translate the half-open ``time_end`` contract to an inclusive bound.
+
+        The Datus query contract for OSI-family semantic layers treats
+        ``time_end`` as an exclusive upper bound (half-open range
+        ``[time_start, time_end)``, matching osi-engine S-TIME-3), while
+        MetricFlow time constraints — and this adapter's own rendered SQL and
+        row filters — are end-inclusive at day grain. Convert once at the
+        query entry point; everything downstream stays inclusive.
+        """
+        end = cls._parse_date_boundary(time_end, label="time_end")
+        if end is None:
+            return time_end
+        return cls._format_date_boundary(end - timedelta(days=1))
 
     @staticmethod
     def _shift_months(value: date, months: int) -> date:
@@ -383,11 +505,15 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             columns=list(result.columns), data=filtered, metadata=metadata
         )
 
-    def _dataset_by_name(self) -> Dict[str, DatasetIR]:
-        return {dataset.name: dataset for dataset in self._model().datasets}
+    @staticmethod
+    def _dataset_by_name(model: SemanticModelIR) -> Dict[str, DatasetIR]:
+        return {dataset.name: dataset for dataset in model.datasets}
 
     def _root_dataset_names_for_metric(
-        self, metric: MetricIR, seen_metrics: Optional[set[str]] = None
+        self,
+        model: SemanticModelIR,
+        metric: MetricIR,
+        seen_metrics: Optional[set[str]] = None,
     ) -> List[str]:
         if metric.dataset:
             return [metric.dataset]
@@ -399,20 +525,20 @@ class DatusOSIAdapter(BaseSemanticAdapter):
 
         dataset_names: List[str] = []
         for input_metric in metric.inputs:
-            referenced = self._find_metric(input_metric.name)
+            referenced = self._find_metric(input_metric.name, model)
             if referenced is None:
                 continue
             dataset_names.extend(
-                self._root_dataset_names_for_metric(referenced, seen_metrics)
+                self._root_dataset_names_for_metric(model, referenced, seen_metrics)
             )
 
         if dataset_names:
             return self._dedupe(dataset_names)
 
-        if metric.measures and self._model().datasets:
+        if metric.measures and model.datasets:
             # MetricFlow lowering places dataset-less backing measures on the
             # first declared dataset, so discovery follows the same fallback.
-            return [self._model().datasets[0].name]
+            return [model.datasets[0].name]
 
         return []
 
@@ -427,9 +553,12 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             result.append(value)
         return result
 
-    def _metric_metadata(self, metric: MetricIR) -> Dict[str, Any]:
-        dataset_names = self._root_dataset_names_for_metric(metric)
+    def _metric_metadata(
+        self, model: SemanticModelIR, metric: MetricIR
+    ) -> Dict[str, Any]:
+        dataset_names = self._root_dataset_names_for_metric(model, metric)
         metadata: Dict[str, Any] = {
+            "semantic_model_name": model.name,
             "dataset": metric.dataset
             or (dataset_names[0] if len(dataset_names) == 1 else None),
             "datasets": dataset_names if len(dataset_names) > 1 else None,
@@ -485,7 +614,10 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         return {key: value for key, value in metadata.items() if value is not None}
 
     def _metric_has_offset_dependency(
-        self, metric: MetricIR, seen_metrics: Optional[set[str]] = None
+        self,
+        model: SemanticModelIR,
+        metric: MetricIR,
+        seen_metrics: Optional[set[str]] = None,
     ) -> bool:
         if metric.period_over_period is not None:
             return True
@@ -501,10 +633,10 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         seen_metrics.add(metric.name)
 
         for input_metric in metric.inputs:
-            referenced = self._find_metric(input_metric.name)
+            referenced = self._find_metric(input_metric.name, model)
             if referenced is None:
                 continue
-            if self._metric_has_offset_dependency(referenced, seen_metrics):
+            if self._metric_has_offset_dependency(model, referenced, seen_metrics):
                 return True
         return False
 
@@ -519,7 +651,9 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 return grain
         return None
 
-    def _requires_time_dimension(self, metric: MetricIR) -> bool:
+    def _requires_time_dimension(
+        self, model: SemanticModelIR, metric: MetricIR
+    ) -> bool:
         """Metrics whose definition mandates a metric_time group-by.
 
         A cumulative metric (window / grain_to_date), period-over-period
@@ -530,11 +664,14 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         """
         return (
             metric.kind is MetricKind.CUMULATIVE
-            or self._metric_has_offset_dependency(metric)
+            or self._metric_has_offset_dependency(model, metric)
         )
 
     def _static_required_grains(
-        self, metric: MetricIR, seen_metrics: Optional[set[str]] = None
+        self,
+        model: SemanticModelIR,
+        metric: MetricIR,
+        seen_metrics: Optional[set[str]] = None,
     ) -> set[str]:
         """Required time grains derivable from the metric definition.
 
@@ -568,13 +705,16 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 if grain:
                     grains.add(grain)
 
-            referenced = self._find_metric(input_metric.name)
+            referenced = self._find_metric(input_metric.name, model)
             if referenced is not None:
-                grains.update(self._static_required_grains(referenced, seen_metrics))
+                grains.update(
+                    self._static_required_grains(model, referenced, seen_metrics)
+                )
         return grains
 
     def _ensure_time_grouping(
         self,
+        model: SemanticModelIR,
         metrics: List[str],
         dimensions: List[str],
         time_granularity: Optional[str],
@@ -592,13 +732,13 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         required_metrics: List[str] = []
         required_grains: Dict[str, List[str]] = {}
         for name in metrics:
-            metric = self._find_metric(name)
+            metric = self._find_metric(name, model)
             if metric is not None and metric.period_over_period is not None:
                 continue
-            if metric is None or not self._requires_time_dimension(metric):
+            if metric is None or not self._requires_time_dimension(model, metric):
                 continue
             required_metrics.append(name)
-            for grain in self._static_required_grains(metric):
+            for grain in self._static_required_grains(model, metric):
                 required_grains.setdefault(grain, []).append(name)
 
         if not required_metrics:
@@ -693,7 +833,10 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         )
 
     def _offset_anchor_metric_names(
-        self, metric: MetricIR, seen_metrics: Optional[set[str]] = None
+        self,
+        model: SemanticModelIR,
+        metric: MetricIR,
+        seen_metrics: Optional[set[str]] = None,
     ) -> List[str]:
         """Return current-period metrics that bound offset-derived output rows."""
         if metric.period_over_period is not None:
@@ -722,35 +865,35 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             )
 
         for input_metric in metric.inputs:
-            referenced = self._find_metric(input_metric.name)
+            referenced = self._find_metric(input_metric.name, model)
             if referenced is None:
                 continue
             anchors.extend(
-                self._offset_anchor_metric_names(referenced, set(seen_metrics))
+                self._offset_anchor_metric_names(model, referenced, set(seen_metrics))
             )
 
         return self._dedupe(anchors)
 
     def _query_metrics_plan(
-        self, metrics: List[str]
+        self, model: SemanticModelIR, metrics: List[str]
     ) -> tuple[List[str], List[str], List[str]]:
         requested = self._dedupe(list(metrics))
         anchor_metrics: List[str] = []
         filter_metrics: List[str] = []
 
         for metric_name in requested:
-            metric = self._find_metric(metric_name)
+            metric = self._find_metric(metric_name, model)
             if metric is None:
                 continue
-            if self._metric_has_offset_dependency(metric):
-                anchor_metrics.extend(self._offset_anchor_metric_names(metric))
+            if self._metric_has_offset_dependency(model, metric):
+                anchor_metrics.extend(self._offset_anchor_metric_names(model, metric))
             else:
                 filter_metrics.append(metric_name)
 
         anchor_metrics = [
             metric_name
             for metric_name in self._dedupe(anchor_metrics)
-            if self._find_metric(metric_name) is not None
+            if self._find_metric(metric_name, model) is not None
             or is_period_over_period_base_metric_name(metric_name)
         ]
         hidden_anchor_metrics = [
@@ -810,14 +953,14 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         )
 
     def _relationship_dimension(
-        self, metric: MetricIR, dimension: str
+        self, model: SemanticModelIR, metric: MetricIR, dimension: str
     ) -> Optional[tuple[RelationshipIR, DatasetIR, FieldIR, str]]:
-        dataset_names = self._root_dataset_names_for_metric(metric)
+        dataset_names = self._root_dataset_names_for_metric(model, metric)
         if len(dataset_names) != 1 or "__" not in dimension:
             return None
         from_dataset = dataset_names[0]
-        datasets = self._dataset_by_name()
-        for relationship in self._model().relationships:
+        datasets = self._dataset_by_name(model)
+        for relationship in model.relationships:
             if relationship.from_dataset != from_dataset:
                 continue
             to_dataset = datasets.get(relationship.to_dataset)
@@ -834,7 +977,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 (
                     candidate
                     for candidate in to_dataset.fields
-                    if candidate.name == field_name
+                    if candidate.name == field_name and candidate.is_dimension
                 ),
                 None,
             )
@@ -955,6 +1098,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
     def _dimension_preserving_sql(
         self,
         *,
+        model: SemanticModelIR,
         metrics: List[str],
         dimensions: Sequence[str],
         time_start: Optional[str],
@@ -966,7 +1110,9 @@ class DatusOSIAdapter(BaseSemanticAdapter):
     ) -> Optional[str]:
         if len(dimensions) != 1 or is_metric_time_dimension(dimensions[0]):
             return None
-        metric_objects = [self._find_metric(metric_name) for metric_name in metrics]
+        metric_objects = [
+            self._find_metric(metric_name, model) for metric_name in metrics
+        ]
         if any(metric is None for metric in metric_objects):
             return None
         typed_metrics = [metric for metric in metric_objects if metric is not None]
@@ -975,20 +1121,20 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         ):
             return None
         first_metric = typed_metrics[0]
-        rel_dim = self._relationship_dimension(first_metric, dimensions[0])
+        rel_dim = self._relationship_dimension(model, first_metric, dimensions[0])
         if rel_dim is None:
             return None
         relationship, to_dataset, field, _join_name = rel_dim
         rel_dim_key = self._relationship_dimension_key(rel_dim)
         for metric in typed_metrics[1:]:
-            metric_rel_dim = self._relationship_dimension(metric, dimensions[0])
+            metric_rel_dim = self._relationship_dimension(model, metric, dimensions[0])
             if (
                 metric_rel_dim is None
                 or self._relationship_dimension_key(metric_rel_dim) != rel_dim_key
             ):
                 return None
 
-        datasets = self._dataset_by_name()
+        datasets = self._dataset_by_name(model)
         fact_dataset = datasets.get(relationship.from_dataset)
         if fact_dataset is None:
             return None
@@ -1109,6 +1255,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         self,
         executor: Any,
         *,
+        model: SemanticModelIR,
         metrics: List[str],
         dimensions: Sequence[str],
         time_start: Optional[str],
@@ -1120,6 +1267,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         dry_run: bool,
     ) -> Optional[QueryResult]:
         sql = self._dimension_preserving_sql(
+            model=model,
             metrics=metrics,
             dimensions=dimensions,
             time_start=time_start,
@@ -1147,33 +1295,67 @@ class DatusOSIAdapter(BaseSemanticAdapter):
 
     # ---- BaseSemanticAdapter interface ---------------------------------
 
+    def list_semantic_models(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> List[SemanticModelInfo]:
+        models: List[SemanticModelInfo] = []
+        for model_name in self._load_document_results():
+            model = self._model(model_name)
+            dimensions = self._dedupe(
+                [
+                    dimension.name
+                    for dataset in model.datasets
+                    for dimension in self._dimensions_for_dataset(model, dataset.name)
+                ]
+            )
+            models.append(
+                SemanticModelInfo(
+                    name=model.name,
+                    platform_type="semantic_model",
+                    dimensions=[DimensionInfo(name=name) for name in dimensions],
+                    measures=[metric.name for metric in model.metrics],
+                    extra={"datasets": [dataset.name for dataset in model.datasets]},
+                )
+            )
+        return models
+
     async def list_metrics(
         self, path: Optional[List[str]] = None, limit: int = 100, offset: int = 0
     ) -> List[MetricDefinition]:
-        metrics = self._model().metrics
+        metrics = [
+            (self._model(model_name), metric)
+            for model_name in self._load_document_results()
+            for metric in self._model(model_name).metrics
+        ]
         if path:
             metrics = [
-                m
-                for m in metrics
-                if isinstance(m.metadata.get("subject_path"), list)
-                and m.metadata["subject_path"][: len(path)] == path
+                (model, metric)
+                for model, metric in metrics
+                if isinstance(metric.metadata.get("subject_path"), list)
+                and metric.metadata["subject_path"][: len(path)] == path
             ]
         metrics = metrics[offset : offset + limit]
         return [
             MetricDefinition(
-                name=m.name,
-                description=m.description or None,
-                type=m.kind.value,
-                dimensions=[d.name for d in self._dimensions_for_metric(m)],
-                measures=[x.name for x in m.measures],
-                unit=m.unit,
-                format=m.format,
-                path=m.metadata.get("subject_path")
-                if isinstance(m.metadata.get("subject_path"), list)
+                name=metric.name,
+                description=metric.description or None,
+                type=metric.kind.value,
+                dimensions=[
+                    dimension.name
+                    for dimension in self._dimensions_for_metric(model, metric)
+                ],
+                measures=[measure.name for measure in metric.measures],
+                unit=metric.unit,
+                format=metric.format,
+                path=metric.metadata.get("subject_path")
+                if isinstance(metric.metadata.get("subject_path"), list)
                 else None,
-                metadata=self._metric_metadata(m),
+                metadata=self._metric_metadata(model, metric),
             )
-            for m in metrics
+            for model, metric in metrics
         ]
 
     @staticmethod
@@ -1192,11 +1374,12 @@ class DatusOSIAdapter(BaseSemanticAdapter):
 
     def _dimensions_for_dataset(
         self,
+        model: SemanticModelIR,
         dataset_name: str,
         prefix: Optional[List[str]] = None,
         visited: Optional[set[str]] = None,
     ) -> List[DimensionInfo]:
-        datasets = self._dataset_by_name()
+        datasets = self._dataset_by_name(model)
         dataset = datasets.get(dataset_name)
         if dataset is None:
             return []
@@ -1211,9 +1394,12 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 "__".join([*prefix, field.name]) if prefix else field.name,
             )
             for field in dataset.fields
+            # Plain row-level fields (no `dimension:` block in OSI core) back
+            # metric expressions but are not legal grouping dimensions.
+            if field.is_dimension
         ]
 
-        for relationship in self._model().relationships:
+        for relationship in model.relationships:
             if relationship.from_dataset != dataset_name:
                 continue
             if relationship.to_dataset in visited:
@@ -1226,6 +1412,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             )
             dimensions.extend(
                 self._dimensions_for_dataset(
+                    model,
                     relationship.to_dataset,
                     prefix=[*prefix, join_name],
                     visited=set(visited),
@@ -1233,11 +1420,13 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             )
         return dimensions
 
-    def _dimensions_for_metric(self, metric: MetricIR) -> List[DimensionInfo]:
+    def _dimensions_for_metric(
+        self, model: SemanticModelIR, metric: MetricIR
+    ) -> List[DimensionInfo]:
         dimensions: List[DimensionInfo] = []
         seen: set[str] = set()
-        for dataset_name in self._root_dataset_names_for_metric(metric):
-            for dimension in self._dimensions_for_dataset(dataset_name):
+        for dataset_name in self._root_dataset_names_for_metric(model, metric):
+            for dimension in self._dimensions_for_dataset(model, dataset_name):
                 if dimension.name in seen:
                     continue
                 seen.add(dimension.name)
@@ -1247,10 +1436,14 @@ class DatusOSIAdapter(BaseSemanticAdapter):
     async def get_dimensions(
         self, metric_name: str, path: Optional[List[str]] = None
     ) -> List[DimensionInfo]:
-        metric = self._find_metric(metric_name)
+        model_name = self._metric_model_name(metric_name)
+        if model_name is None:
+            return []
+        model = self._model(model_name)
+        metric = self._find_metric(metric_name, model)
         if metric is None:
             return []
-        return self._dimensions_for_metric(metric)
+        return self._dimensions_for_metric(model, metric)
 
     async def query_metrics(
         self,
@@ -1267,12 +1460,13 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         zero_fill: bool = False,
         dry_run: bool = False,
     ) -> QueryResult:
-        model = self._model()
+        model = self._resolve_query_model(metrics)
         period_over_period_metrics = self._period_over_period_metrics(model, metrics)
         live = getattr(self._backend, "has_live_connection", False)
         dimensions = dimensions or []
+        time_end = self._exclusive_end_to_inclusive(time_end)
         dimensions, time_granularity = self._ensure_time_grouping(
-            metrics, dimensions, time_granularity
+            model, metrics, dimensions, time_granularity
         )
         policy = normalize_join_policy(join_policy)
 
@@ -1298,6 +1492,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         if dry_run and not live:
             if policy == "dimension_preserving":
                 sql = self._dimension_preserving_sql(
+                    model=model,
                     metrics=metrics,
                     dimensions=dimensions,
                     time_start=time_start,
@@ -1351,7 +1546,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             )
 
         query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
-            self._query_metrics_plan(metrics)
+            self._query_metrics_plan(model, metrics)
         )
 
         # delegate live execution / explain to the wrapped MetricFlowAdapter
@@ -1359,6 +1554,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         if policy == "dimension_preserving":
             dimension_preserving_result = await self._query_dimension_preserving(
                 executor,
+                model=model,
                 metrics=metrics,
                 dimensions=dimensions,
                 time_start=time_start,
@@ -1444,6 +1640,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
     async def validate_semantic(
         self,
         scope: str = "all",
+        semantic_model_name: Optional[str] = None,
         checks: Optional[List[str] | str] = None,
         baseline_artifact: Optional[Dict[str, Any]] = None,
     ) -> ValidationResult:
@@ -1465,83 +1662,156 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 ],
             )
 
-        issues: List[ValidationIssue] = []
-
-        # Stage 1: OSI Profile validation (authoring level).
         try:
-            normalization = self._load_document_result()
-            doc = normalization.document
+            if semantic_model_name:
+                results = {
+                    semantic_model_name: self._load_target_document_result(
+                        semantic_model_name
+                    )
+                }
+            else:
+                results = self._load_document_results()
         except OSIError as e:
             return ValidationResult(
                 valid=False, issues=[ValidationIssue(severity="error", message=str(e))]
             )
-        issues.extend(
-            ValidationIssue(severity="warning", message=m)
-            for m in [*normalization.warnings, *normalization.actions]
-        )
-        if "profile" in checks_list:
-            issues.extend(
-                ValidationIssue(severity="error", message=m)
-                for m in validate_profile(doc)
-            )
-            issues.extend(
-                ValidationIssue(severity="warning", message=m)
-                for m in detect_nonportable_functions(doc, dialect=self._dialect)
-            )
-        if "authoring_quality" in checks_list:
-            issues.extend(
-                ValidationIssue(severity="error", message=m)
-                for m in validate_authoring_quality(doc)
-            )
-        if "mutation_guard" in checks_list:
-            issues.extend(
-                ValidationIssue(severity="error", message=m)
-                for m in validate_mutation_guard(doc, baseline_artifact)
+
+        if semantic_model_name:
+            selected_names = [semantic_model_name]
+        elif scope == "all":
+            selected_names = list(results)
+        elif len(results) == 1:
+            selected_names = list(results)
+        else:
+            candidates = ", ".join(sorted(results))
+            return ValidationResult(
+                valid=False,
+                issues=[
+                    ValidationIssue(
+                        severity="error",
+                        message=(
+                            "semantic_model_name is required for targeted validation "
+                            f"when multiple models exist. Available models: {candidates}."
+                        ),
+                    )
+                ],
             )
 
-        if any(i.severity == "error" for i in issues):
-            return ValidationResult(valid=False, issues=issues)
-
+        issues: List[ValidationIssue] = []
         needs_ir = bool({"ir", "capability", "backend"} & set(checks_list))
-        if not needs_ir:
-            return ValidationResult(valid=True, issues=issues)
 
-        # Stage 2: compile to IR (business-semantic errors fail fast).
-        try:
-            model = compile_document(doc, dialect=self._dialect)
-        except OSIValidationError as e:
-            issues.append(ValidationIssue(severity="error", message=str(e)))
-            return ValidationResult(valid=False, issues=issues)
-
-        # Stage 3: IR + backend capability validation.
-        if "ir" in checks_list:
-            issues.extend(
-                ValidationIssue(severity="error", message=m) for m in validate_ir(model)
+        def add_issue(model_name: str, severity: str, message: str) -> None:
+            issues.append(
+                ValidationIssue(
+                    severity=severity,
+                    message=f"[semantic_model={model_name}] {message}",
+                )
             )
-        if "capability" in checks_list:
-            caps = getattr(self._backend, "capabilities", {}) or {}
-            issues.extend(
-                ValidationIssue(severity="error", message=m)
-                for m in validate_capabilities(model, caps)
-            )
-        if any(i.severity == "error" for i in issues):
-            return ValidationResult(valid=False, issues=issues)
 
-        # Stage 4: backend validation. With a live connection, delegate to
-        # MetricFlowAdapter for the full pipeline (lint + parse + semantic +
-        # data-warehouse validation); otherwise run parse + semantic only.
-        if "backend" in checks_list:
+        for model_name in selected_names:
+            normalization = results[model_name]
+            doc = normalization.document
+            for message in [*normalization.warnings, *normalization.actions]:
+                add_issue(model_name, "warning", message)
+            for message in normalization.errors:
+                add_issue(model_name, "error", message)
+
+            model_issue_start = len(issues)
+            if "profile" in checks_list:
+                for message in validate_profile(doc):
+                    add_issue(model_name, "error", message)
+                for message in detect_nonportable_functions(doc, dialect=self._dialect):
+                    add_issue(model_name, "warning", message)
+            if "authoring_quality" in checks_list:
+                for message in validate_authoring_quality(doc):
+                    add_issue(model_name, "error", message)
+            if "mutation_guard" in checks_list:
+                for message in validate_mutation_guard(doc, baseline_artifact):
+                    add_issue(model_name, "error", message)
+
+            if (
+                any(issue.severity == "error" for issue in issues[model_issue_start:])
+                or not needs_ir
+            ):
+                continue
+
+            try:
+                if semantic_model_name:
+                    model = compile_document(doc, dialect=self._dialect)
+                else:
+                    model = self._model(model_name)
+            except OSIValidationError as exc:
+                add_issue(model_name, "error", str(exc))
+                continue
+
+            if "ir" in checks_list:
+                for message in validate_ir(model):
+                    add_issue(model_name, "error", message)
+                for message in detect_measure_columns_modeled_as_dimensions(
+                    model, dialect=self._dialect
+                ):
+                    add_issue(model_name, "warning", message)
+            if "capability" in checks_list:
+                caps = getattr(self._backend, "capabilities", {}) or {}
+                for message in validate_capabilities(model, caps):
+                    add_issue(model_name, "error", message)
+
+            if (
+                any(issue.severity == "error" for issue in issues[model_issue_start:])
+                or "backend" not in checks_list
+            ):
+                continue
+
             if getattr(self._backend, "has_live_connection", False):
                 executor = self._backend.make_executor(model)
                 backend_result = await executor.validate_semantic(scope=scope)
             else:
                 backend_result = self._backend.validate(model)
-            issues.extend(backend_result.issues)
-            valid = backend_result.valid and not any(
-                i.severity == "error" for i in issues
-            )
-            return ValidationResult(valid=valid, issues=issues)
+            for issue in backend_result.issues:
+                add_issue(model_name, issue.severity, issue.message)
+
         return ValidationResult(
-            valid=not any(i.severity == "error" for i in issues),
+            valid=not any(issue.severity == "error" for issue in issues),
             issues=issues,
         )
+
+    # ==================== Authoring Interface ====================
+    # Backend/editor surface; not exposed as an agent/LLM tool. Operates on the
+    # OSI YAML files (source of truth), not on the KB projection.
+
+    def _author(self) -> OSIMetricAuthor:
+        return OSIMetricAuthor(self._semantic_models_path())
+
+    def read_metric_source(
+        self,
+        metric_name: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+    ) -> MetricSource:
+        return self._author().read(metric_name)
+
+    def write_metric_source(
+        self,
+        metric_name: str,
+        source: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+        create: bool = False,
+    ) -> MetricMutationResult:
+        return self._author().write(metric_name, source, subject_path=subject_path, create=create)
+
+    def delete_metric_source(
+        self,
+        metric_name: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+    ) -> MetricMutationResult:
+        return self._author().delete(metric_name)
+
+    def validate_metric_source(
+        self,
+        source: str,
+        *,
+        metric_name: Optional[str] = None,
+    ) -> ValidationResult:
+        return self._author().validate(source, metric_name=metric_name)

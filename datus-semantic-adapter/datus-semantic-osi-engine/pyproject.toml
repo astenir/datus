@@ -1,0 +1,50 @@
+[project]
+name = "datus-semantic-osi-engine"
+version = "0.1.0"
+description = "Datus semantic adapter over osi-engine, the native Rust OSI engine"
+requires-python = ">=3.12"
+license = {text = "Apache-2.0"}
+authors = [{name = "DatusAI", email = "support@datus.ai"}]
+dependencies = [
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    # Authoring reuse: the shared MetricAuthor lives in core, so osi_engine
+    # reuses the OSI file read/write/validate logic without depending on the
+    # datus-semantic-osi (Python compiler) package.
+    "datus-semantic-core>=0.2.2",
+]
+
+[project.optional-dependencies]
+# The Rust engine bindings. Optional so the package can be imported (and its
+# entry point discovered) without the wheel; adapter use raises a clear error.
+engine = [
+    "datus-osi-engine>=0.1.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+]
+
+[project.entry-points."datus.semantic_adapters"]
+osi_engine = "datus_semantic_osi_engine:register"
+
+[tool.uv.sources]
+datus-semantic-core = { path = "../datus-semantic-core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["datus_semantic_osi_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+markers = [
+    "integration: needs the real datus-osi-engine wheel and the duckdb CLI",
+]

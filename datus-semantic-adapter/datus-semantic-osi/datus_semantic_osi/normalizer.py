@@ -40,6 +40,7 @@ class _FieldSig:
     expr: str
     type: str
     granularity: Optional[str] = None
+    is_dimension: bool = True
 
 
 _CATEGORICAL_TYPES = {"categorical", "string", "str", "text", "varchar", "char"}
@@ -96,6 +97,7 @@ def _dimension_sig(dim: OSIDimension) -> _FieldSig:
         expr=_norm_identifier(dim.expr or dim.name),
         type=_norm_type(dim.type),
         granularity=_norm_identifier(dim.granularity) if dim.granularity else None,
+        is_dimension=dim.is_dimension,
     )
 
 

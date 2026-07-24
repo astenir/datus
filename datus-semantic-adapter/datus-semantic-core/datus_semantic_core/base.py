@@ -5,6 +5,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional
 
+from .authoring import AuthoringNotSupportedError, MetricMutationResult, MetricSource
 from .models import (
     DimensionInfo,
     MetricDefinition,
@@ -99,3 +100,68 @@ class BaseSemanticAdapter(ABC):
     async def validate_semantic(self, scope: str = "all") -> ValidationResult:
         """Validate the semantic layer configuration files."""
         raise NotImplementedError()
+
+    # ==================== Authoring Interface ====================
+    # Backend/editor surface for reading & mutating the YAML source of truth.
+    # NOT part of the agent/LLM tool surface — do not register these as tools.
+    #
+    # These are intentionally *non-abstract*: adapters that do not own a
+    # file-based source can leave them unimplemented and callers get a clear
+    # AuthoringNotSupportedError instead of an import-time failure.
+
+    def read_metric_source(
+        self,
+        metric_name: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+    ) -> MetricSource:
+        """Return the source-of-truth YAML for a single metric.
+
+        ``subject_path`` (logical categorization path; last element is the
+        metric name) is an optional hint some backends carry; adapters may
+        ignore it and resolve purely by ``metric_name``.
+        """
+        raise AuthoringNotSupportedError(
+            f"{type(self).__name__} does not support reading metric source."
+        )
+
+    def write_metric_source(
+        self,
+        metric_name: str,
+        source: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+        create: bool = False,
+    ) -> MetricMutationResult:
+        """Create or update a metric from its YAML ``source``.
+
+        ``source`` must be in the same shape returned by
+        :meth:`read_metric_source`. With ``create=True`` the metric must not
+        already exist; otherwise it must exist. When ``subject_path`` is given
+        the adapter records it as the metric's categorization.
+        """
+        raise AuthoringNotSupportedError(
+            f"{type(self).__name__} does not support writing metric source."
+        )
+
+    def delete_metric_source(
+        self,
+        metric_name: str,
+        *,
+        subject_path: Optional[List[str]] = None,
+    ) -> MetricMutationResult:
+        """Remove a metric from its source file."""
+        raise AuthoringNotSupportedError(
+            f"{type(self).__name__} does not support deleting metric source."
+        )
+
+    def validate_metric_source(
+        self,
+        source: str,
+        *,
+        metric_name: Optional[str] = None,
+    ) -> ValidationResult:
+        """Validate a metric YAML ``source`` without persisting it."""
+        raise AuthoringNotSupportedError(
+            f"{type(self).__name__} does not support validating metric source."
+        )

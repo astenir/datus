@@ -62,11 +62,17 @@ class MeasureIR(BaseModel):
 
 
 class FieldIR(BaseModel):
-    """A row-level scalar field on a dataset (no aggregation)."""
+    """A row-level scalar field on a dataset (no aggregation).
+
+    ``is_dimension`` mirrors the OSI core opt-in: only fields authored with a
+    ``dimension:`` block are exposed as grouping/filtering dimensions. Plain
+    fields stay row-level expressions usable inside metric expressions.
+    """
 
     name: str
     expr: str
     type: str = "categorical"  # categorical | time | numeric
+    is_dimension: bool = True
     is_primary_time: bool = False
     time_granularity: Optional[str] = None
     description: str = ""

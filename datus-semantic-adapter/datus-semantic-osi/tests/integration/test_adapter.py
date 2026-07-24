@@ -6,11 +6,13 @@
 import pytest
 import yaml
 from types import SimpleNamespace
+from typing import ClassVar
 
 pytest.importorskip("metricflow")
 
-from datus_semantic_core.models import QueryResult
+from datus_semantic_core.models import QueryResult, ValidationResult
 from datus_semantic_osi.adapter import DatusOSIAdapter
+from datus_semantic_osi.backend import MetricFlowBackend
 from datus_semantic_osi.config import DatusOSIConfig
 from datus_semantic_osi.profile import parse_osi_profile, to_core_schema_document
 
@@ -160,10 +162,42 @@ metrics:
 """
 
 
+SECOND_OSI_YAML = """
+semantic_model:
+  name: finance_budget
+datasets:
+  - name: budgets
+    source:
+      table: fact_budget
+    primary_key: budget_id
+    dimensions:
+      - name: cost_center
+        expr: cost_center
+metrics:
+  - name: budget_total
+    description: "Budget total"
+    expression: "SUM(budget_amount)"
+    dataset: budgets
+    subject_path: [finance, budget]
+"""
+
+
 @pytest.fixture
 def adapter(tmp_path):
     (tmp_path / "model.yaml").write_text(_core_yaml(OSI_YAML))
     config = DatusOSIConfig(semantic_models_path=str(tmp_path), datasource="starrocks")
+    return DatusOSIAdapter(config)
+
+
+@pytest.fixture
+def multi_model_adapter(tmp_path):
+    models_path = tmp_path / "models"
+    models_path.mkdir()
+    (models_path / "commerce_orders.yaml").write_text(_core_yaml(OSI_YAML))
+    (models_path / "finance_budget.yaml").write_text(_core_yaml(SECOND_OSI_YAML))
+    config = DatusOSIConfig(
+        semantic_models_path=str(models_path), datasource="starrocks"
+    )
     return DatusOSIAdapter(config)
 
 
@@ -194,6 +228,96 @@ class _FakeBackend:
     def make_executor(self, model):
         self.models.append(model)
         return self.executor
+
+
+class _FakeValidationBackend:
+    has_live_connection = False
+    capabilities: ClassVar[dict] = {}
+
+    def __init__(self):
+        self.models = []
+
+    def validate(self, model):
+        self.models.append(model)
+        return ValidationResult(valid=True)
+
+
+async def test_multi_model_adapter_lists_models_and_metrics(multi_model_adapter):
+    models = multi_model_adapter.list_semantic_models()
+    metrics = {
+        metric.name: metric for metric in await multi_model_adapter.list_metrics()
+    }
+
+    assert {model.name for model in models} == {"commerce_orders", "finance_budget"}
+    assert metrics["order_count"].metadata["semantic_model_name"] == "commerce_orders"
+    assert metrics["budget_total"].metadata["semantic_model_name"] == "finance_budget"
+
+
+async def test_multi_model_adapter_routes_query_to_metric_owner(multi_model_adapter):
+    executor = _FakeExecutor(QueryResult(columns=["budget_total"], data=[]))
+    backend = _FakeBackend(executor)
+    multi_model_adapter._backend = backend
+
+    await multi_model_adapter.query_metrics(["budget_total"])
+
+    assert [model.name for model in backend.models] == ["finance_budget"]
+
+
+async def test_multi_model_adapter_rejects_cross_model_query(multi_model_adapter):
+    with pytest.raises(ValueError, match="multiple semantic models"):
+        await multi_model_adapter.query_metrics(["order_count", "budget_total"])
+
+
+async def test_targeted_validation_only_validates_selected_model(multi_model_adapter):
+    backend = _FakeValidationBackend()
+    multi_model_adapter._backend = backend
+
+    result = await multi_model_adapter.validate_semantic(
+        scope="semantic_model",
+        semantic_model_name="finance_budget",
+        checks=["backend"],
+    )
+
+    assert result.valid
+    assert [model.name for model in backend.models] == ["finance_budget"]
+
+
+async def test_targeted_validation_ignores_unrelated_invalid_model(
+    multi_model_adapter,
+):
+    models_path = multi_model_adapter.config.semantic_models_path
+    with open(f"{models_path}/broken.yml", "w", encoding="utf-8") as stream:
+        stream.write(
+            "version: 0.2.0.dev0\n"
+            "semantic_model:\n"
+            "  - name: broken\n"
+            "    datasets:\n"
+            "      - name: missing_source\n"
+        )
+
+    result = await multi_model_adapter.validate_semantic(
+        scope="semantic_model",
+        semantic_model_name="finance_budget",
+        checks=["profile"],
+    )
+
+    assert result.valid
+
+
+def test_backend_artifacts_are_isolated_by_model(multi_model_adapter, tmp_path):
+    backend = MetricFlowBackend(generated_path=str(tmp_path / "generated"))
+
+    commerce_path = backend._write_persistent(
+        multi_model_adapter._model("commerce_orders")
+    )
+    finance_path = backend._write_persistent(
+        multi_model_adapter._model("finance_budget")
+    )
+
+    assert commerce_path.name == "commerce_orders"
+    assert finance_path.name == "finance_budget"
+    assert (commerce_path / "semantic_models.yaml").is_file()
+    assert (finance_path / "semantic_models.yaml").is_file()
 
 
 async def test_validate_semantic_passes(adapter):
@@ -276,7 +400,10 @@ async def test_list_metrics_selects_subject_path(adapter):
 
 def test_offset_derived_metrics_use_current_period_anchor(adapter):
     query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
-        adapter._query_metrics_plan(["order_count_mom"])
+        adapter._query_metrics_plan(
+            adapter._resolve_query_model(["order_count_mom"]),
+            ["order_count_mom"],
+        )
     )
 
     assert query_metrics == ["order_count_mom", "order_count"]
@@ -286,7 +413,10 @@ def test_offset_derived_metrics_use_current_period_anchor(adapter):
 
 def test_offset_only_metrics_use_referenced_metric_as_anchor(adapter):
     query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
-        adapter._query_metrics_plan(["previous_month_order_count"])
+        adapter._query_metrics_plan(
+            adapter._resolve_query_model(["previous_month_order_count"]),
+            ["previous_month_order_count"],
+        )
     )
 
     assert query_metrics == ["previous_month_order_count", "order_count"]
@@ -296,7 +426,10 @@ def test_offset_only_metrics_use_referenced_metric_as_anchor(adapter):
 
 def test_period_over_period_metrics_use_generated_base_as_anchor(adapter):
     query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
-        adapter._query_metrics_plan(["order_count_month_yoy"])
+        adapter._query_metrics_plan(
+            adapter._resolve_query_model(["order_count_month_yoy"]),
+            ["order_count_month_yoy"],
+        )
     )
 
     assert query_metrics == [
@@ -309,7 +442,10 @@ def test_period_over_period_metrics_use_generated_base_as_anchor(adapter):
 
 def test_week_period_over_period_metrics_use_generated_base_as_anchor(adapter):
     query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
-        adapter._query_metrics_plan(["order_count_week_wow_delta"])
+        adapter._query_metrics_plan(
+            adapter._resolve_query_model(["order_count_week_wow_delta"]),
+            ["order_count_week_wow_delta"],
+        )
     )
 
     assert query_metrics == [
@@ -1284,6 +1420,57 @@ metrics:
 
     metrics = await adapter.list_metrics()
     assert "customer_id__region_id__region_name" in metrics[0].dimensions
+
+
+async def test_get_dimensions_excludes_plain_measure_source_fields(tmp_path):
+    # A field without a `dimension:` block is a row-level measure source per
+    # OSI core; it must not be listed as a queryable dimension.
+    (tmp_path / "model.yaml").write_text(
+        """
+version: 0.2.0.dev0
+semantic_model:
+  - name: lending
+    datasets:
+      - name: loan_quality
+        source: dm.loan_quality
+        fields:
+          - name: snapshot_date
+            expression:
+              dialects: [{dialect: ANSI_SQL, expression: snapshot_date}]
+            dimension: {is_time: true}
+            custom_extensions:
+              - vendor_name: DATUS
+                data: '{"time_granularity": "month"}'
+          - name: branch_no
+            expression:
+              dialects: [{dialect: ANSI_SQL, expression: branch_no}]
+            dimension: {}
+          - name: loan_balance
+            expression:
+              dialects: [{dialect: ANSI_SQL, expression: loan_balance}]
+            description: "aggregation-only balance column"
+    metrics:
+      - name: loan_balance_total
+        description: "Total loan balance"
+        expression:
+          dialects: [{dialect: ANSI_SQL, expression: "SUM(loan_quality.loan_balance)"}]
+        custom_extensions:
+          - vendor_name: DATUS
+            data: '{"time_dimension": "snapshot_date"}'
+"""
+    )
+    adapter = DatusOSIAdapter(
+        DatusOSIConfig(semantic_models_path=str(tmp_path), datasource="duckdb")
+    )
+
+    dims = await adapter.get_dimensions("loan_balance_total")
+    names = {d.name for d in dims}
+    assert "branch_no" in names
+    assert "snapshot_date" in names
+    assert "loan_balance" not in names
+
+    metrics = await adapter.list_metrics()
+    assert "loan_balance" not in metrics[0].dimensions
 
 
 def _injected_dimensions(executor):

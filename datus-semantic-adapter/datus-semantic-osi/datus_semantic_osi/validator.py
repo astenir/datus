@@ -19,6 +19,7 @@ from sqlglot import expressions as exp
 from datus_semantic_osi.dialects import DEFAULT_SQLGLOT_DIALECT
 from datus_semantic_osi.errors import OSIValidationError
 from datus_semantic_osi.ir import MetricKind, SemanticModelIR
+from datus_semantic_osi.metricflow_backend import lowered_element_types
 from datus_semantic_osi.normalizer import normalization_errors
 from datus_semantic_osi.profile import OSIDocument, to_core_schema_document
 from datus_semantic_osi.window_semantics import (
@@ -250,35 +251,77 @@ def validate_ir(model: SemanticModelIR) -> List[str]:
                 f"Relationship `{rel.name}` to unknown dataset `{rel.to_dataset}`."
             )
 
-    # An element name must have one consistent type across the whole model:
+    # An element name must lower to one consistent MetricFlow type model-wide:
     # MetricFlow rejects e.g. `start_date` being a time dimension in one data
     # source and categorical in another, or a column being an identifier in one
-    # and a dimension in another. Relationship-derived foreign identifiers are
-    # accounted for so a join key declared as a dimension on the fact side is the
-    # conflict that gets reported.
-    rel_fk = {(r.from_dataset, r.from_identifier) for r in model.relationships}
-    rel_fk_names = {r.from_identifier for r in model.relationships} | {
-        r.to_identifier for r in model.relationships
-    }
-    element_type: dict = {}
-    for ds in model.datasets:
-        for ident in ds.identifiers:
-            element_type.setdefault(ident.name, set()).add("identifier")
-        for field in ds.fields:
-            # a field that is the join key on this dataset becomes an identifier
-            if field.name in rel_fk_names or (ds.name, field.name) in rel_fk:
-                element_type.setdefault(field.name, set()).add("identifier")
-            elif field.type == "time":
-                element_type.setdefault(field.name, set()).add("time")
-            else:
-                element_type.setdefault(field.name, set()).add("dimension")
-    for name, types in element_type.items():
+    # and a dimension in another. The classification mirrors the lowering
+    # (identifier auto-resolution, relationship-derived foreign identifiers,
+    # same-dataset shadowing) so only conflicts the backend would reject are
+    # reported, with a structural fix instead of a type-toggling one.
+    try:
+        element_types = lowered_element_types(model)
+    except OSIValidationError as exc:
+        # Relationship lowering itself can be structurally invalid (duplicate
+        # foreign identifiers with different expressions); surface it as an
+        # issue instead of escaping the validator.
+        issues.append(str(exc))
+        return issues
+    for name, types in sorted(element_types.items()):
         if len(types) > 1:
             issues.append(
-                f"Element `{name}` is used as multiple types {sorted(types)} across datasets; "
-                f"a column must have one consistent type (identifier / time / dimension) model-wide."
+                f"Element `{name}` lowers to multiple MetricFlow element types "
+                f"{sorted(types)} across datasets; one name must map to one type "
+                f"model-wide. Fix structurally: if `{name}` is a join or grain key, "
+                f"declare it in `primary_key`/`unique_keys` (or a relationship) in "
+                f"every dataset that carries it; if it is a grouping attribute, "
+                f"declare it as a field with a `dimension:` block everywhere and "
+                f"remove it from keys; if a dataset only aggregates it, drop the "
+                f"field there — metric expressions may reference physical columns "
+                f"directly."
             )
     return issues
+
+
+def detect_measure_columns_modeled_as_dimensions(
+    model: SemanticModelIR, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
+) -> List[str]:
+    """Warn when a metric aggregates a column its dataset also exposes as a dimension.
+
+    Grouping by a measure's raw row-level value (a balance, an amount, a
+    precomputed rate) is almost never intended; it usually means the author
+    added a ``dimension:`` block to every field instead of opting in only the
+    grouping attributes.
+    """
+    warnings: List[str] = []
+    dims_by_ds: Dict[str, set] = {
+        ds.name: {f.name for f in ds.fields if f.is_dimension and f.type != "time"}
+        for ds in model.datasets
+    }
+    default_ds = model.datasets[0].name if model.datasets else None
+    seen: set = set()
+    for metric in model.metrics:
+        ds_name = metric.dataset or default_ds
+        if ds_name is None:
+            continue
+        for measure in metric.measures:
+            try:
+                tree = sqlglot.parse_one(measure.expr, read=dialect)
+            except Exception:  # noqa: BLE001 - unparseable exprs surface elsewhere
+                continue
+            if tree is None:
+                continue
+            for column in tree.find_all(exp.Column):
+                col_name = column.name
+                if col_name in dims_by_ds.get(ds_name, set()) and (ds_name, col_name) not in seen:
+                    seen.add((ds_name, col_name))
+                    warnings.append(
+                        f"Metric `{metric.name}` aggregates column `{col_name}` which "
+                        f"dataset `{ds_name}` also models as a dimension; grouping by a "
+                        f"measure's raw value is usually unintended. Drop the field's "
+                        f"`dimension:` block (or the field itself) unless it is "
+                        f"genuinely used for grouping or filtering."
+                    )
+    return warnings
 
 
 def validate_capabilities(model: SemanticModelIR, capabilities: dict) -> List[str]:

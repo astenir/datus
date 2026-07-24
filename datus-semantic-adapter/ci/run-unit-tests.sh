@@ -8,6 +8,7 @@ PACKAGE_SPECS=(
   "datus-semantic-core:datus-semantic-core/tests"
   "datus-semantic-metricflow:datus-semantic-metricflow/datus_semantic_metricflow/tests"
   "datus-semantic-osi:datus-semantic-osi/tests"
+  "datus-semantic-osi-engine:datus-semantic-osi-engine/tests"
 )
 
 usage() {
@@ -130,6 +131,24 @@ run_package_tests() {
         --with-editable ./datus-semantic-core \
         --with-editable ./datus-semantic-metricflow \
         --with-editable ./datus-semantic-osi \
+        pytest "$test_path" \
+        -m "not integration" \
+        --tb=short \
+        --verbose
+      ;;
+    datus-semantic-osi-engine)
+      # The datus-osi-engine wheel is intentionally NOT installed here: unit
+      # tests run against a fake binding, so they exercise the adapter without
+      # the Rust extension. Integration tests (-m integration) are skipped.
+      # The shared authoring layer (MetricAuthor) lives in datus-semantic-core,
+      # so osi_engine needs no dependency on datus-semantic-osi.
+      uv run --no-project --isolated \
+        --with pytest \
+        --with pytest-asyncio \
+        --with pydantic \
+        --with pyyaml \
+        --with-editable ./datus-semantic-core \
+        --with-editable ./datus-semantic-osi-engine \
         pytest "$test_path" \
         -m "not integration" \
         --tb=short \

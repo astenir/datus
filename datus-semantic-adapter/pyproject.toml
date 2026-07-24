@@ -1,4 +1,6 @@
 [tool.uv.workspace]
+# datus-semantic-osi-engine is tested in isolation until the unpublished
+# datus-osi-engine wheel can be resolved by this lockable workspace.
 members = ["datus-semantic-core", "datus-semantic-metricflow", "datus-semantic-osi"]
 
 [tool.uv.sources]

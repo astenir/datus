@@ -16,6 +16,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
+import re
 from typing import Iterator, List, Optional
 
 from datus_semantic_core.models import ValidationIssue, ValidationResult
@@ -142,26 +143,33 @@ class MetricFlowBackend(SemanticExecutionBackend):
             "Install with `pip install 'datus-semantic-osi[metricflow]'`."
         )
 
+    @staticmethod
+    def _model_artifact_name(model: SemanticModelIR) -> str:
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", model.name).strip("._")
+        return name or "semantic_model"
+
     @contextmanager
-    def _artifact_dir(self) -> Iterator[Path]:
+    def _artifact_dir(self, model: SemanticModelIR) -> Iterator[Path]:
         if self._generated_path:
-            d = Path(self._generated_path)
+            d = Path(self._generated_path) / self._model_artifact_name(model)
             d.mkdir(parents=True, exist_ok=True)
             yield d
             return
         with tempfile.TemporaryDirectory(prefix="osi_metricflow_") as directory:
             yield Path(directory)
 
-    def _persistent_artifact_dir(self) -> Path:
+    def _persistent_artifact_dir(self, model: SemanticModelIR) -> Path:
         if self._generated_path:
-            d = Path(self._generated_path)
+            d = Path(self._generated_path) / self._model_artifact_name(model)
             d.mkdir(parents=True, exist_ok=True)
             return d
         if self._live_temp_dir is None:
             self._live_temp_dir = tempfile.TemporaryDirectory(
                 prefix="osi_metricflow_live_"
             )
-        return Path(self._live_temp_dir.name)
+        directory = Path(self._live_temp_dir.name) / self._model_artifact_name(model)
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def lower(self, model: SemanticModelIR) -> MetricFlowArtifact:
         return lower_to_metricflow(model)
@@ -171,7 +179,7 @@ class MetricFlowBackend(SemanticExecutionBackend):
         return directory
 
     def _write_persistent(self, model: SemanticModelIR) -> Path:
-        return self._write(model, self._persistent_artifact_dir())
+        return self._write(model, self._persistent_artifact_dir(model))
 
     def validate(self, model: SemanticModelIR) -> ValidationResult:
         try:
@@ -190,7 +198,7 @@ class MetricFlowBackend(SemanticExecutionBackend):
             )
 
         issues: List[ValidationIssue] = []
-        with self._artifact_dir() as directory:
+        with self._artifact_dir(model) as directory:
             self._write(model, directory)
             build = parse_directory_of_yaml_files_to_model(str(directory))
         for e in build.issues.errors:
@@ -236,7 +244,7 @@ class MetricFlowBackend(SemanticExecutionBackend):
         where: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> str:
-        with self._artifact_dir() as directory:
+        with self._artifact_dir(model) as directory:
             self._write(model, directory)
             client = self._client(directory)
             result = client.explain(

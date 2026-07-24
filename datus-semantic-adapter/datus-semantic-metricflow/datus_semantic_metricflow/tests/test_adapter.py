@@ -173,6 +173,23 @@ def adapter():
     return instance
 
 
+class TestMetricFlowAdapterAuthoringCacheInvalidation:
+    """A successful authoring mutation must drop the cached client so later
+    reads (list_metrics / query_metrics / get_dimensions) reload the YAML."""
+
+    def test_write_metric_source_invalidates_client_cache(self, adapter):
+        adapter._author = lambda: SimpleNamespace(write=lambda *a, **k: SimpleNamespace(name="m"))
+        adapter._client_initialized = True
+        adapter.write_metric_source("m", "metric:\n  name: m\n  type: aggregate\n")
+        assert adapter._client_initialized is False
+
+    def test_delete_metric_source_invalidates_client_cache(self, adapter):
+        adapter._author = lambda: SimpleNamespace(delete=lambda *a, **k: SimpleNamespace(name="m"))
+        adapter._client_initialized = True
+        adapter.delete_metric_source("m")
+        assert adapter._client_initialized is False
+
+
 class TestMetricFlowAdapter:
     def test_resolve_model_path_uses_agent_home_and_datasource(self):
         config = MetricFlowConfig(datasource="analytics", agent_home="/tmp/datus-home")
@@ -893,9 +910,7 @@ metric:
         )
 
     @pytest.mark.asyncio
-    async def test_query_metrics_rejects_cumulative_when_time_grain_resolver_missing(
-        self, adapter
-    ):
+    async def test_query_metrics_rejects_cumulative_when_time_grain_resolver_missing(self, adapter):
         adapter.client.engine = SimpleNamespace()
         adapter.client.semantic_model.metric_semantics.get_metrics.return_value = [
             _metricflow_metric(
@@ -946,9 +961,7 @@ metric:
         )
 
     @pytest.mark.asyncio
-    async def test_query_metrics_uses_one_time_group_for_compatible_metrics(
-        self, adapter
-    ):
+    async def test_query_metrics_uses_one_time_group_for_compatible_metrics(self, adapter):
         adapter.client.engine._query_parser._time_granularity_solver.local_dimension_granularity_range.return_value = (
             TimeGranularity.DAY,
             TimeGranularity.DAY,
@@ -991,9 +1004,7 @@ metric:
         )
 
     @pytest.mark.asyncio
-    async def test_query_metrics_rejects_conflicting_required_time_grains(
-        self, adapter
-    ):
+    async def test_query_metrics_rejects_conflicting_required_time_grains(self, adapter):
         adapter.client.engine._query_parser._time_granularity_solver.local_dimension_granularity_range.return_value = (
             TimeGranularity.DAY,
             TimeGranularity.DAY,
@@ -1042,9 +1053,7 @@ metric:
             result_df=_FakeDataFrame([]), dataflow_plan=None
         )
 
-        await adapter.query_metrics(
-            metrics=["running_revenue"], dimensions=["metric_time__day"]
-        )
+        await adapter.query_metrics(metrics=["running_revenue"], dimensions=["metric_time__day"])
 
         adapter.client.query.assert_called_once_with(
             metrics=["running_revenue"],
