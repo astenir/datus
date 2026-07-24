@@ -31,6 +31,31 @@ describe("parsePermissionRequest", () => {
     });
   });
 
+  it("extracts commands from bash permission prompts", () => {
+    expect(
+      parsePermissionRequest(
+        "### Bash Command Permission\n\n```bash\ngit status\n```\n\n**Reason:** No bash command rule matched\n",
+      ),
+    ).toEqual({
+      toolName: "bash_tools.bash",
+      serverName: "bash_tools",
+      operationName: "bash",
+      argsText: "git status",
+      argsRows: [{ key: "command", value: "git status" }],
+    });
+  });
+
+  it("preserves multiline commands from bash permission prompts", () => {
+    expect(
+      parsePermissionRequest(
+        "Bash Command Permission\n\n```sh\ncd /tmp\nprintf 'ready\\n'\n```",
+      ),
+    ).toMatchObject({
+      argsText: "cd /tmp\nprintf 'ready\\n'",
+      argsRows: [{ key: "command", value: "cd /tmp\nprintf 'ready\\n'" }],
+    });
+  });
+
   it("ignores normal interaction copy", () => {
     expect(parsePermissionRequest("请选择是否继续")).toBeNull();
   });

@@ -35,9 +35,9 @@ const policyModeLabel = computed(() =>
 
     <Alert>
       <ShieldCheckIcon />
-      <AlertTitle>拒绝规则优先</AlertTitle>
+      <AlertTitle>服务端 Bash 已禁用</AlertTitle>
       <AlertDescription>
-        即使工具同时出现在允许列表中，拒绝列表仍会阻止调用；关闭委派后 task 工具也会被移除。
+        Web 和企业会话不会加载服务端 Bash 工具，下方策略不能重新启用 Bash。其他工具仍遵循拒绝优先；关闭委派后 task 工具也会被移除。
       </AlertDescription>
     </Alert>
 
@@ -81,7 +81,7 @@ const policyModeLabel = computed(() =>
       <Field class="md:col-span-2">
         <FieldLabel>拒绝工具</FieldLabel>
         <SearchableMultiSelect
-          :options="props.manager.toolOptions.value"
+          :options="props.manager.deniedToolOptions.value"
           :selected-values="props.manager.deniedTools.value"
           placeholder="选择必须禁止的工具"
           search-placeholder="搜索工具名称或分类..."
@@ -89,7 +89,9 @@ const policyModeLabel = computed(() =>
           no-results-text="没有匹配工具"
           @toggle="props.manager.toggleListFieldValue('deniedToolsText', $event)"
         />
-        <FieldDescription>可使用分类通配规则，例如 filesystem_tools.* 或 bash_tools.*。</FieldDescription>
+        <FieldDescription>
+          可使用分类通配规则，例如 filesystem_tools.* 或 bash_tools.*；Web 和企业会话即使移除 Bash 拒绝规则仍保持禁用。
+        </FieldDescription>
       </Field>
 
       <Field

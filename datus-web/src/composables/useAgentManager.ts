@@ -65,6 +65,12 @@ export interface AgentSelectOption {
   description?: string;
 }
 
+const BASH_TOOL_DENY_OPTION: AgentSelectOption = {
+  value: "bash_tools.*",
+  label: "服务端 Bash",
+  description: "策略拒绝规则；Web 和企业会话同时由后端强制禁用",
+};
+
 type AgentListFormField =
   | "toolsText"
   | "deniedToolsText"
@@ -510,7 +516,17 @@ export function useAgentManager() {
     );
     return withSelectedFallbackOptions(
       optionsWithDefaults,
-      [...selectedTools.value, ...deniedTools.value],
+      selectedTools.value,
+      value => `当前配置：${value}`,
+    );
+  });
+  const deniedToolOptions = computed(() => {
+    const baseOptions = toolOptions.value.some(option => option.value === BASH_TOOL_DENY_OPTION.value)
+      ? toolOptions.value
+      : [BASH_TOOL_DENY_OPTION, ...toolOptions.value];
+    return withSelectedFallbackOptions(
+      baseOptions,
+      deniedTools.value,
       value => `当前配置：${value}`,
     );
   });
@@ -1102,6 +1118,7 @@ export function useAgentManager() {
     artifactOptions,
     nodeClassOptions,
     toolOptions,
+    deniedToolOptions,
     skillOptions,
     mcpServerOptions,
     aclUserOptions,

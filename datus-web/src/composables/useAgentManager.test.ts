@@ -352,6 +352,32 @@ describe("useAgentManager", () => {
     ]);
   });
 
+  it("keeps the bash policy pattern available only in the deny picker", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+
+    expect(manager.toolOptions.value.map(option => option.value)).not.toContain("bash_tools.*");
+    expect(manager.deniedToolOptions.value).toContainEqual({
+      value: "bash_tools.*",
+      label: "服务端 Bash",
+      description: "策略拒绝规则；Web 和企业会话同时由后端强制禁用",
+    });
+  });
+
+  it("can add the bash deny rule again after removing it", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    manager.toggleListFieldValue("deniedToolsText", "bash_tools.*");
+    expect(manager.deniedTools.value).not.toContain("bash_tools.*");
+    expect(manager.deniedToolOptions.value.map(option => option.value)).toContain("bash_tools.*");
+
+    manager.toggleListFieldValue("deniedToolsText", "bash_tools.*");
+    expect(manager.deniedTools.value).toContain("bash_tools.*");
+  });
+
   it("hydrates builtin templates from the read-only detail payload", async () => {
     getAgent.mockResolvedValue({
       agent_id: "gen_sql",
@@ -835,7 +861,29 @@ describe("useAgentManager", () => {
         allowed_roles: ["analyst"],
         allowed_user_ids: ["alice"],
       },
+      tool_policy: expect.objectContaining({
+        denied: [],
+      }),
     }));
+  });
+
+  it("persists an explicitly selected bash deny rule", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    await manager.selectAgent("analyst");
+    manager.toggleListFieldValue("deniedToolsText", "bash_tools.*");
+
+    await manager.saveForm();
+
+    expect(editAgent).toHaveBeenCalledWith(
+      "http://api.test",
+      "analyst",
+      expect.objectContaining({
+        tool_policy: expect.objectContaining({
+          denied: ["bash_tools.*"],
+        }),
+      }),
+    );
   });
 
   it("saves builtin enterprise policy but does not mutate or delete its definition", async () => {

@@ -12,6 +12,9 @@ export type PermissionRequestDisplay = {
 };
 
 export function parsePermissionRequest(content: string): PermissionRequestDisplay | null {
+  const bashRequest = parseBashPermissionRequest(content);
+  if (bashRequest) return bashRequest;
+
   if (!isPermissionRequest(content)) return null;
 
   const toolName = extractMarkdownField(content, "Tool");
@@ -28,6 +31,21 @@ export function parsePermissionRequest(content: string): PermissionRequestDispla
   if (serverName) result.serverName = serverName;
   if (operationName) result.operationName = operationName;
   return result;
+}
+
+function parseBashPermissionRequest(content: string): PermissionRequestDisplay | null {
+  if (!/(^|\n)\s*(#{1,6}\s*)?Bash Command Permission\b/i.test(content)) return null;
+
+  const command = content.match(/```(?:bash|sh|shell)?\s*\n([\s\S]*?)```/i)?.[1]?.trim();
+  if (!command) return null;
+
+  return {
+    toolName: "bash_tools.bash",
+    serverName: "bash_tools",
+    operationName: "bash",
+    argsText: command,
+    argsRows: [{ key: "command", value: command }],
+  };
 }
 
 function isPermissionRequest(content: string) {
