@@ -1217,9 +1217,6 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
         try:
             from datus_storage_base.conditions import eq
 
-            # Ensure table is ready
-            self._ensure_table_ready()
-
             # Build where clause
             conditions = [eq(SUBJECT_ID_COLUMN_NAME, node_id), datasource_condition(self.datasource_id)]
 
