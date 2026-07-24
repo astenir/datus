@@ -12,7 +12,7 @@ import copy
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional, TypeAlias
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
@@ -54,6 +54,7 @@ REPORT_EDIT_SESSION_PREFIX = "report_edit__"
 DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__"
 ARTIFACT_EDIT_SESSION_TTL_SECONDS = 6 * 60 * 60
 ArtifactEditSession = ReportEditSession | DashboardEditSession
+WebFilesystemExecutor: TypeAlias = Literal["client", "server"]
 
 
 @dataclass(frozen=True)
@@ -368,7 +369,10 @@ class ChatTaskManager:
         enterprise_enabled: bool = False,
         chat_admission: Optional["ChatAdmissionController"] = None,
         buffer_limits: Optional[ChatBufferLimits] = None,
+        web_filesystem_executor: WebFilesystemExecutor = "client",
     ) -> None:
+        if web_filesystem_executor not in ("client", "server"):
+            raise ValueError("web_filesystem_executor must be 'client' or 'server'")
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
         self._discarded_task_ids: set[int] = set()
@@ -382,6 +386,7 @@ class ChatTaskManager:
         self._enterprise_enabled = enterprise_enabled
         self._chat_admission = chat_admission
         self._buffer_limits = buffer_limits or ChatBufferLimits()
+        self._web_filesystem_executor = web_filesystem_executor
         self._cleanup_handle: Optional[asyncio.TimerHandle] = None
         self._supports_artifact_edit_sessions = True
         self._supports_report_edit_sessions = True
@@ -959,19 +964,24 @@ class ChatTaskManager:
                 # always the executor, whatever the permission profile.
                 apply_proxy_tools(node, ["filesystem_tools.*"])
             elif effective_source == "web":
-                # Browsers do not own a workspace filesystem executor. Keep
-                # filesystem tools server-side for every permission profile;
-                # normal mode still asks through the existing permission
-                # interaction before the approved server-side execution.
+                # Keep the upstream v0.3.8 client-executor contract as the
+                # default. Downstream web deployments that do not implement a
+                # browser filesystem executor opt into server execution when
+                # DatusService constructs the manager.
                 active_profile = getattr(getattr(node, "permission_manager", None), "active_profile", None)
-                # Mutate in place like ``apply_proxy_tools`` does because
-                # PermissionHooks may hold a shared reference to the set.
-                existing_proxied = getattr(node, "proxied_tool_names", None)
-                if isinstance(existing_proxied, set):
-                    existing_proxied.clear()
+                if self._web_filesystem_executor == "server" or active_profile in ("auto", "dangerous"):
+                    # Mutate in place like ``apply_proxy_tools`` does because
+                    # PermissionHooks may hold a shared reference to the set.
+                    existing_proxied = getattr(node, "proxied_tool_names", None)
+                    if isinstance(existing_proxied, set):
+                        existing_proxied.clear()
+                    else:
+                        node.proxied_tool_names = set()
+                    logger.info(
+                        "Filesystem tools run server-side for session=%s (profile=%s)", session_id, active_profile
+                    )
                 else:
-                    node.proxied_tool_names = set()
-                logger.info("Filesystem tools run server-side for session=%s (profile=%s)", session_id, active_profile)
+                    apply_proxy_tools(node, ["write_file", "edit_file", "delete_file"])
             elif effective_source:
                 logger.warning("Unsupported source '%s'; skipping proxy shortcut", effective_source)
 

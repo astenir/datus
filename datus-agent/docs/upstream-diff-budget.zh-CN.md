@@ -19,9 +19,9 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-335 files changed, 76308 insertions(+), 6843 deletions(-)
-149 added
-182 modified
+331 files changed, 76426 insertions(+), 6824 deletions(-)
+150 added
+177 modified
 4 deleted
 ```
 
@@ -30,15 +30,35 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 ```text
 97 production/package files
 63 tests
-12 docs
-10 config/meta files
+9 docs
+8 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 29 个 production、68 个 tests、11 个 docs 和 41 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。
+分类口径：只统计 `modified`；`datus/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 29 个 production、69 个 tests、11 个 docs 和 41 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-24：浏览器文件工具策略显式化
+
+问题：上游 `v0.3.8` 默认在 `normal` 权限模式下把 Web 文件写工具代理给客户端；当前下游 Vue 客户端没有浏览器文件执行器。升级后的临时兼容修复直接改写了 `ChatTaskManager` 默认行为，导致直接实例化的契约偏离上游，也把下游前端能力假设写进了上游核心默认值。
+
+处理方式：`ChatTaskManager.web_filesystem_executor` 默认保持上游语义 `client`；`DatusService` 从 `agent.api.chat.web_filesystem_executor` 显式装配下游策略，并在未配置时使用兼容默认值 `server`。下游完整配置和企业配置片段都显式写出 `server`；接入真正实现代理执行和结果回传的上游兼容客户端时可以切换为 `client`。非法值在服务构造时直接失败。
+
+测试边界：恢复上游原测试中的 Web 默认行为断言，把下游 `server` 行为放到新增的 `test_chat_task_manager_downstream.py`；聚焦服务测试同时覆盖缺省值、显式 `client` 和非法配置。
+
+同时恢复为 `v0.3.8` 原内容的低风险上游文件：
+
+```text
+conf/agent.yml.example
+conf/auth_clients.yml.example
+docs/configuration/introduction.md
+docs/configuration/introduction.zh.md
+mkdocs.yml
+```
+
+下游配置选择、legacy auth 边界、OceanBase Oracle 示例和 embedding 限制仍保留在 `conf/README.zh-CN.md`、`conf/agent.downstream.zh-CN.yml.example` 与独立下游文档中。相对本轮开始时，modified 上游文件由 182 降到 177；新增 1 个下游测试文件后，总差异文件由 335 降到 331。
 
 ### 2026-07-24：升级到正式 v0.3.8
 

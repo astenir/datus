@@ -8,6 +8,9 @@
 # 所有密钥都应通过环境变量或密钥系统注入，不要提交真实凭据。
 
 api:
+  chat:
+    # 当前下游 Vue 客户端不执行浏览器侧文件工具；上游兼容客户端可改为 client。
+    web_filesystem_executor: server
   auth_provider:
     # 企业网关不能注入签名身份 header 时使用该 provider。
     # Datus 会读取 Bearer access token，并调用 userinfo 接口换取员工身份。

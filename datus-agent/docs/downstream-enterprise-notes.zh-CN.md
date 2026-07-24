@@ -12,6 +12,19 @@ docs/API/frontend_contract.md
 
 该文档记录当前 Vue 前端使用的 OpenAPI 类型生成、`Result[T]` 响应包裹、SSE 处理和错误形态约定。它是下游前端维护文档，不作为上游 API 文档导航的一部分。
 
+### 浏览器文件工具
+
+上游 `v0.3.8` 在 `normal` 权限模式下默认把 `write_file`、`edit_file`、`delete_file` 代理给浏览器执行。当前下游 Vue 客户端只消费工具事件，不提供浏览器文件系统执行器，因此下游服务使用：
+
+```yaml
+agent:
+  api:
+    chat:
+      web_filesystem_executor: server
+```
+
+这个兼容策略由 `DatusService` 装配，`ChatTaskManager` 的类级默认值仍保持上游的 `client`。这样直接复用上游客户端时可显式切回 `client`，下游前端也不会等待无法返回的代理执行结果。
+
 ## Chat 历史交互摘要
 
 `interaction-summary` 只会在持久化历史 `GET /chat/history` 中返回，用于展示已经发生过的 `ask_user` 交互。这是只读 transcript 块：后端会刻意不返回 `interactionKey`，客户端也不应把它提交到 `POST /chat/user_interaction`。

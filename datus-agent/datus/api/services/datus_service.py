@@ -7,7 +7,7 @@ and a project-scoped ChatTaskManager into a single cached instance.
 import dataclasses
 import hashlib
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.loggings import get_logger
@@ -17,6 +17,22 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from datus.api.enterprise.protocols import ArtifactAclStore, SessionBodyStore, SessionOwnerStore
     from datus.api.services.chat_admission import ChatAdmissionController
+
+
+def _resolve_web_filesystem_executor(agent_config: AgentConfig) -> Literal["client", "server"]:
+    """Resolve the downstream web execution boundary from API config.
+
+    Upstream v0.3.8 assumes that a normal-profile browser can execute proxied
+    filesystem writes. The downstream Vue client cannot, so its compatibility
+    default remains ``server`` while the task manager itself keeps the upstream
+    ``client`` default.
+    """
+    api_config = getattr(agent_config, "api_config", None)
+    chat_config = api_config.get("chat") if isinstance(api_config, dict) else None
+    executor = chat_config.get("web_filesystem_executor", "server") if isinstance(chat_config, dict) else "server"
+    if executor not in ("client", "server"):
+        raise ValueError("agent.api.chat.web_filesystem_executor must be 'client' or 'server'")
+    return executor
 
 
 class DatusService:
@@ -61,6 +77,7 @@ class DatusService:
             enterprise_enabled=enterprise_enabled,
             chat_admission=chat_admission,
             buffer_limits=ChatBufferLimits.from_api_config(getattr(agent_config, "api_config", None)),
+            web_filesystem_executor=_resolve_web_filesystem_executor(agent_config),
         )
 
         # Lazy service slots

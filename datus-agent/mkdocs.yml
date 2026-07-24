@@ -106,7 +106,6 @@ nav:
     - Develop:
       - Overview: develop/README.md
       - Observability: develop/observability.md
-      - MetricFlow OceanBase Oracle: develop/metricflow_oceanbase_oracle.md
     - VSCode Extension: vscode_extension/introduction.md
 
   - Release Notes: release_notes.md

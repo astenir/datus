@@ -407,12 +407,12 @@ class TestChatTaskManagerBehavior:
         assert content.payload["content"] == "1 table: orders"
 
     @pytest.mark.asyncio
-    async def test_run_loop_vscode_source_proxies_filesystem_tools(self, real_agent_config):
-        """VSCode remains the executor for its local filesystem tools."""
+    async def test_run_loop_web_source_proxies_filesystem_writes(self, real_agent_config):
+        """source='web' proxies the client-owned write tools (write/edit/delete_file)."""
         from datus.api.models.cli_models import StreamChatInput
 
         class FakeNode:
-            session_id = "s-vscode-proxy"
+            session_id = "s-web-proxy"
 
             def get_node_name(self):
                 return "chat"
@@ -426,19 +426,19 @@ class TestChatTaskManagerBehavior:
 
         manager = ChatTaskManager()
         manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
-        task = ChatTask(session_id="s-vscode-proxy", asyncio_task=MagicMock())
+        task = ChatTask(session_id="s-web-proxy", asyncio_task=MagicMock())
 
         with patch("datus.api.services.chat_task_manager.apply_proxy_tools") as mock_apply:
             await manager._run_loop(
                 task,
                 real_agent_config,
-                StreamChatInput(message="hi", source="vscode", session_id="s-vscode-proxy"),
+                StreamChatInput(message="hi", source="web", session_id="s-web-proxy"),
             )
 
         mock_apply.assert_called_once()
         called_node, called_patterns = mock_apply.call_args.args
         assert isinstance(called_node, FakeNode)
-        assert called_patterns == ["filesystem_tools.*"]
+        assert called_patterns == ["write_file", "edit_file", "delete_file"]
         assert task.status == "completed"
 
     @pytest.mark.asyncio
@@ -603,9 +603,11 @@ class TestChatTaskManagerBehavior:
         assert history_error.payload["error_type"] == "CHAT_CANCELLED"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("profile", ["normal", "auto", "dangerous"])
-    async def test_run_loop_web_source_runs_filesystem_tools_server_side(self, real_agent_config, profile):
-        """All web profiles keep filesystem execution in the server workspace."""
+    @pytest.mark.parametrize("profile", ["auto", "dangerous"])
+    async def test_run_loop_web_source_skips_proxy_for_auto_and_dangerous(self, real_agent_config, profile):
+        """auto/dangerous web sessions run filesystem tools server-side: no
+        client proxy (which would block on a browser that may be hidden or
+        gone), and an empty proxied set so SSE frames carry proxied=False."""
         from types import SimpleNamespace
 
         from datus.api.models.cli_models import StreamChatInput
@@ -615,6 +617,8 @@ class TestChatTaskManagerBehavior:
             permission_manager = SimpleNamespace(active_profile=profile)
 
             def __init__(self):
+                # Simulate a pre-populated shared set (PermissionHooks may
+                # hold a reference): the skip path must clear it in place.
                 self.proxied_tool_names = {"write_file"}
 
             def get_node_name(self):
@@ -629,6 +633,7 @@ class TestChatTaskManagerBehavior:
 
         node = FakeNode()
         shared_ref = node.proxied_tool_names
+
         manager = ChatTaskManager()
         manager._create_node = lambda *args, **kwargs: node  # type: ignore[method-assign]
         task = ChatTask(session_id=f"s-web-{profile}", asyncio_task=MagicMock())
@@ -641,8 +646,47 @@ class TestChatTaskManagerBehavior:
             )
 
         mock_apply.assert_not_called()
+        # In-place clear, not rebinding — hooks holding the old reference
+        # must observe the emptied set.
         assert task.node.proxied_tool_names is shared_ref
         assert shared_ref == set()
+        assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_run_loop_web_source_normal_profile_still_proxies(self, real_agent_config):
+        """A node whose active profile is ``normal`` keeps the client proxy —
+        the confirm UI lives in the browser."""
+        from types import SimpleNamespace
+
+        from datus.api.models.cli_models import StreamChatInput
+
+        class FakeNode:
+            session_id = "s-web-normal"
+            permission_manager = SimpleNamespace(active_profile="normal")
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                return
+                yield  # pragma: no cover - makes this an async generator
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-web-normal", asyncio_task=MagicMock())
+
+        with patch("datus.api.services.chat_task_manager.apply_proxy_tools") as mock_apply:
+            await manager._run_loop(
+                task,
+                real_agent_config,
+                StreamChatInput(message="hi", source="web", session_id="s-web-normal"),
+            )
+
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args.args[1] == ["write_file", "edit_file", "delete_file"]
         assert task.status == "completed"
 
     def test_include_final_response_rejects_nested_subagent_response(self):

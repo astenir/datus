@@ -49,6 +49,19 @@
 
 推荐做法是把稳定、可审查的结构写在 YAML，把随环境变化或敏感的值放在进程环境、未提交的 `.env`、容器 secret 或企业密钥系统中。
 
+## Web 文件工具执行边界
+
+当前下游 Vue 客户端不会在浏览器中执行 `write_file`、`edit_file`、`delete_file`。下游完整配置应显式保留：
+
+```yaml
+agent:
+  api:
+    chat:
+      web_filesystem_executor: server
+```
+
+`ChatTaskManager` 自身的默认值是 `client`，与上游 `v0.3.8` 的浏览器代理契约一致；下游 `DatusService` 在未配置时使用兼容默认值 `server`。只有接入真正实现文件工具代理和结果回传的客户端后，才应改为 `client`。非法值会在服务构造时被拒绝，避免悄悄切换执行位置。
+
 ## 新增配置文件时
 
 只有存在独立用途或独立启动入口时才新增文件。文件头至少说明：
