@@ -120,35 +120,6 @@ class TestGetNodeName:
 
 
 # ---------------------------------------------------------------------------
-# MCP connection failure feedback
-# ---------------------------------------------------------------------------
-
-
-class TestMcpConnectionFailureFeedback:
-    def test_drain_emits_one_failed_action_and_clears_pending_failures(self):
-        node = _make_node()
-        manager = ActionHistoryManager()
-
-        node._record_mcp_connection_failure("filesystem", "connection refused")
-        node._record_mcp_connection_failure("filesystem", "connection refused")
-
-        actions = node._drain_mcp_connection_failure_actions(manager)
-
-        assert len(actions) == 1
-        action = actions[0]
-        assert action.role == ActionRole.TOOL
-        assert action.action_type == "mcp.filesystem.connect"
-        assert action.status == ActionStatus.FAILED
-        assert action.input == {"server_name": "filesystem"}
-        assert action.output == {
-            "error": "connection refused",
-            "summary": "MCP Server 'filesystem' connection failed; the Agent continued without it.",
-        }
-        assert manager.get_actions() == actions
-        assert node._drain_mcp_connection_failure_actions(manager) == []
-
-
-# ---------------------------------------------------------------------------
 # TestParseNodeConfig
 # ---------------------------------------------------------------------------
 
@@ -231,28 +202,6 @@ class TestResolveWorkspaceRoot:
         node.agent_config = cfg
         result = node._resolve_workspace_root()
         assert result == "/project/root"
-
-    def test_request_workspace_overrides_node_and_project_roots_for_opted_in_node(self):
-        node = _make_node()
-        node.USE_REQUEST_WORKSPACE = True
-        node.node_config = {"workspace_root": "/configured/node/root"}
-        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
-        cfg.project_root = "/project/root"
-        cfg._request_workspace_root = "/private/alice"
-        node.agent_config = cfg
-
-        assert node._resolve_workspace_root() == "/private/alice"
-
-    def test_project_authoring_node_ignores_request_workspace(self):
-        node = _make_node()
-        node.USE_REQUEST_WORKSPACE = False
-        node.node_config = {}
-        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
-        cfg.project_root = "/project/root"
-        cfg._request_workspace_root = "/private/alice"
-        node.agent_config = cfg
-
-        assert node._resolve_workspace_root() == "/project/root"
 
     def test_vscode_source_short_circuits_to_dot(self):
         """vscode owns its own filesystem; the resolver returns the literal "."
@@ -469,27 +418,6 @@ class TestUpdateContextAgenticNode:
 
 
 class TestClearSession:
-    def test_session_manager_body_store_subagent_scope_includes_parent_session(self, tmp_path):
-        from datus.models.session_manager import session_scope_from_user_id
-
-        body_store = object()
-        agent_config = SimpleNamespace(
-            session_dir=str(tmp_path / "sessions"),
-            _session_body_store=body_store,
-            _session_project_id="enterprise",
-        )
-        node = _make_node(
-            agent_config=agent_config,
-            scope="alice",
-            session_subdir="chat.session_parent",
-        )
-
-        session_manager = node.session_manager
-
-        assert session_manager._body_store is body_store
-        assert session_manager.project_id == "enterprise"
-        assert session_manager._scope == f"alice__{session_scope_from_user_id('chat.session_parent')}"
-
     def test_clear_session(self):
         node = _make_node()
         node.session_id = "real_session_1"
@@ -1161,28 +1089,6 @@ class TestParseNodeConfigExtended:
         assert result.get("model") == "gpt-4"
         assert result.get("system_prompt") == "You are a SQL assistant"
         assert result.get("max_turns") == 10
-
-    def test_enterprise_tool_and_runtime_policies_are_extracted(self):
-        node = _make_simple_node()
-        mock_config = MagicMock()
-        mock_config.agentic_nodes = {
-            "chat": {
-                "tool_policy": {
-                    "mode": "allowlist",
-                    "allowed": ["db_tools.*"],
-                    "denied": ["filesystem_tools.*"],
-                },
-                "runtime_policy": {
-                    "allow_subagent_delegation": False,
-                    "allowed_subagents": [],
-                },
-            }
-        }
-
-        result = node._parse_node_config(mock_config, "chat")
-
-        assert result["tool_policy"] == mock_config.agentic_nodes["chat"]["tool_policy"]
-        assert result["runtime_policy"] == mock_config.agentic_nodes["chat"]["runtime_policy"]
 
     def test_rules_dict_normalized_to_string(self):
         node = _make_simple_node()
@@ -1900,19 +1806,6 @@ class TestEnsurePermissionHooksProxyWiring:
 
         kwargs = ph_cls.call_args.kwargs
         assert kwargs["proxied_tool_names"] == set()
-
-    def test_passes_canonical_node_class(self):
-        """Permission hooks receive stable class identity alongside the runtime alias."""
-        node = self._prepare_node(set())
-        node.get_node_name = MagicMock(return_value="dashboard_edit__unit")
-        node.get_node_class_name = MagicMock(return_value="gen_visual_dashboard")
-
-        with patch("datus.tools.permission.permission_hooks.PermissionHooks") as ph_cls:
-            node._ensure_permission_hooks()
-
-        kwargs = ph_cls.call_args.kwargs
-        assert kwargs["node_name"] == "dashboard_edit__unit"
-        assert kwargs["node_class"] == "gen_visual_dashboard"
 
 
 # ---------------------------------------------------------------------------

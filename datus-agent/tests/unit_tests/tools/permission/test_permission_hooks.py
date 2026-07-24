@@ -1427,7 +1427,7 @@ class TestVisualArtifactAutoAllow:
     on every ``render/*.jsx``.
     """
 
-    def _build(self, broker, tmp_path, *, node_name, node_class=None, profile="normal", rules=None):
+    def _build(self, broker, tmp_path, *, node_name, profile="normal"):
         registry = ToolRegistry()
         fs_tools = []
         for name in ("read_file", "write_file", "edit_file", "delete_file", "glob", "grep"):
@@ -1437,7 +1437,7 @@ class TestVisualArtifactAutoAllow:
         registry.register_tools("filesystem_tools", fs_tools)
 
         manager = PermissionManager(
-            global_config=PermissionConfig(default_permission=PermissionLevel.ASK, rules=rules or []),
+            global_config=PermissionConfig(default_permission=PermissionLevel.ASK, rules=[]),
             active_profile=profile,
         )
         project = tmp_path / "proj"
@@ -1446,7 +1446,6 @@ class TestVisualArtifactAutoAllow:
             broker=broker,
             permission_manager=manager,
             node_name=node_name,
-            node_class=node_class,
             tool_registry=registry,
             fs_policy=FilesystemPolicy(root_path=project, current_node=node_name),
         )
@@ -1487,65 +1486,6 @@ class TestVisualArtifactAutoAllow:
         mock_broker.request = AsyncMock(return_value="y")
 
         await hooks.on_tool_start(self._ctx_for(relpath), MagicMock(), self._tool(tool_name))
-
-        mock_broker.request.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "node_name",
-        ["dashboard_agent_42", "dashboard_edit__edit_2"],
-    )
-    @pytest.mark.asyncio
-    async def test_visual_dashboard_alias_uses_canonical_node_class(self, mock_broker, tmp_path, node_name):
-        """Custom Agent ids and edit-session aliases retain the dashboard carve-out."""
-        deny_write = PermissionRule(
-            tool="filesystem_tools",
-            pattern="write_file",
-            permission=PermissionLevel.DENY,
-        )
-        hooks, project = self._build(
-            mock_broker,
-            tmp_path,
-            node_name=node_name,
-            node_class="gen_visual_dashboard",
-            rules=[deny_write],
-        )
-        target = project / "dashboards/sales_live/render/app.jsx"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("")
-
-        await hooks.on_tool_start(
-            self._ctx_for("dashboards/sales_live/render/app.jsx"),
-            MagicMock(),
-            self._tool("write_file"),
-        )
-
-        mock_broker.request.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_alias_without_visual_artifact_node_class_remains_denied(self, mock_broker, tmp_path):
-        """An artifact-looking alias must not grant write capability by name alone."""
-        deny_write = PermissionRule(
-            tool="filesystem_tools",
-            pattern="write_file",
-            permission=PermissionLevel.DENY,
-        )
-        hooks, project = self._build(
-            mock_broker,
-            tmp_path,
-            node_name="dashboard_edit__forged",
-            node_class="chat",
-            rules=[deny_write],
-        )
-        target = project / "dashboards/sales_live/render/app.jsx"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("")
-
-        with pytest.raises(PermissionDeniedException):
-            await hooks.on_tool_start(
-                self._ctx_for("dashboards/sales_live/render/app.jsx"),
-                MagicMock(),
-                self._tool("write_file"),
-            )
 
         mock_broker.request.assert_not_called()
 

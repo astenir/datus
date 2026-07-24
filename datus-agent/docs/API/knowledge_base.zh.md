@@ -12,7 +12,6 @@
 
 | 字段                  | 类型      | 默认值          | 说明 |
 |----------------------|----------|----------------|------|
-| `datasource_id`      | string   | _（必填）_       | 本次请求使用的已授权数据源；后端基于请求级配置副本执行 |
 | `components`         | string[] | _（必填）_       | 要构建的组件：`metadata`、`semantic_model`、`metrics`、`reference_sql` |
 | `strategy`           | string   | `incremental`  | `check`（仅检查）、`overwrite`（重建）、`incremental`（增量更新）或 `refresh-profile`（仅语义模型） |
 | `schema_linking_type`| string   | `full`         | metadata 专用：`table`、`view`、`mv`、`full` |
@@ -22,19 +21,6 @@
 | `semantic_yaml`      | string?  | `null`         | 项目根目录的相对路径，指向语义模型 YAML；`strategy=refresh-profile` 时必需 |
 | `subject_tree`       | string[]?| `null`         | 预定义层级分类 |
 | `sql_dir`            | string?  | `null`         | 项目根目录的相对路径，指向 `.sql` 文件目录 |
-
-缺少、空白、不存在或未授权的 `datasource_id` 会被拒绝，接口不会回退到服务端全局默认数据源。
-
-当 `semantic_model` 或 `metrics` 使用 success-story CSV 时，建议使用按数据源隔离的新格式文件：
-
-```text
-{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv
-```
-
-新格式包含 `datasource_id` 列，且文件中只能有一个非空数据源；它必须与请求体中的 `datasource_id` 一致。空值、混合
-数据源或不匹配会返回 `422`。为兼容旧数据，缺少 `datasource_id` 列的旧 CSV 暂时允许构建，但后端会记录警告和审计
-事件。旧文件可以使用 `datus-agent migrate-success-stories --source <file> --datasource <id> --subagent <name>` 显式
-复制迁移，源文件不会被删除。
 
 **响应**：`text/event-stream`，参见下方 [SSE 事件格式](#sse-events)。
 

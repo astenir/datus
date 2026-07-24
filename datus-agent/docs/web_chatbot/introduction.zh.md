@@ -115,39 +115,18 @@ http://localhost:8501?session=abc123def456...
 
 1. 先审阅生成的 SQL
 2. 点击 "Save to success story" 按钮
-3. 后端从该次 `execute_sql` / `read_query` 的会话历史中恢复真实数据源
-4. 查询会保存到 `{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv`
-
-页面 URL 或当前选择的数据源不会决定保存目录。例如一次 SQL 实际在 `ccks_fund` 上执行，即使页面当前显示
-`datus_enterprise`，仍会保存到 `{agent.home}/benchmark/ccks_fund/{subagent}/success_story.csv`。如果历史中没有明确的
-数据源，或开始/完成事件记录的数据源冲突，保存会失败，不会回退到默认数据源。
-
-保存根目录由当前配置的 `agent.home` 决定；可以在 `agent.yml` 中设置 `agent.home`，或用 `--config` 选择另一份配置。
+3. 查询会保存到 `~/.datus/benchmark/[subagent]/success_story.csv`
 
 ![Save Generated SQL](../assets/geneated_sql_save.png)
 
 **CSV 格式**：
 
 ```csv
-question,sql,datasource_id,source_id,session_id,session_link,subagent_name,timestamp
-"Show revenue by category",SELECT ...,ccks_fund,ss_...,abc123...,http://localhost:8501?session=...,chat,2025-01-15T02:30:00Z
+session_link,session_id,subagent_name,user_message,sql,timestamp
+http://localhost:8501?session=...,abc123...,chatbot,"Show revenue by category",SELECT ...,2025-01-15 10:30:00
 ```
 
-返回给前端的是相对于 benchmark 目录的 `storage_key`（例如
-`ccks_fund/chat/success_story.csv`），不会暴露服务器绝对路径。
-
-旧版 CSV 不会被自动移动或删除。确认旧文件中的所有记录都属于同一个数据源后，可以显式复制迁移：
-
-```bash
-datus-agent migrate-success-stories \
-  --source ~/.datus/benchmark/chat/success_story.csv \
-  --datasource ccks_fund \
-  --subagent chat
-```
-
-迁移按 `source_id` 去重，可以重复执行；源文件保持不变。如果新版 CSV 已声明其他 `datasource_id`，迁移会被拒绝。
-这些文件可以作为 semantic model 或 metrics 知识库构建的 `success_story` 输入；新格式文件的数据源必须与构建请求的
-`datasource_id` 一致。
+这有助于沉淀有效查询用于基准评测与持续改进。
 
 ## 总结
 

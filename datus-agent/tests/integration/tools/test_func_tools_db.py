@@ -148,7 +148,7 @@ class TestSqliteMultiConnector:
         databases, routed by ``(datasource, database)``.
         """
         from datus.configuration.agent_config_loader import load_agent_config
-        from tests.conftest import write_acceptance_config_with_local_bird
+        from tests.downstream_acceptance_fixtures import write_acceptance_config_with_local_bird
 
         config_path = write_acceptance_config_with_local_bird(tmp_path)
         return load_agent_config(

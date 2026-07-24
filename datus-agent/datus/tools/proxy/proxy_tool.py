@@ -27,7 +27,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_RESULT_TIMEOUT = 120.0
+DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS = DEFAULT_RESULT_TIMEOUT
 
 # Node types whose GenerationHooks depend on local filesystem tools (write_file, etc.)
 # Their filesystem_tools must NOT be proxied; other tools are still proxied.
@@ -47,9 +48,12 @@ _FS_DEPENDENT_NODES: Set[str] = {
 def create_proxy_tool(
     original: FunctionTool,
     channel: ToolResultChannel,
-    timeout_seconds: float = DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
 ) -> FunctionTool:
     """Wrap a FunctionTool so it awaits results from the channel instead of executing."""
+
+    if timeout_seconds is None:
+        timeout_seconds = DEFAULT_RESULT_TIMEOUT
 
     async def proxy_invoke(tool_ctx: ToolContext, args_str: str) -> dict:
         call_id = tool_ctx.tool_call_id

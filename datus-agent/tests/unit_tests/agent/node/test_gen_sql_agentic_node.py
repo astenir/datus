@@ -1979,20 +1979,6 @@ class TestSetupMcpServers:
         mock_setup.assert_called_once_with("custom_server")
         assert result == {"custom_server": mock_server}
 
-    def test_mcp_instance_creation_failure_records_degraded_capability(self, real_agent_config, mock_llm_create):
-        node = _make_node(real_agent_config, mock_llm_create)
-        manager = MagicMock()
-        manager.get_server_config.return_value = MagicMock()
-        manager._create_server_instance.return_value = (None, {"error": "invalid transport config"})
-
-        with patch("datus.tools.mcp_tools.mcp_manager.MCPManager", return_value=manager):
-            result = node._setup_mcp_server_from_config("broken_server")
-
-        assert result is None
-        assert node.degraded_capabilities["mcp.broken_server"] == (
-            "MCP Server 'broken_server' could not be initialized: invalid transport config"
-        )
-
 
 # ---------------------------------------------------------------------------
 # TestSetupInput

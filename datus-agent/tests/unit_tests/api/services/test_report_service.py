@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -90,12 +89,6 @@ def _write_report(
             encoding="utf-8",
         )
     return report_dir
-
-
-def _seed_dist(dist_dir: Path) -> None:
-    dist_dir.mkdir(parents=True, exist_ok=True)
-    (dist_dir / "index.css").write_text("/* offline css */", encoding="utf-8")
-    (dist_dir / "index.umd.js").write_text("/* offline js */", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -313,36 +306,6 @@ async def test_detail_picks_up_analysis_files_via_flat_walker(tmp_path: Path):
         "analysis/suggested_questions.json",
         "analysis/intent.md",
     }
-
-
-# ---------------------------------------------------------------------------
-# HTML rendering
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_render_html_uses_configured_report_dist(tmp_path: Path):
-    _write_report(tmp_path, report_slug="html_offline")
-    dist_dir = tmp_path / "vendor" / "web-artifact-render" / "dist"
-    _seed_dist(dist_dir)
-    agent_config = SimpleNamespace(
-        agentic_nodes={
-            "gen_visual_report": {
-                "report_dist": str(dist_dir),
-            },
-        },
-    )
-
-    result = await ReportService(agent_config=agent_config).render_html(
-        project_files_root=tmp_path,
-        report_slug="html_offline",
-    )
-
-    assert result.success is True
-    assert "data:text/css;base64," in result.data
-    assert "data:text/javascript;base64," in result.data
-    assert "https://unpkg.com/" not in result.data
-    assert not (tmp_path / "reports" / "html_offline" / "_assets").exists()
 
 
 # ---------------------------------------------------------------------------

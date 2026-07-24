@@ -214,7 +214,7 @@ def llm_agent_config(tmp_path_factory) -> AgentConfig:
 @pytest.fixture
 def mock_args(tmp_path):
     """Provides default mock arguments for initializing DatusCLI."""
-    from tests.conftest import write_acceptance_config_with_local_bird
+    from tests.downstream_acceptance_fixtures import write_acceptance_config_with_local_bird
 
     config_path = write_acceptance_config_with_local_bird(tmp_path)
     return Namespace(

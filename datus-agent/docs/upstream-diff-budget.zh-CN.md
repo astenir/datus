@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-24
 
-说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复和真实企业 auth/catalog/SQL smoke 后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
+说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复和第六轮测试迁移后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
 
 对比口径：
 
@@ -19,26 +19,159 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-331 files changed, 76426 insertions(+), 6824 deletions(-)
-150 added
-177 modified
+317 files changed, 74191 insertions(+), 4050 deletions(-)
+181 added
+132 modified
 4 deleted
 ```
 
 修改的上游既有文件按类型拆分：
 
 ```text
-97 production/package files
-63 tests
-9 docs
-8 config/meta files
+95 production/package files
+32 tests
+0 docs
+5 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 29 个 production、69 个 tests、11 个 docs 和 41 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 31 个 production、100 个 tests、9 个 docs 和 41 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。上一版把 1 个 modified 文档误计入 config/meta，真实旧值应为 10 docs 和 7 config/meta；本版已修正。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-24：无行为差异恢复与测试迁移第六轮
+
+处理方式：恢复冗余声明、重复注释和重复 acceptance 说明；继续把只承载下游回归的测试迁入独立 `_downstream.py` 文件。BIRD 最小 acceptance fixture 从上游根 `tests/conftest.py` 迁入新增模块，引用它的两个既有 integration 文件只调整导入路径。OceanBase Oracle 发布与真实租户指南迁入 `datus_enterprise/docs/`，从而恢复上游 `ci/harness/coverage-map.yml`。DashboardService 原测试不能完全恢复，因为当前生产代码要求 fake connector 提供 `dialect`；原文件仅保留两行必要测试兼容，其余下游测试已迁出。
+
+本轮恢复为 `v0.3.8` 原内容的上游文件：
+
+```text
+datus/agent/node/base_artifact_ask_agentic_node.py
+conf/providers.yml
+datus/conf/providers.yml
+ci/harness/coverage-map.yml
+tests/integration/adapters/README.md
+tests/conftest.py
+tests/unit_tests/tools/db_tools/test_db_func_tools.py
+tests/unit_tests/tools/func_tool/test_database.py
+tests/unit_tests/tools/func_tool/test_sub_agent_task_tool.py
+tests/unit_tests/api/routes/test_models_routes.py
+tests/unit_tests/configuration/test_agent_config.py
+tests/unit_tests/api/test_service_app.py
+tests/unit_tests/api/services/test_action_sse_converter.py
+```
+
+对应下游覆盖迁入：
+
+```text
+tests/downstream_acceptance_fixtures.py
+tests/unit_tests/tools/db_tools/test_db_func_tools_downstream.py
+tests/unit_tests/tools/func_tool/test_database_downstream.py
+tests/unit_tests/tools/func_tool/test_sub_agent_task_tool_downstream.py
+tests/unit_tests/api/routes/test_models_routes_downstream.py
+tests/unit_tests/api/services/test_dashboard_service_downstream.py
+tests/unit_tests/configuration/test_agent_config_downstream.py
+tests/unit_tests/api/test_service_app_downstream.py
+tests/unit_tests/api/services/test_action_sse_converter_downstream.py
+```
+
+数字变化：相对第五轮基线，modified 由 145 降到 132，其中 production/package 由 97 降到 95、tests 由 41 降到 32、config/meta 由 7 降到 5；added 由 172 增至 181；deleted 保持 4。总差异文件由 321 降到 317。
+
+验证：13 个恢复文件均与 `v0.3.8` 字节级一致；DashboardService 原测试另外仅保留两行 fake connector `dialect`。上游 `create-skill/SKILL.md` 自身带有额外 EOF 空行，精确恢复会触发 `git diff --check`，因此保留规范化结尾而不为数字引入 whitespace 错误。迁移文件的 Ruff、`git diff --check` 和 coverage map strict validation 均通过；上游原测试和新增 downstream 测试合计 `949 passed`。BIRD fixture 集成测试在仓库目录首次被本地 `.datus/config.yml` 的 `default_datasource=datus_enterprise` 覆盖；从 `/tmp` 隔离目录重跑后通过配置加载并进入初始化，但阻塞于当前环境已知的 LanceDB 初始化路径，已中止且未误报为通过。
+
+### 2026-07-24：测试迁移第五轮
+
+处理方式：继续把只承载下游回归覆盖的测试从上游原测试文件迁到独立 `_downstream.py` 文件。对 proxy timeout 保留上游可 monkeypatch 的 `DEFAULT_RESULT_TIMEOUT` 兼容入口，同时保留下游显式 `timeout_seconds` 参数；对应上游测试恢复为 `v0.3.8`，精确超时断言迁入新增文件。未恢复会削弱 fail-closed、ACL、liveness、bundled renderer、路由签名或数据模型必填边界的原测试。
+
+本轮新增恢复为 `v0.3.8` 原内容的上游测试：
+
+```text
+tests/unit_tests/api/services/test_mcp_service.py
+tests/unit_tests/models/test_codex_model.py
+tests/unit_tests/test_main.py
+tests/unit_tests/tools/db_tools/test_db_manager.py
+tests/unit_tests/agent/node/test_agentic_node.py
+tests/unit_tests/tools/func_tool/test_filesystem_tools.py
+tests/unit_tests/tools/func_tool/test_semantic_tools.py
+tests/unit_tests/agent/node/test_gen_visual_report_agentic_node.py
+tests/unit_tests/agent/node/test_gen_visual_dashboard_agentic_node.py
+tests/unit_tests/tools/proxy/test_proxy_tool.py
+tests/unit_tests/storage/test_subject_tree_store.py
+tests/unit_tests/storage/schema_metadata/test_store.py
+tests/unit_tests/tools/permission/test_permission_hooks.py
+tests/unit_tests/storage/test_embedding_openai.py
+tests/unit_tests/agent/node/test_chat_agentic_node.py
+```
+
+对应下游测试迁入：
+
+```text
+tests/unit_tests/api/services/test_mcp_service_enterprise_downstream.py
+tests/unit_tests/models/test_codex_model_downstream.py
+tests/unit_tests/test_main_downstream.py
+tests/unit_tests/tools/db_tools/test_db_manager_downstream.py
+tests/unit_tests/agent/node/test_agentic_node_downstream.py
+tests/unit_tests/tools/func_tool/test_filesystem_tools_downstream.py
+tests/unit_tests/tools/func_tool/test_semantic_tools_downstream.py
+tests/unit_tests/agent/node/test_gen_visual_report_agentic_node_downstream.py
+tests/unit_tests/agent/node/test_gen_visual_dashboard_agentic_node_downstream.py
+tests/unit_tests/tools/proxy/test_proxy_tool_downstream.py
+tests/unit_tests/storage/test_subject_tree_store_downstream.py
+tests/unit_tests/storage/schema_metadata/test_store_downstream.py
+tests/unit_tests/tools/permission/test_permission_hooks_downstream.py
+tests/unit_tests/storage/test_embedding_openai_downstream.py
+tests/unit_tests/agent/node/test_chat_agentic_node_downstream.py
+```
+
+数字变化：相对上一轮基线，modified 由 160 降到 145，其中 tests 由 56 降到 41；added 因新增 15 个独立测试文件由 157 增至 172；总差异文件仍为 321，deleted 保持 4。
+
+验证：各迁移批次的 Ruff 均通过；已完成的定向 pytest 分别为 `173 passed`、`49 passed`、`208 passed`、`121 passed`、`53 passed`、`41 passed`、`284 passed` 和 `21 passed`。ChatAgenticNode 原文件与新增文件的 Ruff 通过且原文件字节级一致，但当前环境在节点初始化时阻塞于 LanceDB 后台路径；既有首测与新增首测均可复现，使用 30 秒单测超时确认后中止，未把环境阻塞误报为通过。
+
+### 2026-07-24：公开文档恢复与测试迁移第三、四轮
+
+处理方式：把知识库 bootstrap、datasource-isolated success story、metadata embedding 限制、MetricFlow/OceanBase Oracle 边界等下游说明集中到 `docs/downstream-enterprise-notes.zh-CN.md`，并恢复 10 个上游公开文档。继续把 7 组纯下游新增测试迁到独立的 `_downstream.py` 文件；原测试文件均与 `v0.3.8` 字节级一致，生产代码和运行行为未改动。
+
+已恢复为 `v0.3.8` 原内容的上游文档：
+
+```text
+docs/API/knowledge_base.md
+docs/API/knowledge_base.zh.md
+docs/adapters/metricflow_semantic_adapter.md
+docs/adapters/metricflow_semantic_adapter.zh.md
+docs/configuration/storage.md
+docs/configuration/storage.zh.md
+docs/metricflow/introduction.md
+docs/metricflow/introduction.zh.md
+docs/web_chatbot/introduction.md
+docs/web_chatbot/introduction.zh.md
+```
+
+已恢复为 `v0.3.8` 原内容的上游测试：
+
+```text
+tests/unit_tests/api/auth/test_loader.py
+tests/unit_tests/api/services/test_agent_service.py
+tests/unit_tests/api/services/test_report_service.py
+tests/unit_tests/configuration/test_agent_config_loader.py
+tests/unit_tests/agent/node/test_gen_semantic_model_agentic_node.py
+tests/unit_tests/agent/node/test_gen_sql_agentic_node.py
+tests/unit_tests/prompts/test_prompt_manager.py
+```
+
+下游测试迁入：
+
+```text
+tests/unit_tests/api/auth/test_loader_downstream.py
+tests/unit_tests/api/services/test_agent_service_downstream.py
+tests/unit_tests/api/services/test_report_service_downstream.py
+tests/unit_tests/configuration/test_agent_config_loader_downstream.py
+tests/unit_tests/agent/node/test_gen_semantic_model_agentic_node_downstream.py
+tests/unit_tests/agent/node/test_gen_sql_agentic_node_downstream.py
+tests/unit_tests/prompts/test_prompt_manager_downstream.py
+```
+
+数字变化：相对上一轮基线，总差异文件由 331 降到 321；modified 由 177 降到 160，其中 tests 由 63 降到 56、docs 由真实的 10 降到 0；added 因新增 7 个独立测试文件由 150 增至 157；deleted 保持 4。两批定向 Ruff 均通过；第一批原文件与下游文件合计 `240 passed`，第二批合计 `200 passed, 1 skipped`。
 
 ### 2026-07-24：浏览器文件工具策略显式化
 

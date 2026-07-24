@@ -14,7 +14,6 @@ metrics, and reference SQL.
 
 | Field                | Type     | Default        | Notes |
 |----------------------|----------|----------------|-------|
-| `datasource_id`      | string   | _(required)_   | Authorized datasource to use for this request; the server runs against a request-scoped config clone |
 | `components`         | string[] | _(required)_   | Components to bootstrap: `metadata`, `semantic_model`, `metrics`, `reference_sql` |
 | `strategy`           | string   | `incremental`  | `check` (inspect only), `overwrite` (rebuild), `incremental` (append/update), or `refresh-profile` (semantic model only) |
 | `schema_linking_type`| string   | `full`         | Metadata only: `table`, `view`, `mv`, or `full` |
@@ -24,21 +23,6 @@ metrics, and reference SQL.
 | `semantic_yaml`      | string?  | `null`         | Project-root-relative semantic model YAML path; required with `strategy=refresh-profile` |
 | `subject_tree`       | string[]?| `null`         | Predefined hierarchical categories |
 | `sql_dir`            | string?  | `null`         | Project-root-relative directory with `.sql` files |
-
-The endpoint rejects a missing, blank, unknown, or unauthorized `datasource_id`; it does not fall back to the server's
-global default datasource.
-
-For `semantic_model` or `metrics` components, prefer the datasource-isolated success-story layout:
-
-```text
-{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv
-```
-
-A new-format CSV contains a `datasource_id` column with exactly one non-empty datasource, and that value must match the
-request body's `datasource_id`. Empty, mixed, or mismatched values return `422`. A legacy CSV without this column remains
-temporarily accepted for compatibility, but the server emits a warning and an audit event. Use
-`datus-agent migrate-success-stories --source <file> --datasource <id> --subagent <name>` to copy a legacy file into the
-isolated layout explicitly; migration never deletes the source.
 
 **Response**: `text/event-stream`. See [SSE event format](#sse-event-format) below.
 

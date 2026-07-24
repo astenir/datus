@@ -29,8 +29,6 @@ docs_coverage_policy:
       reason: Documentation site landing page, not a user-facing flow.
     - path: docs/develop/README.md
       reason: Contributor/development guide, not a product flow.
-    - path: docs/develop/metricflow_oceanbase_oracle.md
-      reason: Maintainer release and real-tenant acceptance guide, not a user-facing product flow.
     - path: docs/plugin/development.md
       reason: Contributor/development guide for plugin authors, not a product flow.
     - path: docs/release_notes.md

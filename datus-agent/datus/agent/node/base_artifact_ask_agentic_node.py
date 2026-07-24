@@ -151,7 +151,6 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
     # datasource but must never mutate it. ``execute_sql`` is write-capable, so
     # construct its DBFuncTool in read-only mode to hard-reject non-read SQL.
     _db_read_only: bool = True
-    USE_REQUEST_WORKSPACE = False
     # When True, a missing ``artifact_blob`` in the agentic_nodes entry is a
     # fatal startup error rather than a signal to fall back to the on-disk
     # ``<kind>/<slug>/`` directory. Kinds whose backend publish flow always

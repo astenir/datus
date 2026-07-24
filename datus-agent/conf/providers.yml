@@ -1,8 +1,5 @@
-# Datus 内置 LLM provider/model 元数据目录，不是用户运行配置。
-#
-# datus init、/model 和模型运行时会把本文件作为程序资源读取；用户凭据应放在
-# agent.providers、环境变量或密钥系统中，不能写到这里。修改 provider/model 时
-# 必须保持仓库 conf/providers.yml 与包内 datus/conf/providers.yml 字节级一致。
+# LLM Provider catalog for interactive init (`datus-cli init`)
+# Add new providers/models here without changing Python code.
 
 providers:
   openai:

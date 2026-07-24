@@ -16,8 +16,6 @@ storage:
     model_name: text-embedding-3-small
     dim_size: 1536
     batch_size: 10
-    sample_cell_max_chars: 1000       # Replace larger sample cells with a length marker
-    sample_max_chars: 8000            # Maximum serialized metadata sample size
     target_model: openai
 
   # Document embedding configuration
@@ -69,8 +67,6 @@ database:
   model_name: text-embedding-3-small
   dim_size: 1536
   batch_size: 10
-  sample_cell_max_chars: 1000
-  sample_max_chars: 8000
   target_model: openai               # Reference to agent.models
 ```
 
@@ -80,8 +76,6 @@ database:
 - **`model_name`**: Specific embedding model to use
 - **`dim_size`**: Output embedding dimension size
 - **`batch_size`**: Number of texts to process in each batch
-- **`sample_cell_max_chars`**: Maximum characters in one metadata sample cell. Larger cell contents are replaced by a length marker before they reach the embedding provider.
-- **`sample_max_chars`**: Maximum characters in the complete serialized sample for one table. Defaults to `8000`.
 - **`target_model`**: LLM model key from [`models`](agent.md#models-configuration) (for OpenAI embeddings)
 
 ### Document Embeddings

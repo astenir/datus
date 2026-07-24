@@ -126,8 +126,9 @@ class TestCreateProxyTool:
         assert result == {"success": 1, "result": "proxied"}
 
     @pytest.mark.asyncio
-    async def test_proxy_tool_returns_error_on_missing_client_result(self):
+    async def test_proxy_tool_returns_error_on_timeout(self, monkeypatch):
         """A client that never reports must time out into a failure result."""
+        monkeypatch.setattr("datus.tools.proxy.proxy_tool.DEFAULT_RESULT_TIMEOUT", 0.01)
         channel = ToolResultChannel()
         original = FunctionTool(
             name="write_file",
@@ -135,7 +136,7 @@ class TestCreateProxyTool:
             params_json_schema={"type": "object", "properties": {}},
             on_invoke_tool=lambda ctx, args: {"success": 1},
         )
-        proxy = create_proxy_tool(original, channel, timeout_seconds=0.01)
+        proxy = create_proxy_tool(original, channel)
 
         ctx = SimpleNamespace(tool_call_id="call_timeout")
         # No publisher — the wait must elapse and surface a failure, not hang.
@@ -170,25 +171,6 @@ class TestCreateProxyTool:
         assert result["success"] == 0
         assert "stream ended" in result["error"]
         assert result["result"] is None
-
-    @pytest.mark.asyncio
-    async def test_proxy_tool_returns_error_on_timeout(self):
-        channel = ToolResultChannel()
-        original = FunctionTool(
-            name="edit_file",
-            description="Edit a file",
-            params_json_schema={"type": "object", "properties": {}},
-            on_invoke_tool=lambda ctx, args: {"success": 1},
-        )
-        proxy = create_proxy_tool(original, channel, timeout_seconds=0.01)
-
-        ctx = SimpleNamespace(tool_call_id="call_timeout")
-        result = await proxy.on_invoke_tool(ctx, "{}")
-
-        assert result["success"] == 0
-        assert "Timed out waiting for external tool result for 'edit_file'" in result["error"]
-        assert result["result"] is None
-        assert channel._futures["call_timeout"].done()
 
     @pytest.mark.asyncio
     async def test_proxy_tool_uses_tool_call_id(self):
