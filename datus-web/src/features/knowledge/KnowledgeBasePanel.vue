@@ -90,12 +90,6 @@ const currentKnowledgeContextLabel = computed(() => {
 
   return selectedTable.value || "未选择表"
 })
-const subjectTypeLabel = computed(() => {
-  if (!selectedSubject.value) return "未选择"
-  if (selectedSubject.value.type === "metric") return "指标"
-  if (selectedSubject.value.type === "reference_sql") return "参考 SQL"
-  return "主题目录"
-})
 const treePanelDescription = computed(() =>
   treeMode.value === "catalog"
     ? "点击表节点加载结构和语义 YAML。"
@@ -403,8 +397,6 @@ onMounted(() => {
           class="hidden xl:flex"
           :tree-mode="treeMode"
           :selected-subject="selectedSubject"
-          :loading-subject-detail="loadingSubjectDetail"
-          :subject-type-label="subjectTypeLabel"
           :detail-loading="detailLoading"
           :detail-loading-label="detailLoadingLabel"
           :metric-info="metricInfo"
@@ -430,8 +422,6 @@ onMounted(() => {
           class="min-h-0 flex-1 rounded-none border-0 shadow-none"
           :tree-mode="treeMode"
           :selected-subject="selectedSubject"
-          :loading-subject-detail="loadingSubjectDetail"
-          :subject-type-label="subjectTypeLabel"
           :detail-loading="detailLoading"
           :detail-loading-label="detailLoadingLabel"
           :metric-info="metricInfo"
