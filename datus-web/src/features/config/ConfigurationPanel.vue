@@ -145,7 +145,7 @@ onMounted(() => {
     <div class="flex min-h-0 flex-1 flex-col gap-4">
       <div class="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-md border px-3 py-2 text-sm">
         <div class="flex min-w-0 items-center gap-2">
-            <span class="text-xs text-muted-foreground">当前数据源</span>
+            <span class="text-xs text-muted-foreground">项目默认数据源</span>
             <span class="max-w-56 truncate font-medium">{{ currentDatasource }}</span>
           </div>
           <template v-if="canViewSystemStatus">

@@ -181,15 +181,19 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">Agent 管理</h1>
-          <div class="mt-1 flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
-            <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <BotIcon class="shrink-0 text-muted-foreground" />
+            <h1 class="font-medium">Agent 管理</h1>
+          </div>
+          <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
+          <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
+            <span class="truncate">配置企业 Agent、访问范围与运行工具。</span>
           </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -240,7 +244,6 @@ onMounted(() => {
               size="sm"
               class="h-full min-h-0 min-w-0"
             >
-        >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
               <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">

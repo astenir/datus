@@ -286,14 +286,18 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">MCP 管理</h1>
-          <p class="text-sm text-muted-foreground">
-            管理后端 MCP Server 配置，查看可用工具和连接状态。
-          </p>
+      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <ActivityIcon class="shrink-0 text-muted-foreground" />
+            <h1 class="font-medium">MCP 管理</h1>
+          </div>
+          <Badge variant="secondary">{{ serverCountLabel }}</Badge>
+          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
+            <span class="truncate">管理后端 MCP Server 配置，查看可用工具和连接状态。</span>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             size="sm"
