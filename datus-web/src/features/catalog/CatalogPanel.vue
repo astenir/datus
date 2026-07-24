@@ -20,6 +20,7 @@ import {
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { useConnection } from "@/composables/useConnection"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
+import DetailLoadingIndicator from "@/features/workspace/DetailLoadingIndicator.vue"
 import { tableApi } from "@/lib/api"
 import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
 import { selectedOptionLabel } from "@/lib/datasource-display"
@@ -50,7 +51,10 @@ const selectedTableRow = computed(() =>
 const detailRowCount = computed(() => formatCount(tableDetail.value?.rows))
 const detailColumnCount = computed(() => tableDetail.value?.columns.length ?? 0)
 const detailIndexCount = computed(() => tableDetail.value?.indexes.length ?? 0)
-const displayedDetailName = computed(() => tableDetail.value?.name || selectedTableName.value || "未选择表")
+const displayedDetailName = computed(() => {
+  if (loadingDetail.value) return selectedTableName.value || "正在加载表"
+  return tableDetail.value?.name || selectedTableName.value || "未选择表"
+})
 
 function formatCount(value: number | undefined) {
   return typeof value === "number" ? value.toLocaleString("zh-CN") : "-"
@@ -164,7 +168,10 @@ watch(
         @select-table="selectTable"
       />
 
-      <Card class="min-w-0">
+      <Card
+        class="min-w-0"
+        :aria-busy="loadingDetail"
+      >
         <CardHeader class="flex flex-row items-start justify-between gap-3">
           <div class="min-w-0">
             <CardTitle class="truncate text-lg">{{ displayedDetailName }}</CardTitle>
@@ -172,108 +179,108 @@ watch(
               {{ selectedTableRow ? `${selectedTableRow.database || "-"} / ${selectedTableRow.schema || "-"}` : "选择左侧表后加载详情" }}
             </CardDescription>
           </div>
-          <Badge :variant="tableDetail ? 'secondary' : 'outline'">
+          <Badge :variant="!loadingDetail && tableDetail ? 'secondary' : 'outline'">
             <CheckCircle2Icon
-              v-if="tableDetail"
+              v-if="tableDetail && !loadingDetail"
               data-icon="inline-start"
             />
-            {{ tableDetail ? "已加载" : loadingDetail ? "加载中" : "未加载" }}
+            {{ loadingDetail ? "加载中" : tableDetail ? "已加载" : "未加载" }}
           </Badge>
         </CardHeader>
         <CardContent class="flex flex-col gap-4">
-          <div class="grid gap-2 sm:grid-cols-3">
-            <div class="rounded-md border p-3">
-              <div class="text-xs text-muted-foreground">Rows</div>
-              <div class="mt-1 text-lg font-semibold">{{ detailRowCount }}</div>
-            </div>
-            <div class="rounded-md border p-3">
-              <div class="text-xs text-muted-foreground">Columns</div>
-              <div class="mt-1 text-lg font-semibold">{{ detailColumnCount }}</div>
-            </div>
-            <div class="rounded-md border p-3">
-              <div class="text-xs text-muted-foreground">Indexes</div>
-              <div class="mt-1 text-lg font-semibold">{{ detailIndexCount }}</div>
-            </div>
-          </div>
-
-          <div
+          <DetailLoadingIndicator
             v-if="loadingDetail"
-            class="rounded-md border p-4 text-sm text-muted-foreground"
-          >
-            正在加载表结构...
-          </div>
-
-          <div
-            v-else-if="!selectedTableName"
-            class="rounded-md border p-4 text-sm text-muted-foreground"
-          >
-            从目录列表选择一个表，或访问带有 <span class="font-mono text-xs">table</span> 查询参数的目录链接。
-          </div>
+            label="正在加载表结构..."
+          />
 
           <template v-else>
-            <div class="overflow-x-auto rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Column</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Nullable</TableHead>
-                    <TableHead>Default</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow
-                    v-for="column in tableDetail?.columns ?? []"
-                    :key="column.name"
-                  >
-                    <TableCell class="font-medium">
-                      {{ column.name }}
-                      <Badge
-                        v-if="column.pk"
-                        variant="secondary"
-                        class="ml-2"
-                      >
-                        PK
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{{ column.type }}</TableCell>
-                    <TableCell>{{ column.nullable ? "是" : "否" }}</TableCell>
-                    <TableCell>{{ column.default_value || "-" }}</TableCell>
-                  </TableRow>
-                  <TableRow v-if="(tableDetail?.columns ?? []).length === 0">
-                    <TableCell
-                      class="h-20 text-center text-sm text-muted-foreground"
-                      colspan="4"
-                    >
-                      暂无字段信息
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
+            <div class="grid gap-2 sm:grid-cols-3">
+              <div class="rounded-md border p-3">
+                <div class="text-xs text-muted-foreground">Rows</div>
+                <div class="mt-1 text-lg font-semibold">{{ detailRowCount }}</div>
+              </div>
+              <div class="rounded-md border p-3">
+                <div class="text-xs text-muted-foreground">Columns</div>
+                <div class="mt-1 text-lg font-semibold">{{ detailColumnCount }}</div>
+              </div>
+              <div class="rounded-md border p-3">
+                <div class="text-xs text-muted-foreground">Indexes</div>
+                <div class="mt-1 text-lg font-semibold">{{ detailIndexCount }}</div>
+              </div>
             </div>
 
-            <div class="rounded-md border p-3">
-              <div class="mb-2 text-sm font-medium">索引</div>
-              <div
-                v-if="(tableDetail?.indexes ?? []).length === 0"
-                class="text-sm text-muted-foreground"
-              >
-                暂无索引信息
-              </div>
-              <div
-                v-for="index in tableDetail?.indexes ?? []"
-                :key="index.name"
-                class="flex items-center justify-between gap-3 border-t py-2 first:border-t-0 first:pt-0 last:pb-0"
-              >
-                <div class="min-w-0">
-                  <div class="truncate text-sm font-medium">{{ index.name }}</div>
-                  <div class="truncate text-xs text-muted-foreground">
-                    {{ index.columns.join(", ") || "-" }}
-                  </div>
-                </div>
-                <Badge variant="outline">{{ index.type || "index" }}</Badge>
-              </div>
+            <div
+              v-if="!selectedTableName"
+              class="rounded-md border p-4 text-sm text-muted-foreground"
+            >
+              从目录列表选择一个表，或访问带有 <span class="font-mono text-xs">table</span> 查询参数的目录链接。
             </div>
+
+            <template v-else>
+              <div class="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Column</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Nullable</TableHead>
+                      <TableHead>Default</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow
+                      v-for="column in tableDetail?.columns ?? []"
+                      :key="column.name"
+                    >
+                      <TableCell class="font-medium">
+                        {{ column.name }}
+                        <Badge
+                          v-if="column.pk"
+                          variant="secondary"
+                          class="ml-2"
+                        >
+                          PK
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{{ column.type }}</TableCell>
+                      <TableCell>{{ column.nullable ? "是" : "否" }}</TableCell>
+                      <TableCell>{{ column.default_value || "-" }}</TableCell>
+                    </TableRow>
+                    <TableRow v-if="(tableDetail?.columns ?? []).length === 0">
+                      <TableCell
+                        class="h-20 text-center text-sm text-muted-foreground"
+                        colspan="4"
+                      >
+                        暂无字段信息
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div class="rounded-md border p-3">
+                <div class="mb-2 text-sm font-medium">索引</div>
+                <div
+                  v-if="(tableDetail?.indexes ?? []).length === 0"
+                  class="text-sm text-muted-foreground"
+                >
+                  暂无索引信息
+                </div>
+                <div
+                  v-for="index in tableDetail?.indexes ?? []"
+                  :key="index.name"
+                  class="flex items-center justify-between gap-3 border-t py-2 first:border-t-0 first:pt-0 last:pb-0"
+                >
+                  <div class="min-w-0">
+                    <div class="truncate text-sm font-medium">{{ index.name }}</div>
+                    <div class="truncate text-xs text-muted-foreground">
+                      {{ index.columns.join(", ") || "-" }}
+                    </div>
+                  </div>
+                  <Badge variant="outline">{{ index.type || "index" }}</Badge>
+                </div>
+              </div>
+            </template>
           </template>
         </CardContent>
       </Card>

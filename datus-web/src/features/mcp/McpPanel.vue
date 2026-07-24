@@ -15,6 +15,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
@@ -29,6 +36,7 @@ import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import { usePermission } from "@/composables/usePermission"
 import { ApiResultError } from "@/lib/chat"
+import { friendlyMcpConnectionError } from "@/lib/mcp"
 import { handleError } from "@/lib/utils"
 import type { McpConnectivityResult, McpServerInfo, McpToolInfo } from "@/types"
 
@@ -49,6 +57,7 @@ const toolsLoading = shallowRef(false)
 const submittingServer = shallowRef(false)
 const deleting = shallowRef(false)
 const checkingServer = shallowRef("")
+const mobileDetailOpen = shallowRef(false)
 const serverDialogOpen = shallowRef(false)
 const serverDialogMode = shallowRef<"create" | "edit">("create")
 const editingServer = shallowRef<McpServerInfo | null>(null)
@@ -96,6 +105,13 @@ function agentReferencesFromError(error: unknown): McpAgentReference[] {
       status: typeof agent.status === "string" ? agent.status : "",
     }]
   })
+}
+
+function showMcpConnectionError(context: string, serverName: string, error: unknown) {
+  console.error(`${context} (${serverName})`, error)
+  const friendly = friendlyMcpConnectionError(error, serverName)
+  if (!friendly) return
+  toast.error(friendly.title, { description: friendly.description })
 }
 
 function openDeleteDialog(server: McpServerInfo) {
@@ -147,15 +163,21 @@ async function loadTools() {
     tools.value = result?.tools ?? []
   } catch (error) {
     tools.value = []
-    handleError("加载 MCP 工具失败", error)
+    showMcpConnectionError("加载 MCP 工具失败", selectedServer.value, error)
   } finally {
     toolsLoading.value = false
   }
 }
 
 function selectServer(serverName: string) {
+  if (selectedServer.value === serverName) return
   selectedServer.value = serverName
   void loadTools()
+}
+
+function openMobileServerDetail(serverName: string) {
+  selectServer(serverName)
+  mobileDetailOpen.value = true
 }
 
 function serverTarget(server: McpServerInfo) {
@@ -217,7 +239,7 @@ async function checkConnectivity(serverName: string) {
     }
     toast.success(result?.message || "MCP Server 连接正常")
   } catch (error) {
-    handleError("检查 MCP 连接失败", error)
+    showMcpConnectionError("检查 MCP 连接失败", serverName, error)
   } finally {
     checkingServer.value = ""
   }
@@ -264,14 +286,18 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">MCP 管理</h1>
-          <p class="text-sm text-muted-foreground">
-            管理后端 MCP Server 配置，查看可用工具和连接状态。
-          </p>
+      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <ActivityIcon class="shrink-0 text-muted-foreground" />
+            <h1 class="font-medium">MCP 管理</h1>
+          </div>
+          <Badge variant="secondary">{{ serverCountLabel }}</Badge>
+          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
+            <span class="truncate">管理后端 MCP Server 配置，查看可用工具和连接状态。</span>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -292,7 +318,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 xl:grid-cols-[380px_1fr] xl:grid-rows-none">
+      <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[380px_1fr]">
         <Card class="min-h-0">
           <CardHeader class="shrink-0">
             <div class="flex items-center justify-between gap-3">
@@ -315,7 +341,22 @@ onMounted(() => {
                   <div class="flex items-start gap-2">
                     <Button
                       variant="ghost"
-                      class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left"
+                      class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:hidden"
+                      @click="openMobileServerDetail(server.name)"
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="flex items-center justify-between gap-2">
+                          <span class="truncate font-medium">{{ server.name }}</span>
+                          <Badge variant="secondary">{{ server.type }}</Badge>
+                        </span>
+                        <span class="mt-1 block break-all text-xs text-muted-foreground">
+                          {{ serverTarget(server) }}
+                        </span>
+                      </span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      class="hidden h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:flex"
                       @click="selectServer(server.name)"
                     >
                       <span class="min-w-0 flex-1">
@@ -387,7 +428,7 @@ onMounted(() => {
           </CardContent>
         </Card>
 
-        <Card class="min-h-0">
+        <Card class="hidden min-h-0 xl:flex">
           <CardHeader class="shrink-0">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
@@ -438,6 +479,60 @@ onMounted(() => {
         </Card>
       </div>
     </div>
+
+    <Sheet v-model:open="mobileDetailOpen">
+      <SheetContent
+        side="right"
+        class="gap-0 data-[side=right]:w-full sm:data-[side=right]:max-w-xl xl:hidden"
+      >
+        <SheetHeader class="border-b">
+          <SheetTitle>{{ selected?.name || "MCP Server 详情" }}</SheetTitle>
+          <SheetDescription class="break-all">
+            {{ selectedConnectivity ? connectivityLabel(selectedConnectivity) : (selected ? serverTarget(selected) : "未选择 Server") }}
+          </SheetDescription>
+        </SheetHeader>
+        <div class="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-sm font-medium">可用工具</span>
+            <Badge
+              v-if="selected?.status"
+              variant="outline"
+            >
+              {{ selected.status }}
+            </Badge>
+          </div>
+          <ScrollArea class="min-h-0 flex-1">
+            <div class="pr-3">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Tool</TableHead>
+                    <TableHead>Description</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow
+                    v-for="tool in tools"
+                    :key="tool.name"
+                  >
+                    <TableCell class="font-medium">{{ tool.name }}</TableCell>
+                    <TableCell class="whitespace-normal">{{ tool.description || "-" }}</TableCell>
+                  </TableRow>
+                  <TableRow v-if="tools.length === 0">
+                    <TableCell
+                      class="h-24 text-center text-muted-foreground"
+                      colspan="2"
+                    >
+                      {{ toolsEmptyLabel }}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </ScrollArea>
+        </div>
+      </SheetContent>
+    </Sheet>
 
     <McpServerDialog
       v-model:open="serverDialogOpen"

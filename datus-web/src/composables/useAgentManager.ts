@@ -43,7 +43,6 @@ export interface AgentFormState {
   allowedUserIds: string[];
   toolPolicyMode: "inherit" | "allowlist";
   deniedToolsText: string;
-  maxPermissionMode: "normal" | "auto" | "dangerous";
   allowSubagentDelegation: boolean;
   allowedSubagentIds: string[];
   defaultUserIds: string[];
@@ -97,7 +96,6 @@ function emptyForm(): AgentFormState {
     allowedUserIds: [],
     toolPolicyMode: "allowlist",
     deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
-    maxPermissionMode: "normal",
     allowSubagentDelegation: false,
     allowedSubagentIds: [],
     defaultUserIds: [],
@@ -230,9 +228,6 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     allowedUserIds: [...(agent.acl?.allowed_user_ids ?? [])],
     toolPolicyMode: agent.tool_policy?.mode === "inherit" ? "inherit" : "allowlist",
     deniedToolsText: listText(agent.tool_policy?.denied),
-    maxPermissionMode: agent.runtime_policy?.max_permission_mode === "dangerous"
-      ? "dangerous"
-      : agent.runtime_policy?.max_permission_mode === "auto" ? "auto" : "normal",
     allowSubagentDelegation: agent.runtime_policy?.allow_subagent_delegation ?? false,
     allowedSubagentIds: [...(agent.runtime_policy?.allowed_subagents ?? [])],
     defaultUserIds: [],
@@ -267,7 +262,6 @@ function createInputFromForm(form: AgentFormState, supportsMcp: boolean): Create
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
-      max_permission_mode: form.maxPermissionMode ?? "normal",
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
@@ -282,7 +276,6 @@ function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentP
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
-      max_permission_mode: form.maxPermissionMode ?? "normal",
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
@@ -604,7 +597,7 @@ export function useAgentManager() {
       if (err.errorCode === "AGENT_DEFAULT_REQUIRES_PUBLISHED") {
         return "只有已发布的 Agent 才能分配默认用户，请先将状态切换为“已发布”。";
       }
-      return err.message;
+      return fallback;
     }
 
     return fallback;
@@ -725,7 +718,7 @@ export function useAgentManager() {
         mcpToolsByServer.value = Object.fromEntries(servers.map((server) => [server.name, []]));
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
+      const message = agentRouteErrorMessage(err, "读取 MCP Server 失败");
       mcpServers.value = [];
       mcpToolsByServer.value = {};
       mcpCatalogLoaded.value = false;
@@ -774,7 +767,7 @@ export function useAgentManager() {
         || left.manifest.slug.localeCompare(right.manifest.slug)
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取 Agent 可选资源失败";
+      const message = agentRouteErrorMessage(err, "读取 Agent 可选资源失败");
       datasources.value = [];
       artifacts.value = [];
       resourceCatalogError.value = message;
@@ -877,7 +870,6 @@ export function useAgentManager() {
       allowedUserIds: [],
       toolPolicyMode: "allowlist",
       deniedToolsText: "filesystem_tools.write_file\nfilesystem_tools.edit_file\nfilesystem_tools.delete_file\nbash_tools.*",
-      maxPermissionMode: "normal",
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
@@ -1002,7 +994,9 @@ export function useAgentManager() {
     } catch (err) {
       const message = agentRouteErrorMessage(
         err,
-        err instanceof Error ? err.message : "Agent 保存失败",
+        err instanceof Error && err.message === "最大轮次必须是正整数"
+          ? err.message
+          : "Agent 保存失败",
       );
       console.error("保存 Agent 失败:", err);
       toast.error(message);

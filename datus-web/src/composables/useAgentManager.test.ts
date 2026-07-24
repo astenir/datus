@@ -256,6 +256,22 @@ describe("useAgentManager", () => {
     expect(toastError).toHaveBeenCalledWith(expect.stringContaining("企业 Agent 管理接口"));
   });
 
+  it("does not expose unrecognized backend errors in Agent feedback", async () => {
+    const { ApiResultError } = await import("@/lib/chat");
+    listAgents.mockRejectedValue(new ApiResultError(
+      "RuntimeError: https://private.example/agents failed at /srv/agent.py",
+      "INTERNAL_ERROR",
+    ));
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+
+    expect(manager.error.value).toBe("读取 Agent 列表失败");
+    expect(toastError).toHaveBeenCalledWith("读取 Agent 列表失败");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("private.example");
+  });
+
   it("loads selected agent detail and its usable tools", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -709,7 +725,6 @@ describe("useAgentManager", () => {
       allowedUserIds: ["alice", "bob"],
       toolPolicyMode: "allowlist",
       deniedToolsText: "filesystem_tools.*",
-      maxPermissionMode: "normal",
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
@@ -747,7 +762,6 @@ describe("useAgentManager", () => {
         denied: ["filesystem_tools.*"],
       },
       runtime_policy: {
-        max_permission_mode: "normal",
         allow_subagent_delegation: false,
         allowed_subagents: [],
       },

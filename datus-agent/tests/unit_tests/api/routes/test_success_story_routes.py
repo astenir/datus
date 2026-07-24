@@ -3,60 +3,155 @@
 
 """Unit tests for datus/api/routes/success_story_routes.py."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import HTTPException
 
-from datus.api.models.success_story_models import SuccessStoryData, SuccessStoryInput
-from datus.api.routes.success_story_routes import save_success_story
-from datus.api.services.success_story_service import SubagentNotFoundError
+from datus.api.auth.context import AppContext
+from datus.api.enterprise.deps import SessionAccess
+from datus.api.models.base_models import Result
+from datus.api.models.success_story_models import SuccessStoryData, SuccessStoryInput, SuccessStorySource
+from datus.api.routes import success_story_routes
+from datus.api.services.chat_service import SuccessStorySourceError
 
 
-def _mock_svc(**service_attrs):
+def _payload():
+    return SuccessStoryInput(session_id="chat_session_1", call_tool_id="call_1", session_link="/chat/chat_session_1")
+
+
+def _source(sql="SELECT 1"):
+    return SuccessStorySource(
+        session_id="chat_session_1",
+        call_tool_id="call_1",
+        question="show one",
+        sql=sql,
+        datasource_id="ccks_fund",
+        subagent_name="gen_sql",
+        session_link="/chat/chat_session_1",
+    )
+
+
+def _data(created=True):
+    return SuccessStoryData(
+        story_id="ss_123",
+        created=created,
+        datasource_id="ccks_fund",
+        subagent_name="gen_sql",
+        storage_key="ccks_fund/gen_sql/success_story.csv",
+        session_id="chat_session_1",
+        timestamp="2026-04-20T00:00:00Z",
+    )
+
+
+def _svc(source=None, save=None):
     svc = MagicMock()
-    svc.success_story = MagicMock(**service_attrs)
+    svc.chat.resolve_success_story_source_async = AsyncMock(return_value=source or _source())
+    svc.success_story.save = save or MagicMock(return_value=_data())
     return svc
 
 
-@pytest.mark.asyncio
-async def test_save_returns_result_success():
-    data = SuccessStoryData(
-        csv_path="/tmp/benchmark/gen_sql/success_story.csv",
-        subagent_name="gen_sql",
-        session_id="s1",
-        session_link=None,
-        timestamp="2026-04-20 00:00:00",
+async def _install(monkeypatch, svc, access=None):
+    monkeypatch.setattr(success_story_routes.api_deps, "resolve_datus_service_for_request", AsyncMock(return_value=svc))
+    monkeypatch.setattr(
+        success_story_routes,
+        "authorize_session_access",
+        AsyncMock(return_value=access or SessionAccess(error=None, user_id="alice")),
     )
-    svc = _mock_svc(save=MagicMock(return_value=data))
-    payload = SuccessStoryInput(session_id="s1", sql="SELECT 1", user_message="q", subagent_id="gen_sql")
+    monkeypatch.setattr(success_story_routes, "_audit_success_story", AsyncMock())
 
-    result = await save_success_story(payload, svc)
+
+@pytest.mark.asyncio
+async def test_save_returns_canonical_result(monkeypatch):
+    svc = _svc()
+    await _install(monkeypatch, svc)
+
+    result = await success_story_routes.save_success_story(_payload(), MagicMock(), AppContext(user_id="alice"))
 
     assert result.success is True
-    assert result.data == data
-    svc.success_story.save.assert_called_once_with(payload)
+    assert result.data == _data()
+    svc.chat.resolve_success_story_source_async.assert_awaited_once_with(
+        "chat_session_1",
+        "call_1",
+        user_id="alice",
+        session_link="/chat/chat_session_1",
+    )
+    svc.success_story.save.assert_called_once_with(_source())
 
 
 @pytest.mark.asyncio
-async def test_save_translates_subagent_not_found_to_400():
-    svc = _mock_svc(save=MagicMock(side_effect=SubagentNotFoundError("Subagent 'nope' not found")))
-    payload = SuccessStoryInput(session_id="s1", sql="SELECT 1", user_message="q", subagent_id="nope")
+async def test_foreign_session_returns_stable_error(monkeypatch):
+    svc = _svc()
+    denial = Result[dict](success=False, errorCode="SESSION_FORBIDDEN", errorMessage="denied")
+    await _install(monkeypatch, svc, SessionAccess(error=denial, user_id=None))
 
-    with pytest.raises(HTTPException) as exc:
-        await save_success_story(payload, svc)
+    result = await success_story_routes.save_success_story(_payload(), MagicMock(), AppContext(user_id="alice"))
 
-    assert exc.value.status_code == 400
-    assert "nope" in exc.value.detail
+    assert result.success is False
+    assert result.errorCode == "SUCCESS_STORY_SESSION_FORBIDDEN"
+    svc.chat.resolve_success_story_source_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_save_returns_failure_result_on_os_error():
-    svc = _mock_svc(save=MagicMock(side_effect=OSError("disk full")))
-    payload = SuccessStoryInput(session_id="s1", sql="SELECT 1", user_message="q")
+async def test_missing_or_failed_source_returns_resolver_code(monkeypatch):
+    svc = _svc()
+    svc.chat.resolve_success_story_source_async.side_effect = SuccessStorySourceError(
+        "SUCCESS_STORY_NOT_SUCCESSFUL",
+        "Only successful SQL can be saved.",
+    )
+    await _install(monkeypatch, svc)
 
-    result = await save_success_story(payload, svc)
+    result = await success_story_routes.save_success_story(_payload(), MagicMock(), AppContext(user_id="alice"))
+
+    assert result.success is False
+    assert result.errorCode == "SUCCESS_STORY_NOT_SUCCESSFUL"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sql",
+    ["DELETE FROM users", "CREATE TABLE x (id INT)", "SELECT 1; DELETE FROM users"],
+)
+async def test_write_sql_is_rejected(monkeypatch, sql):
+    svc = _svc(source=_source(sql))
+    await _install(monkeypatch, svc)
+
+    result = await success_story_routes.save_success_story(_payload(), MagicMock(), AppContext(user_id="alice"))
+
+    assert result.success is False
+    assert result.errorCode == "SUCCESS_STORY_SQL_NOT_READ_ONLY"
+    svc.success_story.save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_os_error_returns_safe_copy(monkeypatch):
+    svc = _svc(save=MagicMock(side_effect=OSError("/private/path disk full")))
+    await _install(monkeypatch, svc)
+
+    result = await success_story_routes.save_success_story(_payload(), MagicMock(), AppContext(user_id="alice"))
 
     assert result.success is False
     assert result.errorCode == "SUCCESS_STORY_WRITE_FAILED"
-    assert "disk full" in result.errorMessage
+    assert "/private/path" not in result.errorMessage
+
+
+@pytest.mark.asyncio
+async def test_audit_omits_full_sql(monkeypatch):
+    events = []
+    sink = MagicMock()
+    sink.write = AsyncMock(side_effect=lambda event: events.append(event))
+    monkeypatch.setattr(success_story_routes, "get_audit_sink", lambda: sink)
+
+    await success_story_routes._audit_success_story(
+        AppContext(user_id="alice"),
+        _payload(),
+        decision="allow",
+        metadata={"sql_sha256": "abc", "created": True},
+    )
+
+    assert events[0].action == "knowledge.success_story.save"
+    assert events[0].metadata == {
+        "session_id": "chat_session_1",
+        "call_tool_id": "call_1",
+        "sql_sha256": "abc",
+        "created": True,
+    }

@@ -135,6 +135,7 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "create table if not exists enterprise_session_turn_usage" in normalized
     assert "create table if not exists enterprise_session_running_usage" in normalized
     assert "create table if not exists enterprise_session_system_prompts" in normalized
+    assert "create table if not exists enterprise_session_terminal_events" in normalized
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized
@@ -199,6 +200,27 @@ def test_ob_session_stores_reject_invalid_config():
     with pytest.raises(Exception) as body_exc:
         ObSessionBodyStore(host="127.0.0.1", user="root@test", password="testpass", database="bad-name")
     assert "Invalid OceanBase identifier" in str(body_exc.value)
+
+
+@pytest.mark.asyncio
+async def test_ob_session_owner_store_returns_full_record():
+    store = ObSessionOwnerStore.__new__(ObSessionOwnerStore)
+    store._fetchone = AsyncMock(
+        return_value={
+            "project_id": "enterprise",
+            "session_id": "s1",
+            "user_id": "alice",
+            "created_at": "2026-07-01T08:00:00+00:00",
+            "updated_at": "2026-07-02T09:30:00+00:00",
+        }
+    )
+
+    session = await store.get_session("enterprise", "s1")
+
+    assert session is not None
+    assert session["user_id"] == "alice"
+    assert session["created_at"] == "2026-07-01T08:00:00Z"
+    assert store._fetchone.await_args.args[1] == ("enterprise", "s1")
 
 
 def test_oceanbase_pool_close_closes_idle_and_borrowed_connections():

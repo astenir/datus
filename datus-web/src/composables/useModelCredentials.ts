@@ -28,6 +28,7 @@ export interface ModelCredentialTestState {
 }
 
 export const CUSTOM_OPENAI_COMPATIBLE_PROVIDER = "custom_openai_compatible";
+const MODEL_CONNECTION_FAILURE = "模型连接失败，请检查配置、凭据和网络后重试";
 
 function resultData<T>(response: ApiResponse<T>, fallback: T): T {
   if (!response.success) {
@@ -90,7 +91,7 @@ export function useModelCredentials() {
       ensureFormDefaults();
     } catch (err) {
       console.error("加载模型密钥失败:", err);
-      error.value = err instanceof Error ? err.message : "加载模型密钥失败";
+      error.value = "加载模型密钥失败";
       toast.error("加载模型密钥失败");
     } finally {
       loading.value = false;
@@ -128,7 +129,7 @@ export function useModelCredentials() {
       await loadModels();
     } catch (err) {
       console.error("保存模型密钥失败:", err);
-      error.value = err instanceof Error ? err.message : "保存模型密钥失败";
+      error.value = "保存模型密钥失败";
       toast.error("保存模型密钥失败");
       throw err;
     } finally {
@@ -146,7 +147,7 @@ export function useModelCredentials() {
       await loadModels();
     } catch (err) {
       console.error("删除模型密钥失败:", err);
-      error.value = err instanceof Error ? err.message : "删除模型密钥失败";
+      error.value = "删除模型密钥失败";
       toast.error("删除模型密钥失败");
     } finally {
       saving.value = false;
@@ -158,9 +159,7 @@ export function useModelCredentials() {
     const credential = credentials.value.find(item => item.id === id);
     try {
       const result = resultData(await meApi.testModelCredential(id), { ok: false, message: "测试失败" });
-      const message = result.ok
-        ? "连接正常"
-        : result.message?.trim() || "连接失败";
+      const message = result.ok ? "连接正常" : MODEL_CONNECTION_FAILURE;
       testResults.value = {
         ...testResults.value,
         [id]: { ok: result.ok, message },
@@ -172,15 +171,14 @@ export function useModelCredentials() {
       } else {
         toast.error(message);
       }
-      return result;
+      return result.ok ? result : { ...result, message };
     } catch (err) {
       console.error("测试模型密钥失败:", err);
-      const message = err instanceof Error ? err.message : "测试请求失败";
       testResults.value = {
         ...testResults.value,
-        [id]: { ok: false, message },
+        [id]: { ok: false, message: MODEL_CONNECTION_FAILURE },
       };
-      toast.error(message);
+      toast.error(MODEL_CONNECTION_FAILURE);
       return null;
     } finally {
       testingId.value = null;
@@ -197,7 +195,7 @@ export function useModelCredentials() {
       await loadModels();
     } catch (err) {
       console.error("保存默认模型失败:", err);
-      error.value = err instanceof Error ? err.message : "保存默认模型失败";
+      error.value = "保存默认模型失败";
       toast.error("保存默认模型失败");
     } finally {
       saving.value = false;

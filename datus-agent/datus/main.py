@@ -78,6 +78,31 @@ def create_parser() -> argparse.ArgumentParser:
     )
     check_db_parser.add_argument("--datasource", type=str, required=True, help="Datasource name to check")
 
+    migrate_success_story_parser = subparsers.add_parser(
+        "migrate-success-stories",
+        help="Copy a legacy success-story CSV into the datasource-isolated layout",
+        parents=[global_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    migrate_success_story_parser.add_argument(
+        "--source",
+        type=str,
+        required=True,
+        help="Path to the legacy success-story CSV",
+    )
+    migrate_success_story_parser.add_argument(
+        "--datasource",
+        type=str,
+        required=True,
+        help="Canonical datasource shared by every row in the legacy CSV",
+    )
+    migrate_success_story_parser.add_argument(
+        "--subagent",
+        type=str,
+        default="chat",
+        help="Subagent storage group for the migrated rows (default: chat)",
+    )
+
     # platform-doc command
     platform_doc_parser = subparsers.add_parser(
         "platform-doc",
@@ -514,6 +539,34 @@ def main():
 
     # Load agent configuration
     agent_config = load_agent_config(**vars(args))
+    if args.action == "migrate-success-stories":
+        from rich.console import Console
+
+        from datus.api.services.success_story_service import SuccessStoryService
+        from datus.cli.cli_styles import print_error, print_success
+
+        try:
+            migration = SuccessStoryService(
+                agent_config,
+                project_id=getattr(agent_config, "project_name", "default"),
+            ).migrate_legacy_file(
+                args.source,
+                datasource_id=args.datasource,
+                subagent_name=args.subagent,
+            )
+        except OSError as exc:
+            print_error(Console(), str(exc))
+            return 1
+
+        print_success(
+            Console(),
+            (
+                f"Migrated {migration.migrated_rows}/{migration.total_rows} rows to "
+                f"{migration.storage_key}; skipped {migration.skipped_rows} existing rows."
+            ),
+            symbol=True,
+        )
+        return 0
     if args.action == "platform-doc":
         # platform-doc is datasource-independent; handled before Agent init
         from datus.agent.agent import bootstrap_platform_doc

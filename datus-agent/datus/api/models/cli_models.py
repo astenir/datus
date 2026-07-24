@@ -618,6 +618,28 @@ class SSEEvent(BaseModel):
     timestamp: str = Field(default_factory=now_utc_iso)
 
 
+class ChatSessionTerminalEvent(BaseModel):
+    """Durable display-only outcome for one established chat run."""
+
+    event_id: str = Field(..., description="Stable idempotency key for the terminal event")
+    event_type: Literal["error", "cancelled", "timeout"] = Field(..., description="Terminal outcome type")
+    error: str = Field(..., description="Terminal outcome detail for authorized session history readers")
+    error_type: str = Field(..., description="Stable error or cancellation code")
+    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
+
+
+class ChatSessionSubagentEvent(BaseModel):
+    """Durable display-only link from a parent task call to a child session."""
+
+    event_id: str = Field(..., description="Stable idempotency key for the delegation event")
+    event_type: Literal["subagent"] = Field(default="subagent", description="Display sidecar event type")
+    parent_action_id: str = Field(..., description="Parent task function call id")
+    child_session_id: str = Field(..., description="Persisted nested sub-agent session id")
+    subagent_type: str = Field(..., description="Delegated sub-agent type")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Original task display arguments")
+    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
+
+
 class ChatHistoryData(BaseModel):
     """Chat history data."""
 

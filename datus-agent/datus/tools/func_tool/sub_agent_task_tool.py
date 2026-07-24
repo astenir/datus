@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
 
+from datus.api.models.cli_models import ChatSessionSubagentEvent
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.inherited_memory_overrides import inherited_memory
 from datus.configuration.node_type import NodeType
@@ -379,6 +380,47 @@ class SubAgentTaskTool:
                 return mode
         return "interactive"
 
+    def _inherit_parent_permission_profile(self, node: "AgenticNode") -> None:
+        """Apply the request-scoped parent profile to a delegated node.
+
+        API chat switches the freshly-created parent node's PermissionManager
+        without mutating the shared AgentConfig.  A delegated node is created
+        later from that unchanged config, so it must inherit the effective
+        profile explicitly while retaining its own node overrides and tool
+        policy.
+        """
+        parent_manager = getattr(self._parent_node, "permission_manager", None)
+        target_profile = getattr(parent_manager, "active_profile", None)
+        if not isinstance(target_profile, str):
+            return
+
+        from datus.tools.permission.profiles import PROFILE_NAMES, build_user_overrides
+
+        if target_profile not in PROFILE_NAMES:
+            raise RuntimeError(f"Cannot delegate with unknown permission profile {target_profile!r}.")
+
+        child_manager = getattr(node, "permission_manager", None)
+        if child_manager is None or getattr(child_manager, "active_profile", None) == target_profile:
+            return
+
+        raw_permissions = getattr(self.agent_config, "_raw_permissions", {}) or {}
+        if not isinstance(raw_permissions, dict):
+            raise RuntimeError("Cannot inherit permission profile: agent permission configuration is malformed.")
+        raw_user = {key: value for key, value in raw_permissions.items() if key != "profile"}
+
+        try:
+            user_overrides = build_user_overrides(target_profile, raw_user)
+            child_manager.switch_profile(target_profile, user_overrides=user_overrides)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to inherit permission profile {target_profile!r} for delegated Agent.") from exc
+
+        logger.info(
+            "Inherited permission profile for delegated Agent",
+            profile=target_profile,
+            parent=getattr(self._parent_node, "node_name", None),
+            child=getattr(node, "node_name", None),
+        )
+
     def _create_builtin_node(self, subagent_type: str, session_id: Optional[str] = None):
         """Create a builtin system subagent node with its non-standard constructor."""
         if subagent_type == "gen_semantic_model":
@@ -736,6 +778,10 @@ class SubAgentTaskTool:
                     )
 
             node = self._create_node(subagent_type, session_id=session_id)
+            parent_scope = getattr(self._parent_node, "scope", None)
+            if isinstance(parent_scope, str) and parent_scope and not getattr(node, "scope", None):
+                node.scope = parent_scope
+            self._inherit_parent_permission_profile(node)
             from datus.agent.tool_policy import apply_agent_runtime_policy
 
             apply_agent_runtime_policy(node)
@@ -765,6 +811,34 @@ class SubAgentTaskTool:
                         "main session. It may have been cleaned up or never existed."
                     ),
                 )
+
+            if isinstance(parent_sid, str) and parent_sid and call_id:
+                event_arguments = {
+                    "type": subagent_type,
+                    "prompt": prompt,
+                    "description": description,
+                }
+                if session_id is not None:
+                    event_arguments["session_id"] = session_id
+                delegation_event = ChatSessionSubagentEvent(
+                    event_id=f"subagent-{call_id}",
+                    parent_action_id=call_id,
+                    child_session_id=node.session_id,
+                    subagent_type=subagent_type,
+                    arguments=event_arguments,
+                )
+                try:
+                    await self._parent_node.session_manager.append_subagent_event_async(
+                        parent_sid,
+                        delegation_event,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist sub-agent delegation for parent %s task %s",
+                        parent_sid,
+                        call_id,
+                        exc_info=True,
+                    )
 
             # Set input on the node, then refresh DB-backed tools so connector
             # routing follows the inherited physical database as well.

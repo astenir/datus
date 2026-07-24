@@ -8,7 +8,6 @@ from typing import Any
 from datus.tools.permission.permission_config import PermissionLevel, PermissionRule
 
 TOOL_POLICY_MODES = {"inherit", "allowlist"}
-PERMISSION_MODE_ORDER = {"normal": 0, "auto": 1, "dangerous": 2}
 
 
 def normalize_tool_policy(value: Any) -> dict[str, Any]:
@@ -45,21 +44,11 @@ def include_bound_mcp_servers(value: Any, mcp_server_names: Any) -> dict[str, An
 
 def normalize_runtime_policy(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
-    max_permission_mode = str(raw.get("max_permission_mode") or "normal").strip().lower()
-    if max_permission_mode not in PERMISSION_MODE_ORDER:
-        raise ValueError(f"Agent max_permission_mode must be one of: {', '.join(PERMISSION_MODE_ORDER)}.")
     allowed_subagents = raw.get("allowed_subagents")
     return {
-        "max_permission_mode": max_permission_mode,
         "allow_subagent_delegation": bool(raw.get("allow_subagent_delegation", False)),
         "allowed_subagents": _normalized_patterns(allowed_subagents) if allowed_subagents is not None else [],
     }
-
-
-def permission_mode_exceeds(requested: str | None, maximum: str) -> bool:
-    if not requested:
-        return False
-    return PERMISSION_MODE_ORDER.get(requested, len(PERMISSION_MODE_ORDER)) > PERMISSION_MODE_ORDER[maximum]
 
 
 def apply_agent_runtime_policy(node: Any) -> None:

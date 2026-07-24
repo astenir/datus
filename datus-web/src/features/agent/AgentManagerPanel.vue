@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -61,6 +62,7 @@ const agentStatusOptions = [
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 const agentSourceFilter = shallowRef<AgentSourceFilter>("all")
+const mobileWorkspaceTab = shallowRef("agents")
 
 const visibleAgents = computed(() =>
   filterAgentsBySource(manager.agents.value, agentSourceFilter.value)
@@ -76,6 +78,9 @@ const emptyAgentListMessage = computed(() => {
   if (agentSourceFilter.value === "builtin") return "暂无系统内置 Agent。"
   return "暂无 Agent。点击新建创建第一个可复用 Agent。"
 })
+const agentListLoadingLabel = computed(() =>
+  manager.agents.value.length > 0 ? "正在刷新 Agent..." : "正在加载 Agent..."
+)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
@@ -176,15 +181,19 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">Agent 管理</h1>
-          <div class="mt-1 flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
-            <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <BotIcon class="shrink-0 text-muted-foreground" />
+            <h1 class="font-medium">Agent 管理</h1>
+          </div>
+          <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
+          <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
+            <span class="truncate">配置企业 Agent、访问范围与运行工具。</span>
           </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="ml-auto flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -216,11 +225,25 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
-      <div class="-m-1 grid min-h-0 flex-1 auto-cols-[calc(100vw-2rem)] grid-flow-col gap-4 overflow-x-auto p-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
-        <Card
-          size="sm"
-          class="min-h-0 min-w-0"
-        >
+      <Tabs
+        v-model="mobileWorkspaceTab"
+        class="flex min-h-0 flex-1 flex-col gap-3"
+      >
+        <TabsList class="grid h-auto shrink-0 grid-cols-2 xl:hidden">
+          <TabsTrigger value="agents">Agent 列表</TabsTrigger>
+          <TabsTrigger value="tools">工具参考</TabsTrigger>
+        </TabsList>
+
+        <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)]">
+          <TabsContent
+            value="agents"
+            force-mount
+            class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
+          >
+            <Card
+              size="sm"
+              class="h-full min-h-0 min-w-0"
+            >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
               <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -270,7 +293,7 @@ onMounted(() => {
                     <TableHead class="w-32 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
+                <TableBody :aria-busy="manager.loading.value">
                   <TableRow
                     v-for="agent in visibleAgents"
                     :key="agent.agent_id"
@@ -351,7 +374,22 @@ onMounted(() => {
                       </div>
                     </TableCell>
                   </TableRow>
-                  <TableRow v-if="visibleAgents.length === 0">
+                  <TableRow v-if="manager.loading.value && visibleAgents.length === 0">
+                    <TableCell
+                      colspan="3"
+                      class="h-24 text-center text-sm text-muted-foreground"
+                    >
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        class="flex items-center justify-center gap-2"
+                      >
+                        <Spinner aria-hidden="true" />
+                        {{ agentListLoadingLabel }}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  <TableRow v-else-if="visibleAgents.length === 0">
                     <TableCell
                       colspan="3"
                       class="h-24 text-center text-sm text-muted-foreground"
@@ -363,12 +401,18 @@ onMounted(() => {
               </Table>
             </ScrollArea>
           </CardContent>
-        </Card>
+            </Card>
+          </TabsContent>
 
-        <Card
-          size="sm"
-          class="min-h-0 min-w-0"
-        >
+          <TabsContent
+            value="tools"
+            force-mount
+            class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
+          >
+            <Card
+              size="sm"
+              class="h-full min-h-0 min-w-0"
+            >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
               <div class="min-w-0 flex-1">
@@ -478,8 +522,10 @@ onMounted(() => {
               </TabsContent>
             </Tabs>
           </CardContent>
-        </Card>
-      </div>
+            </Card>
+          </TabsContent>
+        </div>
+      </Tabs>
 
     </div>
 

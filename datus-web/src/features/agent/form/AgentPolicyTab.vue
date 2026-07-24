@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import type { AgentManagerController } from "@/composables/useAgentManager"
-import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -22,10 +22,6 @@ const props = defineProps<{
 const policyModeLabel = computed(() =>
   props.manager.form.value.toolPolicyMode === "allowlist" ? "仅允许所选工具" : "继承节点全部工具"
 )
-const permissionModeLabel = computed(() => {
-  const labels = { normal: "普通", auto: "自动", dangerous: "危险" } as const
-  return labels[props.manager.form.value.maxPermissionMode]
-})
 </script>
 
 <template>
@@ -46,7 +42,7 @@ const permissionModeLabel = computed(() => {
     </Alert>
 
     <FieldGroup class="grid gap-5 md:grid-cols-2">
-      <Field>
+      <Field class="md:col-span-2">
         <FieldLabel for="agent-tool-policy-mode">工具策略</FieldLabel>
         <Select v-model="props.manager.form.value.toolPolicyMode">
           <SelectTrigger
@@ -65,32 +61,12 @@ const permissionModeLabel = computed(() => {
         <FieldDescription>建议企业自定义 Chat 使用允许列表。</FieldDescription>
       </Field>
 
-      <Field>
-        <FieldLabel for="agent-max-permission-mode">最高权限模式</FieldLabel>
-        <Select v-model="props.manager.form.value.maxPermissionMode">
-          <SelectTrigger
-            id="agent-max-permission-mode"
-            class="w-full"
-          >
-            <SelectValue>{{ permissionModeLabel }}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="normal">普通</SelectItem>
-              <SelectItem value="auto">自动</SelectItem>
-              <SelectItem value="dangerous">危险</SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <FieldDescription>用户请求的 permission mode 不能超过此上限。</FieldDescription>
-      </Field>
-
       <Field
         v-if="props.manager.form.value.toolPolicyMode === 'allowlist'"
         class="md:col-span-2"
       >
         <FieldLabel>允许工具</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.toolOptions.value"
           :selected-values="props.manager.selectedTools.value"
           placeholder="选择 Agent 可以调用的工具"
@@ -104,7 +80,7 @@ const permissionModeLabel = computed(() => {
 
       <Field class="md:col-span-2">
         <FieldLabel>拒绝工具</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.toolOptions.value"
           :selected-values="props.manager.deniedTools.value"
           placeholder="选择必须禁止的工具"
@@ -135,7 +111,7 @@ const permissionModeLabel = computed(() => {
         class="md:col-span-2"
       >
         <FieldLabel>允许委派的 Agent</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.subagentOptions.value"
           :selected-values="props.manager.form.value.allowedSubagentIds"
           placeholder="选择可委派的 Agent"

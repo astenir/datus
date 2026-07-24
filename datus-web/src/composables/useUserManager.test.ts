@@ -153,6 +153,21 @@ describe("useUserManager", () => {
     expect(listUsers).not.toHaveBeenCalled();
   });
 
+  it("does not expose unknown user status errors", async () => {
+    disableUser.mockResolvedValue({
+      success: false,
+      errorCode: "INTERNAL_ERROR",
+      errorMessage: "RuntimeError: https://users.private failed",
+    });
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+
+    await manager.setUserEnabled(user, false);
+
+    expect(toastError).toHaveBeenCalledWith("禁用失败，请重试");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("users.private");
+  });
+
   it("requires a user id before upserting a user", async () => {
     const { useUserManager } = await import("./useUserManager");
     const manager = useUserManager();

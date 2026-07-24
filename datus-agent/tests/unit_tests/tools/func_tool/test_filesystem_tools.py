@@ -471,6 +471,8 @@ class TestGlobSearch:
         assert root_result.result["files"] == []
         assert direct_result.success == 1
         assert direct_result.result["files"] == []
+        assert direct_result.result["visibility_filtered"] is True
+        assert "authorization scope" in direct_result.result["message"]
 
     def test_glob_excludes_gitignore_patterns(self, tmp_path):
         (tmp_path / ".gitignore").write_text("*.log\nbuild/\n__pycache__\n")

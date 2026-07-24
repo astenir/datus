@@ -398,6 +398,7 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         prompt_version: Optional[str] = None,
     ) -> str:
         context: Dict[str, Any] = {
+            "artifact_access_mode": self._artifact_access_mode(),
             "has_semantic_tools": bool(self.semantic_tools),
             "has_db_tools": bool(self.db_func_tool),
             "has_context_search_tools": bool(self.context_search_tools),

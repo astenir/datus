@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Opti
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
+    ChatSessionTerminalEvent,
     IMessageContent,
     SSEDataType,
     SSEEndData,
@@ -63,6 +64,7 @@ class ChatBufferLimits:
     max_bytes: int = 16 * 1024 * 1024
     completed_ttl_seconds: int = 300
     cleanup_interval_seconds: int = 60
+    stop_grace_seconds: int = 5
 
     @classmethod
     def from_api_config(cls, api_config: dict[str, Any] | None) -> "ChatBufferLimits":
@@ -74,6 +76,7 @@ class ChatBufferLimits:
             max_bytes=_positive_int(raw.get("max_buffer_bytes"), cls.max_bytes),
             completed_ttl_seconds=_positive_int(raw.get("completed_task_ttl_seconds"), cls.completed_ttl_seconds),
             cleanup_interval_seconds=_positive_int(raw.get("cleanup_interval_seconds"), cls.cleanup_interval_seconds),
+            stop_grace_seconds=_positive_int(raw.get("stop_grace_seconds"), cls.stop_grace_seconds),
         )
 
 
@@ -102,8 +105,8 @@ def is_thinking_only_content(content_items) -> bool:
     return bool(content_items) and all(getattr(item, "type", "") == "thinking" for item in content_items)
 
 
-def _is_thinking_delta(event: SSEEvent) -> bool:
-    """Return True if *event* is a thinking delta (consecutive-mergeable)."""
+def _is_stream_delta(event: SSEEvent) -> bool:
+    """Return True if *event* is a consecutive-mergeable text delta."""
     if event.event != "message":
         return False
     data = event.data
@@ -111,17 +114,25 @@ def _is_thinking_delta(event: SSEEvent) -> bool:
         return False
     if data.type not in (SSEDataType.CREATE_MESSAGE, SSEDataType.APPEND_MESSAGE):
         return False
-    return is_thinking_only_content(data.payload.content)
+    content_types = {getattr(item, "type", "") for item in data.payload.content}
+    return bool(content_types) and content_types <= {"thinking", "markdown"} and len(content_types) == 1
 
 
 def _delta_message_id(event: SSEEvent) -> str:
-    """Extract the message_id from a thinking-delta event.
+    """Extract the message_id from a text-delta event.
 
-    Callers must ensure *event* passes ``_is_thinking_delta`` first.
+    Callers must ensure *event* passes ``_is_stream_delta`` first.
     """
     data = event.data
     if isinstance(data, SSEMessageData):
         return data.payload.message_id
+    return ""
+
+
+def _delta_content_type(event: SSEEvent) -> str:
+    data = event.data
+    if isinstance(data, SSEMessageData) and data.payload.content:
+        return data.payload.content[0].type
     return ""
 
 
@@ -197,7 +208,11 @@ def _is_visible_assistant_response(action, event: SSEEvent, *, tool_result_seen:
     """
     if action.role != ActionRole.ASSISTANT or action.status != ActionStatus.SUCCESS:
         return False
-    if not action.action_type or action.action_type == "thinking_delta" or action.action_type.endswith("_response"):
+    if (
+        not action.action_type
+        or action.action_type in {"thinking", "thinking_delta", "response_delta"}
+        or action.action_type.endswith("_response")
+    ):
         return False
     if not _has_visible_content(event):
         return False
@@ -206,7 +221,7 @@ def _is_visible_assistant_response(action, event: SSEEvent, *, tool_result_seen:
 
 
 def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
-    """Merge consecutive thinking-delta events **for the same message** into single events.
+    """Merge consecutive text deltas for the same message and content type.
 
     Non-delta events pass through unchanged and break any ongoing run of deltas.
     A change in ``message_id`` between adjacent deltas also breaks the run so
@@ -218,18 +233,22 @@ def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
     result: list[SSEEvent] = []
     run_start: int | None = None  # index of first delta in the current run
     run_msg_id: str = ""  # message_id of the current run
+    run_content_type: str = ""
 
     for i, ev in enumerate(events):
-        if _is_thinking_delta(ev):
+        if _is_stream_delta(ev):
             msg_id = _delta_message_id(ev)
+            content_type = _delta_content_type(ev)
             if run_start is None:
                 run_start = i
                 run_msg_id = msg_id
-            elif msg_id != run_msg_id:
-                # Different message — flush the current run and start a new one
+                run_content_type = content_type
+            elif msg_id != run_msg_id or content_type != run_content_type:
+                # Different message or presentation — start a separate run.
                 result.append(_merge_delta_run(events[run_start:i]))
                 run_start = i
                 run_msg_id = msg_id
+                run_content_type = content_type
         else:
             # Flush any accumulated delta run before emitting this non-delta
             if run_start is not None:
@@ -245,7 +264,7 @@ def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
 
 
 def _merge_delta_run(run: list[SSEEvent]) -> SSEEvent:
-    """Merge a non-empty run of thinking-delta events into a single event."""
+    """Merge a non-empty run of homogeneous text-delta events."""
     if len(run) == 1:
         return run[0]
 
@@ -324,6 +343,11 @@ class ChatTask:
         self.error: Optional[str] = None
         self.consumer_offset: int = 0
         self.admission_token = None
+        self.run_id = uuid.uuid4().hex
+        self.session_established = False
+        self.terminal_event_persisted = False
+        self.terminal_event_type: Optional[str] = None
+        self.stop_requested = False
 
 
 class ChatTaskManager:
@@ -553,14 +577,38 @@ class ChatTaskManager:
         task = self._tasks.get(session_id)
         if not task:
             return False
+        task.stop_requested = True
 
         if task.node:
             try:
                 task.node.interrupt_controller.interrupt()
                 logger.info(f"Interrupted running task: {session_id}")
+                if task.session_established:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(task.asyncio_task),
+                            timeout=self._buffer_limits.stop_grace_seconds,
+                        )
+                    except asyncio.CancelledError:
+                        if not task.asyncio_task.cancelled():
+                            raise
+                    except TimeoutError:
+                        logger.warning(
+                            "Chat task did not stop within %ss; cancelling task: %s",
+                            self._buffer_limits.stop_grace_seconds,
+                            session_id,
+                        )
+                        task.asyncio_task.cancel()
+                        await asyncio.gather(task.asyncio_task, return_exceptions=True)
+                    except Exception:
+                        logger.debug("Stopped chat task finished with an error: %s", session_id, exc_info=True)
+                    return True
             except Exception as e:
                 logger.error(f"Failed to interrupt task {session_id}: {e}")
 
+        # Before the session event is established there is no durable chat run
+        # to interrupt gracefully. Cancellation here intentionally remains
+        # process-local and does not create a terminal history event.
         if task.asyncio_task and not task.asyncio_task.done():
             task.asyncio_task.cancel()
             logger.info(f"Cancelled asyncio task: {session_id}")
@@ -697,6 +745,73 @@ class ChatTaskManager:
     # Background loop (full agentic loop implementation)
     # ------------------------------------------------------------------
 
+    async def _persist_terminal_event(
+        self,
+        *,
+        task: ChatTask,
+        agent_config: AgentConfig,
+        user_id: Optional[str],
+        event_type: Literal["error", "cancelled", "timeout"],
+        error: str,
+        error_type: str,
+    ) -> None:
+        """Best-effort persistence for established-session display outcomes."""
+        if not task.session_established or task.terminal_event_persisted:
+            return
+
+        terminal_event = ChatSessionTerminalEvent(
+            event_id=f"{task.run_id}-terminal",
+            event_type=event_type,
+            error=error,
+            error_type=error_type,
+        )
+        base_dir = getattr(agent_config, "session_dir", None) or str(
+            get_path_manager(agent_config=agent_config).sessions_dir
+        )
+        session_manager = SessionManager(
+            session_dir=base_dir,
+            scope=session_scope_from_user_id(user_id),
+            agent_config=agent_config,
+            project_id=self._project_id,
+            body_store=self._session_body_store,
+        )
+        try:
+            await session_manager.append_terminal_event_async(task.session_id, terminal_event)
+        except Exception:
+            logger.warning(
+                "Failed to persist terminal chat event for session %s",
+                task.session_id,
+                exc_info=True,
+            )
+            return
+        task.terminal_event_persisted = True
+        task.terminal_event_type = event_type
+
+    @staticmethod
+    def _terminal_outcome_from_action(
+        action: Any,
+    ) -> Optional[tuple[Literal["error", "cancelled", "timeout"], str, str]]:
+        if getattr(action, "role", None) != ActionRole.ASSISTANT or getattr(action, "depth", 0) != 0:
+            return None
+        if getattr(action, "action_type", None) == "interrupted":
+            detail = str(getattr(action, "messages", None) or "Execution interrupted by user")
+            return ("cancelled", detail, "CHAT_CANCELLED")
+        if getattr(action, "action_type", None) != "error" or getattr(action, "status", None) != ActionStatus.FAILED:
+            return None
+
+        output = action.output if isinstance(getattr(action, "output", None), dict) else {}
+        detail = str(
+            output.get("error")
+            or output.get("error_message")
+            or output.get("errorMessage")
+            or getattr(action, "messages", None)
+            or "Chat execution failed"
+        )
+        error_type = str(
+            output.get("error_type") or output.get("error_code") or output.get("errorCode") or "CHAT_EXECUTION_ERROR"
+        )
+        return ("error", detail, error_type)
+
     async def _run_loop(
         self,
         task: ChatTask,
@@ -808,6 +923,7 @@ class ChatTaskManager:
                     timestamp=now_utc_iso(),
                 ),
             )
+            task.session_established = True
             event_id += 1
             event_id = await self._push_degraded_capability_warnings(task, node, event_id)
 
@@ -863,7 +979,7 @@ class ChatTaskManager:
                 )
 
                 is_first_delta = True
-                if action.action_type == "thinking_delta":
+                if action.action_type in {"thinking_delta", "response_delta"}:
                     is_first_delta = action.action_id not in seen_delta_action_ids
                     seen_delta_action_ids.add(action.action_id)
 
@@ -877,7 +993,7 @@ class ChatTaskManager:
 
                 is_update = is_finalize_progress_update or (
                     effective_stream
-                    and action.action_type == "response"
+                    and action.action_type in {"response", "thinking"}
                     and isinstance(action.output, dict)
                     and action.action_id in seen_delta_action_ids
                 )
@@ -891,6 +1007,17 @@ class ChatTaskManager:
                     is_update=bool(is_update),
                     include_final_response=_should_include_final_response(action, assistant_response_sent),
                 )
+                terminal_outcome = self._terminal_outcome_from_action(action)
+                if terminal_outcome is not None:
+                    terminal_type, terminal_error, terminal_error_type = terminal_outcome
+                    await self._persist_terminal_event(
+                        task=task,
+                        agent_config=agent_config,
+                        user_id=user_id,
+                        event_type=terminal_type,
+                        error=terminal_error,
+                        error_type=terminal_error_type,
+                    )
                 if sse:
                     # Per-LLM-call usage event: the converter has no access
                     # to the service-level session ids, so we stamp them
@@ -957,15 +1084,38 @@ class ChatTaskManager:
             )
             event_id += 1
 
-            task.status = "completed"
+            if task.terminal_event_type == "cancelled":
+                task.status = "cancelled"
+            elif task.terminal_event_type in {"error", "timeout"}:
+                task.status = "error"
+            else:
+                task.status = "completed"
 
         except asyncio.CancelledError:
+            if task.stop_requested:
+                await self._persist_terminal_event(
+                    task=task,
+                    agent_config=agent_config,
+                    user_id=user_id,
+                    event_type="cancelled",
+                    error="Execution stopped by user",
+                    error_type="CHAT_CANCELLED",
+                )
             task.status = "cancelled"
 
         except Exception as e:
             logger.error(f"Chat task error for session {session_id}: {e}")
             task.status = "error"
             task.error = str(e)
+            is_timeout = isinstance(e, TimeoutError)
+            await self._persist_terminal_event(
+                task=task,
+                agent_config=agent_config,
+                user_id=user_id,
+                event_type="timeout" if is_timeout else "error",
+                error=str(e),
+                error_type="TIMEOUT" if is_timeout else type(e).__name__,
+            )
             await self._push_event(
                 task,
                 SSEEvent(
@@ -1192,17 +1342,9 @@ class ChatTaskManager:
         permission_manager = getattr(node, "permission_manager", None)
         if permission_manager is None:
             return
-        from datus.agent.tool_policy import normalize_runtime_policy, permission_mode_exceeds
-
-        node_config = getattr(node, "node_config", None)
-        raw_runtime_policy = node_config.get("runtime_policy") if isinstance(node_config, dict) else None
-        if raw_runtime_policy is None and not permission_mode:
+        if not permission_mode:
             return
-        target_mode = permission_mode or getattr(permission_manager, "active_profile", None) or "normal"
-        if raw_runtime_policy is not None:
-            maximum = normalize_runtime_policy(raw_runtime_policy)["max_permission_mode"]
-            if permission_mode_exceeds(target_mode, maximum):
-                target_mode = maximum
+        target_mode = permission_mode
         if getattr(permission_manager, "active_profile", None) == target_mode:
             return
 

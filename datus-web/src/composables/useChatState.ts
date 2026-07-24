@@ -13,6 +13,7 @@ import {
   requestJson,
   extractResultData,
   filterVisibleChatSessions,
+  friendlyTransportErrorBlock,
   normalizeBaseUrl,
 } from "@/lib/chat";
 import { request } from "@/lib/request";
@@ -23,7 +24,7 @@ import {
   idleChatStreamActivity,
   startedChatStreamActivity,
 } from "@/lib/chat-activity";
-import type { ChatMessage, ChatSessionOption, ParsedMessage, SseEvent } from "@/types";
+import type { ChatErrorBlock, ChatMessage, ChatSessionOption, ParsedMessage, SseEvent } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
 
@@ -35,9 +36,11 @@ const selectedSession = shallowRef<string | null>(null);
 const isStreaming = shallowRef(false);
 const streamActivity = shallowRef(idleChatStreamActivity());
 const isLoadingSessions = shallowRef(false);
+const transportError = shallowRef<ChatErrorBlock | null>(null);
 const submittedInteractionKeys = shallowRef<ReadonlySet<string>>(new Set());
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
+const nonCanonicalSessions = new Set<string>();
 const CACHE_MAX = 20;
 let historyRequestId = 0;
 const activeInteractionKey = computed(() =>
@@ -110,17 +113,20 @@ async function loadSessionHistory(sessionId: string, requestId = ++historyReques
     const historyMessages = normalizeHistoryMessages(data?.messages ?? []);
     if (requestId !== historyRequestId || selectedSession.value !== sessionId) return;
     cacheSet(sessionId, historyMessages);
+    nonCanonicalSessions.delete(sessionId);
     messages.value = historyMessages;
+    transportError.value = null;
   } catch (error) {
     if (requestId !== historyRequestId || selectedSession.value !== sessionId) return;
     console.error("Failed to load session history:", error);
-    messages.value = [];
+    transportError.value = friendlyTransportErrorBlock(error, "history");
   }
 }
 
 function selectSession(sessionId: string | null) {
   const requestId = ++historyRequestId;
   const interruptedStream = abortRef.current !== null;
+  const outgoingSession = selectedSession.value;
   // Abort the active stream before switching.
   if (abortRef.current) {
     abortRef.current.abort();
@@ -129,16 +135,21 @@ function selectSession(sessionId: string | null) {
   isStreaming.value = false;
   streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
+  transportError.value = null;
 
   // Cache current messages for the outgoing session
-  if (selectedSession.value && messages.value.length > 0) {
-    cacheSet(selectedSession.value, messages.value);
+  if (interruptedStream && outgoingSession) {
+    nonCanonicalSessions.add(outgoingSession);
+    messageCache.delete(outgoingSession);
+  }
+  if (outgoingSession && messages.value.length > 0 && !nonCanonicalSessions.has(outgoingSession)) {
+    cacheSet(outgoingSession, messages.value);
   }
 
   selectedSession.value = sessionId;
   if (sessionId) {
     // Restore from cache if available, otherwise load from backend
-    const cached = messageCache.get(sessionId);
+    const cached = nonCanonicalSessions.has(sessionId) ? undefined : messageCache.get(sessionId);
     if (cached) {
       messages.value = cached;
     } else {
@@ -162,6 +173,7 @@ async function sendMessage(opts: {
 }) {
   if (isStreaming.value) return;
   submittedInteractionKeys.value = new Set();
+  transportError.value = null;
   const { language, planMode, permissionMode } = useChatSettings();
   const base = effectiveBase();
 
@@ -189,6 +201,7 @@ async function sendMessage(opts: {
   abortRef.current = controller;
   isStreaming.value = true;
   streamActivity.value = startedChatStreamActivity();
+  let streamCompleted = false;
 
   try {
     const url = `${normalizeBaseUrl(base)}/api/v1/chat/stream`;
@@ -234,24 +247,24 @@ async function sendMessage(opts: {
       }
       applyIncomingMessages(incomingMessages);
     }
+    streamCompleted = true;
   } catch (error) {
     if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
-      messages.value = [
-        ...messages.value,
-        {
-          id: `error-${Date.now()}`,
-          role: "system",
-          content: `**错误** ${error instanceof Error ? error.message : String(error)}`,
-        },
-      ];
+      transportError.value = friendlyTransportErrorBlock(error, "stream");
+      if (selectedSession.value) {
+        nonCanonicalSessions.add(selectedSession.value);
+        messageCache.delete(selectedSession.value);
+      }
     }
   } finally {
     if (abortRef.current === controller) {
       isStreaming.value = false;
       streamActivity.value = idleChatStreamActivity();
       abortRef.current = null;
-      if (selectedSession.value) {
-        cacheSet(selectedSession.value, messages.value);
+      if (selectedSession.value && streamCompleted) {
+        const sessionId = selectedSession.value;
+        messageCache.delete(sessionId);
+        await loadSessionHistory(sessionId);
       }
       void loadSessions();
     }
@@ -268,10 +281,16 @@ async function stopSession() {
     abortRef.current = null;
   }
   if (selectedSession.value) {
+    const sessionId = selectedSession.value;
+    nonCanonicalSessions.add(sessionId);
+    messageCache.delete(sessionId);
     try {
-      await chatApi.stop(base, selectedSession.value);
+      await chatApi.stop(base, sessionId);
+      messageCache.delete(sessionId);
+      await loadSessionHistory(sessionId);
     } catch (error) {
       console.error("Failed to stop session:", error);
+      transportError.value = friendlyTransportErrorBlock(error, "stop");
     }
   }
   isStreaming.value = false;
@@ -285,6 +304,7 @@ async function deleteSession(sessionId: string) {
   try {
     await chatApi.deleteSession(base, sessionId);
     messageCache.delete(sessionId);
+    nonCanonicalSessions.delete(sessionId);
     if (selectedSession.value === sessionId) {
       selectSession(null);
     }
@@ -319,11 +339,13 @@ async function resumeSession(sessionId?: string) {
 
   const targetSession = sessionId ?? selectedSession.value;
   if (!targetSession) return;
+  transportError.value = null;
   const base = effectiveBase();
   const controller = new AbortController();
   abortRef.current = controller;
   isStreaming.value = true;
   streamActivity.value = startedChatStreamActivity();
+  let streamCompleted = false;
   try {
     const url = `${normalizeBaseUrl(base)}/api/v1/chat/resume`;
     const response = await request(url, {
@@ -353,17 +375,23 @@ async function resumeSession(sessionId?: string) {
       }
       applyIncomingMessages(incomingMessages);
     }
+    streamCompleted = true;
   } catch (error) {
     if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
       console.error("Failed to resume session:", error);
+      transportError.value = friendlyTransportErrorBlock(error, "resume");
+      nonCanonicalSessions.add(targetSession);
+      messageCache.delete(targetSession);
     }
   } finally {
     if (abortRef.current === controller) {
       isStreaming.value = false;
       streamActivity.value = idleChatStreamActivity();
       abortRef.current = null;
-      if (selectedSession.value) {
-        cacheSet(selectedSession.value, messages.value);
+      if (selectedSession.value && streamCompleted) {
+        const sessionId = selectedSession.value;
+        messageCache.delete(sessionId);
+        await loadSessionHistory(sessionId);
       }
       void loadSessions();
     }
@@ -387,15 +415,13 @@ async function insertMessage(message: string) {
     await chatApi.insert(base, sessionId, message);
   } catch (error) {
     console.error("Failed to insert message:", error);
-    messages.value = [
-      ...messages.value,
-      {
-        id: `error-${Date.now()}`,
-        role: "system",
-        content: `**注入失败** ${error instanceof Error ? error.message : String(error)}`,
-      },
-    ];
+    messages.value = messages.value.filter((item) => item.id !== userMessage.id);
+    transportError.value = friendlyTransportErrorBlock(error, "insert");
   }
+}
+
+function clearTransportError() {
+  transportError.value = null;
 }
 
 async function sendInteraction(interactionKey: string, answers: string | string[][]) {
@@ -429,7 +455,9 @@ function clearMessages() {
   selectedSession.value = null;
   submittedInteractionKeys.value = new Set();
   streamActivity.value = idleChatStreamActivity();
+  transportError.value = null;
   messageCache.clear();
+  nonCanonicalSessions.clear();
 }
 
 function dispose() {
@@ -441,6 +469,7 @@ function dispose() {
   isStreaming.value = false;
   streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
+  transportError.value = null;
 }
 
 export function useChatState() {
@@ -451,6 +480,7 @@ export function useChatState() {
     isStreaming: readonly(isStreaming),
     streamActivity: readonly(streamActivity),
     isLoadingSessions: readonly(isLoadingSessions),
+    transportError: readonly(transportError),
     activeInteractionKey: readonly(activeInteractionKey),
     loadSessions,
     selectSession,
@@ -462,6 +492,7 @@ export function useChatState() {
     resumeSession,
     sendInteraction,
     clearMessages,
+    clearTransportError,
     dispose,
   };
 }

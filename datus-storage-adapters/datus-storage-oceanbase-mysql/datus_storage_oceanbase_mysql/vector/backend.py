@@ -305,15 +305,20 @@ class OceanBaseMySQLVectorTable(VectorTable):
         _validate_identifier(vector_column)
         where_clause = f"WHERE {combined}" if combined else ""
         distance_fn = "cosine_distance"
+        distance_column = "_distance"
         sql = (
-            f"SELECT {columns} FROM {self._qualified_name} {where_clause} "
-            f"ORDER BY {distance_fn}({_quote_ident(vector_column)}, %s) LIMIT %s"
+            f"SELECT {columns}, {distance_fn}({_quote_ident(vector_column)}, %s) "
+            f"AS {_quote_ident(distance_column)} FROM {self._qualified_name} {where_clause} "
+            f"ORDER BY {_quote_ident(distance_column)} LIMIT %s"
         )
         with self._pool.connection(database=self._database_name) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(sql, (_vector_literal(query_embedding), int(top_n)))
                 rows = cursor.fetchall()
-        return self._rows_to_arrow(rows, select_fields)
+        result_fields = list(select_fields or self._default_columns)
+        if distance_column not in result_fields:
+            result_fields.append(distance_column)
+        return self._rows_to_arrow(rows, result_fields)
 
     def search_hybrid(
         self,
@@ -591,6 +596,8 @@ class OceanBaseMySQLVectorTable(VectorTable):
     def _empty_column_type(self, column: str) -> pa.DataType:
         if column == self._vector_column:
             return pa.list_(pa.float32(), list_size=self._vector_dim)
+        if column == "_distance":
+            return pa.float64()
         return self._column_type(column) or pa.string()
 
     def _rows_to_arrow(self, rows: List[Dict[str, Any]], select_fields: Optional[List[str]] = None) -> pa.Table:
@@ -606,6 +613,8 @@ class OceanBaseMySQLVectorTable(VectorTable):
                     [_parse_vector(value, self._vector_dim) for value in values],
                     type=pa.list_(pa.float32(), list_size=self._vector_dim),
                 )
+            elif column == "_distance":
+                arrays[column] = pa.array([float(value) for value in values], type=pa.float64())
             elif (column_type := self._column_type(column)) is not None and (
                 pa.types.is_list(column_type) or pa.types.is_large_list(column_type)
             ):

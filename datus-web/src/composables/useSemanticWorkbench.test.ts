@@ -67,6 +67,8 @@ describe("useSemanticWorkbench", () => {
     expect(workbench.tableName.value).toBe("fund_nav");
     expect(workbench.tableDetail.value?.name).toBe("fund_nav");
     expect(workbench.semanticYaml.value).toBe("table: fund_nav");
+    expect(workbench.isSemanticDirty.value).toBe(false);
+    expect(workbench.isValidationCurrent.value).toBe(false);
   });
 
   it("ignores an older successful load after a newer table finishes", async () => {
@@ -120,6 +122,75 @@ describe("useSemanticWorkbench", () => {
     expect(workbench.loadingTable.value).toBe(false);
   });
 
+  it("keeps semantic YAML when table structure loading fails", async () => {
+    tableDetail.mockRejectedValueOnce(new Error("table detail failed"));
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+
+    expect(workbench.tableDetail.value).toBeNull();
+    expect(workbench.semanticYaml.value).toBe("table: fund_nav");
+    expect(toastError).toHaveBeenCalledWith("加载表结构失败");
+  });
+
+  it("keeps table structure when semantic model loading fails", async () => {
+    getSemanticModel.mockRejectedValueOnce(new Error("semantic model failed"));
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+
+    expect(workbench.tableDetail.value?.name).toBe("fund_nav");
+    expect(workbench.semanticYaml.value).toBe("");
+    expect(toastError).toHaveBeenCalledWith("加载语义模型失败");
+  });
+
+  it("reports timeouts separately from other semantic model failures", async () => {
+    getSemanticModel.mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+
+    expect(workbench.tableDetail.value?.name).toBe("fund_nav");
+    expect(workbench.semanticYaml.value).toBe("");
+    expect(toastError).toHaveBeenCalledWith("加载语义模型超时，请稍后重试");
+  });
+
+  it("combines failures when both table resources fail", async () => {
+    tableDetail.mockRejectedValueOnce(new Error("table detail failed"));
+    getSemanticModel.mockRejectedValueOnce(new Error("semantic model failed"));
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+
+    expect(workbench.tableDetail.value).toBeNull();
+    expect(workbench.semanticYaml.value).toBe("");
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith("加载表结构和语义模型失败");
+  });
+
+  it("leaves 401 feedback to the global authentication handler", async () => {
+    const { HttpError } = await import("@/lib/request");
+    tableDetail.mockRejectedValueOnce(new HttpError(401, "Unauthorized"));
+    getSemanticModel.mockRejectedValueOnce(new HttpError(401, "Unauthorized"));
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+
+    expect(workbench.tableDetail.value).toBeNull();
+    expect(workbench.semanticYaml.value).toBe("");
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
   it("rejects empty table names before loading", async () => {
     const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
     const workbench = useSemanticWorkbench();
@@ -140,8 +211,12 @@ describe("useSemanticWorkbench", () => {
 
     await workbench.loadTableDetails();
     workbench.semanticYaml.value = "table: fund_nav\ncolumns: []";
+    expect(workbench.isSemanticDirty.value).toBe(true);
     await workbench.validateSemanticModel();
+    expect(workbench.isValidationCurrent.value).toBe(true);
     await workbench.saveSemanticModel();
+    expect(workbench.isSemanticDirty.value).toBe(false);
+    expect(workbench.isValidationCurrent.value).toBe(false);
 
     expect(validateSemanticModel).toHaveBeenCalledWith(
       "http://api.test",
@@ -166,6 +241,22 @@ describe("useSemanticWorkbench", () => {
     );
     expect(tableDetail).toHaveBeenCalledTimes(2);
     expect(toastSuccess).toHaveBeenCalledWith("语义模型已保存");
+  });
+
+  it("marks an earlier validation result stale after the YAML changes", async () => {
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+
+    await workbench.loadTableDetails("fund_nav");
+    workbench.semanticYaml.value = "table: fund_nav\ncolumns: []";
+    await workbench.validateSemanticModel();
+
+    expect(workbench.isValidationCurrent.value).toBe(true);
+
+    workbench.semanticYaml.value = "table: fund_nav\ncolumns:\n  - name: fund_id";
+
+    expect(workbench.isSemanticDirty.value).toBe(true);
+    expect(workbench.isValidationCurrent.value).toBe(false);
   });
 
   it("rejects validate and save before a table is loaded", async () => {

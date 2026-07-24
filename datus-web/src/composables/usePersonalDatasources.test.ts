@@ -118,4 +118,18 @@ describe("usePersonalDatasources", () => {
     expect(testPersonalDatasource).toHaveBeenCalledWith("ds-1");
     expect(deletePersonalDatasource).toHaveBeenCalledWith("ds-1");
   });
+
+  it("does not expose personal datasource probe details in a toast", async () => {
+    testPersonalDatasource.mockResolvedValueOnce({
+      success: true,
+      data: { ok: false, message: "password authentication failed for db.internal" },
+    });
+    const { usePersonalDatasources } = await import("./usePersonalDatasources");
+    const manager = usePersonalDatasources();
+
+    await manager.testDatasource("ds-1");
+
+    expect(toastError).toHaveBeenCalledWith("数据源连接失败，请检查配置、凭据和网络后重试");
+    expect(JSON.stringify(toastError.mock.calls)).not.toContain("db.internal");
+  });
 });

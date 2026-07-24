@@ -10,6 +10,7 @@ import {
   contentFromPayloadBlocks,
   filterVisibleChatSessions,
   friendlyChatErrorBlock,
+  friendlyTransportErrorBlock,
   friendlyToolErrorText,
   isReviewableAssistantMessage,
   mergeToolExecutionBlocks,
@@ -20,7 +21,6 @@ import {
   normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
-  shouldRenderThinkingAsAnswer,
   shouldResetConversationOnAgentChange,
   visibleMessageActionTargetId
 } from "./chat";
@@ -202,8 +202,35 @@ describe("tool execution blocks", () => {
         type: "tool-result",
         callToolId: "call-1",
         toolName: "read_query",
-        errorText: "permission denied",
+        errorText: "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+        resultStatus: "error",
         result: { rows: [] },
+      },
+    ]);
+  });
+
+  it("preserves successful tool status after unwrapping the rendered result", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-1",
+          toolName: "execute_sql",
+          result: {
+            success: 1,
+            result: { original_rows: 1, compressed_data: "value\n1" },
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-1",
+        toolName: "execute_sql",
+        resultStatus: "success",
+        result: { original_rows: 1, compressed_data: "value\n1" },
       },
     ]);
   });
@@ -232,7 +259,8 @@ describe("tool execution blocks", () => {
         callToolId: "call-1",
         toolName: "write_file",
         errorText:
-          "权限受限：当前账号不能让 AI 直接修改服务器文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。",
+          "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。",
+        resultStatus: "error",
         result: {
           success: 0,
           error: rawError,
@@ -241,6 +269,7 @@ describe("tool execution blocks", () => {
     ]);
     const [block] = parsed.blocks;
     expect(block.type === "tool-result" ? block.errorText : "").not.toContain("STOP retrying");
+    expect(block.type === "tool-result" ? block.errorText : "").not.toContain("授予“高危对话模式”权限");
   });
 
   it("renders permission mode denial as a friendly message", () => {
@@ -248,6 +277,62 @@ describe("tool execution blocks", () => {
       "chat",
       "Permission mode 'auto' requires module.chat.permission_mode.",
     )).toBe("权限受限：当前账号不能切换到 自动 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。");
+  });
+
+  it("keeps actionable database diagnostics for SQL execution failures", () => {
+    const rawError = [
+      "error_code=500006, error_message=Failed to execute query on database. Error details: function round(double precision, integer) does not exist",
+      "LINE 7: ROUND(a.foundedsize / 100000000.0, 2) AS 成立规模_亿份,",
+      "        ^",
+      "HINT: No function matches the given name and argument types. You might need to add explicit type casts.",
+    ].join("\n");
+
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-sql-1",
+          toolName: "execute_sql",
+          result: {
+            success: 0,
+            error: rawError,
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-sql-1",
+        toolName: "execute_sql",
+        errorText:
+          "SQL 执行失败（错误码 500006）：function round(double precision, integer) does not exist；错误位置：第 7 行；数据库提示：No function matches the given name and argument types. You might need to add explicit type casts.",
+        resultStatus: "error",
+        result: {
+          success: 0,
+          error: rawError,
+        },
+      },
+    ]);
+  });
+
+  it("does not expose SQL-shaped diagnostics from unrelated tools", () => {
+    const rawError =
+      "error_code=500006, error_message=Failed to execute query on database. Error details: function secret() does not exist";
+
+    expect(friendlyToolErrorText("write_file", rawError)).toBe(
+      "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+    );
+  });
+
+  it("keeps connection details out of SQL tool errors", () => {
+    const rawError =
+      "error_code=500006, error_message=Failed to execute query on database. Error details: request to postgresql://db.internal.example/fund failed";
+
+    expect(friendlyToolErrorText("execute_sql", rawError)).toBe(
+      "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+    );
   });
 
   it("merges matching tool calls and results into a single display block", () => {
@@ -302,7 +387,7 @@ describe("tool execution blocks", () => {
         id: "result-message",
         role: "assistant",
         content: "工具结果 read_query",
-        blocks: [{ type: "tool-result", callToolId: "call-1", toolName: "read_query", duration: 0.5, result: { rows: [[1]] } }],
+        blocks: [{ type: "tool-result", callToolId: "call-1", toolName: "read_query", duration: 0.5, resultStatus: "success", result: { rows: [[1]] } }],
       },
       {
         id: "final",
@@ -324,6 +409,7 @@ describe("tool execution blocks", () => {
             toolName: "read_query",
             params: { sql: "select 1" },
             duration: 0.5,
+            resultStatus: "success",
             result: { rows: [[1]] },
           },
         ],
@@ -451,6 +537,14 @@ describe("tool execution blocks", () => {
 });
 
 describe("chat error display", () => {
+  it("does not turn terminal usage metadata into a conversation message", () => {
+    expect(messageFromEvent({
+      id: "end-1",
+      event: "end",
+      data: { duration: 1.2, total_tokens: 42 },
+    })).toBeNull();
+  });
+
   it("normalizes quota error codes into friendly copy", () => {
     expect(friendlyChatErrorBlock({ code: "QUATA_EXCEEDED", message: "QUATA_EXCEEDED" })).toEqual({
       type: "error",
@@ -460,7 +554,7 @@ describe("chat error display", () => {
     });
   });
 
-  it("keeps backend error details secondary when a known code has detail text", () => {
+  it("does not expose backend details for a known error code", () => {
     expect(friendlyChatErrorBlock({
       code: "DATASOURCE_UNAVAILABLE",
       message: "No active LLM model configured",
@@ -469,7 +563,74 @@ describe("chat error display", () => {
       title: "数据源不可用",
       message: "当前数据源暂时无法访问。请检查数据源连接、授权范围或稍后重试。",
       code: "DATASOURCE_UNAVAILABLE",
-      detail: "No active LLM model configured",
+    });
+  });
+
+  it("renders user cancellation as informational copy without technical detail", () => {
+    expect(friendlyChatErrorBlock({
+      code: "CHAT_CANCELLED",
+      message: "Execution stopped by user",
+    })).toEqual({
+      type: "error",
+      title: "已停止生成",
+      message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+      tone: "info",
+    });
+  });
+
+  it("keeps a user-safe permission explanation without repeating the title", () => {
+    expect(friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截。",
+    })).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
+  it("hides raw exception text when no stable error code is available", () => {
+    const block = friendlyChatErrorBlock({ message: "RuntimeError: /srv/private/provider failed" });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "请求没有完成",
+      message: "服务未能完成本次请求。请稍后重试；若问题持续，请联系管理员查看后台日志。",
+    });
+    expect(block.message).not.toContain("/srv/private");
+  });
+
+  it("maps current backend error codes and preserves USER_DISABLED", () => {
+    expect(friendlyChatErrorBlock({ code: "CHAT_EXECUTION_ERROR" })).toMatchObject({
+      title: "对话执行未完成",
+      code: "CHAT_EXECUTION_ERROR",
+    });
+    expect(friendlyChatErrorBlock({ code: "USER_DISABLED" })).toMatchObject({
+      title: "账号不可用",
+      code: "USER_DISABLED",
+    });
+    expect(friendlyChatErrorBlock({ code: "AGENT_FORBIDDEN" })).toMatchObject({
+      title: "无法使用当前 Agent",
+      code: "AGENT_FORBIDDEN",
+    });
+  });
+
+  it("uses structured HTTP codes and safe network copy for transport failures", () => {
+    expect(friendlyTransportErrorBlock({
+      name: "HttpError",
+      status: 403,
+      code: "SESSION_FORBIDDEN",
+    }, "history")).toMatchObject({
+      title: "无法访问会话",
+      code: "SESSION_FORBIDDEN",
+    });
+
+    expect(friendlyTransportErrorBlock(new Error("fetch failed for /internal/path"), "stream")).toEqual({
+      type: "error",
+      title: "无法连接到对话服务",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
     });
   });
 
@@ -825,6 +986,26 @@ describe("contentFromPayloadBlocks", () => {
     ]);
   });
 
+  it("replaces raw interaction failure details with safe user copy", () => {
+    const parsed = contentFromPayloadBlocks([{
+      type: "interaction-summary",
+      payload: {
+        status: "failed",
+        actionType: "ask_user",
+        error: "RuntimeError: broker failed at /srv/private/session.py",
+      },
+    }]);
+
+    expect(parsed.blocks).toEqual([{
+      type: "interaction-summary",
+      status: "failed",
+      actionType: "ask_user",
+      requests: [],
+      answers: [],
+      error: "本次交互处理失败。请稍后重试；若问题持续，请联系管理员。",
+    }]);
+  });
+
   it("keeps sub-agent completion payloads structured for node rendering", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -844,7 +1025,7 @@ describe("contentFromPayloadBlocks", () => {
         subagent: "visual_report",
         toolCount: 3,
         duration: 1.25,
-        errorText: "render failed",
+        errorText: "子 Agent 执行失败。请稍后重试；若问题持续，请联系管理员。",
       },
     ]);
   });
@@ -876,7 +1057,7 @@ describe("contentFromPayloadBlocks", () => {
   });
 });
 
-describe("streaming thinking display compatibility", () => {
+describe("streaming message tracking", () => {
   it("tracks only the latest message as actively streaming", () => {
     expect(activeStreamingMessageId([])).toBeNull();
     expect(activeStreamingMessageId([
@@ -885,28 +1066,6 @@ describe("streaming thinking display compatibility", () => {
     ])).toBe("thinking_stream_1");
   });
 
-  it("renders top-level assistant thinking-only messages as visible answer text", () => {
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      blocks: [{ type: "thinking", content: "partial answer" }],
-    })).toBe(true);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      blocks: [{ type: "markdown", content: "final answer" }],
-    })).toBe(false);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "assistant",
-      depth: 1,
-      blocks: [{ type: "thinking", content: "internal reasoning" }],
-    })).toBe(false);
-
-    expect(shouldRenderThinkingAsAnswer({
-      role: "user",
-      blocks: [{ type: "thinking", content: "not an assistant answer" }],
-    })).toBe(false);
-  });
 });
 
 describe("activeUserInteractionKey", () => {
@@ -1133,6 +1292,58 @@ describe("mergeMessage", () => {
 });
 
 describe("normalizeHistoryMessages", () => {
+  it("restores a durable terminal event as the same typed error block", () => {
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "run-1-terminal",
+        role: "system",
+        content: [{
+          type: "error",
+          payload: {
+            error: "provider stream failed",
+            error_type: "MODEL_UNAVAILABLE",
+            event_type: "error",
+          },
+        }],
+      },
+    ]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("run-1-terminal");
+    expect(messages[0]?.blocks).toEqual([{
+      type: "error",
+      title: "模型暂时不可用",
+      message: "当前模型服务没有完成请求。请稍后重试，或切换到其他可用模型。",
+      code: "MODEL_UNAVAILABLE",
+    }]);
+  });
+
+  it("restores a durable permission denial with the backend user-safe detail", () => {
+    const detail = "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。";
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "permission-terminal",
+        role: "system",
+        content: [{
+          type: "error",
+          payload: {
+            error: detail,
+            error_type: "PERMISSION_DENIED",
+            event_type: "error",
+          },
+        }],
+      },
+    ]);
+
+    expect(messages[0]?.blocks).toEqual([{
+      type: "error",
+      title: "权限受限",
+      message: "当前 Agent 或会话的工具策略不允许直接修改文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    }]);
+  });
+
   it("collapses stored thinking and final markdown payloads with the same message id", () => {
     const messages = normalizeHistoryMessages([
       {
@@ -1170,6 +1381,26 @@ describe("normalizeHistoryMessages", () => {
         ],
         depth: undefined
       }
+    ]);
+  });
+
+  it("preserves reasoning and final answers when history gives them distinct message ids", () => {
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "response-1:reasoning",
+        role: "assistant",
+        content: [{ type: "thinking", payload: { content: "检查上下文" } }],
+      },
+      {
+        message_id: "response-1:response",
+        role: "assistant",
+        content: [{ type: "markdown", payload: { content: "这是正常回答" } }],
+      },
+    ]);
+
+    expect(messages.map((message) => message.blocks)).toEqual([
+      [{ type: "thinking", content: "检查上下文" }],
+      [{ type: "markdown", content: "这是正常回答" }],
     ]);
   });
 });

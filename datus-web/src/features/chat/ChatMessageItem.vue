@@ -2,8 +2,7 @@
 import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
-import { shouldRenderThinkingAsAnswer } from "@/lib/chat"
-import type { ChatDisplayMessage, SelectOption } from "@/types"
+import type { ChatDisplayMessage, SelectOption, SuccessStorySource } from "@/types"
 
 const props = defineProps<{
   message: ChatDisplayMessage
@@ -14,20 +13,24 @@ const props = defineProps<{
   datasourceName?: string
   datasourceOptions?: readonly SelectOption[]
   databaseName?: string
+  successStorySessionId?: string
+  successStorySessionLink?: string
+  canSaveSuccessStory?: boolean
+  successStoryVersion?: number
+  isSuccessStorySaving?: (source: SuccessStorySource) => boolean
+  isSuccessStorySaved?: (source: SuccessStorySource) => boolean
 }>()
 
 const emit = defineEmits<{
   submitInteraction: [interactionKey: string, answers: string[][]]
   openArtifact: [kind: string, slug: string]
+  saveSuccessStory: [source: SuccessStorySource]
 }>()
 
 const isUserMessage = computed(() => props.message.role === "user")
 const isSystemMessage = computed(() => props.message.role === "system")
 const hasErrorBlock = computed(() => props.message.blocks?.some((block) => block.type === "error") ?? false)
 const messageFrom = computed(() => isUserMessage.value ? "user" : "assistant")
-const thinkingDisplay = computed(() =>
-  shouldRenderThinkingAsAnswer(props.message) ? "answer" : "reasoning",
-)
 const messageClass = computed(() =>
   hasErrorBlock.value
     ? "mx-auto w-full !max-w-3xl justify-center"
@@ -52,6 +55,10 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
 function openArtifact(kind: string, slug: string) {
   emit("openArtifact", kind, slug)
 }
+
+function saveSuccessStory(source: SuccessStorySource) {
+  emit("saveSuccessStory", source)
+}
 </script>
 
 <template>
@@ -74,15 +81,21 @@ function openArtifact(kind: string, slug: string) {
             :key="`${message.id}-${index}`"
             :block="block"
             :streaming="streaming"
-            :thinking-display="thinkingDisplay"
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
             :docked-interaction-key="dockedInteractionKey"
             :datasource-name="datasourceName"
             :datasource-options="datasourceOptions"
             :database-name="databaseName"
+            :success-story-session-id="successStorySessionId"
+            :success-story-session-link="successStorySessionLink"
+            :can-save-success-story="canSaveSuccessStory"
+            :success-story-version="successStoryVersion"
+            :is-success-story-saving="isSuccessStorySaving"
+            :is-success-story-saved="isSuccessStorySaved"
             @submit-interaction="submitInteraction"
             @open-artifact="openArtifact"
+            @save-success-story="saveSuccessStory"
           />
         </template>
         <MessageResponse

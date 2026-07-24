@@ -25,6 +25,7 @@ from datus.configuration.agent_config import ModelConfig
 from datus.models.base import LLMBaseModel
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
+from datus.models.stream_interrupt import handle_stream_interrupt
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.tool_summary import detect_tool_failure
@@ -579,41 +580,92 @@ class CodexModel(LLMBaseModel):
             # Stream events and yield ActionHistory objects
             temp_tool_calls = {}  # {call_id: {"tool_name": ..., "arguments": ...}}
             early_assistant_yielded = False
-            thinking_stream_id: Optional[str] = None
-            thinking_accumulated = ""
+            response_stream_id: Optional[str] = None
+            response_accumulated = ""
+            reasoning_stream_id: Optional[str] = None
+            reasoning_accumulated = ""
+            completed_task_call_ids: set[str] = set()
+            graceful_interrupt_requested = False
 
             try:
                 while not result.is_complete:
-                    if interrupt_controller and interrupt_controller.is_interrupted:
-                        from datus.cli.execution_state import ExecutionInterrupted
-
-                        raise ExecutionInterrupted("Interrupted by user")
+                    graceful_interrupt_requested = await handle_stream_interrupt(
+                        interrupt_controller=interrupt_controller,
+                        result=result,
+                        session=session,
+                        completed_task_call_ids=completed_task_call_ids,
+                        graceful_interrupt_requested=graceful_interrupt_requested,
+                    )
 
                     async for event in _stream_events_with_trace_baggage(result, agent_kwargs["name"]):
-                        if interrupt_controller and interrupt_controller.is_interrupted:
-                            from datus.cli.execution_state import ExecutionInterrupted
-
-                            raise ExecutionInterrupted("Interrupted by user")
+                        graceful_interrupt_requested = await handle_stream_interrupt(
+                            interrupt_controller=interrupt_controller,
+                            result=result,
+                            session=session,
+                            completed_task_call_ids=completed_task_call_ids,
+                            graceful_interrupt_requested=graceful_interrupt_requested,
+                        )
 
                         # Handle assistant text from raw response events (streaming)
                         if hasattr(event, "type") and event.type == "raw_response_event":
                             raw_data = getattr(event, "data", None)
                             raw_type = getattr(raw_data, "type", None) if raw_data else None
 
-                            # Stream text delta
-                            if raw_type == "response.output_text.delta":
-                                delta_text = getattr(raw_data, "delta", None)
+                            if raw_type in {
+                                "response.reasoning_summary_text.delta",
+                                "response.reasoning_text.delta",
+                            }:
+                                delta_text = getattr(raw_data, "delta", None) or ""
                                 if delta_text:
-                                    if thinking_stream_id is None:
-                                        thinking_stream_id = f"thinking_stream_{uuid.uuid4().hex[:8]}"
-                                    thinking_accumulated += delta_text
-                                    delta_action = ActionHistory(
-                                        action_id=thinking_stream_id,
+                                    if reasoning_stream_id is None:
+                                        reasoning_stream_id = f"reasoning_stream_{uuid.uuid4().hex[:8]}"
+                                    reasoning_accumulated += delta_text
+                                    yield ActionHistory(
+                                        action_id=reasoning_stream_id,
                                         role=ActionRole.ASSISTANT,
                                         messages="",
                                         action_type="thinking_delta",
                                         input={},
-                                        output={"delta": delta_text, "accumulated": thinking_accumulated},
+                                        output={"delta": delta_text, "accumulated": reasoning_accumulated},
+                                        status=ActionStatus.PROCESSING,
+                                    )
+                                continue
+
+                            if raw_type in {
+                                "response.reasoning_summary_text.done",
+                                "response.reasoning_text.done",
+                            }:
+                                full_reasoning = (getattr(raw_data, "text", None) or reasoning_accumulated).strip()
+                                if full_reasoning:
+                                    reasoning_action = ActionHistory(
+                                        action_id=reasoning_stream_id or f"reasoning_{uuid.uuid4().hex[:8]}",
+                                        role=ActionRole.ASSISTANT,
+                                        messages=full_reasoning,
+                                        action_type="thinking",
+                                        input={},
+                                        output={"thinking": full_reasoning, "content_type": "thinking"},
+                                        status=ActionStatus.SUCCESS,
+                                    )
+                                    action_history_manager.add_action(reasoning_action)
+                                    yield reasoning_action
+                                reasoning_stream_id = None
+                                reasoning_accumulated = ""
+                                continue
+
+                            # Stream normal assistant text as markdown deltas.
+                            if raw_type == "response.output_text.delta":
+                                delta_text = getattr(raw_data, "delta", None)
+                                if delta_text:
+                                    if response_stream_id is None:
+                                        response_stream_id = f"response_stream_{uuid.uuid4().hex[:8]}"
+                                    response_accumulated += delta_text
+                                    delta_action = ActionHistory(
+                                        action_id=response_stream_id,
+                                        role=ActionRole.ASSISTANT,
+                                        messages="",
+                                        action_type="response_delta",
+                                        input={},
+                                        output={"delta": delta_text, "accumulated": response_accumulated},
                                         status=ActionStatus.PROCESSING,
                                     )
                                     yield delta_action
@@ -621,23 +673,27 @@ class CodexModel(LLMBaseModel):
 
                             # Content part done: emit completed thinking action
                             if raw_type == "response.content_part.done":
-                                if thinking_accumulated.strip():
-                                    full_text = thinking_accumulated.strip()
+                                if response_accumulated.strip():
+                                    full_text = response_accumulated.strip()
                                     text_split = full_text if len(full_text) <= 200 else f"{full_text[:200]}..."
                                     action = ActionHistory(
-                                        action_id=thinking_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
+                                        action_id=response_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
                                         role=ActionRole.ASSISTANT,
                                         messages=f"Thinking: {text_split}",
                                         action_type="response",
                                         input={},
-                                        output={"raw_output": full_text, "is_thinking": len(temp_tool_calls) > 0},
+                                        output={
+                                            "raw_output": full_text,
+                                            "is_thinking": len(temp_tool_calls) > 0,
+                                            "content_type": "markdown",
+                                        },
                                         status=ActionStatus.SUCCESS,
                                     )
                                     action_history_manager.add_action(action)
                                     yield action
                                     early_assistant_yielded = True
-                                thinking_stream_id = None
-                                thinking_accumulated = ""
+                                response_stream_id = None
+                                response_accumulated = ""
                                 continue
 
                             # Fallback: response.output_item.done type="message"
@@ -659,7 +715,10 @@ class CodexModel(LLMBaseModel):
                                                 messages=full_text[:200] + ("..." if len(full_text) > 200 else ""),
                                                 action_type="response",
                                                 input={},
-                                                output={"raw_output": full_text},
+                                                output={
+                                                    "raw_output": full_text,
+                                                    "content_type": "markdown",
+                                                },
                                                 status=ActionStatus.SUCCESS,
                                             )
                                             action_history_manager.add_action(action)
@@ -782,6 +841,13 @@ class CodexModel(LLMBaseModel):
                                 )
                                 action_history_manager.add_action(action)
                                 yield action
+                                if tool_name == "task":
+                                    completed_task_call_ids.add(call_id)
+
+                if graceful_interrupt_requested:
+                    from datus.cli.execution_state import ExecutionInterrupted
+
+                    raise ExecutionInterrupted("Interrupted by user")
 
             except MaxTurnsExceeded as e:
                 raise DatusException(ErrorCode.MODEL_MAX_TURNS_EXCEEDED, message_args={"max_turns": max_turns}) from e

@@ -322,7 +322,7 @@ def _is_plain_assistant_response(action: ActionHistory) -> bool:
     if action.action_type != "response":
         return False
     output = action.output if isinstance(action.output, dict) else {}
-    return output.get("is_thinking") is False
+    return output.get("content_type") == "markdown" or output.get("is_thinking") is False
 
 
 def _build_thinking_content(action: ActionHistory) -> Optional[List[IMessageContent]]:
@@ -374,7 +374,11 @@ def _build_error_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for failed action event, extracting error from BaseResult format."""
     output = action.output if isinstance(action.output, dict) else {}
     error_message = output.get("error") or action.messages or "Unknown error"
-    return [IMessageContent(type="error", payload={"content": error_message})]
+    payload = {"content": error_message}
+    error_type = output.get("error_type")
+    if error_type:
+        payload["error_type"] = str(error_type)
+    return [IMessageContent(type="error", payload=payload)]
 
 
 def _build_interaction_content(action: ActionHistory) -> List[IMessageContent]:
@@ -602,14 +606,15 @@ def action_to_sse_event(
         if action.action_type == "compact_progress":
             return None  # REPL-only in-progress hint; not surfaced over SSE
 
-        if action.action_type == "thinking_delta":
+        if action.action_type in {"thinking_delta", "response_delta"}:
             if not stream_thinking:
                 return None
             output = action.output if isinstance(action.output, dict) else {}
             delta_text = output.get("delta", "")
             if not is_first_delta:
                 sse_type = SSEDataType.APPEND_MESSAGE
-            contents = [IMessageContent(type="thinking", payload={"content": delta_text})]
+            content_type = "thinking" if action.action_type == "thinking_delta" else "markdown"
+            contents = [IMessageContent(type=content_type, payload={"content": delta_text})]
         elif action.action_type == "finalize_progress":
             # Visual-artifact finalize streams 3 stage transitions through
             # a single bubble. All 3 actions share an action_id (= wire

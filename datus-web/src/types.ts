@@ -15,6 +15,7 @@ export type ChatStreamPhase =
   | "idle"
   | "submitting"
   | "connected"
+  | "preparing_response"
   | "responding"
   | "running_tool"
   | "awaiting_user"
@@ -26,7 +27,15 @@ export type ChatStreamActivity = {
   connectedAt: number | null;
   lastEventAt: number | null;
   lastContentAt: number | null;
-  activeOperation?: string;
+  activeTools: Readonly<Record<string, ChatToolActivity>>;
+  toolCallCount: number;
+  toolCompletedCount: number;
+};
+
+export type ChatToolActivity = {
+  callToolId: string;
+  toolName: string;
+  startedAt: number;
 };
 
 export type MessageOperation = "createMessage" | "appendMessage" | "updateMessage";
@@ -49,6 +58,7 @@ export type ToolResultBlock = {
   duration?: number;
   shortDesc?: string;
   errorText?: string;
+  resultStatus?: "success" | "error";
   result?: unknown;
 };
 export type ToolExecutionBlock = {
@@ -59,6 +69,7 @@ export type ToolExecutionBlock = {
   duration?: number;
   shortDesc?: string;
   errorText?: string;
+  resultStatus?: "success" | "error";
   result?: unknown;
   childMessages?: readonly ToolChildMessage[];
 };
@@ -67,8 +78,8 @@ export type ChatErrorBlock = {
   type: "error";
   title: string;
   message: string;
+  tone?: "error" | "warning" | "info";
   code?: string;
-  detail?: string;
 };
 
 export type MessageBlock =
@@ -626,6 +637,8 @@ export type ArtifactManifest = {
   updated_at?: string;
   datasources?: string[];
   key_tables?: string[];
+  owner_user_id?: string | null;
+  owner_display_name?: string | null;
   can_manage_share?: boolean;
   can_edit?: boolean;
 };
@@ -789,18 +802,24 @@ export type AgentToolsData = {
 
 export type SuccessStoryInput = {
   session_id: string;
-  sql: string;
-  user_message: string;
-  subagent_id?: string;
+  call_tool_id: string;
   session_link?: string;
 };
 
 export type SuccessStoryResult = {
-  csv_path: string;
+  story_id: string;
+  created: boolean;
+  datasource_id: string;
   subagent_name: string;
+  storage_key: string;
   session_id: string;
-  session_link?: string;
   timestamp: string;
+};
+
+export type SuccessStorySource = {
+  sessionId: string;
+  callToolId: string;
+  sessionLink?: string;
 };
 
 // ─── Support-Only Legacy / Compatibility APIs ───────────────────────────────

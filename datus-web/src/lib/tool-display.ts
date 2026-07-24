@@ -118,6 +118,14 @@ export function isSqlExecutionTool(toolName: string) {
     normalized.endsWith(".execute_sql");
 }
 
+export function isSuccessStoryEligibleToolExecution(
+  toolName: string,
+  resultStatus: ToolResultStatus | undefined,
+  errorText?: string,
+) {
+  return !errorText && isSqlExecutionTool(toolName) && resultStatus === "success";
+}
+
 function tableFromColumnDefinitions(value: unknown): ToolTable | null {
   const columns = columnDefinitionRows(value);
   if (!columns || columns.length === 0) return null;

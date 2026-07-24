@@ -3,6 +3,7 @@ import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
 import { tableApi } from "@/lib/api";
+import { HttpError } from "@/lib/request";
 import type { SemanticModelValidation, TableDetail } from "@/types";
 
 function firstTableNameFromCatalogEntry(entry: Record<string, unknown>): string {
@@ -22,6 +23,40 @@ interface SemanticWorkbenchOptions {
   currentDatasource?: () => string | null | undefined;
 }
 
+type TableLoadResource = "表结构" | "语义模型";
+
+interface TableLoadFailure {
+  resource: TableLoadResource;
+  error: unknown;
+}
+
+function isAuthenticationFailure(error: unknown): boolean {
+  return error instanceof HttpError && error.status === 401;
+}
+
+function isRequestTimeout(error: unknown): boolean {
+  if (error instanceof Error) return error.name === "AbortError";
+  if (typeof error !== "object" || error === null || !("name" in error)) return false;
+  return (error as { name?: unknown }).name === "AbortError";
+}
+
+function tableLoadFailureMessage(failures: readonly TableLoadFailure[]): string | null {
+  const visibleFailures = failures.filter(({ error }) => !isAuthenticationFailure(error));
+  if (visibleFailures.length === 0) return null;
+
+  if (visibleFailures.length > 1) {
+    return visibleFailures.every(({ error }) => isRequestTimeout(error))
+      ? "加载表结构和语义模型超时，请稍后重试"
+      : "加载表结构和语义模型失败";
+  }
+
+  const [failure] = visibleFailures;
+  if (!failure) return null;
+  return isRequestTimeout(failure.error)
+    ? `加载${failure.resource}超时，请稍后重试`
+    : `加载${failure.resource}失败`;
+}
+
 export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
   const connection = useConnection();
 
@@ -31,10 +66,16 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
   const tableName = shallowRef("");
   const tableDetail = ref<TableDetail | null>(null);
   const semanticYaml = shallowRef("");
+  const originalSemanticYaml = shallowRef("");
+  const validatedSemanticYaml = shallowRef<string | null>(null);
   const validation = ref<SemanticModelValidation | null>(null);
   let tableLoadRequestId = 0;
 
   const semanticInvalidMessages = computed(() => validation.value?.invalid_message ?? []);
+  const isSemanticDirty = computed(() => semanticYaml.value !== originalSemanticYaml.value);
+  const isValidationCurrent = computed(() =>
+    validation.value !== null && validatedSemanticYaml.value === semanticYaml.value,
+  );
   const canLoadTable = computed(() => tableName.value.trim().length > 0);
 
   async function loadTableDetails(name = tableName.value) {
@@ -47,22 +88,38 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     tableName.value = target;
     loadingTable.value = true;
     validation.value = null;
+    validatedSemanticYaml.value = null;
     const requestId = ++tableLoadRequestId;
     const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
-      const [detail, semantic] = await Promise.all([
+      const [detailResult, semanticResult] = await Promise.allSettled([
         tableApi.detail(connection.effectiveBase(), target, datasourceId),
         tableApi.getSemanticModel(connection.effectiveBase(), target, datasourceId),
       ]);
-      if (requestId === tableLoadRequestId) {
-        tableDetail.value = detail?.table ?? null;
-        semanticYaml.value = semantic?.yaml ?? "";
+      if (requestId !== tableLoadRequestId) return;
+
+      const failures: TableLoadFailure[] = [];
+      if (detailResult.status === "fulfilled") {
+        tableDetail.value = detailResult.value?.table ?? null;
+      } else {
+        tableDetail.value = null;
+        failures.push({ resource: "表结构", error: detailResult.reason });
+        console.error(`加载表结构失败 (${datasourceId ?? "default"}:${target}):`, detailResult.reason);
       }
-    } catch (error) {
-      if (requestId === tableLoadRequestId) {
-        console.error("加载语义模型失败:", error);
-        toast.error("加载语义模型失败");
+
+      if (semanticResult.status === "fulfilled") {
+        const loadedYaml = semanticResult.value?.yaml ?? "";
+        semanticYaml.value = loadedYaml;
+        originalSemanticYaml.value = loadedYaml;
+      } else {
+        semanticYaml.value = "";
+        originalSemanticYaml.value = "";
+        failures.push({ resource: "语义模型", error: semanticResult.reason });
+        console.error(`加载语义模型失败 (${datasourceId ?? "default"}:${target}):`, semanticResult.reason);
       }
+
+      const failureMessage = tableLoadFailureMessage(failures);
+      if (failureMessage) toast.error(failureMessage);
     } finally {
       if (requestId === tableLoadRequestId) {
         loadingTable.value = false;
@@ -78,14 +135,16 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     }
 
     validating.value = true;
+    const yamlToValidate = semanticYaml.value;
     const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
       validation.value = await tableApi.validateSemanticModel(
         connection.effectiveBase(),
         target,
-        semanticYaml.value,
+        yamlToValidate,
         datasourceId,
       );
+      validatedSemanticYaml.value = validation.value ? yamlToValidate : null;
       toast.success(validation.value?.valid ? "语义模型校验通过" : "语义模型校验未通过");
     } catch (error) {
       console.error("校验语义模型失败:", error);
@@ -135,6 +194,8 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     semanticYaml,
     validation: readonly(validation),
     semanticInvalidMessages,
+    isSemanticDirty,
+    isValidationCurrent,
     canLoadTable,
     loadTableDetails,
     validateSemanticModel,

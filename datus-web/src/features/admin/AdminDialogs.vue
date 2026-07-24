@@ -20,6 +20,11 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input"
 import { adminDatasourceLabel } from "@/lib/datasource-display"
 import {
+  adminSessionBodyStateLabel,
+  adminSessionStatusDescription,
+  adminSessionStatusLabel,
+} from "@/lib/admin-session"
+import {
   Select,
   SelectContent,
   SelectGroup,
@@ -29,9 +34,8 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
-import AdminRoleDropdown from "@/features/admin/AdminRoleDropdown.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 import { usePermission } from "@/composables/usePermission"
 import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
 import { userDisableBlockedReason } from "@/features/admin/user-disable-guard"
@@ -533,7 +537,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
     :open="overview.showSessionDetailDialog.value"
     @update:open="setSessionDetailDialogOpen"
   >
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>会话详情</DialogTitle>
         <DialogDescription>
@@ -568,34 +572,42 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         <div class="rounded-md border p-3">
           <div class="text-xs text-muted-foreground">状态</div>
           <Badge :variant="overview.selectedSessionDetail.value.is_running ? 'default' : 'secondary'">
-            {{ overview.selectedSessionDetail.value.status }}
+            {{ adminSessionStatusLabel(overview.selectedSessionDetail.value.status) }}
           </Badge>
-        </div>
-        <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">磁盘记录</div>
-          <div class="font-medium">
-            {{ overview.selectedSessionDetail.value.exists_on_disk ? "存在" : "缺失或未知" }}
+          <div class="mt-1 text-xs text-muted-foreground">
+            {{ adminSessionStatusDescription(overview.selectedSessionDetail.value.status) }}
           </div>
         </div>
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">事件数</div>
+          <div class="text-xs text-muted-foreground">会话正文</div>
+          <div class="font-medium">
+            {{ adminSessionBodyStateLabel(overview.selectedSessionDetail.value.exists_on_disk) }}
+          </div>
+          <div class="mt-1 text-xs text-muted-foreground">检查用户作用域下的正文存储或本地会话文件。</div>
+        </div>
+        <div class="rounded-md border p-3">
+          <div class="text-xs text-muted-foreground">缓冲事件</div>
           <div class="font-medium">{{ overview.selectedSessionDetail.value.event_count }}</div>
+          <div class="mt-1 text-xs text-muted-foreground">当前进程仍保留的 SSE 原始事件，不是消息数。</div>
         </div>
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">消费偏移</div>
+          <div class="text-xs text-muted-foreground">SSE 消费游标</div>
           <div class="font-medium">{{ overview.selectedSessionDetail.value.consumer_offset }}</div>
+          <div class="mt-1 text-xs text-muted-foreground">用于断线续传的进程内游标，不是客户端确认值。</div>
         </div>
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">创建时间</div>
+          <div class="text-xs text-muted-foreground">记录创建时间</div>
           <div class="font-medium">{{ formatOptionalDate(overview.selectedSessionDetail.value.created_at) }}</div>
         </div>
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">更新时间</div>
+          <div class="text-xs text-muted-foreground">记录更新时间</div>
           <div class="font-medium">{{ formatOptionalDate(overview.selectedSessionDetail.value.updated_at) }}</div>
+          <div class="mt-1 text-xs text-muted-foreground">所有者索引最近一次写入时间，不代表每条消息活动。</div>
         </div>
         <div class="rounded-md border p-3 md:col-span-2">
-          <div class="text-xs text-muted-foreground">错误</div>
+          <div class="text-xs text-muted-foreground">本次运行错误</div>
           <pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">{{ overview.selectedSessionDetail.value.error || "-" }}</pre>
+          <div class="mt-1 text-xs text-muted-foreground">仅当前 API 进程的断线恢复窗口内可用，不是持久化错误历史。</div>
         </div>
       </div>
 
@@ -717,12 +729,14 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
           >
             {{ users.roleAssignmentError.value }}
           </div>
-          <AdminRoleDropdown
+          <SearchableMultiSelect
             v-else-if="users.roleOptions.value.length"
             :options="users.roleOptions.value"
             :selected-values="users.selectedRoleIds.value"
             placeholder="选择用户角色"
+            search-placeholder="搜索角色..."
             empty-text="未分配角色"
+            no-results-text="没有匹配角色"
             @toggle="users.toggleSelectedRole"
           />
           <p
@@ -1573,7 +1587,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         </Field>
         <Field>
           <FieldLabel>允许角色</FieldLabel>
-          <AdminAclMultiCombobox
+          <SearchableMultiSelect
             :options="artifactRoleOptions"
             :selected-values="overview.artifactAclForm.value.allowed_roles"
             placeholder="选择角色"
@@ -1585,7 +1599,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         </Field>
         <Field>
           <FieldLabel>允许用户</FieldLabel>
-          <AdminAclMultiCombobox
+          <SearchableMultiSelect
             :options="artifactUserOptions"
             :selected-values="overview.artifactAclForm.value.allowed_user_ids"
             placeholder="选择用户"

@@ -23,12 +23,12 @@ const ROLE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function roleSaveFailureMessage(result: BackendFailure): string {
   if (result.errorCode === "ROLE_PERMISSION_FORBIDDEN") return "不能授予自己尚未拥有的权限";
-  return result.errorMessage || "保存失败，请重试";
+  return "保存失败，请重试";
 }
 
 function roleDeleteFailureMessage(result: BackendFailure): string {
   if (result.errorCode === "ROLE_DELETE_FORBIDDEN") return "角色仍是系统内置角色或已分配给用户，不能删除";
-  return result.errorMessage || "删除失败，请重试";
+  return "删除失败，请重试";
 }
 
 export function useRoleManager() {

@@ -6,6 +6,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pyarrow as pa
 import pytest
 
 from datus.tools.db_tools import BaseSqlConnector, connector_registry
@@ -53,6 +54,10 @@ class FakeRecordBatch:
 
     def __init__(self, rows):
         self._rows = rows
+
+    @property
+    def column_names(self):
+        return list(self._rows[0]) if self._rows else []
 
     def select(self, fields):
         selected = [{field: row.get(field) for field in fields} for row in self._rows]
@@ -1561,6 +1566,55 @@ class TestDBFuncToolIntegration:
         assert isinstance(samples, dict)
         assert samples["original_rows"] == 1
         assert "sample_rows" in samples["compressed_data"]
+
+    def test_search_table_accepts_results_without_distance(self, db_func_tool):
+        """Relational vector backends may omit the optional similarity score."""
+        db_func_tool.has_schema = True
+        db_func_tool.schema_rag = Mock()
+        metadata = self._build_metadata_batch().to_pylist()
+        samples = self._build_sample_batch().to_pylist()
+        metadata[0].pop("_distance")
+        samples[0].pop("_distance")
+        db_func_tool.schema_rag.search_similar.return_value = (
+            pa.Table.from_pylist(metadata),
+            pa.Table.from_pylist(samples),
+        )
+
+        result = db_func_tool.search_table("orders table")
+
+        assert result.success == 1
+        assert result.result["metadata"][0]["table_name"] == "orders"
+        assert "_distance" not in result.result["metadata"][0]
+        assert result.result["sample_data"]["original_rows"] == 1
+
+    def test_search_table_returns_success_for_empty_arrow_results(self, db_func_tool):
+        """An empty semantic search is a valid result even without a distance column."""
+        db_func_tool.has_schema = True
+        db_func_tool.schema_rag = Mock()
+        db_func_tool.schema_rag.search_similar.return_value = (
+            pa.table(
+                {
+                    "catalog_name": pa.array([], type=pa.string()),
+                    "database_name": pa.array([], type=pa.string()),
+                    "schema_name": pa.array([], type=pa.string()),
+                    "table_name": pa.array([], type=pa.string()),
+                    "table_type": pa.array([], type=pa.string()),
+                    "identifier": pa.array([], type=pa.string()),
+                }
+            ),
+            pa.table(
+                {
+                    "identifier": pa.array([], type=pa.string()),
+                    "table_type": pa.array([], type=pa.string()),
+                    "sample_rows": pa.array([], type=pa.string()),
+                }
+            ),
+        )
+
+        result = db_func_tool.search_table("missing table")
+
+        assert result.success == 1
+        assert result.result == {"metadata": [], "sample_data": []}
 
     def test_search_table_enriches_semantic_model(self, db_func_tool):
         """When semantic models exist, metadata rows should include enriched context."""

@@ -39,6 +39,11 @@ class FailingAuditSink:
         raise RuntimeError("audit down")
 
 
+class FailingUserStore:
+    async def get_user(self, user_id: str):  # noqa: ARG002
+        raise RuntimeError("user store down")
+
+
 class MemoryArtifactAclStore:
     def __init__(self, initial=None):
         self.acls = dict(initial or {})
@@ -359,6 +364,8 @@ async def test_dashboard_list_grants_edit_capability_to_owner_with_dashboard_edi
         user_id="owner-1",
         permissions={"module.dashboard.view", "module.dashboard.edit"},
     )
+    user_store = InMemoryEnterpriseUserStore()
+    await user_store.upsert_user(user_id="owner-1", display_name="Owner User")
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -369,6 +376,7 @@ async def test_dashboard_list_grants_edit_capability_to_owner_with_dashboard_edi
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
             artifact_acl_store=store,
+            user_store=user_store,
         ),
     )
 
@@ -376,8 +384,49 @@ async def test_dashboard_list_grants_edit_capability_to_owner_with_dashboard_edi
 
     assert result.success is True
     assert len(result.data) == 1
+    assert result.data[0].owner_user_id == "owner-1"
+    assert result.data[0].owner_display_name == "Owner User"
     assert result.data[0].can_manage_share is True
     assert result.data[0].can_edit is True
+
+
+@pytest.mark.asyncio
+async def test_dashboard_list_keeps_owner_id_when_user_lookup_fails(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="owner-1", permissions={"module.dashboard.view"})
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+            user_store=FailingUserStore(),
+        ),
+    )
+
+    result = await artifact_routes.list_dashboards(_svc(tmp_path), ctx)
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert result.data[0].owner_user_id == "owner-1"
+    assert result.data[0].owner_display_name is None
+    assert result.data[0].can_manage_share is True
+    assert result.data[0].can_edit is False
 
 
 def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: Path):

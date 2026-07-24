@@ -21,7 +21,7 @@ from datus.api.services.chat_task_manager import (
     ChatTaskManager,
     _coalesce_deltas,
     _fill_database_context,
-    _is_thinking_delta,
+    _is_stream_delta,
     _should_include_final_response,
 )
 
@@ -81,6 +81,9 @@ class TestChatTaskInit:
         assert task.error is None
         assert task.consumer_offset == 0
         assert isinstance(task.created_at, datetime)
+        assert task.session_established is False
+        assert task.terminal_event_persisted is False
+        assert task.stop_requested is False
 
 
 class TestChatTaskManagerInit:
@@ -204,6 +207,16 @@ class TestApplyPermissionModeOverride:
         node = self._make_node(current_profile="normal")
         manager._apply_permission_mode_override(node, self._make_agent_config(), "auto")
         node.permission_manager.switch_profile.assert_called_once_with("auto", user_overrides=None)
+
+    def test_legacy_agent_permission_ceiling_does_not_clamp_request_profile(self):
+        """Persisted pre-migration runtime policy must not override an authorized request."""
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="normal")
+        node.node_config = {"runtime_policy": {"max_permission_mode": "normal"}}
+
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "dangerous")
+
+        node.permission_manager.switch_profile.assert_called_once_with("dangerous", user_overrides=None)
 
     def test_switches_profile_with_user_overrides(self):
         """Non-empty _raw_permissions yields a built user_overrides config."""
@@ -427,6 +440,167 @@ class TestChatTaskManagerBehavior:
         assert isinstance(called_node, FakeNode)
         assert called_patterns == ["write_file", "edit_file", "delete_file"]
         assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_established_stream_error_is_durable_in_fresh_history(self, real_agent_config):
+        """A terminal SSE error must survive destruction of in-memory task state."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+
+        session_id = "durable-terminal-error"
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class FailingNode:
+            session_id = "llm-durable-terminal-error"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                if False:
+                    yield None
+                raise RuntimeError("provider stream failed")
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: FailingNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="hello", session_id=session_id),
+        )
+
+        live_error = next(event for event in task.events if event.event == "error")
+        assert live_error.data.error_type == "RuntimeError"
+        assert live_error.data.error == "provider stream failed"
+
+        history_service = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        )
+        history = history_service.get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["error_type"] == live_error.data.error_type
+        assert history_error.payload["error"] == live_error.data.error
+
+        sdk_items = await SessionManager(session_dir=real_agent_config.session_dir).get_session(session_id).get_items()
+        assert sdk_items == []
+
+    @pytest.mark.asyncio
+    async def test_permission_denial_action_is_durable_with_stable_error_type(self, real_agent_config):
+        """Expected tool-policy denials retain their safe detail and stable code."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        session_id = "durable-permission-denial"
+        error = (
+            "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
+            "write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。"
+            "请联系管理员核对该 Agent 的工具策略。"
+        )
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class PermissionDeniedNode:
+            session_id = "llm-durable-permission-denial"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield ActionHistory(
+                    action_id="permission-denied-action",
+                    role=ActionRole.ASSISTANT,
+                    action_type="error",
+                    messages=f"chat interaction failed: {error}",
+                    input={},
+                    output={"success": False, "error": error, "error_type": "PERMISSION_DENIED"},
+                    status=ActionStatus.FAILED,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: PermissionDeniedNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="create a file", session_id=session_id),
+        )
+
+        assert task.status == "error"
+        history = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        ).get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["error_type"] == "PERMISSION_DENIED"
+        assert history_error.payload["error"] == error
+
+    @pytest.mark.asyncio
+    async def test_interrupted_action_is_durable_in_fresh_history(self, real_agent_config):
+        """A graceful user stop is restored as a cancelled terminal block."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services.chat_service import ChatService
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        session_id = "durable-terminal-cancelled"
+        SessionManager(session_dir=real_agent_config.session_dir).create_session(session_id)
+
+        class InterruptedNode:
+            session_id = "llm-durable-terminal-cancelled"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield ActionHistory(
+                    action_id="interrupted-action",
+                    role=ActionRole.ASSISTANT,
+                    action_type="interrupted",
+                    messages="Execution interrupted by user",
+                    input={},
+                    output=None,
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: InterruptedNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="hello", session_id=session_id),
+        )
+
+        assert task.status == "cancelled"
+        history = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="test-proj",
+        ).get_history(session_id)
+        history_error = next(
+            content for message in history.data.messages for content in message.content if content.type == "error"
+        )
+        assert history_error.payload["event_type"] == "cancelled"
+        assert history_error.payload["error_type"] == "CHAT_CANCELLED"
 
     def test_include_final_response_rejects_nested_subagent_response(self):
         """Depth>0 sub-agent wrappers must not render as top-level answers."""
@@ -869,6 +1043,22 @@ class TestStartChat:
         mock_node.interrupt_controller.interrupt.assert_called_once()
         await manager.shutdown()
 
+    async def test_stop_established_task_waits_for_graceful_interrupt(self):
+        """Established tasks get a chance to emit their durable interrupted action."""
+        manager = ChatTaskManager()
+        interrupted = asyncio.Event()
+        running = asyncio.create_task(interrupted.wait())
+        task = ChatTask(session_id="graceful-stop", asyncio_task=running)
+        task.session_established = True
+        task.node = MagicMock()
+        task.node.interrupt_controller.interrupt.side_effect = interrupted.set
+        manager._tasks[task.session_id] = task
+
+        assert await manager.stop_task(task.session_id) is True
+        assert running.done() is True
+        assert running.cancelled() is False
+        task.node.interrupt_controller.interrupt.assert_called_once()
+
     async def test_wait_all_tasks_with_running(self, real_agent_config, mock_llm_create):
         """wait_all_tasks waits for running tasks without cancelling."""
         from datus.api.models.cli_models import StreamChatInput
@@ -1263,7 +1453,7 @@ def _make_thinking_delta(event_id: int, text: str, message_id: str = "m1", data_
 
 
 def _make_markdown_event(event_id: int, text: str, message_id: str = "m1"):
-    """Create a non-delta markdown message SSEEvent."""
+    """Create a markdown-delta SSEEvent."""
     return SSEEvent(
         id=event_id,
         event="message",
@@ -1284,27 +1474,27 @@ def _make_ping_event(event_id: int = -1):
 
 
 # ---------------------------------------------------------------------------
-# _is_thinking_delta tests
+# _is_stream_delta tests
 # ---------------------------------------------------------------------------
 
 
-class TestIsThinkingDelta:
-    """Tests for _is_thinking_delta identification."""
+class TestIsStreamDelta:
+    """Tests for streamed text-delta identification."""
 
     def test_positive_append(self):
         """Correctly identifies APPEND_MESSAGE thinking delta."""
         ev = _make_thinking_delta(0, "hello")
-        assert _is_thinking_delta(ev) is True
+        assert _is_stream_delta(ev) is True
 
     def test_positive_create(self):
         """Correctly identifies CREATE_MESSAGE thinking delta."""
         ev = _make_thinking_delta(0, "hello", data_type=SSEDataType.CREATE_MESSAGE)
-        assert _is_thinking_delta(ev) is True
+        assert _is_stream_delta(ev) is True
 
-    def test_negative_markdown(self):
-        """Markdown content is not a thinking delta."""
+    def test_positive_markdown(self):
+        """Markdown response chunks are stream deltas too."""
         ev = _make_markdown_event(0, "hello")
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is True
 
     def test_negative_update_message(self):
         """UPDATE_MESSAGE is not a thinking delta."""
@@ -1321,12 +1511,12 @@ class TestIsThinkingDelta:
             ),
             timestamp="t",
         )
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
     def test_negative_ping_event(self):
         """Ping event is not a thinking delta."""
         ev = _make_ping_event()
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
     def test_negative_empty_content(self):
         """Empty content list is not a thinking delta."""
@@ -1339,7 +1529,7 @@ class TestIsThinkingDelta:
             ),
             timestamp="t",
         )
-        assert _is_thinking_delta(ev) is False
+        assert _is_stream_delta(ev) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1372,8 +1562,8 @@ class TestCoalesceDeltas:
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "part0part1part2"
 
-    def test_preserves_non_delta(self):
-        """Non-delta events pass through unchanged."""
+    def test_preserves_single_markdown_delta_and_non_delta(self):
+        """A lone markdown delta and a ping pass through unchanged."""
         md = _make_markdown_event(0, "hello")
         ping = _make_ping_event(1)
         result = _coalesce_deltas([md, ping])
@@ -1381,8 +1571,8 @@ class TestCoalesceDeltas:
         assert result[0] is md
         assert result[1] is ping
 
-    def test_mixed_sequence(self):
-        """delta + non-delta + delta → 3 events (non-delta breaks run)."""
+    def test_mixed_presentations_are_not_merged(self):
+        """Thinking and markdown runs remain separate even with one message id."""
         d1 = _make_thinking_delta(0, "a")
         md = _make_markdown_event(1, "break")
         d2 = _make_thinking_delta(2, "b")
@@ -1395,9 +1585,9 @@ class TestCoalesceDeltas:
         # Third is the lone delta (unchanged)
         assert result[2] is d2
 
-    def test_trailing_delta_run(self):
-        """Non-delta followed by multiple deltas → 2 events."""
-        md = _make_markdown_event(0, "start")
+    def test_markdown_run_followed_by_thinking_run(self):
+        """Markdown and thinking deltas form separate coalesced runs."""
+        md = _make_markdown_event(0, "start", message_id="answer")
         d1 = _make_thinking_delta(1, "x")
         d2 = _make_thinking_delta(2, "y")
         result = _coalesce_deltas([md, d1, d2])

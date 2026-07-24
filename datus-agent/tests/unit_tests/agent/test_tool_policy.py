@@ -7,7 +7,6 @@ from datus.agent.tool_policy import (
     include_bound_mcp_servers,
     normalize_runtime_policy,
     normalize_tool_policy,
-    permission_mode_exceeds,
 )
 from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel
 from datus.tools.registry.tool_registry import ToolRegistry
@@ -41,7 +40,7 @@ def test_allowlist_prunes_visible_tools_and_adds_call_time_denies():
             "allowed": ["filesystem_tools.read_file"],
             "denied": ["filesystem_tools.write_file", "bash_tools.*"],
         },
-        runtime_policy={"max_permission_mode": "normal", "allow_subagent_delegation": False},
+        runtime_policy={"allow_subagent_delegation": False},
     )
 
     apply_agent_runtime_policy(node)
@@ -65,7 +64,6 @@ def test_runtime_policy_can_limit_delegation_to_explicit_agents():
     node = _node(
         tool_policy={"mode": "inherit"},
         runtime_policy={
-            "max_permission_mode": "auto",
             "allow_subagent_delegation": True,
             "allowed_subagents": ["safe_sql"],
         },
@@ -91,12 +89,21 @@ def test_bound_mcp_servers_are_added_to_allowlist_and_denies_still_win():
     assert set(node.mcp_servers) == {"remote"}
 
 
-def test_policy_normalization_and_permission_ceiling_fail_closed():
+def test_policy_normalization_ignores_legacy_permission_ceiling():
     assert normalize_tool_policy(None) == {"mode": "inherit", "allowed": [], "denied": []}
-    assert normalize_runtime_policy(None)["max_permission_mode"] == "normal"
-    assert permission_mode_exceeds("dangerous", "normal") is True
-    assert permission_mode_exceeds("normal", "auto") is False
+    assert normalize_runtime_policy(None) == {
+        "allow_subagent_delegation": False,
+        "allowed_subagents": [],
+    }
+    assert normalize_runtime_policy(
+        {
+            "max_permission_mode": "dangerous",
+            "allow_subagent_delegation": True,
+            "allowed_subagents": ["safe_sql"],
+        }
+    ) == {
+        "allow_subagent_delegation": True,
+        "allowed_subagents": ["safe_sql"],
+    }
     with pytest.raises(ValueError):
         normalize_tool_policy({"mode": "unknown"})
-    with pytest.raises(ValueError):
-        normalize_runtime_policy({"max_permission_mode": "root"})

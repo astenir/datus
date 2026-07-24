@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { EyeIcon, FilePenLineIcon, Share2Icon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ArtifactDetail } from "@/composables/useArtifacts"
+import ArtifactDetailOverview from "@/features/artifacts/ArtifactDetailOverview.vue"
 import DashboardTemplateRunner from "@/features/artifacts/DashboardTemplateRunner.vue"
 import type { DashboardDetail, SqlQueryResultEnvelope } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
@@ -16,11 +14,6 @@ const props = defineProps<{
   detail: ArtifactDetail | null
   loading: boolean
   error: string | null
-  previewOpening: boolean
-  shareLoading: boolean
-  canManageShare: boolean
-  canEdit: boolean
-  editLoading: boolean
   queryResult: SqlQueryResultEnvelope | null
   queryLoading: boolean
   queryError: string | null
@@ -28,9 +21,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  openPreview: []
-  share: []
-  edit: []
   runDashboardQuery: [querySlug: string, params: Record<string, unknown>]
 }>()
 
@@ -38,27 +28,11 @@ function isDashboardDetail(detail: ArtifactDetail | null): detail is DashboardDe
   return Boolean(detail && "templates" in detail)
 }
 
-function formatOptionalDate(value: string | null | undefined) {
-  if (!value) return "-"
-  return new Date(value.endsWith("Z") ? value : `${value}Z`).toLocaleString("zh-CN", {
-    hour12: false,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
 function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
   emit("runDashboardQuery", querySlug, params)
 }
 
 const kindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘")
-const manifest = computed(() => props.detail?.manifest ?? null)
-const datasources = computed(() => manifest.value?.datasources ?? [])
-const keyTables = computed(() => manifest.value?.key_tables ?? [])
-const files = computed(() => props.detail?.files ?? [])
-const visibleFiles = computed(() => files.value.slice(0, 5))
 const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.templates ?? [] : [])
 </script>
 
@@ -89,120 +63,35 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
 
     <div
       v-else
-      class="flex flex-col gap-4"
+      class="min-w-0"
     >
-      <div class="flex flex-col gap-1">
-        <h2 class="text-sm font-semibold">{{ props.detail.name }}</h2>
-        <p class="text-sm leading-6 text-muted-foreground">{{ props.detail.description }}</p>
-      </div>
-
-      <div class="grid gap-2 text-sm">
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-muted-foreground">创建时间</span>
-          <span class="font-medium">{{ formatOptionalDate(props.detail.created_at) }}</span>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-muted-foreground">文件</span>
-          <span class="font-medium">{{ files.length }}</span>
-        </div>
-        <div
-          v-if="props.tab === 'dashboard'"
-          class="flex items-center justify-between gap-3"
-        >
-          <span class="text-muted-foreground">查询模板</span>
-          <span class="font-medium">{{ templates.length }}</span>
-        </div>
-      </div>
-
       <div
-        v-if="datasources.length > 0"
-        class="flex flex-col gap-2"
-      >
-        <div class="text-xs font-medium text-muted-foreground">数据源</div>
-        <div class="flex flex-wrap gap-1.5">
-          <Badge
-            v-for="datasource in datasources"
-            :key="datasource"
-            variant="secondary"
-          >
-            {{ datasource }}
-          </Badge>
-        </div>
-      </div>
-
-      <div
-        v-if="keyTables.length > 0"
-        class="flex flex-col gap-2"
-      >
-        <div class="text-xs font-medium text-muted-foreground">关键表</div>
-        <div class="flex flex-wrap gap-1.5">
-          <Badge
-            v-for="table in keyTables"
-            :key="table"
-            variant="outline"
-          >
-            {{ table }}
-          </Badge>
-        </div>
-      </div>
-
-      <div
-        v-if="visibleFiles.length > 0"
-        class="flex flex-col gap-2"
-      >
-        <div class="text-xs font-medium text-muted-foreground">文件</div>
-        <div class="flex flex-col gap-1 rounded-md border p-2">
-          <div
-            v-for="file in visibleFiles"
-            :key="file.path"
-            class="truncate font-mono text-xs"
-          >
-            {{ file.path }}
-          </div>
-        </div>
-      </div>
-
-      <DashboardTemplateRunner
         v-if="props.tab === 'dashboard'"
-        :templates="templates ?? []"
-        :result="props.queryResult"
-        :loading="props.queryLoading"
-        :error="props.queryError"
-        :active-slug="props.activeQuerySlug"
-        @run="runDashboardQuery"
-      />
+        class="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start"
+      >
+        <ArtifactDetailOverview
+          class="lg:col-start-2 lg:row-start-1"
+          :tab="props.tab"
+          :detail="props.detail"
+          compact
+        />
 
-      <div class="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="props.previewOpening"
-          @click="emit('openPreview')"
-        >
-          <EyeIcon data-icon="inline-start" />
-          {{ props.previewOpening ? "加载中" : "查看" }}
-        </Button>
-        <Button
-          v-if="props.canManageShare"
-          variant="outline"
-          size="sm"
-          :disabled="props.shareLoading"
-          @click="emit('share')"
-        >
-          <Share2Icon data-icon="inline-start" />
-          {{ props.shareLoading ? "加载中" : "分享设置" }}
-        </Button>
-        <Button
-          v-if="props.canEdit"
-          variant="outline"
-          size="sm"
-          :disabled="props.editLoading"
-          @click="emit('edit')"
-        >
-          <FilePenLineIcon data-icon="inline-start" />
-          {{ props.editLoading ? "创建中" : `编辑${kindLabel}` }}
-        </Button>
+        <DashboardTemplateRunner
+          class="min-w-0 lg:col-start-1 lg:row-start-1"
+          :templates="templates"
+          :result="props.queryResult"
+          :loading="props.queryLoading"
+          :error="props.queryError"
+          :active-slug="props.activeQuerySlug"
+          @run="runDashboardQuery"
+        />
       </div>
+
+      <ArtifactDetailOverview
+        v-else
+        :tab="props.tab"
+        :detail="props.detail"
+      />
     </div>
   </div>
 </template>

@@ -50,9 +50,11 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePermission } from "@/composables/usePermission"
+import AdminMobileRecord from "@/features/admin/AdminMobileRecord.vue"
 import type { AdminManagementTabProps } from "@/features/admin/types"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
+import { adminSessionStatusLabel } from "@/lib/admin-session"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 import type { AdminArtifact, AdminUser } from "@/types/admin"
 import type { AdminViewTab } from "@/features/workspace/types"
@@ -241,6 +243,7 @@ const filteredSessions = computed(() => {
       session.session_id,
       session.owner_user_id,
       session.status,
+      adminSessionStatusLabel(session.status),
       session.event_count,
     ])
   })
@@ -445,7 +448,66 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="user in filteredUsers"
+              :key="user.user_id"
+              :title="user.display_name || user.user_id"
+              :description="user.display_name ? user.user_id : user.email || undefined"
+            >
+              <template #status>
+                <Badge :variant="user.enabled ? 'default' : 'secondary'">
+                  {{ user.enabled ? "启用" : "禁用" }}
+                </Badge>
+              </template>
+              <span>{{ user.department || "未设置部门" }}</span>
+              <span>角色 {{ user.role_count }}</span>
+              <span>直接授权 {{ user.direct_datasource_grant_count }}</span>
+              <span>最近活跃 {{ formatOptionalDate(user.last_seen_at || user.updated_at || user.created_at) }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestUserDetail(user.user_id)"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  详情
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="users.openEditUserDialog(user)"
+                >
+                  <PencilIcon data-icon="inline-start" />
+                  编辑
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="Boolean(userDisableBlockedReason(user))"
+                  :title="userDisableBlockedReason(user) ?? undefined"
+                  @click="requestSetUserEnabled(user, !user.enabled)"
+                >
+                  <UserXIcon
+                    v-if="user.enabled"
+                    data-icon="inline-start"
+                  />
+                  <UserCheckIcon
+                    v-else
+                    data-icon="inline-start"
+                  />
+                  {{ user.enabled ? "禁用" : "启用" }}
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredUsers.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ users.users.value.length === 0 ? "暂无用户" : "没有匹配的用户" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>User ID</TableHead>
@@ -575,7 +637,56 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="role in filteredRoles"
+              :key="role.role_id"
+              :title="role.name"
+              :description="role.role_id"
+            >
+              <template #status>
+                <Badge :variant="role.built_in ? 'secondary' : 'outline'">
+                  {{ role.built_in ? "内置" : "自定义" }}
+                </Badge>
+              </template>
+              <span>权限 {{ role.permissions?.length || 0 }}</span>
+              <span>更新于 {{ formatOptionalDate(role.updated_at || role.created_at) }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestRoleDetail(role.role_id)"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  详情
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="roles.openEditDialog(role)"
+                >
+                  <PencilIcon data-icon="inline-start" />
+                  编辑
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="role.built_in"
+                  @click="roles.requestDeleteRole(role)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  删除
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredRoles.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ roles.roles.value.length === 0 ? "暂无角色" : "没有匹配的角色" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>Role ID</TableHead>
@@ -708,7 +819,48 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="grant in filteredGrants"
+              :key="grantKey(grant.subject_type, grant.subject_id, grant.datasource_key)"
+              :title="`${grant.subject_type} / ${grant.subject_id}`"
+              :description="grant.datasource_key"
+            >
+              <template #status>
+                <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">
+                  {{ grant.effect }}
+                </Badge>
+              </template>
+              <span class="break-all">范围 {{ formatScope(grant.scope) }}</span>
+              <span>更新于 {{ formatOptionalDate(grant.updated_at || grant.created_at) }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestGrantDetail(grant)"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  详情
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="overview.deletingGrantKey.value === grantKey(grant.subject_type, grant.subject_id, grant.datasource_key)"
+                  @click="overview.deleteGrant(grant)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  删除
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredGrants.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ overview.data.value.datasourceGrants.length === 0 ? "暂无数据授权" : "没有匹配的数据授权" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>主体</TableHead>
@@ -806,14 +958,64 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="session in filteredSessions"
+              :key="session.session_id"
+              :title="session.session_id"
+              :description="session.owner_user_id ? `所有者 ${session.owner_user_id}` : '未记录所有者'"
+            >
+              <template #status>
+                <Badge :variant="session.is_running ? 'default' : 'secondary'">
+                  {{ adminSessionStatusLabel(session.status) }}
+                </Badge>
+              </template>
+              <span>缓冲事件 {{ session.event_count }}</span>
+              <span>更新于 {{ formatOptionalDate(session.updated_at || session.created_at) }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestSessionDetail(session.session_id)"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  详情
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="!session.is_running || overview.actingSessionId.value === session.session_id"
+                  @click="overview.stopSession(session)"
+                >
+                  <SquareIcon data-icon="inline-start" />
+                  停止
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="overview.actingSessionId.value === session.session_id"
+                  @click="overview.deleteSession(session)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  删除
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredSessions.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ overview.data.value.sessions.length === 0 ? "暂无会话" : "没有匹配的会话" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>Session ID</TableHead>
                 <TableHead>所有者</TableHead>
                 <TableHead class="text-center">状态</TableHead>
-                <TableHead class="text-center">事件数</TableHead>
-                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="text-center">缓冲事件</TableHead>
+                <TableHead class="text-center">记录更新时间</TableHead>
                 <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -826,7 +1028,7 @@ function setPermittedActiveTab(value: unknown): void {
                 <TableCell>{{ session.owner_user_id || "-" }}</TableCell>
                 <TableCell class="text-center">
                   <Badge :variant="session.is_running ? 'default' : 'secondary'">
-                    {{ session.status }}
+                    {{ adminSessionStatusLabel(session.status) }}
                   </Badge>
                 </TableCell>
                 <TableCell class="text-center">{{ session.event_count }}</TableCell>
@@ -921,7 +1123,49 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="quota in filteredQuotas"
+              :key="`${quota.subject_type}:${quota.subject_id}:${quota.resource}`"
+              :title="`${quota.subject_type} / ${quota.subject_id || '*'}`"
+              :description="quota.resource"
+            >
+              <template #status>
+                <Badge :variant="quota.enabled ? 'default' : 'secondary'">
+                  {{ quota.enabled ? "启用" : "停用" }}
+                </Badge>
+              </template>
+              <span>额度 {{ quota.limit }}</span>
+              <span>已用 {{ usageByKey.get(`${quota.subject_type}:${quota.subject_id}:${quota.resource}`)?.used ?? 0 }}</span>
+              <span>窗口 {{ quota.window_seconds }}s</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="overview.openEditQuotaDialog(quota)"
+                >
+                  <PencilIcon data-icon="inline-start" />
+                  编辑
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="overview.deletingQuotaKey.value === `${quota.subject_type}:${quota.subject_id}:${quota.resource}`"
+                  @click="overview.deleteQuota(quota)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  删除
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredQuotas.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ overview.data.value.quotas.length === 0 ? "暂无额度配置" : "没有匹配的额度配置" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>主体</TableHead>
@@ -1031,7 +1275,48 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="secret in filteredSecrets"
+              :key="secret.name"
+              :title="secret.name"
+              :description="secret.description || secret.ref_hint"
+            >
+              <template #status>
+                <Badge :variant="secret.enabled ? 'default' : 'secondary'">
+                  {{ secret.enabled ? "启用" : "停用" }}
+                </Badge>
+              </template>
+              <span>Provider {{ secret.provider }}</span>
+              <span class="break-all">引用 {{ secret.ref_hint }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestSecretDetail(secret.name)"
+                >
+                  <EyeIcon data-icon="inline-start" />
+                  详情
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="overview.deletingSecretName.value === secret.name"
+                  @click="overview.deleteSecret(secret)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  删除
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredSecrets.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ overview.data.value.secrets.length === 0 ? "暂无密钥引用" : "没有匹配的密钥引用" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
@@ -1129,7 +1414,37 @@ function setPermittedActiveTab(value: unknown): void {
           </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
+          <div class="flex flex-col gap-2 lg:hidden">
+            <AdminMobileRecord
+              v-for="artifact in filteredArtifacts"
+              :key="overview.artifactKey(artifact)"
+              :title="artifact.manifest.name"
+              :description="artifact.manifest.slug"
+            >
+              <template #status>
+                <Badge variant="outline">{{ artifact.artifact_type }}</Badge>
+              </template>
+              <span class="break-all">数据源 {{ artifact.manifest.datasources?.join(", ") || "-" }}</span>
+              <span>更新于 {{ formatOptionalDate(artifact.manifest.updated_at || artifact.manifest.created_at) }}</span>
+              <template #actions>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  @click="requestArtifactAcl(artifact)"
+                >
+                  <ShieldCheckIcon data-icon="inline-start" />
+                  查看 ACL
+                </Button>
+              </template>
+            </AdminMobileRecord>
+            <div
+              v-if="filteredArtifacts.length === 0"
+              class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+            >
+              {{ overview.data.value.artifacts.length === 0 ? "暂无产物" : "没有匹配的产物" }}
+            </div>
+          </div>
+          <Table class="hidden lg:table">
             <TableHeader>
               <TableRow>
                 <TableHead class="text-center">类型</TableHead>
@@ -1305,7 +1620,49 @@ function setPermittedActiveTab(value: unknown): void {
         </CardHeader>
         <CardContent class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
           <div class="min-h-0 flex-1 overflow-auto">
-            <Table>
+            <div class="flex flex-col gap-2 lg:hidden">
+              <div
+                v-if="audits.loading.value"
+                class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+              >
+                正在加载审计日志...
+              </div>
+              <AdminMobileRecord
+                v-for="(log, index) in audits.loading.value ? [] : audits.logs.value"
+                :key="audits.formatLogKey(log, index)"
+                :title="`${log.resource_type} / ${log.resource_id || '-'}`"
+                :description="log.reason || '未记录原因'"
+              >
+                <template #status>
+                  <Badge :variant="audits.getActionVariant(log.action)">
+                    {{ audits.getActionText(log.action) }}
+                  </Badge>
+                  <Badge :variant="log.decision === 'allow' ? 'default' : 'destructive'">
+                    {{ log.decision }}
+                  </Badge>
+                </template>
+                <span>用户 {{ log.user_id || "-" }}</span>
+                <span>{{ formatOptionalDate(log.created_at) }}</span>
+                <span class="font-mono">日志 {{ log.id ?? "-" }}</span>
+                <template #actions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    @click="audits.viewDetail(log)"
+                  >
+                    <EyeIcon data-icon="inline-start" />
+                    详情
+                  </Button>
+                </template>
+              </AdminMobileRecord>
+              <div
+                v-if="!audits.loading.value && audits.logs.value.length === 0"
+                class="rounded-md border p-6 text-center text-sm text-muted-foreground"
+              >
+                暂无匹配审计日志
+              </div>
+            </div>
+            <Table class="hidden lg:table">
               <TableHeader>
                 <TableRow>
                   <TableHead class="text-center">时间</TableHead>

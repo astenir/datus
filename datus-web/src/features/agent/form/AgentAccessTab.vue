@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { AgentManagerController } from "@/composables/useAgentManager"
-import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -118,7 +118,7 @@ const publishedWithoutAudience = computed(() =>
 
       <Field v-if="props.manager.form.value.visibility !== 'enterprise'">
         <FieldLabel>允许角色</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.aclRoleOptions.value"
           :selected-values="props.manager.form.value.allowedRoleIds"
           :disabled="props.readonly || props.manager.aclDirectoryLoading.value"
@@ -133,7 +133,7 @@ const publishedWithoutAudience = computed(() =>
 
       <Field v-if="props.manager.form.value.visibility !== 'enterprise'">
         <FieldLabel>允许用户</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.aclUserOptions.value"
           :selected-values="props.manager.form.value.allowedUserIds"
           :disabled="props.readonly || props.manager.aclDirectoryLoading.value"
@@ -148,7 +148,7 @@ const publishedWithoutAudience = computed(() =>
 
       <Field class="md:col-span-2">
         <FieldLabel>默认使用该 Agent 的用户</FieldLabel>
-        <AgentMultiOptionPicker
+        <SearchableMultiSelect
           :options="props.manager.aclUserOptions.value"
           :selected-values="props.manager.form.value.defaultUserIds"
           :disabled="props.readonly || props.manager.aclDirectoryLoading.value || props.manager.form.value.status !== 'published'"

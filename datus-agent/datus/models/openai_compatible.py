@@ -32,6 +32,7 @@ from datus.models.base import LLMBaseModel
 from datus.models.litellm_adapter import LiteLLMAdapter, is_known_non_thinking_model, is_official_openai_endpoint
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
+from datus.models.stream_interrupt import handle_stream_interrupt
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure
@@ -1336,10 +1337,13 @@ class OpenAICompatibleModel(LLMBaseModel):
                 tool_output_seen = False
                 final_assistant_yielded = False
                 last_assistant_text = ""
+                completed_task_call_ids: set[str] = set()
+                graceful_interrupt_requested = False
 
-                # Streaming thinking state: accumulate text deltas for real-time output
-                thinking_stream_id: Optional[str] = None
-                thinking_accumulated = ""
+                response_stream_id: Optional[str] = None
+                response_accumulated = ""
+                reasoning_stream_id: Optional[str] = None
+                reasoning_accumulated = ""
                 placeholder_filter = LitellmPlaceholderStreamFilter()
 
                 def mark_assistant_response(text: str, is_thinking: bool) -> None:
@@ -1349,40 +1353,84 @@ class OpenAICompatibleModel(LLMBaseModel):
                         final_assistant_yielded = True
 
                 while not result.is_complete:
-                    if interrupt_controller and interrupt_controller.is_interrupted:
-                        from datus.cli.execution_state import ExecutionInterrupted
-
-                        raise ExecutionInterrupted("Interrupted by user")
+                    graceful_interrupt_requested = await handle_stream_interrupt(
+                        interrupt_controller=interrupt_controller,
+                        result=result,
+                        session=session,
+                        completed_task_call_ids=completed_task_call_ids,
+                        graceful_interrupt_requested=graceful_interrupt_requested,
+                    )
                     async for event in _stream_events_with_trace_baggage(result, agent_name):
-                        if interrupt_controller and interrupt_controller.is_interrupted:
-                            from datus.cli.execution_state import ExecutionInterrupted
+                        graceful_interrupt_requested = await handle_stream_interrupt(
+                            interrupt_controller=interrupt_controller,
+                            result=result,
+                            session=session,
+                            completed_task_call_ids=completed_task_call_ids,
+                            graceful_interrupt_requested=graceful_interrupt_requested,
+                        )
 
-                            raise ExecutionInterrupted("Interrupted by user")
-
-                        # Capture assistant text from raw response events for streaming output.
-                        # We process three raw event types:
-                        # 1. response.output_text.delta - stream text chunks as thinking_delta
-                        # 2. response.content_part.done - emit final thinking action
-                        # 3. response.output_item.done type="message" - fallback (skipped if early captured)
+                        # Capture provider reasoning and normal assistant text from
+                        # raw response events without conflating their presentation.
                         if hasattr(event, "type") and event.type == "raw_response_event":
                             raw_data = getattr(event, "data", None)
                             raw_type = getattr(raw_data, "type", None) if raw_data else None
 
-                            # Stream text delta: yield thinking_delta for real-time display
-                            if raw_type == "response.output_text.delta":
-                                raw_delta = getattr(raw_data, "delta", None) or ""
-                                delta_text = placeholder_filter.feed(raw_delta)
+                            if raw_type in {
+                                "response.reasoning_summary_text.delta",
+                                "response.reasoning_text.delta",
+                            }:
+                                delta_text = getattr(raw_data, "delta", None) or ""
                                 if delta_text:
-                                    if thinking_stream_id is None:
-                                        thinking_stream_id = f"thinking_stream_{uuid.uuid4().hex[:8]}"
-                                    thinking_accumulated += delta_text
-                                    delta_action = ActionHistory(
-                                        action_id=thinking_stream_id,
+                                    if reasoning_stream_id is None:
+                                        reasoning_stream_id = f"reasoning_stream_{uuid.uuid4().hex[:8]}"
+                                    reasoning_accumulated += delta_text
+                                    yield ActionHistory(
+                                        action_id=reasoning_stream_id,
                                         role=ActionRole.ASSISTANT,
                                         messages="",
                                         action_type="thinking_delta",
                                         input={},
-                                        output={"delta": delta_text, "accumulated": thinking_accumulated},
+                                        output={"delta": delta_text, "accumulated": reasoning_accumulated},
+                                        status=ActionStatus.PROCESSING,
+                                    )
+                                continue
+
+                            if raw_type in {
+                                "response.reasoning_summary_text.done",
+                                "response.reasoning_text.done",
+                            }:
+                                full_reasoning = (getattr(raw_data, "text", None) or reasoning_accumulated).strip()
+                                if full_reasoning:
+                                    reasoning_action = ActionHistory(
+                                        action_id=reasoning_stream_id or f"reasoning_{uuid.uuid4().hex[:8]}",
+                                        role=ActionRole.ASSISTANT,
+                                        messages=full_reasoning,
+                                        action_type="thinking",
+                                        input={},
+                                        output={"thinking": full_reasoning, "content_type": "thinking"},
+                                        status=ActionStatus.SUCCESS,
+                                    )
+                                    action_history_manager.add_action(reasoning_action)
+                                    yield reasoning_action
+                                reasoning_stream_id = None
+                                reasoning_accumulated = ""
+                                continue
+
+                            # Stream normal assistant text as markdown deltas.
+                            if raw_type == "response.output_text.delta":
+                                raw_delta = getattr(raw_data, "delta", None) or ""
+                                delta_text = placeholder_filter.feed(raw_delta)
+                                if delta_text:
+                                    if response_stream_id is None:
+                                        response_stream_id = f"response_stream_{uuid.uuid4().hex[:8]}"
+                                    response_accumulated += delta_text
+                                    delta_action = ActionHistory(
+                                        action_id=response_stream_id,
+                                        role=ActionRole.ASSISTANT,
+                                        messages="",
+                                        action_type="response_delta",
+                                        input={},
+                                        output={"delta": delta_text, "accumulated": response_accumulated},
                                         status=ActionStatus.PROCESSING,
                                     )
                                     # Do NOT add to action_history_manager (transient, prevents dedup)
@@ -1393,18 +1441,22 @@ class OpenAICompatibleModel(LLMBaseModel):
                             if raw_type == "response.content_part.done":
                                 tail = placeholder_filter.finalize()
                                 if tail:
-                                    thinking_accumulated += tail
-                                full_text = strip_litellm_placeholder(thinking_accumulated.strip())
+                                    response_accumulated += tail
+                                full_text = strip_litellm_placeholder(response_accumulated.strip())
                                 if full_text:
                                     text_content_split = full_text if len(full_text) <= 200 else f"{full_text[:200]}..."
                                     is_thinking = len(temp_tool_calls) > 0
                                     thinking_action = ActionHistory(
-                                        action_id=thinking_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
+                                        action_id=response_stream_id or f"assistant_{uuid.uuid4().hex[:8]}",
                                         role=ActionRole.ASSISTANT,
                                         messages=f"Thinking: {text_content_split}",
                                         action_type="response",
                                         input={},
-                                        output={"raw_output": full_text, "is_thinking": is_thinking},
+                                        output={
+                                            "raw_output": full_text,
+                                            "is_thinking": is_thinking,
+                                            "content_type": "markdown",
+                                        },
                                         status=ActionStatus.SUCCESS,
                                     )
                                     action_history_manager.add_action(thinking_action)
@@ -1412,8 +1464,8 @@ class OpenAICompatibleModel(LLMBaseModel):
                                     mark_assistant_response(full_text, is_thinking)
                                     early_assistant_yielded = True
                                 # Reset stream state for next content part
-                                thinking_stream_id = None
-                                thinking_accumulated = ""
+                                response_stream_id = None
+                                response_accumulated = ""
                                 continue
 
                             # Fallback: response.output_item.done type="message"
@@ -1439,7 +1491,11 @@ class OpenAICompatibleModel(LLMBaseModel):
                                                 messages=f"Thinking: {text_content_split}",
                                                 action_type="response",
                                                 input={},
-                                                output={"raw_output": full_text, "is_thinking": is_thinking},
+                                                output={
+                                                    "raw_output": full_text,
+                                                    "is_thinking": is_thinking,
+                                                    "content_type": "markdown",
+                                                },
                                                 status=ActionStatus.SUCCESS,
                                             )
                                             action_history_manager.add_action(thinking_action)
@@ -1621,6 +1677,9 @@ class OpenAICompatibleModel(LLMBaseModel):
                                 action_history_manager.add_action(complete_action)
                                 yield complete_action
 
+                                if tool_name == "task":
+                                    completed_task_call_ids.add(call_id)
+
                                 # Remove from temp storage to avoid duplicates
                                 del temp_tool_calls[call_id]
 
@@ -1673,12 +1732,21 @@ class OpenAICompatibleModel(LLMBaseModel):
                                         messages=f"Thinking: {text_content_split}",
                                         action_type="response",
                                         input={},
-                                        output={"raw_output": text_content, "is_thinking": is_thinking},
+                                        output={
+                                            "raw_output": text_content,
+                                            "is_thinking": is_thinking,
+                                            "content_type": "markdown",
+                                        },
                                         status=ActionStatus.SUCCESS,
                                     )
                                     action_history_manager.add_action(thinking_action)
                                     yield thinking_action
                                     mark_assistant_response(text_content, is_thinking)
+
+                if graceful_interrupt_requested:
+                    from datus.cli.execution_state import ExecutionInterrupted
+
+                    raise ExecutionInterrupted("Interrupted by user")
 
                 final_output = getattr(result, "final_output", "") or ""
                 if not isinstance(final_output, str):
@@ -1692,7 +1760,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                         messages=f"Thinking: {final_output_preview}",
                         action_type="response",
                         input={},
-                        output={"raw_output": final_output, "is_thinking": False},
+                        output={"raw_output": final_output, "is_thinking": False, "content_type": "markdown"},
                         status=ActionStatus.SUCCESS,
                     )
                     action_history_manager.add_action(final_action)
@@ -1740,14 +1808,17 @@ class OpenAICompatibleModel(LLMBaseModel):
         for attempt in range(max_retries):
             try:
                 async for action in _stream_operation():
-                    # Skip actions that were already yielded in previous retry attempts
-                    # (thinking_delta actions share a stream ID and must not be deduped)
-                    if action.action_type != "thinking_delta" and action.action_id in processed_action_ids:
+                    # Skip actions already yielded in previous retry attempts.
+                    # Stream deltas share one ID per logical content block and
+                    # therefore must not be deduplicated chunk-by-chunk.
+                    if action.action_type not in {"thinking_delta", "response_delta"} and (
+                        action.action_id in processed_action_ids
+                    ):
                         logger.debug(f"Skipping duplicate action: {action.action_id}")
                         continue
 
                     # Mark this action as processed (skip transient deltas)
-                    if action.action_type != "thinking_delta":
+                    if action.action_type not in {"thinking_delta", "response_delta"}:
                         processed_action_ids.add(action.action_id)
                     yield action
                 # If we successfully complete, break out of retry loop

@@ -14,6 +14,7 @@ import type {
   SseMessagePayload
 } from "@/types";
 import { request } from "@/lib/request";
+import { isSqlExecutionTool, toolResultStatus } from "@/lib/tool-display";
 
 export type ChatStreamRequestInput = {
   message: string;
@@ -112,7 +113,7 @@ function parseInteractionRequests(rawRequests: readonly unknown[]) {
       return { key, title: title || key };
     });
     const title = stringifyContent(req.title).trim();
-    const content = stringifyContent(req.content).trim() || title || "Interaction";
+    const content = stringifyContent(req.content).trim() || title || "交互请求";
     const contentType = stringifyContent(req.contentType ?? req.content_type).trim();
     const defaultChoice = stringifyContent(req.defaultChoice ?? req.default_choice).trim();
     const allowFreeText = req.allowFreeText ?? req.allow_free_text ?? false;
@@ -136,7 +137,7 @@ function normalizeInteractionSummaryStatus(value: unknown): InteractionSummarySt
   return "unknown";
 }
 
-const friendlyChatErrors: Record<string, { title: string; message: string }> = {
+const friendlyChatErrors: Record<string, { title: string; message: string; tone?: "error" | "warning" | "info" }> = {
   QUOTA_EXCEEDED: {
     title: "对话额度已用完",
     message: "本轮请求已停止，因为当前账号或角色的对话额度已达到上限。请稍后再试，或联系管理员调整额度。",
@@ -150,6 +151,10 @@ const friendlyChatErrors: Record<string, { title: string; message: string }> = {
     message: "当前登录凭证已失效。请重新登录后再继续本次操作。",
   },
   AUTH_USER_DISABLED: {
+    title: "账号不可用",
+    message: "当前账号已被停用或不再允许登录。请联系管理员确认账号状态。",
+  },
+  USER_DISABLED: {
     title: "账号不可用",
     message: "当前账号已被停用或不再允许登录。请联系管理员确认账号状态。",
   },
@@ -172,6 +177,19 @@ const friendlyChatErrors: Record<string, { title: string; message: string }> = {
   PERMISSION_DENIED: {
     title: "权限受限",
     message: "当前权限策略拦截了这次操作。换参数通常不会绕过限制，请联系管理员确认授权范围。",
+    tone: "warning",
+  },
+  AGENT_FORBIDDEN: {
+    title: "无法使用当前 Agent",
+    message: "当前账号不在这个 Agent 的授权范围内。请选择其他可用 Agent，或联系管理员调整访问范围。",
+  },
+  DATASOURCE_ACCESS_DENIED: {
+    title: "数据源访问受限",
+    message: "当前账号无权访问本次请求使用的数据源。请选择已授权的数据源，或联系管理员调整授权范围。",
+  },
+  DATASOURCE_FORBIDDEN: {
+    title: "数据源访问受限",
+    message: "当前账号无权访问本次请求使用的数据源。请选择已授权的数据源，或联系管理员调整授权范围。",
   },
   DATASOURCE_UNAVAILABLE: {
     title: "数据源不可用",
@@ -185,9 +203,75 @@ const friendlyChatErrors: Record<string, { title: string; message: string }> = {
     title: "模型配置缺失",
     message: "系统还没有可用的模型配置。请先在配置中心设置模型 Provider 和模型名。",
   },
+  MODEL_CREDENTIAL_UNAVAILABLE: {
+    title: "模型凭证不可用",
+    message: "当前模型凭证缺失、已失效或暂时不可用。请选择其他可用模型，或联系管理员检查模型配置。",
+  },
+  MODEL_FORBIDDEN: {
+    title: "模型访问受限",
+    message: "当前账号无权使用所选模型。请选择授权范围内的模型，或联系管理员调整模型权限。",
+  },
   RATE_LIMITED: {
     title: "请求过于频繁",
     message: "当前请求触发了限流保护。请稍后再试。",
+  },
+  CHAT_CANCELLED: {
+    title: "已停止生成",
+    message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+    tone: "info",
+  },
+  CHAT_CAPACITY_EXCEEDED: {
+    title: "对话服务繁忙",
+    message: "当前同时执行的对话较多，暂时无法启动本轮请求。请稍后重试。",
+  },
+  CHAT_EVENT_BUFFER_EXPIRED: {
+    title: "实时连接已过期",
+    message: "本轮对话的实时事件已经过期。请重新打开会话以加载已保存的内容。",
+  },
+  CHAT_EXECUTION_ERROR: {
+    title: "对话执行未完成",
+    message: "服务在执行本轮对话时遇到问题。请稍后重试；若问题持续，请联系管理员查看后台日志。",
+  },
+  CHAT_START_FAILED: {
+    title: "对话启动失败",
+    message: "服务暂时无法启动本轮对话。请稍后重试；若问题持续，请联系管理员查看后台日志。",
+  },
+  PRE_CHAT_HOOK_ERROR: {
+    title: "对话准备失败",
+    message: "服务在准备本轮对话时遇到问题，尚未开始执行。请稍后重试或联系管理员。",
+  },
+  SESSION_FORBIDDEN: {
+    title: "无法访问会话",
+    message: "当前账号无权查看或操作这个会话。请切换到自己的会话，或联系管理员确认会话归属。",
+  },
+  SQL_POLICY_PRINCIPAL_REQUIRED: {
+    title: "数据访问身份缺失",
+    message: "系统无法确认本次数据访问所需的执行身份，因此已停止操作。请联系管理员检查数据权限配置。",
+  },
+  POLICY_DENIED: {
+    title: "操作被安全策略拦截",
+    message: "本次操作不符合当前安全策略。换参数通常不会绕过限制，请联系管理员确认允许的操作范围。",
+    tone: "warning",
+  },
+  PLATFORM_STATUS_FORBIDDEN: {
+    title: "服务当前不可执行",
+    message: "平台目前处于只读或维护状态，暂时不能执行本次操作。请稍后重试或联系管理员。",
+  },
+  RESOURCE_NOT_FOUND: {
+    title: "资源不存在或不可访问",
+    message: "目标资源可能已被删除，或当前账号没有访问权限。请刷新后重试。",
+  },
+  ARTIFACT_FORBIDDEN: {
+    title: "无法访问产物",
+    message: "当前账号无权查看或操作这个报表或仪表盘。请联系所有者或管理员确认共享范围。",
+  },
+  ENTERPRISE_DISABLED: {
+    title: "企业功能未启用",
+    message: "当前部署没有启用这项企业功能。请联系管理员检查服务配置。",
+  },
+  ENTERPRISE_ROUTE_DISABLED: {
+    title: "当前功能不可用",
+    message: "这项功能在当前企业部署中未开放。请联系管理员确认可用功能范围。",
   },
   TIMEOUT: {
     title: "请求超时",
@@ -206,26 +290,47 @@ function errorCodeFromUnknown(value: unknown): string | undefined {
   return canonicalErrorCode(text);
 }
 
+function errorCodeFromText(value: unknown): string | undefined {
+  const text = stringifyContent(value).trim();
+  const exactCode = errorCodeFromUnknown(text);
+  if (exactCode) return exactCode;
+  const match = text.match(/^([A-Z][A-Z0-9_]{2,})(?=\s*[:：]|\s|$)/);
+  return match?.[1] ? canonicalErrorCode(match[1]) : undefined;
+}
+
+function safePermissionMessage(rawMessage: string) {
+  if (!rawMessage.startsWith("权限受限：")) return "";
+  return rawMessage.slice("权限受限：".length).trim();
+}
+
 export function friendlyChatErrorBlock(input: {
   code?: unknown;
   message?: unknown;
   fallback?: unknown;
 }): Extract<MessageBlock, { type: "error" }> {
   const rawMessage = stringifyContent(input.message ?? input.fallback).trim();
-  const code = errorCodeFromUnknown(input.code) ?? errorCodeFromUnknown(rawMessage);
+  const code = errorCodeFromUnknown(input.code) ?? errorCodeFromText(rawMessage);
   const meta = code ? friendlyChatErrors[code] : undefined;
-  const messageIsOnlyCode = Boolean(code && errorCodeFromUnknown(rawMessage) === code);
-  const detail = rawMessage && !messageIsOnlyCode && rawMessage !== meta?.message
-    ? rawMessage
-    : "";
 
   if (meta) {
+    if (code === "CHAT_CANCELLED") {
+      return {
+        type: "error",
+        title: meta.title,
+        message: meta.message,
+        tone: "info",
+      };
+    }
+
+    const permissionMessage = code === "PERMISSION_DENIED"
+      ? safePermissionMessage(rawMessage)
+      : "";
     return {
       type: "error",
       title: meta.title,
-      message: meta.message,
+      message: permissionMessage || meta.message,
+      ...(meta.tone ? { tone: meta.tone } : {}),
       code,
-      ...(detail ? { detail } : {}),
     };
   }
 
@@ -241,8 +346,45 @@ export function friendlyChatErrorBlock(input: {
   return {
     type: "error",
     title: "请求没有完成",
-    message: rawMessage || "服务没有返回可读的错误信息。请稍后重试，或联系管理员查看后台日志。",
+    message: "服务未能完成本次请求。请稍后重试；若问题持续，请联系管理员查看后台日志。",
   };
+}
+
+type TransportErrorContext = "history" | "stream" | "resume" | "stop" | "insert";
+
+const transportErrorTitles: Record<TransportErrorContext, string> = {
+  history: "会话历史加载失败",
+  stream: "无法连接到对话服务",
+  resume: "恢复对话失败",
+  stop: "停止会话失败",
+  insert: "消息发送失败",
+};
+
+export function friendlyTransportErrorBlock(
+  error: unknown,
+  context: TransportErrorContext,
+): Extract<MessageBlock, { type: "error" }> {
+  const record = isRecord(error) ? error : {};
+  const httpCode = errorCodeFromUnknown(record.code);
+  if (httpCode) return friendlyChatErrorBlock({ code: httpCode });
+
+  const status = typeof record.status === "number" ? record.status : undefined;
+  if (status === 401) return friendlyChatErrorBlock({ code: "AUTH_REQUIRED" });
+  if (status === 403) return friendlyChatErrorBlock({ code: "FORBIDDEN" });
+
+  return {
+    type: "error",
+    title: transportErrorTitles[context],
+    message: status
+      ? "服务暂时无法完成这次操作。请稍后重试；若问题持续，请联系管理员。"
+      : "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
+  };
+}
+
+function friendlyInlineErrorText(rawError: string, fallback: string) {
+  const code = errorCodeFromText(rawError);
+  if (!code) return fallback;
+  return friendlyChatErrors[code]?.message ?? fallback;
 }
 
 function parseInteractionSummaryAnswers(rawAnswers: unknown) {
@@ -255,7 +397,7 @@ function parseInteractionSummaryAnswers(rawAnswers: unknown) {
       ? rawAnswer.map((entry) => stringifyContent(entry).trim()).filter(Boolean)
       : stringifyContent(rawAnswer).trim();
     return {
-      question: stringifyContent(answerItem.question ?? answerItem.content).trim() || "Interaction",
+      question: stringifyContent(answerItem.question ?? answerItem.content).trim() || "交互请求",
       answer,
     };
   });
@@ -317,6 +459,7 @@ function mergeToolCallWithResult(
   if (result.duration != null) mergedBlock.duration = result.duration;
   if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
   if (result.errorText) mergedBlock.errorText = result.errorText;
+  if (result.resultStatus) mergedBlock.resultStatus = result.resultStatus;
   if (childMessages.length > 0) mergedBlock.childMessages = childMessages;
   return mergedBlock;
 }
@@ -499,14 +642,6 @@ function latestUserInteractionBlock(message: ChatMessage | undefined) {
   return block?.type === "user-interaction" ? block : null;
 }
 
-export function shouldRenderThinkingAsAnswer(message: Pick<ChatDisplayMessage, "role" | "depth" | "blocks">) {
-  const blocks = message.blocks ?? [];
-  return message.role === "assistant"
-    && !message.depth
-    && blocks.some((block) => block.type === "thinking")
-    && !blocks.some((block) => block.type === "markdown");
-}
-
 export function shouldResetConversationOnAgentChange() {
   return false;
 }
@@ -687,6 +822,7 @@ export function contentFromPayloadBlocks(
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
       const errorText = toolErrorText(payload, toolName);
+      const resultStatus = toolResultStatus(payload.result);
       const block: Extract<MessageBlock, { type: "tool-result" }> = {
         type: "tool-result",
         toolName,
@@ -696,6 +832,7 @@ export function contentFromPayloadBlocks(
       if (duration != null) block.duration = duration;
       if (shortDesc) block.shortDesc = shortDesc;
       if (errorText) block.errorText = errorText;
+      if (resultStatus !== "unknown") block.resultStatus = resultStatus;
       blocks.push(block);
     } else if (type === "error") {
       blocks.push(friendlyChatErrorBlock({
@@ -725,20 +862,30 @@ export function contentFromPayloadBlocks(
         requests,
         answers,
       };
-      if (error) block.error = error;
+      if (error) {
+        block.error = friendlyInlineErrorText(
+          error,
+          "本次交互处理失败。请稍后重试；若问题持续，请联系管理员。",
+        );
+      }
       blocks.push(block);
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
-      const errorText = stringifyContent(payload.error);
+      const rawErrorText = stringifyContent(payload.error).trim();
       const block: Extract<MessageBlock, { type: "subagent-complete" }> = {
         type: "subagent-complete",
         subagent,
       };
       if (typeof toolCount === "number") block.toolCount = toolCount;
       if (duration != null) block.duration = duration;
-      if (errorText) block.errorText = errorText;
+      if (rawErrorText) {
+        block.errorText = friendlyInlineErrorText(
+          rawErrorText,
+          "子 Agent 执行失败。请稍后重试；若问题持续，请联系管理员。",
+        );
+      }
       blocks.push(block);
     } else if (type === "artifact") {
       const kind = stringifyContent(payload.kind ?? "dashboard");
@@ -787,6 +934,10 @@ function unwrapToolResult(value: unknown): unknown {
 const permissionDeniedToolPattern =
   /PERMISSION_DENIED:\s*Tool\s+'([^']+)'\s+\(([^)]+)\)\s+is blocked by the\s+'([^']+)'\s+permission profile/i;
 const permissionModeDeniedPattern = /Permission mode '([^']+)' requires module\.chat\.permission_mode/i;
+const datusSqlExecutionErrorPattern =
+  /error_code=(500005|500006),\s*error_message=(?:Invalid SQL syntax in query|Failed to execute query on database)\.\s*Error details:\s*([\s\S]+)$/i;
+const unsafeDatabaseDiagnosticPattern =
+  /(?:https?:\/\/|(?:postgres(?:ql)?|mysql|oracle):\/\/|traceback\s+\(most recent call last\)|(?:password|passwd|credential|secret|token)\s*[=:]|(?:^|\s)\/(?:[^/\s]+\/){2,}[^/\s]+)/i;
 const filesystemWriteTools = new Set(["write_file", "edit_file", "delete_file"]);
 
 function permissionProfileLabel(profile: string) {
@@ -796,6 +947,29 @@ function permissionProfileLabel(profile: string) {
     dangerous: "危险",
   };
   return labels[profile] ?? profile;
+}
+
+function friendlyDatusSqlExecutionError(rawError: string): string | undefined {
+  const match = rawError.match(datusSqlExecutionErrorPattern);
+  const errorCode = match?.[1];
+  const details = match?.[2]?.trim();
+  if (!errorCode || !details) return undefined;
+
+  const hintMatch = details.match(/\bHINT:\s*([\s\S]*)$/i);
+  const hint = hintMatch?.[1]?.trim() ?? "";
+  const detailsBeforeHint = details.slice(0, hintMatch?.index ?? details.length).trim();
+  const lineMatch = detailsBeforeHint.match(/\bLINE\s+(\d+):/i);
+  const primary = detailsBeforeHint.replace(/\bLINE\s+\d+:[\s\S]*$/i, "").trim();
+
+  if (!primary || primary.length > 800 || hint.length > 800) return undefined;
+  if (unsafeDatabaseDiagnosticPattern.test(primary) || unsafeDatabaseDiagnosticPattern.test(hint)) {
+    return undefined;
+  }
+
+  const parts = [`SQL 执行失败（错误码 ${errorCode}）：${primary}`];
+  if (lineMatch?.[1]) parts.push(`错误位置：第 ${lineMatch[1]} 行`);
+  if (hint) parts.push(`数据库提示：${hint}`);
+  return parts.join("；");
 }
 
 export function friendlyToolErrorText(toolName: string, rawError: string): string {
@@ -810,7 +984,7 @@ export function friendlyToolErrorText(toolName: string, rawError: string): strin
     const profileText = profile ? `“${permissionProfileLabel(profile)}”权限模式` : "当前权限策略";
 
     if (category === "filesystem_tools" && filesystemWriteTools.has(deniedTool)) {
-      return `权限受限：当前账号不能让 AI 直接修改服务器文件。${deniedTool} 已被${profileText}拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。`;
+      return `权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。${deniedTool} 已被${profileText}拦截，换路径或重试不会绕过限制。请联系管理员核对该 Agent 的工具策略。`;
     }
 
     return `权限受限：当前账号没有执行工具 ${deniedTool} 的权限，已被${profileText}拦截，换参数或重试不会绕过限制。`;
@@ -822,7 +996,15 @@ export function friendlyToolErrorText(toolName: string, rawError: string): strin
     return `权限受限：当前账号不能切换到 ${permissionProfileLabel(mode)} 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。`;
   }
 
-  return error;
+  if (isSqlExecutionTool(toolName)) {
+    const sqlExecutionError = friendlyDatusSqlExecutionError(error);
+    if (sqlExecutionError) return sqlExecutionError;
+  }
+
+  return friendlyInlineErrorText(
+    error,
+    "工具执行失败。请稍后重试；若问题持续，请联系管理员。",
+  );
 }
 
 function toolErrorText(payload: Record<string, unknown>, toolName: string): string | undefined {
@@ -995,16 +1177,7 @@ export function messageFromEvent(event: SseEvent): ParsedMessage | null {
   }
 
   if (event.event === "end") {
-    const usage = typeof data.total_tokens === "number" ? ` · ${data.total_tokens} tokens` : "";
-    const duration = typeof data.duration === "number" ? `${data.duration.toFixed(1)}s` : "完成";
-    return {
-      operation: "createMessage",
-      message: {
-        id: `end-${event.id ?? Date.now()}`,
-        role: "system",
-        content: `本轮完成：${duration}${usage}`
-      }
-    };
+    return null;
   }
 
   const payload = data.payload;

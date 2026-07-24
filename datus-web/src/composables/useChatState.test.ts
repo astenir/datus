@@ -121,4 +121,135 @@ describe("useChatState", () => {
     expect(secondSignal?.aborted).toBe(true);
     await secondStream;
   });
+
+  it("keeps browser transport failures outside durable conversation messages", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("network disconnected"));
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    await state.sendMessage({
+      message: "hello",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+
+    expect(state.messages.value).toHaveLength(1);
+    expect(state.messages.value[0]?.role).toBe("user");
+    expect(state.transportError.value).toEqual({
+      type: "error",
+      title: "无法连接到对话服务",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
+    });
+
+    state.clearTransportError();
+    expect(state.transportError.value).toBeNull();
+  });
+
+  it("does not cache a partial transcript after a transport failure", async () => {
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          messages: [{
+            message_id: "before-failure",
+            role: "assistant",
+            content: [{ type: "markdown", payload: { content: "before failure" } }],
+          }],
+        },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          messages: [{
+            message_id: "canonical-after-failure",
+            role: "assistant",
+            content: [{ type: "markdown", payload: { content: "canonical history" } }],
+          }],
+        },
+      });
+    const request = vi.fn().mockRejectedValue(new Error("network disconnected"));
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    state.selectSession("session-a");
+    await vi.waitFor(() => {
+      expect(state.messages.value[0]?.content).toBe("before failure");
+    });
+
+    await state.sendMessage({
+      message: "new turn",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+    state.selectSession(null);
+    state.selectSession("session-a");
+
+    await vi.waitFor(() => {
+      expect(state.messages.value[0]?.content).toBe("canonical history");
+    });
+    expect(requestJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the current transcript when a history refresh fails", async () => {
+    const requestJson = vi.fn()
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          messages: [{
+            message_id: "persisted-message",
+            role: "assistant",
+            content: [{ type: "markdown", payload: { content: "saved answer" } }],
+          }],
+        },
+      })
+      .mockRejectedValueOnce(new Error("history unavailable"));
+    chatApi.compact.mockResolvedValueOnce({ success: true });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    state.selectSession("session-a");
+    await vi.waitFor(() => {
+      expect(state.messages.value[0]?.content).toBe("saved answer");
+    });
+
+    await state.compactSession("session-a");
+
+    expect(state.messages.value[0]?.content).toBe("saved answer");
+    expect(state.transportError.value).toEqual({
+      type: "error",
+      title: "会话历史加载失败",
+      message: "请检查网络连接和服务地址后重试。已保存的会话内容不会受影响。",
+    });
+  });
 });

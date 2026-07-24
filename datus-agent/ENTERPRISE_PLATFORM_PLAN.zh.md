@@ -85,6 +85,7 @@ MVP 支持两种生产可接受形态：
 
 ```text
 module.chat
+module.chat.permission_mode
 module.sql_executor
 module.datasource_catalog
 module.report.view
@@ -125,6 +126,7 @@ module.system.status
 规则：
 
 - `view` 只表示列表/详情/静态 HTML 可见，不自动包含实时查询、导出、编辑。
+- `module.chat.permission_mode` 只允许请求 `auto` / `dangerous` 对话模式；该模式只调整本轮工具确认策略，不授予 Agent 新工具，也不绕过 Agent Tool Policy、文件路径或 Artifact ACL。
 - `query` 表示实时查数或执行保存 SQL，必须叠加 datasource grant、SQL policy、quota、audit。
 - `export` 单独授权，并需要 ACL、quota、审计、脱敏策略。
 - admin 也必须拆成显式 permission，不用硬编码超级用户绕过授权链。
@@ -267,9 +269,9 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
 
-用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和委派 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
 
-Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。`runtime_policy.max_permission_mode` 限制用户请求的最高 permission mode，`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
+Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。对话 permission mode 属于用户和本轮会话的确认策略，由 `module.chat.permission_mode` 控制，Agent 不再配置第二套模式上限。`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
 
 每个 PG metadata/body store 独立持有 asyncpg pool。连接预算按：
 
@@ -278,6 +280,8 @@ store 数量 * max_size * API 进程数 + 业务 datasource + 运维/监控余�
 ```
 
 启用 `session_body_store` 后，新 session 正文/history/state 写 PG；历史 SQLite `.db` 不自动迁移。回滚方式是移除该配置并重启，新请求回本地 SQLite，但 PG 中已写正文不会自动回写。
+
+对话展示 sidecar 事件使用 session body 内的独立表：本地 SQLite 为 `chat_session_terminal_events`，PostgreSQL/OceanBase 为 `enterprise_session_terminal_events`。当前保存两类展示事实：已建立会话后的终态（error/cancelled/timeout），以及父 `task` 调用与嵌套子 Agent session 的委派关联。后者在子 Agent 启动前落库，使父 turn 尚未提交就被停止时，history 仍能恢复子 session 中已经持久化的 reasoning summary、assistant message、工具调用和结果。企业 child session 的标准 scope 为 `<user_scope>__<parent_session_id>`；history 对早期只写入 `<parent_session_id>` 的记录保留只读回退。两类 sidecar 事件都只参与 history 展示，不进入 Agent SDK/model 上下文；feedback copy/rewind 不复制旧 sidecar，避免把上一次失败或委派关系重放到新分支。该表通过 `CREATE TABLE IF NOT EXISTS` 增量引入，新增事件类型不需要 schema migration，滚动发布时旧版本会忽略它；生产发布前应按目标方言预建同构 DDL。回滚应用无需删表，确认不再回滚且完成 session body 备份后才可人工清理。
 
 备份恢复必须分别考虑：
 

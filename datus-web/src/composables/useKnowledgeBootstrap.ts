@@ -402,7 +402,7 @@ export function useKnowledgeBootstrap(options: UseKnowledgeBootstrapOptions = {}
       return record;
     } catch (error) {
       console.error("知识库文件上传失败:", error);
-      toast.error(error instanceof Error ? error.message : "文件上传失败");
+      toast.error("文件上传失败");
       return null;
     } finally {
       uploadPending.value = {
@@ -504,7 +504,7 @@ export function useKnowledgeBootstrap(options: UseKnowledgeBootstrapOptions = {}
       }
       console.error("启动知识库构建失败:", error);
       status.value = "error";
-      toast.error(error instanceof Error ? error.message : "启动知识库构建失败");
+      toast.error("启动知识库构建失败");
     }
   }
 

@@ -14,6 +14,76 @@ export type RemoteMcpHeadersResult = {
   error?: string;
 };
 
+export type FriendlyMcpConnectionError = {
+  title: string;
+  description: string;
+};
+
+export function friendlyMcpConnectionError(
+  error: unknown,
+  serverName?: string,
+): FriendlyMcpConnectionError | null {
+  const status = errorStatus(error);
+  if (status === 401) return null;
+
+  if (status === 403) {
+    return {
+      title: "无权访问 MCP Server",
+      description: "当前账号无权访问该 Server，请联系管理员检查 MCP 权限。",
+    };
+  }
+
+  const message = errorMessage(error);
+  const server = serverName?.trim() ? `“${serverName.trim()}”` : "该 MCP Server";
+
+  if (/\b410\b|\bgone\b/i.test(message)) {
+    return {
+      title: "MCP Server 地址已失效",
+      description: `${server}对应的远程服务已下线或 URL 已过期，请更新配置后重试。`,
+    };
+  }
+
+  if (/connecttimeout|timed?\s*out|time[-_ ]?out|aborterror/i.test(message)) {
+    return {
+      title: "MCP Server 连接超时",
+      description: `暂时无法连接${server}，请检查服务地址、网络、代理或防火墙后重试。`,
+    };
+  }
+
+  if (/\b(?:401|403)\b|unauthorized|forbidden/i.test(message)) {
+    return {
+      title: "MCP Server 认证失败",
+      description: `${server}拒绝了连接，请检查 Token、Headers 和远程服务权限。`,
+    };
+  }
+
+  if (/\b404\b|not found/i.test(message)) {
+    return {
+      title: "MCP Server 地址无效",
+      description: `${server}对应的远程端点不存在，请检查 URL 后重试。`,
+    };
+  }
+
+  if (/\b429\b|too many requests/i.test(message)) {
+    return {
+      title: "MCP Server 请求过于频繁",
+      description: `${server}暂时限制了请求，请稍后重试。`,
+    };
+  }
+
+  if (/\b5\d{2}\b/.test(message)) {
+    return {
+      title: "MCP Server 暂时不可用",
+      description: `${server}当前响应异常，请稍后重试或联系服务提供方。`,
+    };
+  }
+
+  return {
+    title: "无法连接 MCP Server",
+    description: `暂时无法连接${server}，请检查服务地址、认证信息和网络连接后重试。`,
+  };
+}
+
 export function buildRemoteMcpHeaders(input: RemoteMcpHeadersInput): RemoteMcpHeadersResult {
   const headers: Record<string, string> = {};
   const headersRaw = input.headersJson?.trim() ?? "";
@@ -159,6 +229,19 @@ export function buildMcpServerInfo(input: McpServerFormInput): BuildMcpServerRes
 
 function isMcpServerType(value: string): value is McpServerType {
   return MCP_SERVER_TYPES.includes(value as McpServerType);
+}
+
+function errorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("status" in error)) return undefined;
+  return typeof error.status === "number" ? error.status : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return typeof error === "string" ? error : "";
 }
 
 function splitList(value: string): string[] {

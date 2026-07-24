@@ -76,6 +76,14 @@ async def test_in_memory_session_owner_store_supports_delete_and_user_listing():
 
     assert await store.get_owner("project", "s1") is None
     assert await store.get_owner("project", "s2") == "alice"
+    assert await store.get_session("project", "s2") == {
+        "project_id": "project",
+        "session_id": "s2",
+        "user_id": "alice",
+        "created_at": None,
+        "updated_at": None,
+    }
+    assert await store.get_session("project", "missing") is None
     assert await store.list_session_ids("project", "alice") == ["s2"]
     assert await store.list_sessions("project") == [
         {
@@ -351,6 +359,12 @@ async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     reopened = SqliteSessionOwnerStore(str(db_path))
     assert await reopened.get_owner("project", "s1") == "bob@example.com"
     assert await reopened.get_owner("project", "s2") == "alice@example.com"
+    session = await reopened.get_session("project", "s1")
+    assert session is not None
+    assert session["user_id"] == "bob@example.com"
+    assert session["created_at"]
+    assert session["updated_at"]
+    assert await reopened.get_session("project", "missing") is None
     assert await reopened.list_session_ids("project", "alice@example.com") == ["s2"]
     sessions = await reopened.list_sessions("project")
     assert [

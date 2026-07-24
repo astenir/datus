@@ -29,8 +29,9 @@ from datus.api.models.cli_models import (
 )
 from datus.api.routes.chat_routes import (
     _FUSE_IO_TIMEOUT,
+    _authorize_chat_permission_mode,
     _authorize_subagent_dispatch,
-    _harden_chat_permission_mode,
+    _default_enterprise_chat_permission_mode,
     _is_valid_subagent_id,
     delete_session,
     get_chat_history,
@@ -42,8 +43,6 @@ from datus.api.routes.chat_routes import (
     submit_user_interaction,
 )
 from datus.api.services.chat_task_manager import EventBufferExpiredError
-from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel
-from datus.tools.permission.profiles import build_effective_config
 from datus.tools.proxy.tool_result_channel import ToolResultChannel
 from datus.tools.sql_policy import SqlPolicyConfig
 
@@ -86,74 +85,165 @@ def _request_with_service(svc):
     return SimpleNamespace(app=SimpleNamespace(dependency_overrides={api_deps.get_datus_service: override_service}))
 
 
-class TestChatPermissionModeHardening:
-    def test_agent_runtime_policy_rejects_profile_above_maximum(self):
+class TestChatPermissionModeAuthorization:
+    def test_enterprise_omitted_mode_defaults_to_normal(self):
+        request = StreamChatInput(message="hi", permission_mode=None)
+
+        _default_enterprise_chat_permission_mode(request, enterprise_enabled=True)
+
+        assert request.permission_mode == "normal"
+
+    def test_non_enterprise_keeps_permission_mode_unchanged(self):
+        request = StreamChatInput(message="hi", permission_mode=None)
+
+        _default_enterprise_chat_permission_mode(request, enterprise_enabled=False)
+
+        assert request.permission_mode is None
+
+    @pytest.mark.asyncio
+    async def test_enterprise_elevated_mode_requires_user_permission(self, monkeypatch):
         request = StreamChatInput(message="hi", permission_mode="auto")
-        agent_config = SimpleNamespace(
-            active_profile_name="auto",
-            permissions_config=PermissionConfig(default_permission=PermissionLevel.ALLOW),
-            _raw_permissions={},
-        )
-        agent_record = {
-            "scoped_context": {"_enterprise_agent_policy": {"runtime_policy": {"max_permission_mode": "normal"}}}
-        }
+        require_permission = AsyncMock(side_effect=HTTPException(status_code=403, detail="Permission denied."))
+        monkeypatch.setattr("datus.api.routes.chat_routes.require_authorized_module", require_permission)
 
         with pytest.raises(HTTPException) as exc_info:
-            _harden_chat_permission_mode(
+            await _authorize_chat_permission_mode(
                 request,
-                agent_config,
+                _mock_ctx(user_id="bob", permissions={"module.chat"}),
                 enterprise_enabled=True,
-                agent_record=agent_record,
             )
 
         assert exc_info.value.status_code == 403
-        assert "Agent maximum 'normal'" in str(exc_info.value.detail)
-
-    def test_enterprise_ordinary_user_normal_profile_denies_raw_filesystem_writes(self):
-        request = StreamChatInput(message="hi", permission_mode="normal")
-        agent_config = SimpleNamespace(
-            active_profile_name="auto",
-            permissions_config=PermissionConfig(default_permission=PermissionLevel.ALLOW),
-            _raw_permissions={},
+        assert exc_info.value.detail == "Permission mode 'auto' requires module.chat.permission_mode."
+        require_permission.assert_awaited_once_with(
+            ANY,
+            "module.chat.permission_mode",
         )
 
-        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=True, agent_record=None)
+    @pytest.mark.asyncio
+    async def test_enterprise_elevated_mode_allows_authorized_user(self, monkeypatch):
+        request = StreamChatInput(message="hi", permission_mode="dangerous")
+        require_permission = AsyncMock(return_value=None)
+        monkeypatch.setattr("datus.api.routes.chat_routes.require_authorized_module", require_permission)
 
-        assert request.permission_mode == "normal"
-        assert agent_config.active_profile_name == "normal"
-        assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
-        deny_rules = [
-            rule.pattern
-            for rule in agent_config.permissions_config.rules
-            if rule.tool == "filesystem_tools" and rule.permission == PermissionLevel.DENY
-        ]
-        assert deny_rules == ["write_file", "edit_file", "delete_file"]
-
-    def test_enterprise_ordinary_user_downgrades_operator_auto_profile(self):
-        request = StreamChatInput(message="hi", permission_mode=None)
-        agent_config = SimpleNamespace(
-            active_profile_name="auto",
-            permissions_config=build_effective_config("auto"),
-            _raw_permissions={"profile": "auto"},
+        await _authorize_chat_permission_mode(
+            request,
+            _mock_ctx(user_id="alice", permissions={"module.chat.permission_mode"}),
+            enterprise_enabled=True,
         )
 
-        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=True, agent_record=None)
-
-        assert agent_config.active_profile_name == "normal"
-        assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
-        assert not any(
-            rule.tool == "tools" and rule.pattern == "todo_write" and rule.permission == PermissionLevel.ALLOW
-            for rule in agent_config.permissions_config.rules
+        require_permission.assert_awaited_once_with(
+            ANY,
+            "module.chat.permission_mode",
         )
 
-    def test_non_enterprise_keeps_permission_mode_unchanged(self):
-        request = StreamChatInput(message="hi", permission_mode="auto")
-        agent_config = SimpleNamespace(active_profile_name="auto", permissions_config=PermissionConfig())
+    @pytest.mark.asyncio
+    async def test_stream_allows_authorized_elevated_mode_with_legacy_agent_ceiling(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
 
-        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=False, agent_record=None)
+        _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+        agent_record = {
+            "agent_id": "custom-chat",
+            "node_class": "chat",
+            "scoped_context": {
+                "_enterprise_agent_policy": {
+                    "runtime_policy": {
+                        "max_permission_mode": "normal",
+                        "allow_subagent_delegation": False,
+                    },
+                },
+            },
+        }
+        monkeypatch.setattr(
+            "datus.api.routes.chat_routes.resolve_enterprise_agent_for_dispatch",
+            AsyncMock(return_value=agent_record),
+        )
+        require_permission = AsyncMock(return_value=None)
+        monkeypatch.setattr("datus.api.routes.chat_routes.require_authorized_module", require_permission)
+        project_config = AsyncMock(side_effect=HTTPException(status_code=403, detail="DATASOURCE_FORBIDDEN"))
+        monkeypatch.setattr("datus.api.routes.chat_routes.project_request_config", project_config)
+        svc = _mock_svc_with_nodes()
+        request = StreamChatInput(
+            message="hi",
+            subagent_id="custom-chat",
+            permission_mode="dangerous",
+        )
 
-        assert request.permission_mode == "auto"
-        assert agent_config.active_profile_name == "auto"
+        response = await stream_chat(
+            request,
+            _mock_ctx(user_id="alice", permissions={"module.chat.permission_mode"}),
+            _request_with_service(svc),
+        )
+
+        assert isinstance(response, StreamingResponse)
+        require_permission.assert_awaited_once_with(ANY, "module.chat.permission_mode")
+        project_config.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("enterprise_enabled", "permission_mode"),
+        [(False, "dangerous"), (True, None), (True, "normal")],
+    )
+    async def test_permission_mode_authorization_skips_non_elevated_requests(
+        self,
+        monkeypatch,
+        enterprise_enabled,
+        permission_mode,
+    ):
+        request = StreamChatInput(message="hi", permission_mode=permission_mode)
+        require_permission = AsyncMock(return_value=None)
+        monkeypatch.setattr("datus.api.routes.chat_routes.require_authorized_module", require_permission)
+
+        await _authorize_chat_permission_mode(
+            request,
+            _mock_ctx(user_id="bob", permissions={"module.chat"}),
+            enterprise_enabled=enterprise_enabled,
+        )
+
+        require_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stream_rejects_unauthorized_elevated_mode_before_config_projection(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+        agent_record = {
+            "agent_id": "custom-chat",
+            "node_class": "chat",
+            "scoped_context": {
+                "_enterprise_agent_policy": {
+                    "runtime_policy": {"max_permission_mode": "dangerous"},
+                }
+            },
+        }
+        monkeypatch.setattr(
+            "datus.api.routes.chat_routes.resolve_enterprise_agent_for_dispatch",
+            AsyncMock(return_value=agent_record),
+        )
+        require_permission = AsyncMock(side_effect=HTTPException(status_code=403, detail="Permission denied."))
+        monkeypatch.setattr("datus.api.routes.chat_routes.require_authorized_module", require_permission)
+        project_config = AsyncMock(side_effect=AssertionError("config projection must not run"))
+        monkeypatch.setattr("datus.api.routes.chat_routes.project_request_config", project_config)
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("chat execution must not run"))
+        request = StreamChatInput(
+            message="hi",
+            subagent_id="custom-chat",
+            permission_mode="dangerous",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await stream_chat(
+                request,
+                _mock_ctx(user_id="bob", permissions={"module.chat"}),
+                _request_with_service(svc),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Permission mode 'dangerous' requires module.chat.permission_mode."
+        require_permission.assert_awaited_once()
+        project_config.assert_not_awaited()
+        svc.chat.stream_chat.assert_not_called()
 
 
 class CollectingAuditSink:

@@ -245,6 +245,29 @@ describe("useConfigurationManager", () => {
     expect(manager.datasourceProbeResult.value).toEqual({ ok: true, message: "datasource ok" });
   });
 
+  it("does not expose failed probe details returned by providers", async () => {
+    testModel.mockResolvedValueOnce({
+      ok: false,
+      message: "HTTP 401 from https://models.private/v1",
+    });
+    const { useConfigurationManager } = await import("./useConfigurationManager");
+    const manager = useConfigurationManager();
+    manager.modelProbe.value = {
+      type: "openai",
+      model: "gpt-4.1",
+      api_key: "",
+      base_url: "",
+    };
+
+    await manager.testModelProbe();
+
+    expect(manager.modelProbeResult.value).toEqual({
+      ok: false,
+      message: "连接测试失败，请检查配置",
+    });
+    expect(JSON.stringify(manager.modelProbeResult.value)).not.toContain("models.private");
+  });
+
   it("tests saved provider and custom model references without browser credentials", async () => {
     const { useConfigurationManager } = await import("./useConfigurationManager");
     const manager = useConfigurationManager();

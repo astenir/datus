@@ -1748,6 +1748,20 @@ class InMemorySessionOwnerStore:
     async def get_owner(self, project_id: str, session_id: str) -> str | None:
         return self._owners.get((project_id, session_id))
 
+    async def get_session(self, project_id: str, session_id: str) -> dict[str, Any] | None:
+        """Return one owner record for admin session details."""
+
+        owner = self._owners.get((project_id, session_id))
+        if owner is None:
+            return None
+        return {
+            "project_id": project_id,
+            "session_id": session_id,
+            "user_id": owner,
+            "created_at": None,
+            "updated_at": None,
+        }
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         self._owners.pop((project_id, session_id), None)
 
@@ -1812,6 +1826,28 @@ class SqliteSessionOwnerStore:
                 (project_id, session_id),
             ).fetchone()
         return str(row[0]) if row else None
+
+    async def get_session(self, project_id: str, session_id: str) -> dict[str, Any] | None:
+        """Return one owner record for admin session details."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT project_id, session_id, user_id, created_at, updated_at
+                FROM session_owners
+                WHERE project_id = ? AND session_id = ?
+                """,
+                (project_id, session_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "project_id": str(row[0]),
+            "session_id": str(row[1]),
+            "user_id": str(row[2]),
+            "created_at": row[3],
+            "updated_at": row[4],
+        }
 
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         with self._connect() as conn:

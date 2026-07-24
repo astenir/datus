@@ -23,6 +23,8 @@ export interface PersonalDatasourceForm {
   enabled: boolean;
 }
 
+const DATASOURCE_CONNECTION_FAILURE = "数据源连接失败，请检查配置、凭据和网络后重试";
+
 function resultData<T>(response: ApiResponse<T>, fallback: T): T {
   if (!response.success) {
     throw new Error(response.errorMessage || response.errorCode || "请求失败");
@@ -81,7 +83,7 @@ export function usePersonalDatasources() {
       ensureFormDefaults();
     } catch (err) {
       console.error("加载个人数据源失败:", err);
-      error.value = err instanceof Error ? err.message : "加载个人数据源失败";
+      error.value = "加载个人数据源失败";
       toast.error("加载个人数据源失败");
     } finally {
       loading.value = false;
@@ -121,7 +123,7 @@ export function usePersonalDatasources() {
       await load();
     } catch (err) {
       console.error("保存个人数据源失败:", err);
-      error.value = err instanceof Error ? err.message : "保存个人数据源失败";
+      error.value = "保存个人数据源失败";
       toast.error("保存个人数据源失败");
       throw err;
     } finally {
@@ -138,7 +140,7 @@ export function usePersonalDatasources() {
       await load();
     } catch (err) {
       console.error("删除个人数据源失败:", err);
-      error.value = err instanceof Error ? err.message : "删除个人数据源失败";
+      error.value = "删除个人数据源失败";
       toast.error("删除个人数据源失败");
     } finally {
       saving.value = false;
@@ -152,9 +154,9 @@ export function usePersonalDatasources() {
       if (result.ok) {
         toast.success("数据源连接可用");
       } else {
-        toast.error(result.message || "数据源连接不可用");
+        toast.error(DATASOURCE_CONNECTION_FAILURE);
       }
-      return result;
+      return result.ok ? result : { ...result, message: DATASOURCE_CONNECTION_FAILURE };
     } catch (err) {
       console.error("测试个人数据源失败:", err);
       toast.error("测试个人数据源失败");

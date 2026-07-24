@@ -92,6 +92,68 @@ describe("useCatalog", () => {
     expect(catalog.databaseOptions.value).toEqual([{ value: "fund", label: "fund" }]);
   });
 
+  it("exposes separate loading states for database and schema requests", async () => {
+    const databaseResult = deferred<{ databases: Array<{ name: string; schema_name: string; tables: never[] }> }>();
+    const staleSchemaResult = deferred<{ databases: Array<{ name: string; schema_name: string; tables: never[] }> }>();
+    const latestSchemaResult = deferred<{ databases: Array<{ name: string; schema_name: string; tables: never[] }> }>();
+    const list = vi.fn()
+      .mockReturnValueOnce(databaseResult.promise)
+      .mockReturnValueOnce(staleSchemaResult.promise)
+      .mockReturnValueOnce(latestSchemaResult.promise);
+
+    vi.doMock("@/lib/api", () => ({
+      catalogApi: {
+        list,
+        status: vi.fn(),
+        prewarm: vi.fn(),
+      },
+    }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({
+        effectiveBase: () => "",
+      }),
+    }));
+    vi.doMock("@/lib/utils", () => ({
+      handleError: vi.fn(),
+    }));
+
+    const { useCatalog } = await import("./useCatalog");
+    const catalog = useCatalog();
+
+    const databaseLoad = catalog.loadCatalog(undefined, "fund");
+    expect(catalog.isLoadingCatalog.value).toBe(true);
+    expect(catalog.isLoadingDatabases.value).toBe(true);
+    expect(catalog.isLoadingSchemas.value).toBe(false);
+
+    databaseResult.resolve({
+      databases: [{ name: "fund", schema_name: "public", tables: [] }],
+    });
+    await databaseLoad;
+    expect(catalog.isLoadingCatalog.value).toBe(false);
+    expect(catalog.isLoadingDatabases.value).toBe(false);
+
+    const staleSchemaLoad = catalog.loadCatalog("fund", "fund");
+    expect(catalog.isLoadingCatalog.value).toBe(true);
+    expect(catalog.isLoadingDatabases.value).toBe(false);
+    expect(catalog.isLoadingSchemas.value).toBe(true);
+
+    const latestSchemaLoad = catalog.loadCatalog("analytics", "fund");
+    latestSchemaResult.resolve({
+      databases: [{ name: "analytics", schema_name: "reporting", tables: [] }],
+    });
+    await latestSchemaLoad;
+    expect(catalog.isLoadingCatalog.value).toBe(false);
+    expect(catalog.isLoadingSchemas.value).toBe(false);
+
+    staleSchemaResult.resolve({
+      databases: [{ name: "fund", schema_name: "public", tables: [] }],
+    });
+    await staleSchemaLoad;
+    expect(catalog.catalogEntries.value).toEqual([
+      { name: "analytics", schema_name: "reporting", tables: [] },
+    ]);
+  });
+
   it("keeps catalog snapshots and selections per datasource", async () => {
     const list = vi.fn()
       .mockResolvedValueOnce({

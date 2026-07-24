@@ -26,6 +26,7 @@ MODEL_POLICY = "model_policy"
 QUOTA = "quota"
 TOOL_PERMISSION = "tool_permission"
 AGENT_ACL = "agent_acl"
+PERMISSION_MODE_RBAC = "permission_mode_rbac"
 
 KNOWN_SECURITY_CATEGORIES = frozenset(
     {
@@ -47,6 +48,7 @@ KNOWN_SECURITY_CATEGORIES = frozenset(
         QUOTA,
         TOOL_PERMISSION,
         AGENT_ACL,
+        PERMISSION_MODE_RBAC,
     }
 )
 
@@ -157,6 +159,19 @@ _CHAT_CONTROL_EXCEPTION_POLICY = _policy(
     MUTATION_EXECUTION,
     note="Operational stop/cancel control remains available during readonly/maintenance.",
 )
+_SUCCESS_STORY_WRITE_POLICY = _policy(
+    MODULE_RBAC,
+    SESSION_OWNER,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    AUDIT,
+    module_permission="module.kb",
+    audit_action="knowledge.success_story.save",
+    note=(
+        "Server resolves the successful read-only SQL and datasource from owner-scoped canonical session history, "
+        "then stores it in a datasource-isolated benchmark file."
+    ),
+)
 _CATALOG_READ_POLICY = _policy(
     MODULE_RBAC,
     DATASOURCE_PROJECTION,
@@ -254,6 +269,7 @@ _add(
     _policy(
         AGENT_ACL,
         TOOL_PERMISSION,
+        PERMISSION_MODE_RBAC,
         SESSION_OWNER,
         DATASOURCE_PROJECTION,
         DATASOURCE_GRANT,
@@ -264,6 +280,10 @@ _add(
         PLATFORM_STATUS_GATE,
         MUTATION_EXECUTION,
         audit_action="chat.stream",
+        note=(
+            "Agent dispatch uses Agent ACL; auto/dangerous permission modes additionally require "
+            "module.chat.permission_mode before execution."
+        ),
         data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, SQL_POLICY},
     ),
 )
@@ -469,11 +489,12 @@ _add_many(
         "/api/v1/agent/edit",
         "/api/v1/data_visualization",
         "/api/v1/tools/{tool_name}",
-        "/api/v1/success-stories",
     ],
     _LEGACY_DISABLED_POLICY,
 )
 _add_many("DELETE", ["/api/v1/subject/delete", "/api/v1/agent/delete"], _LEGACY_DISABLED_POLICY)
+
+_add("POST", "/api/v1/success-stories", _SUCCESS_STORY_WRITE_POLICY)
 
 _add(
     "GET",

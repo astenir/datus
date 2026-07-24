@@ -17,6 +17,9 @@ export function idleChatStreamActivity(): ChatStreamActivity {
     connectedAt: null,
     lastEventAt: null,
     lastContentAt: null,
+    activeTools: {},
+    toolCallCount: 0,
+    toolCompletedCount: 0,
   };
 }
 
@@ -27,6 +30,9 @@ export function startedChatStreamActivity(now = Date.now()): ChatStreamActivity 
     connectedAt: null,
     lastEventAt: null,
     lastContentAt: null,
+    activeTools: {},
+    toolCallCount: 0,
+    toolCompletedCount: 0,
   };
 }
 
@@ -55,6 +61,11 @@ function latestActivityBlock(blocks: readonly MessageBlock[] = []) {
   );
 }
 
+function toolCallKey(incoming: ParsedMessage, callToolId?: string) {
+  if (callToolId) return callToolId;
+  return incoming.message.id.replace(/^complete_/, "");
+}
+
 export function chatStreamActivityAfterEvent(
   activity: ChatStreamActivity,
   event: SseEvent,
@@ -77,27 +88,41 @@ export function chatStreamActivityAfterEvent(
     return { ...next, phase: "awaiting_user", lastContentAt: now };
   }
   if (block?.type === "tool-call") {
+    const callToolId = toolCallKey(incoming, block.callToolId);
+    const existing = next.activeTools[callToolId];
     return {
       ...next,
-      phase: "running_tool",
+      phase: next.phase === "awaiting_user" ? "awaiting_user" : "running_tool",
       lastContentAt: now,
-      activeOperation: block.toolName,
+      activeTools: {
+        ...next.activeTools,
+        [callToolId]: existing ?? { callToolId, toolName: block.toolName, startedAt: now },
+      },
+      toolCallCount: next.toolCallCount + (existing ? 0 : 1),
     };
   }
   if (block?.type === "tool-result") {
+    const callToolId = toolCallKey(incoming, block.callToolId);
+    const wasActive = Boolean(next.activeTools[callToolId]);
+    const activeTools = { ...next.activeTools };
+    delete activeTools[callToolId];
     return {
       ...next,
-      phase: "connected",
+      phase: next.phase === "awaiting_user"
+        ? "awaiting_user"
+        : Object.keys(activeTools).length > 0 ? "running_tool" : "preparing_response",
       lastContentAt: now,
-      activeOperation: undefined,
+      activeTools,
+      toolCompletedCount: next.toolCompletedCount + (wasActive ? 1 : 0),
     };
   }
 
   return {
     ...next,
-    phase: "responding",
+    phase: next.phase === "awaiting_user"
+      ? "awaiting_user"
+      : Object.keys(next.activeTools).length > 0 ? "running_tool" : "responding",
     lastContentAt: now,
-    activeOperation: undefined,
   };
 }
 
@@ -107,7 +132,7 @@ export function continuingChatStreamActivity(
 ): ChatStreamActivity {
   return {
     ...activity,
-    phase: activity.activeOperation ? "running_tool" : "connected",
+    phase: Object.keys(activity.activeTools).length > 0 ? "running_tool" : "connected",
     lastEventAt: now,
   };
 }
@@ -140,7 +165,7 @@ export function chatActivityPresentation(
     return { visible: false, tone: "normal", label: "" };
   }
 
-  const lastActivityAt = activity.lastEventAt ?? startedAt;
+  const lastActivityAt = activity.lastContentAt ?? activity.connectedAt ?? startedAt;
   const idleMs = Math.max(0, now - lastActivityAt);
   const elapsed = formatElapsed(Math.floor(elapsedMs / 1000));
 
@@ -158,12 +183,34 @@ export function chatActivityPresentation(
   if (activity.phase === "responding") {
     return { visible: false, tone: "normal", label: "" };
   }
-  if (activity.phase === "running_tool") {
+  if (activity.phase === "preparing_response") {
     return {
       visible: true,
       tone: "normal",
-      label: activity.activeOperation ? `正在执行 ${activity.activeOperation}` : "正在执行工具",
-      detail: elapsedMs >= CHAT_ACTIVITY_LONG_WAIT_MS ? elapsed : undefined,
+      label: "正在整理工具结果…",
+      detail: idleMs >= CHAT_ACTIVITY_LONG_WAIT_MS
+        ? `已等待 ${formatElapsed(Math.floor(idleMs / 1000))}`
+        : undefined,
+    };
+  }
+  if (activity.phase === "running_tool") {
+    const activeTools = Object.values(activity.activeTools);
+    const activeCount = activeTools.length;
+    const progress = activity.toolCallCount > 1
+      ? `已完成 ${activity.toolCompletedCount}/${activity.toolCallCount}`
+      : undefined;
+    const activeStartedAt = Math.min(...activeTools.map((tool) => tool.startedAt));
+    const toolElapsedMs = Math.max(0, now - activeStartedAt);
+    const elapsedDetail = toolElapsedMs >= CHAT_ACTIVITY_LONG_WAIT_MS
+      ? formatElapsed(Math.floor(toolElapsedMs / 1000))
+      : undefined;
+    return {
+      visible: true,
+      tone: "normal",
+      label: activeCount === 1
+        ? `正在执行 ${activeTools[0]?.toolName ?? "工具"}`
+        : `正在并行执行 ${activeCount} 个工具`,
+      detail: [progress, elapsedDetail].filter(Boolean).join(" · ") || undefined,
     };
   }
   if (elapsedMs >= CHAT_ACTIVITY_EXTENDED_WAIT_MS) {

@@ -66,6 +66,11 @@ class FakeChatService:
         return Result(success=True, data=ChatSessionData())
 
 
+class FailingSessionLookupChatService(FakeChatService):
+    def session_exists(self, session_id, user_id=None):
+        raise RuntimeError("session body store down")
+
+
 class LegacyOwnerStore:
     def __init__(self):
         self.owners = {}
@@ -95,6 +100,20 @@ class FailingOwnerStore(InMemorySessionOwnerStore):
 class DeleteFailingOwnerStore(InMemorySessionOwnerStore):
     async def delete_owner(self, project_id, session_id):
         raise RuntimeError("owner delete down")
+
+
+class TimestampedOwnerStore(InMemorySessionOwnerStore):
+    async def get_session(self, project_id, session_id):
+        owner = await self.get_owner(project_id, session_id)
+        if owner is None:
+            return None
+        return {
+            "project_id": project_id,
+            "session_id": session_id,
+            "user_id": owner,
+            "created_at": "2026-07-01T08:00:00+00:00",
+            "updated_at": "2026-07-02T09:30:00+00:00",
+        }
 
 
 def _install_extensions(monkeypatch, owner_store, audit_sink):
@@ -270,7 +289,7 @@ def test_admin_sessions_user_filter_does_not_include_other_user_runtime_only_tas
 
 
 def test_admin_session_detail_returns_owner_and_runtime_status(monkeypatch):
-    owner_store = InMemorySessionOwnerStore()
+    owner_store = TimestampedOwnerStore()
     asyncio.run(owner_store.set_owner("project", "s2", "bob"))
     audit_sink = CollectingAuditSink()
     _install_extensions(monkeypatch, owner_store, audit_sink)
@@ -288,8 +307,28 @@ def test_admin_session_detail_returns_owner_and_runtime_status(monkeypatch):
     assert body["data"]["owner_user_id"] == "bob"
     assert body["data"]["status"] == "running"
     assert body["data"]["consumer_offset"] == 0
+    assert body["data"]["created_at"] == "2026-07-01T08:00:00+00:00"
+    assert body["data"]["updated_at"] == "2026-07-02T09:30:00+00:00"
     assert audit_sink.events[-1].metadata["operation"] == "get_admin_session"
     assert audit_sink.events[-1].metadata["old"]["status"] == "running"
+
+
+def test_admin_session_body_lookup_failure_is_reported_as_unknown(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s2", "bob"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc()
+    svc.chat = FailingSessionLookupChatService()
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/admin/sessions/s2")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["exists_on_disk"] is None
 
 
 @pytest.mark.parametrize(

@@ -16,9 +16,11 @@ from datus.api.enterprise.route_security_matrix import (
     LOCAL_COMPATIBLE,
     MODULE_RBAC,
     MUTATION_EXECUTION,
+    PERMISSION_MODE_RBAC,
     PLATFORM_STATUS_EXCEPTION,
     PLATFORM_STATUS_GATE,
     ROUTE_SECURITY_MATRIX,
+    SESSION_OWNER,
     SYSTEM_READONLY,
     TABLE_SCOPE,
     route_key,
@@ -63,6 +65,7 @@ def test_route_security_categories_are_known_and_cover_required_dimensions():
         SYSTEM_READONLY,
         LOCAL_COMPATIBLE,
         AGENT_ACL,
+        PERMISSION_MODE_RBAC,
     } <= seen_categories
 
 
@@ -128,6 +131,21 @@ def test_kb_bootstrap_declares_request_scoped_datasource_boundaries():
     assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.data_boundaries
 
 
+def test_success_story_save_uses_live_kb_session_and_audit_policy():
+    policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/success-stories")]
+
+    assert {
+        MODULE_RBAC,
+        SESSION_OWNER,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        AUDIT,
+    } <= policy.categories
+    assert LEGACY_DISABLED not in policy.categories
+    assert policy.module_permission == "module.kb"
+    assert policy.audit_action == "knowledge.success_story.save"
+
+
 def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_policy():
     legacy_routes = {
         key: policy for key, policy in ROUTE_SECURITY_MATRIX.items() if LEGACY_DISABLED in policy.categories
@@ -173,6 +191,9 @@ def test_agent_catalog_and_dispatch_use_agent_acl_not_module_rbac():
         assert AGENT_ACL in policy.categories
         assert MODULE_RBAC not in policy.categories
         assert policy.module_permission is None
+
+    chat_stream_policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/chat/stream")]
+    assert PERMISSION_MODE_RBAC in chat_stream_policy.categories
 
 
 def test_datasource_grant_admin_routes_carry_datasource_boundary():

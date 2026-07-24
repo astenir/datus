@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue"
-import { RefreshCwIcon } from "@lucide/vue"
+import { EyeIcon, FilePenLineIcon, RefreshCwIcon, Share2Icon } from "@lucide/vue"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogScrollContent,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Spinner } from "@/components/ui/spinner"
 import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
@@ -40,6 +43,10 @@ const detailTargetSlug = shallowRef<string | null>(null)
 const selectedViewerSlug = computed(() => props.selectedSlug?.trim() || null)
 const selectedDetailSlug = computed(() => detailTargetSlug.value)
 const detailKindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘")
+const detailDialogTitle = computed(() => {
+  if (artifacts.detailLoading.value) return `${detailKindLabel.value}详情`
+  return artifacts.activeDetail.value?.name?.trim() || `${detailKindLabel.value}详情`
+})
 const viewerPreviewKey = computed(() => {
   const slug = selectedViewerSlug.value
   return slug ? artifactPreviewKey(props.tab, slug) : null
@@ -60,6 +67,11 @@ const selectedShareLoading = computed(() => {
   if (!slug) return false
   return artifacts.shareLoadingKey.value === artifactPreviewKey(props.tab, slug)
 })
+const selectedPreviewOpening = computed(() => {
+  const slug = selectedDetailSlug.value
+  if (!slug) return false
+  return artifacts.previewLoadingKey.value === artifactPreviewKey(props.tab, slug)
+})
 const selectedDetailCanManageShare = computed(() => {
   const slug = selectedDetailSlug.value
   if (!slug) return false
@@ -74,6 +86,7 @@ const selectedDetailCanEdit = computed(() => {
   const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
   return items.some(item => item.slug === slug && item.can_edit === true)
 })
+const selectedEditLoading = computed(() => editingSlugFor(props.tab) === selectedDetailSlug.value)
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))
@@ -227,8 +240,11 @@ watch(
           :disabled="artifacts.listLoading.value"
           @click="artifacts.loadArtifacts(props.tab)"
         >
-          <RefreshCwIcon data-icon="inline-start" />
-          刷新
+          <RefreshCwIcon
+            data-icon="inline-start"
+            :class="artifacts.listLoading.value && 'animate-spin'"
+          />
+          {{ artifacts.listLoading.value ? "刷新中" : "刷新" }}
         </Button>
       </div>
 
@@ -269,36 +285,91 @@ watch(
       :open="detailDialogOpen"
       @update:open="handleDetailDialogOpen"
     >
-      <DialogScrollContent class="max-h-[88vh] w-[calc(100vw-2rem)] min-w-0 overflow-y-auto sm:max-w-2xl lg:max-w-4xl">
-        <DialogHeader class="min-w-0 pr-8">
-          <DialogTitle>{{ detailKindLabel }}详情</DialogTitle>
+      <DialogScrollContent class="my-0 grid h-[100dvh] max-h-[100dvh] w-screen max-w-none min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden border-0 p-0 sm:my-8 sm:h-auto sm:max-h-[88vh] sm:w-[calc(100vw-2rem)] sm:max-w-3xl sm:rounded-lg sm:border md:w-[calc(100vw-2rem)] lg:max-w-5xl">
+        <DialogHeader class="min-w-0 border-b px-4 py-4 pr-12 sm:px-6 sm:py-5 sm:pr-14">
+          <div class="flex min-w-0 items-center gap-2">
+            <Badge
+              class="shrink-0"
+              variant="secondary"
+            >
+              {{ detailKindLabel }}
+            </Badge>
+            <DialogTitle class="min-w-0 truncate">{{ detailDialogTitle }}</DialogTitle>
+          </div>
           <DialogDescription class="truncate">
             {{ selectedDetailSlug ?? "未选择产物" }}
           </DialogDescription>
         </DialogHeader>
 
-        <div class="pr-1">
+        <div class="min-h-0 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           <ArtifactDetailPanel
             v-if="selectedDetailSlug"
             :tab="props.tab"
             :detail="artifacts.activeDetail.value"
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
-            :preview-opening="false"
-            :share-loading="selectedShareLoading"
-            :can-manage-share="selectedDetailCanManageShare"
-            :can-edit="selectedDetailCanEdit"
-            :edit-loading="editingSlugFor(props.tab) === selectedDetailSlug"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
-            @open-preview="openPreview(props.tab, selectedDetailSlug)"
-            @share="openShare(props.tab, selectedDetailSlug)"
-            @edit="editArtifact(props.tab, selectedDetailSlug)"
             @run-dashboard-query="runDashboardQuery"
           />
         </div>
+
+        <DialogFooter
+          v-if="artifacts.activeDetail.value && !artifacts.detailLoading.value && !artifacts.detailError.value"
+          class="shrink-0 border-t px-4 py-3 sm:px-6"
+        >
+          <Button
+            v-if="selectedDetailCanManageShare"
+            variant="outline"
+            size="sm"
+            :disabled="selectedShareLoading"
+            @click="openShare(props.tab, selectedDetailSlug)"
+          >
+            <Spinner
+              v-if="selectedShareLoading"
+              data-icon="inline-start"
+            />
+            <Share2Icon
+              v-else
+              data-icon="inline-start"
+            />
+            {{ selectedShareLoading ? "加载中" : "分享设置" }}
+          </Button>
+          <Button
+            v-if="selectedDetailCanEdit"
+            variant="outline"
+            size="sm"
+            :disabled="selectedEditLoading"
+            @click="editArtifact(props.tab, selectedDetailSlug)"
+          >
+            <Spinner
+              v-if="selectedEditLoading"
+              data-icon="inline-start"
+            />
+            <FilePenLineIcon
+              v-else
+              data-icon="inline-start"
+            />
+            {{ selectedEditLoading ? "创建中" : `编辑${detailKindLabel}` }}
+          </Button>
+          <Button
+            size="sm"
+            :disabled="selectedPreviewOpening"
+            @click="openPreview(props.tab, selectedDetailSlug)"
+          >
+            <Spinner
+              v-if="selectedPreviewOpening"
+              data-icon="inline-start"
+            />
+            <EyeIcon
+              v-else
+              data-icon="inline-start"
+            />
+            {{ selectedPreviewOpening ? "加载中" : "查看" }}
+          </Button>
+        </DialogFooter>
       </DialogScrollContent>
     </Dialog>
 

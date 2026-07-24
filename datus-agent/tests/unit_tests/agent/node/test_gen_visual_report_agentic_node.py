@@ -54,6 +54,25 @@ def _make_node(real_agent_config, **overrides):
     return GenVisualReportAgenticNode(**kwargs)
 
 
+def _render_prompt(real_agent_config, *, access_mode: str, version: str | None = None) -> str:
+    from datus.prompts.prompt_manager import get_prompt_manager
+
+    return get_prompt_manager(agent_config=real_agent_config).render_template(
+        template_name="gen_visual_report_system",
+        version=version,
+        artifact_access_mode=access_mode,
+        has_semantic_tools=False,
+        has_db_tools=False,
+        has_context_search_tools=False,
+        has_ask_user_tool=False,
+        has_task_tool=False,
+        agent_config=real_agent_config,
+        report_slug=None,
+        rules=[],
+        agent_description="",
+    )
+
+
 _APP_JSX_TEMPLATE = """\
 /** @datus-title {title} */
 import React from 'react';
@@ -149,6 +168,18 @@ class TestGenVisualReportInit:
         )
         assert result.success == 0
         assert "ACL-authorized binding" in (result.error or "")
+
+    def test_enterprise_create_prompt_does_not_require_slug_discovery(self, real_agent_config):
+        prompt = _render_prompt(real_agent_config, access_mode="create")
+
+        assert "Enterprise create-only report session" in prompt
+        assert "always** run `glob('reports/*')`" not in prompt
+        assert "Use `glob('reports/*')` to discover existing slugs" not in prompt
+
+    def test_local_prompt_keeps_slug_discovery(self, real_agent_config):
+        prompt = _render_prompt(real_agent_config, access_mode="legacy", version="1.0")
+
+        assert "always** run `glob('reports/*')`" in prompt
 
     def test_tool_registry_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
         """Filesystem tools must be declared in the ``filesystem_tools``

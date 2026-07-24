@@ -75,6 +75,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
@@ -244,6 +245,15 @@ const visibleSessions = computed(() => {
     return titleFromQuery(session.user_query).toLocaleLowerCase().includes(needle)
   })
 })
+const isInitialSessionLoad = computed(() =>
+  props.workspace.isLoadingSessions.value && props.workspace.sessions.value.length === 0
+)
+const isRefreshingSessions = computed(() =>
+  props.workspace.isLoadingSessions.value && props.workspace.sessions.value.length > 0
+)
+const emptySessionLabel = computed(() =>
+  searchQuery.value.trim() ? "没有匹配的会话" : "暂无历史对话"
+)
 const sessionCountLabel = computed(() => {
   const count = visibleSessions.value.length
   return count > 99 ? "99+" : String(count)
@@ -371,7 +381,7 @@ async function compactSession(sessionId: string) {
       toast.success(`会话已压缩${saved}`)
       return
     }
-    toast.error(result?.error || "会话压缩失败")
+    toast.error("会话压缩失败")
   } catch (error) {
     console.error("压缩会话失败:", error)
     toast.error("会话压缩失败")
@@ -572,12 +582,20 @@ async function deleteSession(sessionId: string) {
           <span>历史对话</span>
           <Badge
             variant="outline"
-            class="h-5 rounded-md px-1.5"
+            class="h-5 gap-1 rounded-md px-1.5"
           >
+            <Spinner
+              v-if="isRefreshingSessions"
+              aria-label="正在刷新历史对话"
+              class="size-3"
+            />
             {{ sessionCountLabel }}
           </Badge>
         </SidebarGroupLabel>
-        <SidebarGroupContent class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <SidebarGroupContent
+          :aria-busy="workspace.isLoadingSessions.value"
+          class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden"
+        >
           <InputGroup class="mt-1 h-9 rounded-lg bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
             <InputGroupAddon>
               <SearchIcon data-icon="inline-start" />
@@ -586,12 +604,26 @@ async function deleteSession(sessionId: string) {
               v-model="searchQuery"
               aria-label="搜索会话"
               placeholder="搜索历史..."
+              :disabled="isInitialSessionLoad"
               class="text-sm"
             />
           </InputGroup>
 
           <ScrollArea class="-mr-3 min-h-0 flex-1 pr-0">
-            <SidebarMenu class="gap-0.5 pr-4 pt-0.5">
+            <div
+              v-if="isInitialSessionLoad"
+              role="status"
+              aria-live="polite"
+              class="mr-4 flex items-center justify-center gap-2 rounded-lg bg-sidebar-accent/50 px-3 py-6 text-sm text-muted-foreground"
+            >
+              <Spinner aria-hidden="true" />
+              正在加载历史对话...
+            </div>
+
+            <SidebarMenu
+              v-else
+              class="gap-0.5 pr-4 pt-0.5"
+            >
               <SidebarMenuItem
                 v-for="session in visibleSessions"
                 :key="session.session_id"
@@ -640,10 +672,10 @@ async function deleteSession(sessionId: string) {
             </SidebarMenu>
 
             <div
-              v-if="visibleSessions.length === 0"
+              v-if="!isInitialSessionLoad && visibleSessions.length === 0"
               class="rounded-lg bg-sidebar-accent/50 px-3 py-6 text-center text-sm text-muted-foreground"
             >
-              没有匹配的会话
+              {{ emptySessionLabel }}
             </div>
           </ScrollArea>
         </SidebarGroupContent>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BundledLanguage } from "shiki"
 import { computed, shallowRef } from "vue"
-import { PlayIcon } from "@lucide/vue"
+import { BookmarkPlusIcon, CheckIcon, Loader2Icon, PlayIcon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -30,7 +30,7 @@ import {
   summarizeValue,
   tableFromToolValue,
 } from "@/lib/tool-display"
-import type { SelectOption } from "@/types"
+import type { SelectOption, SuccessStorySource } from "@/types"
 
 const MAX_VISIBLE_ROWS = 50
 
@@ -42,6 +42,13 @@ const props = defineProps<{
   datasourceName?: string
   datasourceOptions?: readonly SelectOption[]
   databaseName?: string
+  successStorySource?: SuccessStorySource
+  successStorySaving?: boolean
+  successStorySaved?: boolean
+}>()
+
+const emit = defineEmits<{
+  saveSuccessStory: [source: SuccessStorySource]
 }>()
 
 const sqlDialogOpen = shallowRef(false)
@@ -111,6 +118,11 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
+function saveSuccessStory() {
+  if (!props.successStorySource || props.successStorySaving || props.successStorySaved) return
+  emit("saveSuccessStory", props.successStorySource)
+}
+
 </script>
 
 <template>
@@ -142,6 +154,37 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       <CodeBlockHeader class="px-2 py-1">
         <CodeBlockTitle>SQL</CodeBlockTitle>
         <CodeBlockActions>
+          <TooltipProvider v-if="successStorySource">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  :disabled="successStorySaving || successStorySaved"
+                  :aria-label="successStorySaved ? '已保存为成功案例' : '保存为成功案例'"
+                  @click="saveSuccessStory"
+                >
+                  <Loader2Icon
+                    v-if="successStorySaving"
+                    data-icon="inline-start"
+                    class="animate-spin"
+                  />
+                  <CheckIcon
+                    v-else-if="successStorySaved"
+                    data-icon="inline-start"
+                  />
+                  <BookmarkPlusIcon
+                    v-else
+                    data-icon="inline-start"
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{{ successStorySaved ? "已保存为成功案例" : "保存为成功案例" }}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <TooltipProvider v-if="canExecuteSql">
             <Tooltip>
               <TooltipTrigger as-child>

@@ -284,6 +284,10 @@ class PgSessionBodyStore:
                     *keys,
                 )
                 await conn.execute(
+                    "DELETE FROM enterprise_session_terminal_events WHERE project_id=$1 AND scope=$2 AND session_id=$3",
+                    *keys,
+                )
+                await conn.execute(
                     "DELETE FROM enterprise_session_turn_usage WHERE project_id=$1 AND scope=$2 AND session_id=$3",
                     *keys,
                 )
@@ -467,6 +471,56 @@ class PgSessionBodyStore:
                 session_id=session_id,
             )
         ]
+
+    async def append_session_terminal_event(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        session_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        await self._ensure_schema()
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO enterprise_session_terminal_events
+                  (project_id, scope, session_id, event_id, event_type, payload_json)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (project_id, scope, session_id, event_id) DO NOTHING
+                """,
+                _normalize_project_id(project_id),
+                _normalize_scope(scope),
+                session_id,
+                str(event["event_id"]),
+                str(event["event_type"]),
+                json.dumps(event, ensure_ascii=False),
+            )
+
+    async def get_session_terminal_events(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> list[dict[str, Any]]:
+        await self._ensure_schema()
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT payload_json
+                FROM enterprise_session_terminal_events
+                WHERE project_id=$1 AND scope=$2 AND session_id=$3
+                ORDER BY created_at, id
+                """,
+                _normalize_project_id(project_id),
+                _normalize_scope(scope),
+                session_id,
+            )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = _loads(row["payload_json"])
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
 
     async def get_detailed_usage(self, *, project_id: str, scope: str | None, session_id: str) -> dict[str, Any]:
         session = self.open_session(project_id=project_id, scope=scope, session_id=session_id)
@@ -1225,6 +1279,18 @@ CREATE TABLE IF NOT EXISTS enterprise_session_system_prompts (
   PRIMARY KEY (project_id, scope, session_id)
 );
 
+CREATE TABLE IF NOT EXISTS enterprise_session_terminal_events (
+  id BIGSERIAL PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, scope, session_id, event_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_enterprise_session_bodies_updated
   ON enterprise_session_bodies (project_id, scope, updated_at);
 CREATE INDEX IF NOT EXISTS idx_enterprise_session_messages_session
@@ -1233,4 +1299,6 @@ CREATE INDEX IF NOT EXISTS idx_enterprise_session_structure_seq
   ON enterprise_session_message_structure (project_id, scope, session_id, branch_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_enterprise_session_usage_turn
   ON enterprise_session_turn_usage (project_id, scope, session_id, branch_id, user_turn_number);
+CREATE INDEX IF NOT EXISTS idx_enterprise_session_terminal_events_session
+  ON enterprise_session_terminal_events (project_id, scope, session_id, created_at, id);
 """

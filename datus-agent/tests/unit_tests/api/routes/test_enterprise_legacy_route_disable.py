@@ -13,7 +13,7 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
-from datus.api.routes import agent_routes, explorer_routes, success_story_routes, tool_routes, visualization_routes
+from datus.api.routes import agent_routes, explorer_routes, tool_routes, visualization_routes
 from datus.api.service import _include_api_router
 
 
@@ -74,14 +74,6 @@ def _client(monkeypatch, router, route_name: str, ctx: AppContext):
             "visualization.legacy",
         ),
         (tool_routes.router, "tool", "post", "/api/v1/tools/db_tools.read_query", {}, "tools.direct_dispatch"),
-        (
-            success_story_routes.router,
-            "success_story",
-            "post",
-            "/api/v1/success-stories",
-            {"messages": [], "metadata": {}},
-            "success_stories.write_legacy",
-        ),
     ],
 )
 def test_legacy_routes_are_disabled_in_enterprise_mode(

@@ -184,7 +184,10 @@ class DatusService:
         if self._success_story is None:
             from datus.api.services.success_story_service import SuccessStoryService
 
-            self._success_story = SuccessStoryService(agent_config=self._agent_config)
+            self._success_story = SuccessStoryService(
+                agent_config=self._agent_config,
+                project_id=self._project_id,
+            )
         return self._success_story
 
     @property

@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, shallowRef } from "vue"
 import type { ChatStatus } from "ai"
 import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
 import { toast } from "vue-sonner"
+import { useRouter } from "vue-router"
 import {
   Conversation,
   ConversationContent,
@@ -34,11 +35,15 @@ import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import { activeStreamingMessageId, activeUserInteractionRequest, mergeToolExecutionMessages } from "@/lib/chat"
 import { parsePermissionRequest } from "@/lib/interaction-display"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import { usePermission } from "@/composables/usePermission"
+import { useSuccessStory } from "@/composables/useSuccessStory"
+import { workspaceRouteNames } from "@/features/workspace/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
-import type { SelectOption } from "@/types"
+import type { SelectOption, SuccessStorySource } from "@/types"
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
+import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
@@ -46,6 +51,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   openArtifact: [tab: ArtifactViewTab, slug: string]
 }>()
+
+const router = useRouter()
+const permission = usePermission()
+const successStory = useSuccessStory()
 
 const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
 const DEFAULT_MODEL_VALUE = "__datus_default_model__"
@@ -57,6 +66,15 @@ type ModelOptionGroup = {
 }
 
 const displayMessages = computed(() => mergeToolExecutionMessages(props.workspace.messages.value))
+const canSaveSuccessStory = computed(() => permission.isAdmin() || permission.hasPermission("module.kb"))
+const successStorySessionLink = computed(() => {
+  const sessionId = props.workspace.selectedSession.value
+  if (!sessionId) return undefined
+  return router.resolve({
+    name: workspaceRouteNames.chatSession,
+    params: { sessionId },
+  }).href
+})
 const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.value ? "streaming" : "ready")
 const streamingMessageId = computed(() =>
   props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
@@ -192,6 +210,10 @@ function openArtifact(kind: string, slug: string) {
   const tab: ArtifactViewTab = kind === "report" ? "report" : "dashboard"
   emit("openArtifact", tab, slug)
 }
+
+function saveSuccessStory(source: SuccessStorySource) {
+  void successStory.save(source)
+}
 </script>
 
 <template>
@@ -228,7 +250,7 @@ function openArtifact(kind: string, slug: string) {
         <ChatMessageItem
           v-for="message in displayMessages"
           :key="message.id"
-          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value]"
+          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
           :message="message"
           :streaming="message.id === streamingMessageId"
           :interaction-disabled="Boolean(pendingInteractionKey)"
@@ -237,8 +259,15 @@ function openArtifact(kind: string, slug: string) {
           :datasource-name="workspace.currentDatasource.value"
           :datasource-options="workspace.visibleDatasourceOptions.value"
           :database-name="workspace.database.value"
+          :success-story-session-id="workspace.selectedSession.value ?? undefined"
+          :success-story-session-link="successStorySessionLink"
+          :can-save-success-story="canSaveSuccessStory"
+          :success-story-version="successStory.version.value"
+          :is-success-story-saving="successStory.isSaving"
+          :is-success-story-saved="successStory.isSaved"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"
+          @save-success-story="saveSuccessStory"
         />
         <ChatActivityStatus
           v-if="workspace.isStreaming.value"
@@ -251,6 +280,14 @@ function openArtifact(kind: string, slug: string) {
 
     <footer class="shrink-0 px-4 pb-5 pt-3 md:px-8 md:pb-7">
       <div class="mx-auto max-w-[52rem]">
+        <ChatErrorBlock
+          v-if="workspace.transportError.value"
+          :block="workspace.transportError.value"
+          dismissible
+          class="mb-3"
+          @dismiss="workspace.clearTransportError"
+        />
+
         <ActiveInteractionDock
           :interaction="dockedInteraction"
           :disabled="Boolean(pendingInteractionKey)"
@@ -293,6 +330,9 @@ function openArtifact(kind: string, slug: string) {
                 :schema-options="schemaOptions"
                 :agent-options="workspace.agentOptions.value"
                 :loading-catalog="workspace.isLoadingCatalog.value"
+                :loading-databases="workspace.isLoadingDatabases.value"
+                :loading-schemas="workspace.isLoadingSchemas.value"
+                :loading-agents="workspace.isLoadingAgents.value"
                 :switching-datasource="workspace.isPrewarmingCurrentDatasource.value"
                 :saving-default-agent="workspace.isSavingDefaultAgent.value"
                 @update-datasource="workspace.handleDatasourceSwitch"

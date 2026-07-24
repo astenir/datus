@@ -269,6 +269,8 @@ class FakeConnection:
             return row
         if "FROM enterprise_datasource_grants" in normalized and "WHERE subject_type" in normalized:
             return self.grants.get((args[0], args[1], args[2]))
+        if "FROM session_owners" in normalized and "SELECT project_id" in normalized:
+            return self.sessions.get((args[0], args[1]))
         if "FROM session_owners" in normalized and "SELECT user_id" in normalized:
             return self.sessions.get((args[0], args[1]))
         if "INSERT INTO enterprise_artifact_acls" in normalized:
@@ -721,6 +723,10 @@ async def test_pg_session_owner_store_set_get_list_and_delete(fake_pg):
     await store.set_owner("enterprise", "s2", "alice")
 
     assert await store.get_owner("enterprise", "s1") == "alice"
+    session = await store.get_session("enterprise", "s1")
+    assert session is not None
+    assert session["user_id"] == "alice"
+    assert await store.get_session("enterprise", "missing") is None
     assert await store.list_session_ids("enterprise", "alice") == ["s1", "s2"]
     assert [record["session_id"] for record in await store.list_sessions("enterprise", "alice")] == ["s1", "s2"]
 

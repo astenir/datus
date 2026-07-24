@@ -130,7 +130,7 @@ describe("useConnection", () => {
     expect(result).toEqual({ ok: false, message: "连接测试失败，请检查数据源配置" });
   });
 
-  it("keeps readable datasource test failures from the backend", async () => {
+  it("does not expose readable datasource failures returned by the backend", async () => {
     installLocalStorage("");
     const getAgent = vi.fn().mockResolvedValue({
       current_datasource: "fund",
@@ -161,7 +161,7 @@ describe("useConnection", () => {
     await connection.checkConnection();
     const result = await connection.testDatasource();
 
-    expect(result).toEqual({ ok: false, message: "password authentication failed" });
+    expect(result).toEqual({ ok: false, message: "连接测试失败，请检查数据源配置" });
   });
 
   it("switches datasource and refreshes the config summary", async () => {

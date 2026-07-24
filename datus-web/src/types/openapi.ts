@@ -3044,8 +3044,6 @@ export interface components {
 
         AgentRuntimePolicy: {
 
-            max_permission_mode: string;
-
             allow_subagent_delegation: boolean;
 
             allowed_subagents?: string[];
@@ -3124,6 +3122,10 @@ export interface components {
             datasources?: string[];
 
             key_tables?: string[];
+
+            owner_user_id?: string | null;
+
+            owner_display_name?: string | null;
 
             can_manage_share: boolean;
 
@@ -5579,13 +5581,17 @@ export interface components {
 
         SuccessStoryData: {
 
-            csv_path: string;
+            story_id: string;
+
+            created: boolean;
+
+            datasource_id: string;
 
             subagent_name: string;
 
-            session_id: string;
+            storage_key: string;
 
-            session_link?: string | null;
+            session_id: string;
 
             timestamp: string;
         };
@@ -5594,11 +5600,7 @@ export interface components {
 
             session_id: string;
 
-            sql: string;
-
-            user_message: string;
-
-            subagent_id?: string | null;
+            call_tool_id: string;
 
             session_link?: string | null;
         };

@@ -1192,17 +1192,17 @@ class DBFuncTool:
 
             metadata_rows: List[Dict[str, Any]] = []
             if metadata:
-                metadata_rows = metadata.select(
-                    [
-                        "catalog_name",
-                        "database_name",
-                        "schema_name",
-                        "table_name",
-                        "table_type",
-                        "identifier",
-                        "_distance",
-                    ]
-                ).to_pylist()
+                metadata_fields = [
+                    "catalog_name",
+                    "database_name",
+                    "schema_name",
+                    "table_name",
+                    "table_type",
+                    "identifier",
+                ]
+                if "_distance" in metadata.column_names:
+                    metadata_fields.append("_distance")
+                metadata_rows = metadata.select(metadata_fields).to_pylist()
             if not metadata_rows:
                 return FuncToolResult(success=1, result=result_dict)
 
@@ -1249,7 +1249,7 @@ class DBFuncTool:
             sample_rows: List[Dict[str, Any]] = []
             if sample_values:
                 if simple_sample_data:
-                    selected_fields = ["identifier", "table_type", "sample_rows", "_distance"]
+                    selected_fields = ["identifier", "table_type", "sample_rows"]
                 else:
                     selected_fields = [
                         "identifier",
@@ -1259,8 +1259,9 @@ class DBFuncTool:
                         "table_type",
                         "table_name",
                         "sample_rows",
-                        "_distance",
                     ]
+                if "_distance" in sample_values.column_names:
+                    selected_fields.append("_distance")
                 sample_rows = [
                     row
                     for row in sample_values.select(selected_fields).to_pylist()

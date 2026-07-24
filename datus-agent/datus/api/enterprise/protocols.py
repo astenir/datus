@@ -478,6 +478,23 @@ class SessionBodyStore(Protocol):
         """Return raw message rows for API history rendering."""
         ...
 
+    async def append_session_terminal_event(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        session_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        """Idempotently persist a display-only terminal chat event."""
+        ...
+
+    async def get_session_terminal_events(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> list[dict[str, Any]]:
+        """Return display-only terminal events in creation order."""
+        ...
+
     async def get_detailed_usage(self, *, project_id: str, scope: str | None, session_id: str) -> dict[str, Any]:
         """Return persisted turn usage plus any running-turn snapshot."""
         ...

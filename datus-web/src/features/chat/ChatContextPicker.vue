@@ -8,7 +8,6 @@ import {
   ChevronRightIcon,
   DatabaseIcon,
   Layers3Icon,
-  Loader2Icon,
   RotateCcwIcon,
   ServerIcon,
   StarIcon,
@@ -46,6 +45,9 @@ const props = defineProps<{
   schemaOptions: readonly SelectOption[]
   agentOptions: readonly SelectOption[]
   loadingCatalog: boolean
+  loadingDatabases: boolean
+  loadingSchemas: boolean
+  loadingAgents: boolean
   switchingDatasource: boolean
   savingDefaultAgent: boolean
 }>()
@@ -90,7 +92,17 @@ const defaultAgentActionDisabled = computed(() =>
   || (!props.selectedAgent && !props.userDefaultAgentId),
 )
 const schemaSelectDisabled = computed(() =>
-  !props.database || props.loadingCatalog || (props.schemaOptions.length === 0 && !props.schema),
+  !props.database || props.loadingSchemas || (props.schemaOptions.length === 0 && !props.schema),
+)
+const loadingContext = computed(() => props.loadingCatalog || props.loadingAgents || props.switchingDatasource)
+const loadingContextLabel = computed(() => {
+  if (props.switchingDatasource || props.loadingDatabases) return "正在连接数据源并加载数据库"
+  if (props.loadingSchemas) return "正在加载 Schema"
+  if (props.loadingAgents) return "正在加载 Agent"
+  return ""
+})
+const agentLoadingLabel = computed(() =>
+  props.agentOptions.length > 0 ? "正在刷新 Agent..." : "正在加载 Agent..."
 )
 const hasScopedContext = computed(() => Boolean(props.database || props.schema || props.selectedAgent))
 const hasTriggerContext = computed(() => Boolean(props.datasource || hasScopedContext.value))
@@ -197,12 +209,29 @@ function resetContext() {
       <PromptInputButton
         type="button"
         aria-label="配置上下文"
+        :aria-busy="loadingContext"
         :title="triggerLabel"
         :class="triggerButtonClass"
       >
         <DatabaseIcon data-icon="inline-start" />
         <span class="min-w-0 flex-1 truncate">{{ triggerLabel }}</span>
-        <ChevronDownIcon data-icon="inline-end" />
+        <span
+          v-if="loadingContextLabel"
+          role="status"
+          aria-live="polite"
+          class="sr-only"
+        >
+          {{ loadingContextLabel }}
+        </span>
+        <Spinner
+          v-if="loadingContext"
+          aria-hidden="true"
+          data-icon="inline-end"
+        />
+        <ChevronDownIcon
+          v-else
+          data-icon="inline-end"
+        />
       </PromptInputButton>
     </PopoverTrigger>
 
@@ -250,10 +279,11 @@ function resetContext() {
                 </div>
               </div>
             </div>
-            <Loader2Icon
-              v-if="switchingDatasource"
+            <Spinner
+              v-if="switchingDatasource || loadingDatabases"
+              aria-label="正在加载数据库"
               data-icon="inline-end"
-              class="animate-spin text-muted-foreground"
+              class="text-muted-foreground"
             />
             <ChevronRightIcon
               v-else
@@ -283,6 +313,13 @@ function resetContext() {
               </div>
             </div>
             <ChevronRightIcon
+              v-if="!loadingCatalog"
+              data-icon="inline-end"
+              class="text-muted-foreground"
+            />
+            <Spinner
+              v-else
+              :aria-label="loadingSchemas ? '正在加载 Schema' : '正在加载数据库'"
               data-icon="inline-end"
               class="text-muted-foreground"
             />
@@ -309,6 +346,13 @@ function resetContext() {
               </div>
             </div>
             <ChevronRightIcon
+              v-if="!loadingAgents"
+              data-icon="inline-end"
+              class="text-muted-foreground"
+            />
+            <Spinner
+              v-else
+              aria-label="正在加载 Agent"
               data-icon="inline-end"
               class="text-muted-foreground"
             />
@@ -359,8 +403,11 @@ function resetContext() {
               :key="datasourceOption.value"
               type="button"
               variant="ghost"
-              :disabled="switchingDatasource"
-              :class="rowClass(datasource === datasourceOption.value, switchingDatasource)"
+              :disabled="(switchingDatasource || loadingDatabases) && datasource === datasourceOption.value"
+              :class="rowClass(
+                datasource === datasourceOption.value,
+                (switchingDatasource || loadingDatabases) && datasource === datasourceOption.value,
+              )"
               @click="selectDatasource(datasourceOption.value)"
             >
               <ServerIcon
@@ -374,8 +421,14 @@ function resetContext() {
               >
                 {{ datasourceStatusLabel(statusForDatasource(datasourceOption.value)?.status) }}
               </Badge>
+              <Spinner
+                v-if="datasource === datasourceOption.value && (switchingDatasource || loadingDatabases)"
+                aria-label="正在加载数据库"
+                data-icon="inline-end"
+                class="text-muted-foreground"
+              />
               <CheckIcon
-                v-if="datasource === datasourceOption.value"
+                v-else-if="datasource === datasourceOption.value"
                 data-icon="inline-end"
                 class="text-muted-foreground"
               />
@@ -417,7 +470,17 @@ function resetContext() {
               <div class="px-1 text-xs font-medium text-muted-foreground">
                 数据库
               </div>
+              <div
+                v-if="loadingDatabases"
+                role="status"
+                aria-live="polite"
+                class="flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-sm text-muted-foreground"
+              >
+                <Spinner aria-hidden="true" />
+                正在连接数据源并加载数据库...
+              </div>
               <Button
+                v-else
                 type="button"
                 variant="ghost"
                 :class="rowClass(!database)"
@@ -447,8 +510,14 @@ function resetContext() {
                   class="text-muted-foreground"
                 />
                 <span class="min-w-0 flex-1 truncate text-sm">{{ databaseOption.label }}</span>
+                <Spinner
+                  v-if="database === databaseOption.value && loadingSchemas"
+                  aria-label="正在加载 Schema"
+                  data-icon="inline-end"
+                  class="text-muted-foreground"
+                />
                 <CheckIcon
-                  v-if="database === databaseOption.value"
+                  v-else-if="database === databaseOption.value"
                   data-icon="inline-end"
                   class="text-muted-foreground"
                 />
@@ -469,14 +538,13 @@ function resetContext() {
                 先选择数据库
               </div>
               <div
-                v-else-if="loadingCatalog"
+                v-else-if="loadingSchemas"
+                role="status"
+                aria-live="polite"
                 class="flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-sm text-muted-foreground"
               >
-                <Loader2Icon
-                  data-icon="inline-start"
-                  class="animate-spin"
-                />
-                正在加载 Schema
+                <Spinner aria-hidden="true" />
+                正在加载 Schema...
               </div>
               <template v-else>
                 <Button
@@ -543,8 +611,20 @@ function resetContext() {
           </div>
         </div>
 
-        <ScrollArea class="h-56 pr-2 sm:h-80">
+        <ScrollArea
+          :aria-busy="loadingAgents"
+          class="h-56 pr-2 sm:h-80"
+        >
           <div class="flex flex-col gap-1">
+            <div
+              v-if="loadingAgents"
+              role="status"
+              aria-live="polite"
+              class="flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 text-sm text-muted-foreground"
+            >
+              <Spinner aria-hidden="true" />
+              {{ agentLoadingLabel }}
+            </div>
             <Button
               type="button"
               variant="ghost"
@@ -582,7 +662,7 @@ function resetContext() {
               />
             </Button>
             <div
-              v-if="agentOptions.length === 0"
+              v-if="!loadingAgents && agentOptions.length === 0"
               class="px-3 py-2 text-sm text-muted-foreground"
             >
               暂无可选 Agent

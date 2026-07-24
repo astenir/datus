@@ -19,12 +19,14 @@ const databaseOptions = ref<SelectOption[]>([]);
 const database = shallowRef("");
 const schema = shallowRef("");
 const isLoadingCatalog = shallowRef(false);
+const isLoadingDatabases = shallowRef(false);
+const isLoadingSchemas = shallowRef(false);
 const activeDatasource = shallowRef("");
 const catalogSnapshots = shallowRef<Record<string, CatalogSnapshot>>({});
 const datasourceStatuses = ref<Record<string, DatasourceStatusItem>>({});
 const prewarmingDatasources = shallowRef<Set<string>>(new Set());
 const latestCatalogRequestByDatasource = new Map<string, number>();
-const pendingCatalogRequests = new Map<number, string>();
+const pendingCatalogRequests = new Map<number, { datasource: string; database: string }>();
 let catalogRequestSequence = 0;
 
 function datasourceKey(datasourceId?: string) {
@@ -62,8 +64,13 @@ function saveActiveSnapshot() {
 }
 
 function syncCatalogLoading() {
-  isLoadingCatalog.value = Array.from(pendingCatalogRequests.values())
-    .some((datasource) => datasource === activeDatasource.value);
+  const latestActiveRequestId = latestCatalogRequestByDatasource.get(activeDatasource.value);
+  const activeRequest = latestActiveRequestId === undefined
+    ? undefined
+    : pendingCatalogRequests.get(latestActiveRequestId);
+  isLoadingDatabases.value = Boolean(activeRequest && !activeRequest.database);
+  isLoadingSchemas.value = Boolean(activeRequest?.database);
+  isLoadingCatalog.value = isLoadingDatabases.value || isLoadingSchemas.value;
 }
 
 function restoreSnapshot(datasourceId?: string) {
@@ -101,6 +108,7 @@ function hasCatalogSnapshot(datasourceId?: string) {
 
 async function loadCatalog(databaseName?: string, datasourceId?: string): Promise<boolean> {
   const datasource = datasourceKey(datasourceId) || activeDatasource.value;
+  const requestedDatabase = databaseName?.trim() ?? "";
   if (datasource !== activeDatasource.value) {
     selectCatalogDatasource(datasource);
   }
@@ -108,12 +116,12 @@ async function loadCatalog(databaseName?: string, datasourceId?: string): Promis
   const base = effectiveBase();
   const requestId = ++catalogRequestSequence;
   latestCatalogRequestByDatasource.set(datasource, requestId);
-  pendingCatalogRequests.set(requestId, datasource);
+  pendingCatalogRequests.set(requestId, { datasource, database: requestedDatabase });
   syncCatalogLoading();
   try {
     const result = await catalogApi.list(base, {
       ...(datasource ? { datasource_id: datasource } : {}),
-      ...(databaseName ? { database_name: databaseName } : {}),
+      ...(requestedDatabase ? { database_name: requestedDatabase } : {}),
     });
     if (result && latestCatalogRequestByDatasource.get(datasource) === requestId) {
       const entries = result.databases ?? [];
@@ -127,10 +135,10 @@ async function loadCatalog(databaseName?: string, datasourceId?: string): Promis
         : catalogSnapshots.value[snapshotKey(datasource)];
       let nextDatabase = existingSnapshot?.database ?? "";
       let nextSchema = existingSnapshot?.schema ?? "";
-      const nextDatabaseOptions = databaseName
+      const nextDatabaseOptions = requestedDatabase
         ? [...(existingSnapshot?.databaseOptions ?? [])]
         : databaseOptionsFromEntries(entries);
-      if (!databaseName) {
+      if (!requestedDatabase) {
         if (nextDatabase && !nextDatabaseOptions.some((option) => option.value === nextDatabase)) {
           nextDatabase = "";
           nextSchema = "";
@@ -225,6 +233,8 @@ export function useCatalog() {
     schema: readonly(schema),
     schemaOptions,
     isLoadingCatalog: readonly(isLoadingCatalog),
+    isLoadingDatabases: readonly(isLoadingDatabases),
+    isLoadingSchemas: readonly(isLoadingSchemas),
     datasourceStatuses: readonly(datasourceStatuses),
     prewarmingDatasources: readonly(prewarmingDatasources),
     selectCatalogDatasource,
