@@ -16,7 +16,6 @@ class ExecuteSQLInput(BaseModel):
         json_schema_extra={
             "example": {
                 "database_name": "sales_db",
-                "datasource": "warehouse",
                 "sql_query": "SELECT * FROM users WHERE status = 'active'",
                 "result_format": "csv",
                 "system": False,
@@ -25,7 +24,6 @@ class ExecuteSQLInput(BaseModel):
         }
     )
 
-    datasource: Optional[str] = Field(None, description="Datasource name")
     database_name: Optional[str] = Field(None, description="Database name")
     sql_query: str = Field(..., description="SQL query to execute")
     result_format: str = Field("arrow", description="Result format (arrow, csv, json)")
@@ -143,14 +141,6 @@ class ChatInput(BaseModel):
             "Per-request model override in 'provider/model_id' format "
             "(e.g. 'openai/gpt-4.1', 'custom/my-model'). "
             "Takes highest priority over all other model config."
-        ),
-    )
-    model_credential_id: Optional[str] = Field(
-        default=None,
-        max_length=128,
-        description=(
-            "Current user's model credential ID to use for this request. "
-            "When set, the credential's configured provider and model take priority over model."
         ),
     )
     plan_mode: bool = Field(False, description="Whether in plan mode")
@@ -356,13 +346,6 @@ class UserInteractionInput(BaseModel):
         if isinstance(v, list) and v and isinstance(v[0], str):
             return [[item] for item in v]
         return v
-
-
-class UserInteractionData(BaseModel):
-    """Result for a submitted user interaction."""
-
-    interaction_key: str = Field(..., description="Interaction key that was submitted")
-    submitted: bool = Field(..., description="Whether the interaction answer was accepted")
 
 
 class StreamChatChunk(BaseModel):
@@ -616,28 +599,6 @@ class SSEEvent(BaseModel):
     )
     data: SSEEventData = Field(..., description="Event payload")
     timestamp: str = Field(default_factory=now_utc_iso)
-
-
-class ChatSessionTerminalEvent(BaseModel):
-    """Durable display-only outcome for one established chat run."""
-
-    event_id: str = Field(..., description="Stable idempotency key for the terminal event")
-    event_type: Literal["error", "cancelled", "timeout"] = Field(..., description="Terminal outcome type")
-    error: str = Field(..., description="Terminal outcome detail for authorized session history readers")
-    error_type: str = Field(..., description="Stable error or cancellation code")
-    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
-
-
-class ChatSessionSubagentEvent(BaseModel):
-    """Durable display-only link from a parent task call to a child session."""
-
-    event_id: str = Field(..., description="Stable idempotency key for the delegation event")
-    event_type: Literal["subagent"] = Field(default="subagent", description="Display sidecar event type")
-    parent_action_id: str = Field(..., description="Parent task function call id")
-    child_session_id: str = Field(..., description="Persisted nested sub-agent session id")
-    subagent_type: str = Field(..., description="Delegated sub-agent type")
-    arguments: Dict[str, Any] = Field(default_factory=dict, description="Original task display arguments")
-    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
 
 
 class ChatHistoryData(BaseModel):

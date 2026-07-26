@@ -3,6 +3,11 @@
 import pytest
 
 from datus.api.services.datus_service import DatusService
+from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
+from datus_enterprise.services.database_service import EnterpriseDatasourceService
+from datus_enterprise.services.mcp_service import EnterpriseMCPService
+from datus_enterprise.services.report_service import EnterpriseReportService
+from datus_enterprise.services.success_story_service import EnterpriseSuccessStoryService
 
 
 def test_session_body_store_does_not_mutate_shared_config(real_agent_config):
@@ -35,3 +40,13 @@ def test_web_filesystem_executor_rejects_unknown_value(real_agent_config):
 
     with pytest.raises(ValueError, match="agent.api.chat.web_filesystem_executor"):
         DatusService(agent_config=real_agent_config, project_id="p1")
+
+
+def test_downstream_service_factories_use_enterprise_extensions(real_agent_config):
+    svc = DatusService(agent_config=real_agent_config, project_id="p1")
+
+    assert isinstance(svc.datasource, EnterpriseDatasourceService)
+    assert isinstance(svc.mcp, EnterpriseMCPService)
+    assert isinstance(svc.dashboard, EnterpriseDashboardService)
+    assert isinstance(svc.report, EnterpriseReportService)
+    assert isinstance(svc.success_story, EnterpriseSuccessStoryService)

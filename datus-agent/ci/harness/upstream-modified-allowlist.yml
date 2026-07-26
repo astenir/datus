@@ -1,0 +1,112 @@
+# Modified upstream-owned files intentionally retained against the base release.
+# Update this file only after reviewing the behavior, tests, and removal condition.
+schema_version: 1
+base_ref: v0.3.8
+category_notes:
+  core-hook: Stable registration, request-context, projection, or policy extension point.
+  move-to-enterprise: Route or service change to review for relocation behind a downstream provider.
+  upstreamable-fix: General runtime, storage, model, or tool fix that may be contributed upstream.
+  docs-config-meta: Documentation, build, dependency, lockfile, or repository metadata difference.
+  test-only: Upstream test file retained because the shared runtime contract changed.
+categories:
+  core-hook:
+    - datus/agent/node/agentic_node.py
+    - datus/agent/node/ask_metrics_agentic_node.py
+    - datus/agent/node/feedback_agentic_node.py
+    - datus/agent/node/gen_metrics_agentic_node.py
+    - datus/agent/node/gen_sql_agentic_node.py
+    - datus/agent/node/node_factory.py
+    - datus/agent/node/token_usage_hook.py
+    - datus/api/__init__.py
+    - datus/api/auth/context.py
+    - datus/api/auth/loader.py
+    - datus/api/deps.py
+    - datus/api/routes/chat_routes.py
+    - datus/api/service.py
+    - datus/api/services/chat_service.py
+    - datus/api/services/chat_task_manager.py
+    - datus/api/services/cli_service.py
+    - datus/api/services/dashboard_service.py
+    - datus/api/services/database_service.py
+    - datus/api/services/datus_service.py
+    - datus/api/services/kb_service.py
+    - datus/configuration/agent_config.py
+    - datus/configuration/agent_config_loader.py
+    - datus/models/session_manager.py
+    - datus/tools/db_tools/db_manager.py
+    - datus/tools/func_tool/_artifact_filesystem_base.py
+    - datus/tools/func_tool/filesystem_tools.py
+    - datus/tools/func_tool/sub_agent_task_tool.py
+    - datus/tools/permission/permission_hooks.py
+  move-to-enterprise: []
+  upstreamable-fix:
+    - datus/agent/node/base_visual_artifact_agentic_node.py
+    - datus/agent/node/chat_agentic_node.py
+    - datus/agent/node/gen_visual_dashboard_agentic_node.py
+    - datus/agent/node/gen_visual_report_agentic_node.py
+    - datus/agent/node/visual_artifact/_artifact_html_renderer.py
+    - datus/agent/node/visual_artifact/dashboard_html_renderer.py
+    - datus/agent/node/visual_artifact/report_html_renderer.py
+    - datus/agent/node/visual_artifact/templates/dashboard_index.html
+    - datus/agent/node/visual_artifact/templates/report_index.html
+    - datus/api/main.py
+    - datus/api/services/action_sse_converter.py
+    - datus/api/services/agent_service.py
+    - datus/api/services/explorer_service.py
+    - datus/cli/sub_agent_wizard.py
+    - datus/main.py
+    - datus/models/claude_model.py
+    - datus/models/codex_model.py
+    - datus/models/mcp_utils.py
+    - datus/models/openai_compatible.py
+    - datus/prompts/prompt_manager.py
+    - datus/prompts/prompt_templates/gen_visual_dashboard_system_1.0.j2
+    - datus/prompts/prompt_templates/gen_visual_report_system_1.0.j2
+    - datus/storage/base.py
+    - datus/storage/embedding_models.py
+    - datus/storage/embedding_openai.py
+    - datus/storage/reference_sql/store.py
+    - datus/storage/schema_metadata/store.py
+    - datus/storage/subject_tree/store.py
+    - datus/tools/func_tool/dashboard_artifact_tools.py
+    - datus/tools/func_tool/database.py
+    - datus/tools/func_tool/report_artifact_tools.py
+    - datus/tools/func_tool/semantic_tools.py
+    - datus/tools/mcp_tools/mcp_config.py
+    - datus/tools/mcp_tools/mcp_manager.py
+    - datus/tools/proxy/proxy_tool.py
+    - datus/tools/proxy/tool_result_channel.py
+    - datus/utils/csv_utils.py
+  docs-config-meta:
+    - BUILD.md
+    - CLAUDE.md
+    - datus/api/README.md
+    - datus/resources/skills/create-skill/SKILL.md
+    - datus/tools/db_tools/README.md
+    - pyproject.toml
+    - uv.lock
+  test-only:
+    - tests/integration/conftest.py
+    - tests/integration/tools/test_func_tools_db.py
+    - tests/unit_tests/agent/node/test_dashboard_html_renderer.py
+    - tests/unit_tests/agent/node/test_report_html_renderer.py
+    - tests/unit_tests/api/hooks/test_chat_hooks.py
+    - tests/unit_tests/api/routes/test_chat_routes.py
+    - tests/unit_tests/api/routes/test_chat_routes_feedback.py
+    - tests/unit_tests/api/services/test_chat_service.py
+    - tests/unit_tests/api/services/test_chat_task_manager.py
+    - tests/unit_tests/api/services/test_cli_service.py
+    - tests/unit_tests/api/services/test_dashboard_service.py
+    - tests/unit_tests/api/services/test_database_service.py
+    - tests/unit_tests/api/services/test_kb_service.py
+    - tests/unit_tests/api/test_api_endpoints.py
+    - tests/unit_tests/api/test_deps.py
+    - tests/unit_tests/api/test_service.py
+    - tests/unit_tests/configuration/test_configuration_load.py
+    - tests/unit_tests/models/test_builtin_web_tools.py
+    - tests/unit_tests/models/test_claude_model.py
+    - tests/unit_tests/models/test_openai_compatible_stream_order.py
+    - tests/unit_tests/storage/test_base.py
+    - tests/unit_tests/tools/func_tool/test_dashboard_artifact_tools.py
+    - tests/unit_tests/tools/func_tool/test_report_artifact_tools.py
+    - tests/unit_tests/utils/test_compress_utils.py

@@ -15,11 +15,11 @@ from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
-from datus.api.models.config_models import ProbeResultData
-from datus.api.routes.config_routes import _probe_llm_sync
+from datus.api.models.downstream import ProbeResultData
 from datus.configuration.agent_config import ProviderConfig
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.config_routes import _probe_llm_sync
 from datus_enterprise.model_credentials import (
     CUSTOM_OPENAI_PROVIDER,
     OPENAI_PROVIDER,

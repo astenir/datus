@@ -5,8 +5,6 @@
 """Session management wrapper for LLM models using OpenAI Agents Python session approach."""
 
 import ast
-import asyncio
-import hashlib
 import json
 import os
 import re
@@ -18,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional
 
 from agents.extensions.memory import AdvancedSQLiteSession
 
-from datus.api.models.cli_models import ChatSessionSubagentEvent, ChatSessionTerminalEvent
+from datus.models.session_message_parser import message_rows_to_raw_messages
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.async_utils import run_async
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -26,6 +24,9 @@ from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import extract_user_input
 from datus.utils.time_utils import to_utc_iso
+from datus_enterprise.services import session_scope as _session_scope
+from datus_enterprise.services.session_async_store_mixin import SessionAsyncStoreMixin
+from datus_enterprise.services.session_sidecar_mixin import SessionSidecarMixin
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
@@ -36,7 +37,9 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CHAT_AGENT = "chat"
-_SAFE_SCOPE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_SCOPE_RE = _session_scope.SAFE_SESSION_SCOPE_RE
+_project_id_from_config = _session_scope.project_id_from_config
+session_scope_from_user_id = _session_scope.session_scope_from_user_id
 
 
 def extract_agent_from_session_id(session_id: str) -> str:
@@ -61,43 +64,7 @@ def session_matches_agent(session_id: str, agent_name: Optional[str]) -> bool:
     return extract_agent_from_session_id(session_id) == target
 
 
-def session_scope_from_user_id(user_id: Optional[str]) -> Optional[str]:
-    """Return a filesystem-safe session scope for an authenticated user id.
-
-    ``SessionManager.scope`` is a path segment, while enterprise user ids may
-    be emails, UUID URNs, or IdP subjects. Keep already-safe ids readable and
-    hash anything else to avoid path traversal and accidental directory splits.
-    """
-    if user_id is None:
-        return None
-    raw = str(user_id).strip()
-    if not raw:
-        return None
-    if _SAFE_SCOPE_RE.fullmatch(raw):
-        return raw
-    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
-    if not normalized:
-        normalized = "user"
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-    return f"{normalized[:48]}_{digest}"
-
-
-def _project_id_from_config(agent_config: Optional[Any]) -> str:
-    if agent_config is not None:
-        project_id = getattr(agent_config, "_session_project_id", None)
-        if project_id:
-            return str(project_id)
-        path_manager = getattr(agent_config, "path_manager", None)
-        project_name = getattr(path_manager, "project_name", None)
-        if project_name:
-            return str(project_name)
-        configured = getattr(agent_config, "project_name", None)
-        if configured:
-            return str(configured)
-    return "default"
-
-
-class SessionManager:
+class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
     """
     Manages sessions for multi-turn conversations across LLM models.
 
@@ -212,205 +179,6 @@ class SessionManager:
             return run_sync(operation)
         return run_async(operation())
 
-    @staticmethod
-    def _terminal_event_table_sql() -> str:
-        return (
-            "CREATE TABLE IF NOT EXISTS chat_session_terminal_events ("
-            "event_id TEXT PRIMARY KEY, "
-            "session_id TEXT NOT NULL, "
-            "event_type TEXT NOT NULL, "
-            "payload_json TEXT NOT NULL, "
-            "created_at TEXT NOT NULL)"
-        )
-
-    def append_terminal_event(self, session_id: str, event: ChatSessionTerminalEvent | Dict[str, Any]) -> None:
-        """Idempotently persist a display-only terminal event beside SDK history."""
-        self._validate_session_id(session_id)
-        terminal_event = ChatSessionTerminalEvent.model_validate(event)
-        if self._body_store is not None:
-            self._run_body_store_sync(
-                lambda: self._body_store.append_session_terminal_event(
-                    **self._store_kwargs(session_id),
-                    event=terminal_event.model_dump(),
-                )
-            )
-            return
-
-        db_path = os.path.join(self.session_dir, f"{session_id}.db")
-        with sqlite3.connect(db_path, timeout=5.0) as conn:
-            conn.execute(self._terminal_event_table_sql())
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chat_session_terminal_events_created "
-                "ON chat_session_terminal_events(session_id, created_at, event_id)"
-            )
-            conn.execute(
-                "INSERT OR IGNORE INTO chat_session_terminal_events "
-                "(event_id, session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (
-                    terminal_event.event_id,
-                    session_id,
-                    terminal_event.event_type,
-                    terminal_event.model_dump_json(),
-                    terminal_event.created_at,
-                ),
-            )
-
-    async def append_terminal_event_async(
-        self, session_id: str, event: ChatSessionTerminalEvent | Dict[str, Any]
-    ) -> None:
-        """Persist a terminal event without crossing async body-store loops."""
-        self._validate_session_id(session_id)
-        terminal_event = ChatSessionTerminalEvent.model_validate(event)
-        if self._body_store is not None:
-            await self._body_store.append_session_terminal_event(
-                **self._store_kwargs(session_id),
-                event=terminal_event.model_dump(),
-            )
-            return
-        await asyncio.to_thread(self.append_terminal_event, session_id, terminal_event)
-
-    def append_subagent_event(self, session_id: str, event: ChatSessionSubagentEvent | Dict[str, Any]) -> None:
-        """Idempotently persist a display-only parent-to-child session link."""
-        self._validate_session_id(session_id)
-        subagent_event = ChatSessionSubagentEvent.model_validate(event)
-        if self._body_store is not None:
-            self._run_body_store_sync(
-                lambda: self._body_store.append_session_terminal_event(
-                    **self._store_kwargs(session_id),
-                    event=subagent_event.model_dump(),
-                )
-            )
-            return
-
-        db_path = os.path.join(self.session_dir, f"{session_id}.db")
-        with sqlite3.connect(db_path, timeout=5.0) as conn:
-            conn.execute(self._terminal_event_table_sql())
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chat_session_terminal_events_created "
-                "ON chat_session_terminal_events(session_id, created_at, event_id)"
-            )
-            conn.execute(
-                "INSERT OR IGNORE INTO chat_session_terminal_events "
-                "(event_id, session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (
-                    subagent_event.event_id,
-                    session_id,
-                    subagent_event.event_type,
-                    subagent_event.model_dump_json(),
-                    subagent_event.created_at,
-                ),
-            )
-
-    async def append_subagent_event_async(
-        self, session_id: str, event: ChatSessionSubagentEvent | Dict[str, Any]
-    ) -> None:
-        """Persist a delegation link without crossing async body-store loops."""
-        self._validate_session_id(session_id)
-        subagent_event = ChatSessionSubagentEvent.model_validate(event)
-        if self._body_store is not None:
-            await self._body_store.append_session_terminal_event(
-                **self._store_kwargs(session_id),
-                event=subagent_event.model_dump(),
-            )
-            return
-        await asyncio.to_thread(self.append_subagent_event, session_id, subagent_event)
-
-    def get_terminal_events(self, session_id: str) -> List[ChatSessionTerminalEvent]:
-        """Load valid terminal events without creating history for missing sessions."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            rows = self._run_body_store_sync(
-                lambda: self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
-            )
-            return self._validate_terminal_events(rows, session_id=session_id)
-
-        db_path = os.path.join(self.session_dir, f"{session_id}.db")
-        if not os.path.exists(db_path):
-            return []
-        try:
-            with sqlite3.connect(db_path, timeout=5.0) as conn:
-                rows = conn.execute(
-                    "SELECT payload_json FROM chat_session_terminal_events "
-                    "WHERE session_id = ? ORDER BY created_at, event_id",
-                    (session_id,),
-                ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc).lower():
-                return []
-            raise
-        return self._validate_terminal_events((row[0] for row in rows), session_id=session_id)
-
-    async def get_terminal_events_async(self, session_id: str) -> List[ChatSessionTerminalEvent]:
-        """Load terminal events without crossing async body-store loops."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            rows = await self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
-            return self._validate_terminal_events(rows, session_id=session_id)
-        return await asyncio.to_thread(self.get_terminal_events, session_id)
-
-    def get_subagent_events(self, session_id: str) -> List[ChatSessionSubagentEvent]:
-        """Load valid display-only delegation links for a parent session."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            rows = self._run_body_store_sync(
-                lambda: self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
-            )
-            return self._validate_subagent_events(rows, session_id=session_id)
-
-        db_path = os.path.join(self.session_dir, f"{session_id}.db")
-        if not os.path.exists(db_path):
-            return []
-        try:
-            with sqlite3.connect(db_path, timeout=5.0) as conn:
-                rows = conn.execute(
-                    "SELECT payload_json FROM chat_session_terminal_events "
-                    "WHERE session_id = ? ORDER BY created_at, event_id",
-                    (session_id,),
-                ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc).lower():
-                return []
-            raise
-        return self._validate_subagent_events((row[0] for row in rows), session_id=session_id)
-
-    async def get_subagent_events_async(self, session_id: str) -> List[ChatSessionSubagentEvent]:
-        """Load delegation links without crossing async body-store loops."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            rows = await self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
-            return self._validate_subagent_events(rows, session_id=session_id)
-        return await asyncio.to_thread(self.get_subagent_events, session_id)
-
-    @staticmethod
-    def _validate_terminal_events(rows: Any, *, session_id: str) -> List[ChatSessionTerminalEvent]:
-        events: List[ChatSessionTerminalEvent] = []
-        for row in rows or []:
-            try:
-                payload = json.loads(row) if isinstance(row, str) else row
-                if isinstance(payload, dict) and payload.get("event_type") not in {
-                    "error",
-                    "cancelled",
-                    "timeout",
-                }:
-                    continue
-                events.append(ChatSessionTerminalEvent.model_validate(payload))
-            except (TypeError, ValueError) as exc:
-                logger.warning("Skipping malformed terminal event for session %s: %s", session_id, exc)
-        return events
-
-    @staticmethod
-    def _validate_subagent_events(rows: Any, *, session_id: str) -> List[ChatSessionSubagentEvent]:
-        events: List[ChatSessionSubagentEvent] = []
-        for row in rows or []:
-            try:
-                payload = json.loads(row) if isinstance(row, str) else row
-                if isinstance(payload, dict) and payload.get("event_type") != "subagent":
-                    continue
-                events.append(ChatSessionSubagentEvent.model_validate(payload))
-            except (TypeError, ValueError) as exc:
-                logger.warning("Skipping malformed subagent event for session %s: %s", session_id, exc)
-        return events
-
     def create_session(self, session_id: str) -> AdvancedSQLiteSession:
         """
         Create a new session or get existing one.
@@ -501,15 +269,6 @@ class SessionManager:
             except OSError:
                 pass
 
-    async def save_system_prompt_snapshot_async(self, session_id: str, prompt: str, meta: Dict[str, Any]) -> None:
-        """Persist a system-prompt snapshot without crossing event loops."""
-        payload: Dict[str, Any] = {"schema_version": self._SNAPSHOT_SCHEMA_VERSION, "prompt": prompt, **meta}
-        if self._body_store is not None:
-            self._validate_session_id(session_id)
-            await self._body_store.save_system_prompt_snapshot(**self._store_kwargs(session_id), payload=payload)
-            return
-        self.save_system_prompt_snapshot(session_id, prompt, meta)
-
     def load_system_prompt_snapshot(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Return the stored snapshot payload, or ``None`` when unusable.
 
@@ -535,14 +294,6 @@ class SessionManager:
             return None
         return self._validate_system_prompt_snapshot_payload(payload)
 
-    async def load_system_prompt_snapshot_async(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Return a system-prompt snapshot without crossing event loops."""
-        if self._body_store is not None:
-            self._validate_session_id(session_id)
-            payload = await self._body_store.load_system_prompt_snapshot(**self._store_kwargs(session_id))
-            return self._validate_system_prompt_snapshot_payload(payload)
-        return self.load_system_prompt_snapshot(session_id)
-
     def delete_system_prompt_snapshot(self, session_id: str) -> None:
         """Delete the snapshot file (best-effort, idempotent)."""
         if self._body_store is not None:
@@ -559,14 +310,6 @@ class SessionManager:
             pass
         except OSError as exc:
             logger.warning("Failed to delete system-prompt snapshot %s: %s", path, exc)
-
-    async def delete_system_prompt_snapshot_async(self, session_id: str) -> None:
-        """Delete a system-prompt snapshot without crossing event loops."""
-        if self._body_store is not None:
-            self._validate_session_id(session_id)
-            await self._body_store.delete_system_prompt_snapshot(**self._store_kwargs(session_id))
-            return
-        self.delete_system_prompt_snapshot(session_id)
 
     def delete_session(self, session_id: str) -> None:
         """
@@ -741,26 +484,6 @@ class SessionManager:
             f"{len(turn_usage_rows)} turn_usage rows)"
         )
         return new_session_id
-
-    async def copy_session_async(self, source_session_id: str, target_node_name: str) -> str:
-        """Copy a session from async request code without crossing event loops."""
-        self._validate_session_id(source_session_id)
-        new_session_id = f"{target_node_name}_session_{uuid.uuid4().hex[:8]}"
-        if self._body_store is not None:
-            if await self._body_store.session_exists(**self._store_kwargs(source_session_id)):
-                await self._body_store.copy_session(
-                    project_id=self.project_id,
-                    scope=self._scope,
-                    source_session_id=source_session_id,
-                    target_session_id=new_session_id,
-                )
-                self._sessions[new_session_id] = self._body_store.open_session(
-                    project_id=self.project_id,
-                    scope=self._scope,
-                    session_id=new_session_id,
-                )
-            return new_session_id
-        return self.copy_session(source_session_id, target_node_name)
 
     def rewind_session(
         self,
@@ -1363,25 +1086,6 @@ class SessionManager:
         except sqlite3.OperationalError as exc:
             logger.debug(f"upsert_running_turn_usage failed for {session_id}: {exc}")
 
-    async def upsert_running_turn_usage_async(
-        self,
-        session_id: str,
-        user_turn_number: int,
-        cumulative: Dict[str, Any],
-        context_length: int,
-    ) -> None:
-        """Persist running turn usage without crossing event loops."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            await self._body_store.upsert_running_turn_usage(
-                **self._store_kwargs(session_id),
-                user_turn_number=user_turn_number,
-                cumulative=cumulative,
-                context_length=context_length,
-            )
-            return
-        self.upsert_running_turn_usage(session_id, user_turn_number, cumulative, context_length)
-
     def get_running_turn_usage(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Return the in-progress turn snapshot, or ``None`` when absent."""
         self._validate_session_id(session_id)
@@ -1391,13 +1095,6 @@ class SessionManager:
             )
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         return self._read_running_turn_usage(db_path)
-
-    async def get_running_turn_usage_async(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Return running turn usage without crossing event loops."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            return await self._body_store.get_running_turn_usage(**self._store_kwargs(session_id))
-        return self.get_running_turn_usage(session_id)
 
     def clear_running_turn_usage(self, session_id: str) -> None:
         """Drop the in-progress snapshot, typically right after the SDK's
@@ -1419,14 +1116,6 @@ class SessionManager:
                 conn.commit()
         except sqlite3.OperationalError as exc:
             logger.debug(f"clear_running_turn_usage failed for {session_id}: {exc}")
-
-    async def clear_running_turn_usage_async(self, session_id: str) -> None:
-        """Drop running turn usage without crossing event loops."""
-        self._validate_session_id(session_id)
-        if self._body_store is not None:
-            await self._body_store.clear_running_turn_usage(**self._store_kwargs(session_id))
-            return
-        self.clear_running_turn_usage(session_id)
 
     def _read_running_turn_usage(self, db_path: str) -> Optional[Dict[str, Any]]:
         if not os.path.exists(db_path):
@@ -1509,337 +1198,12 @@ class SessionManager:
     @staticmethod
     def _message_rows_to_raw_messages(message_rows: List[Any]) -> List[Dict[str, Any]]:
         """Convert persisted SDK message rows into API-ready raw chat messages."""
-        messages = []
-        current_assistant_group = None
-        assistant_progress = []
-        current_actions = []  # Collect ActionHistory objects for detailed view
-
-        for row in message_rows:
-            if isinstance(row, dict):
-                message_data = row.get("message_data")
-                created_at = row.get("created_at")
-            else:
-                message_data, created_at = row
-
-            # Normalize SQLite naive UTC timestamp for outward-facing fields.
-            created_at_iso = to_utc_iso(created_at)
-            try:
-                message_json = json.loads(message_data)
-                role = message_json.get("role", "")
-                msg_type = message_json.get("type", "")
-
-                # Handle user messages
-                if role == "user":
-                    raw_user_content = message_json.get("content", "")
-                    # Claude-native tool results are user-role transport
-                    # messages, not real user turns. Attach them to the
-                    # matching tool action without emitting an empty user row.
-                    if isinstance(raw_user_content, list):
-                        tool_results = [
-                            block
-                            for block in raw_user_content
-                            if isinstance(block, dict) and block.get("type") == "tool_result"
-                        ]
-                        has_user_text = any(
-                            isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text")
-                            for block in raw_user_content
-                        )
-                        if tool_results and not has_user_text:
-                            for tool_result in tool_results:
-                                SessionManager._attach_native_tool_result(
-                                    current_actions,
-                                    tool_result.get("tool_use_id"),
-                                    tool_result.get("content"),
-                                    str(created_at) if created_at else None,
-                                )
-                            continue
-
-                    # Before adding user message, flush any pending assistant group
-                    if current_assistant_group:
-                        final_action = SessionManager._parse_final_output(current_actions, current_assistant_group)
-                        if final_action:
-                            current_actions.append(final_action)
-
-                        # Add collected actions and progress to the assistant group
-                        if current_actions:
-                            current_assistant_group["actions"] = current_actions.copy()
-                        if assistant_progress:
-                            current_assistant_group["progress_messages"] = assistant_progress.copy()
-
-                        messages.append(current_assistant_group)
-                        current_assistant_group = None
-                        assistant_progress = []
-                        current_actions = []
-
-                    # Add user message (extract original user input from structured content)
-                    content = extract_user_input(message_json.get("content", ""))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": content,
-                            "timestamp": created_at_iso,
-                            "created_at": created_at_iso,
-                        }
-                    )
-                    continue
-
-                if msg_type == "reasoning":
-                    summary = message_json.get("summary", [])
-                    if isinstance(summary, str):
-                        summary_texts = [summary]
-                    elif isinstance(summary, list):
-                        summary_texts = [
-                            str(item.get("text", "")).strip()
-                            for item in summary
-                            if isinstance(item, dict) and str(item.get("text", "")).strip()
-                        ]
-                    else:
-                        summary_texts = []
-                    reasoning_text = "\n\n".join(summary_texts).strip()
-                    if reasoning_text:
-                        if not current_assistant_group:
-                            current_assistant_group = {
-                                "role": "assistant",
-                                "content": "",
-                                "timestamp": created_at_iso,
-                                "created_at": created_at_iso,
-                            }
-                        assistant_progress.append(f"💭Thinking: {reasoning_text}")
-                        provider_data = message_json.get("provider_data")
-                        provider_data = provider_data if isinstance(provider_data, dict) else {}
-                        response_id = (
-                            provider_data.get("response_id")
-                            or message_json.get("id")
-                            or f"assistant_{uuid.uuid5(uuid.NAMESPACE_URL, f'{created_at}|{message_data}').hex}"
-                        )
-                        current_actions.append(
-                            ActionHistory(
-                                action_id=f"{response_id}:reasoning",
-                                role=ActionRole.ASSISTANT,
-                                messages=reasoning_text,
-                                action_type="thinking",
-                                input=None,
-                                output={"thinking": reasoning_text},
-                                status=ActionStatus.SUCCESS,
-                                start_time=(datetime.fromisoformat(str(created_at)) if created_at else datetime.now()),
-                                end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                            )
-                        )
-                    continue
-
-                # Handle function calls (tool calls)
-                if msg_type == "function_call":
-                    tool_name = message_json.get("name", "unknown")
-                    arguments = message_json.get("arguments", "{}")
-
-                    # Initialize assistant group if needed
-                    if not current_assistant_group:
-                        current_assistant_group = {
-                            "role": "assistant",
-                            "content": "",
-                            "timestamp": created_at_iso,
-                            "created_at": created_at_iso,
-                        }
-
-                    # Parse arguments
-                    try:
-                        args_dict = json.loads(arguments) if arguments else {}
-                        args_str = str(args_dict)[:60]
-                        assistant_progress.append(f"✓ Tool call: {tool_name}({args_str})")
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        assistant_progress.append(f"✓ Tool call: {tool_name}")
-
-                    # Create ActionHistory for tool call (use original call_id from SDK)
-                    action = ActionHistory(
-                        action_id=message_json.get("call_id", str(uuid.uuid4())),
-                        role=ActionRole.TOOL,
-                        messages=f"Tool call: {tool_name}",
-                        action_type=tool_name,
-                        input={"function_name": tool_name, "arguments": arguments},
-                        output=None,  # Will be filled by next function_call_output
-                        status=ActionStatus.PROCESSING,
-                        start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                    )
-                    current_actions.append(action)
-                    continue
-
-                # Handle function outputs (tool results)
-                if msg_type == "function_call_output":
-                    # Create a new SUCCESS action for the tool output
-                    if current_actions:
-                        # Pair with the matching PROCESSING call by call_id so that
-                        # interleaved tool calls are matched correctly on resume.
-                        output_call_id = message_json.get("call_id")
-                        last_action = None
-                        if output_call_id:
-                            for candidate in reversed(current_actions):
-                                if (
-                                    candidate.action_id == output_call_id
-                                    and candidate.status == ActionStatus.PROCESSING
-                                ):
-                                    last_action = candidate
-                                    break
-                        if last_action is None:
-                            last_action = current_actions[-1]
-
-                        # Extract output directly from message_json
-                        output_text = message_json.get("output", "")
-
-                        # Try to parse as Python literal (the output is stored as string repr of dict)
-                        output_data = {}
-                        if output_text:
-                            try:
-                                # Try ast.literal_eval first (safer than eval)
-                                output_data = ast.literal_eval(output_text)
-                            except (ValueError, SyntaxError):
-                                # If that fails, try json.loads
-                                try:
-                                    output_data = json.loads(output_text)
-                                except json.JSONDecodeError:
-                                    # Last resort: store as string
-                                    output_data = {"result": output_text}
-
-                        # Create a new SUCCESS action, prefix with "complete_" like openai_compatible.py
-                        call_id = message_json.get("call_id", last_action.action_id)
-                        success_action = ActionHistory(
-                            action_id="complete_" + call_id,
-                            role=ActionRole.TOOL,
-                            messages=f"Tool result: {last_action.action_type}",
-                            action_type=last_action.action_type,
-                            input=last_action.input,
-                            output=output_data,
-                            status=ActionStatus.SUCCESS,
-                            start_time=last_action.start_time,
-                            end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                        )
-                        current_actions.append(success_action)
-                    continue
-
-                # Handle assistant messages (thinking and final output)
-                if role == "assistant":
-                    # Assistant message - aggregate consecutive ones
-                    content_array = message_json.get("content", [])
-                    provider_data = message_json.get("provider_data")
-                    provider_data = provider_data if isinstance(provider_data, dict) else {}
-                    response_id = (
-                        provider_data.get("response_id")
-                        or message_json.get("id")
-                        or f"assistant_{uuid.uuid5(uuid.NAMESPACE_URL, f'{created_at}|{message_data}').hex}"
-                    )
-
-                    for item in content_array:
-                        if not isinstance(item, dict):
-                            continue
-
-                        item_type = item.get("type", "")
-                        text = item.get("text", "")
-
-                        # Anthropic native responses persist reasoning inside
-                        # the assistant content array rather than as a top-level
-                        # OpenAI ``type=reasoning`` item.
-                        if item_type == "thinking":
-                            thinking_text = str(item.get("thinking", "") or "").strip()
-                            if thinking_text:
-                                if not current_assistant_group:
-                                    current_assistant_group = {
-                                        "role": "assistant",
-                                        "content": "",
-                                        "timestamp": created_at_iso,
-                                        "created_at": created_at_iso,
-                                    }
-                                assistant_progress.append(f"💭Thinking: {thinking_text}")
-                                current_actions.append(
-                                    ActionHistory(
-                                        action_id=f"{response_id}:reasoning",
-                                        role=ActionRole.ASSISTANT,
-                                        messages=thinking_text,
-                                        action_type="thinking",
-                                        input=None,
-                                        output={"thinking": thinking_text, "content_type": "thinking"},
-                                        status=ActionStatus.SUCCESS,
-                                        start_time=(
-                                            datetime.fromisoformat(str(created_at)) if created_at else datetime.now()
-                                        ),
-                                        end_time=(
-                                            datetime.fromisoformat(str(created_at)) if created_at else datetime.now()
-                                        ),
-                                    )
-                                )
-
-                        # Accept both OpenAI-style ``output_text`` and Anthropic-style ``text`` blocks.
-                        if item_type in ("output_text", "text") and text:
-                            # Initialize assistant group if needed
-                            if not current_assistant_group:
-                                current_assistant_group = {
-                                    "role": "assistant",
-                                    "content": "",
-                                    "timestamp": created_at_iso,
-                                    "created_at": created_at_iso,
-                                }
-
-                            assistant_progress.append(text)
-
-                            # Create the normal assistant response action using
-                            # the same provider identity as its reasoning block.
-                            response_action = ActionHistory(
-                                action_id=f"{response_id}:response",
-                                role=ActionRole.ASSISTANT,
-                                messages=text,
-                                action_type="response",
-                                input=None,
-                                output={"raw_output": text, "is_thinking": False, "content_type": "markdown"},
-                                status=ActionStatus.SUCCESS,
-                                start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                                end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                            )
-                            current_actions.append(response_action)
-
-                        # Native Claude tool calls live inside assistant content
-                        # as tool_use / server_tool_use blocks.
-                        if item_type in ("tool_use", "server_tool_use"):
-                            if not current_assistant_group:
-                                current_assistant_group = {
-                                    "role": "assistant",
-                                    "content": "",
-                                    "timestamp": created_at_iso,
-                                    "created_at": created_at_iso,
-                                }
-                            SessionManager._restore_native_tool_call(
-                                item,
-                                current_actions,
-                                assistant_progress,
-                                str(created_at) if created_at else None,
-                            )
-
-                        # Server-side web tools return their result inline in
-                        # the same assistant message, keyed by tool_use_id.
-                        if item_type in ("web_search_tool_result", "web_fetch_tool_result"):
-                            SessionManager._attach_native_tool_result(
-                                current_actions,
-                                item.get("tool_use_id"),
-                                item.get("content"),
-                                str(created_at) if created_at else None,
-                            )
-
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.debug(f"Skipping malformed message: {e}")
-                continue
-
-        # Flush any remaining assistant group
-        if current_assistant_group:
-            final_action = SessionManager._parse_final_output(current_actions, current_assistant_group)
-            if final_action:
-                current_actions.append(final_action)
-
-            if not current_assistant_group.get("content"):
-                current_assistant_group["content"] = "Processing completed"
-            if assistant_progress:
-                current_assistant_group["progress_messages"] = assistant_progress
-            if current_actions:
-                current_assistant_group["actions"] = current_actions.copy()
-            messages.append(current_assistant_group)
-
-        return messages
+        return message_rows_to_raw_messages(
+            message_rows,
+            parse_final_output=SessionManager._parse_final_output,
+            restore_native_tool_call=SessionManager._restore_native_tool_call,
+            attach_native_tool_result=SessionManager._attach_native_tool_result,
+        )
 
     def get_session_messages(self, session_id: str) -> List[Dict]:
         """

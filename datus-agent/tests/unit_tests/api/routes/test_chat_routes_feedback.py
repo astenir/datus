@@ -19,10 +19,9 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
-from datus.api.models.cli_models import FeedbackChatInput, StreamChatInput
+from datus.api.models.downstream import FeedbackChatInput, StreamChatInput
 from datus.api.routes.chat_routes import stream_chat_feedback
 from datus.tools.sql_policy import SqlPolicyConfig
-from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 
 def _build_svc():
@@ -115,88 +114,6 @@ async def test_feedback_endpoint_renders_prompt_and_routes_to_feedback_subagent(
     assert call_args.kwargs["sub_agent_id"] == "feedback"
     assert call_args.kwargs["user_id"] == "tester"
     assert stream_input.message == '[The user reacted to this message "Here is your SQL result" with [thumbsup]]'
-
-
-@pytest.mark.asyncio
-async def test_feedback_endpoint_denies_unauthorized_datasource_before_task_start(monkeypatch):
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
-    svc = _build_svc()
-    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
-    ctx = _build_ctx(
-        datasource_grants={
-            "finance": {"effect": "allow", "allow_sql": True},
-        }
-    )
-    request = FeedbackChatInput(
-        source_session_id="chat_session_abc",
-        reaction_emoji="thumbsup",
-        reference_msg="Here is your SQL result",
-        datasource="hr",
-    )
-
-    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
-    chunks = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
-
-    assert len(chunks) == 1
-    assert "event: error" in chunks[0]
-    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
-    assert payload["error_type"] == "DATASOURCE_ACCESS_DENIED"
-    assert payload["error"] == "Datasource 'hr' is not authorized for this request."
-    svc.chat.stream_chat.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_feedback_endpoint_denies_unauthorized_model_before_task_start():
-    svc = _build_svc()
-    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
-    ctx = _build_ctx()
-    ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
-    request = FeedbackChatInput(
-        source_session_id="chat_session_abc",
-        reaction_emoji="thumbsup",
-        reference_msg="Here is your SQL result",
-        model="deepseek/deepseek-chat",
-    )
-
-    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
-    chunks = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
-
-    assert len(chunks) == 1
-    assert "event: error" in chunks[0]
-    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
-    assert payload["error_type"] == "MODEL_FORBIDDEN"
-    assert "deepseek/deepseek-chat" in payload["error"]
-    svc.chat.stream_chat.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_feedback_endpoint_denies_malformed_model_under_policy():
-    svc = _build_svc()
-    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
-    ctx = _build_ctx()
-    ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
-    request = FeedbackChatInput(
-        source_session_id="chat_session_abc",
-        reaction_emoji="thumbsup",
-        reference_msg="Here is your SQL result",
-        model="gpt-4o",
-    )
-
-    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
-    chunks = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
-
-    assert len(chunks) == 1
-    assert "event: error" in chunks[0]
-    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
-    assert payload["error_type"] == "MODEL_FORBIDDEN"
-    assert "gpt-4o" in payload["error"]
-    svc.chat.stream_chat.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -295,46 +212,3 @@ async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principa
         "error_code": "SQL_POLICY_PRINCIPAL_REQUIRED",
         "missing_principal_paths": ["market_code"],
     }
-
-
-@pytest.mark.asyncio
-async def test_feedback_endpoint_rejects_quota_exceeded_before_task_start(monkeypatch):
-    quota_store = InMemoryEnterpriseQuotaStore()
-    await quota_store.put_quota(
-        subject_type="user",
-        subject_id="tester",
-        resource="chat.feedback",
-        limit=1,
-        window_seconds=3600,
-    )
-    await quota_store.consume_quota(
-        subjects=[{"subject_type": "user", "subject_id": "tester"}],
-        resource="chat.feedback",
-    )
-    audit_sink = CollectingAuditSink()
-    monkeypatch.setattr(
-        deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store)
-    )
-    svc = _build_svc()
-    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
-    request = FeedbackChatInput(
-        source_session_id="chat_session_abc",
-        reaction_emoji="thumbsup",
-        reference_msg="Here is your SQL result",
-    )
-
-    response = await stream_chat_feedback(request, _build_ctx(), _request_with_service(svc))
-    chunks = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
-
-    assert len(chunks) == 1
-    assert "event: error" in chunks[0]
-    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
-    assert payload["error_type"] == "QUOTA_EXCEEDED"
-    svc.chat.stream_chat.assert_not_called()
-    event = next(event for event in audit_sink.events if event.action == "quota.consume")
-    assert event.resource_type == "chat"
-    assert event.decision == "deny"
-    assert event.reason == "quota exceeded"
-    assert event.metadata["resource"] == "chat.feedback"

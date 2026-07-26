@@ -47,15 +47,17 @@ from datus.api.models.cli_models import (
     ChatSessionData,
     CompactSessionData,
     CompactSessionInput,
-    FeedbackChatInput,
     SSEErrorData,
     SSEEvent,
-    StreamChatInput,
-    UserInteractionData,
     UserInteractionInput,
 )
-from datus.api.models.dashboard_models import DashboardEditSession
-from datus.api.models.report_models import ReportEditSession
+from datus.api.models.downstream import (
+    DashboardEditSession,
+    FeedbackChatInput,
+    ReportEditSession,
+    StreamChatInput,
+    UserInteractionData,
+)
 from datus.api.services.background_drain import track_background_task
 from datus.api.services.chat_task_manager import EventBufferExpiredError
 from datus.api.utils.stream_errors import humanize_stream_error

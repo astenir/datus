@@ -5,12 +5,8 @@ import os
 import types
 from typing import AsyncGenerator, Optional
 
-from datus.api.models.kb_models import (
-    BootstrapDocInput,
-    BootstrapKbEvent,
-    BootstrapKbInput,
-    KbComponent,
-)
+from datus.api.models.kb_downstream import BootstrapDocInput, BootstrapKbInput
+from datus.api.models.kb_models import BootstrapKbEvent, KbComponent
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.batch_events import BatchEvent, BatchStage
 from datus.storage.metric.metric_init import init_success_story_metrics

@@ -25,20 +25,20 @@ from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
+from datus.tools.func_tool.sql_scope_downstream import (
+    ddl_sql_reads_from_source,
+    supplemental_table_names,
+    write_sql_reads_from_source,
+)
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import DBType, SQLType
-from datus.utils.datasource_scope import datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
+from datus_enterprise.services.database_tool_scope import DatabaseToolScopePolicy
 
 logger = get_logger(__name__)
 
-_SQL_IDENTIFIER_RE = (
-    r"(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)"
-    r"(?:\s*\.\s*(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*))*"
-)
-_SQL_IDENTIFIER_END_RE = r"(?=\s|$|;)"
 _FALLBACK_SCHEMA_DIALECTS = {"postgres", "postgresql", "greenplum", "redshift"}
 
 
@@ -449,158 +449,11 @@ class DBFuncTool:
                 patterns.append(scoped_pattern)
         return patterns
 
-    @staticmethod
-    def _grant_scope_patterns(grant: Dict[str, Any], scope_key: str) -> Optional[List[str]]:
-        if scope_key not in grant or grant.get(scope_key) is None:
-            return None
-        raw_patterns = grant[scope_key]
-        if isinstance(raw_patterns, str):
-            raw_patterns = [part.strip() for part in raw_patterns.split(",")]
-        if not isinstance(raw_patterns, (list, tuple, set)):
-            return []
-        return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
-
-    def _datasource_grant(self, datasource: Optional[str] = "") -> Any:
-        grants = self.principal.get("datasource_grants")
-        if not isinstance(grants, dict):
-            return None
-        datasource_key = str(datasource or self.principal.get("datasource") or self._default_datasource or "")
-        return grants.get(datasource_key, grants.get("*", False))
-
-    def _grant_scope_matches(
-        self,
-        scope_key: str,
-        candidates: Iterable[str],
-        datasource: Optional[str] = "",
-    ) -> bool:
-        grant = self._datasource_grant(datasource)
-        if grant is None or grant is True:
-            return True
-        if not isinstance(grant, dict):
-            return False
-        if str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-
-        patterns = self._grant_scope_patterns(grant, scope_key)
-        if patterns is None:
-            return True
-        values = [str(candidate).strip() for candidate in candidates if str(candidate).strip()]
-        if not patterns:
-            return False
-        if not values:
-            return any(pattern in ("*", "%") for pattern in patterns)
-        return any(fnmatchcase(value, pattern) for value in values for pattern in patterns)
-
-    @staticmethod
-    def _schema_scope_candidates(coordinate: TableCoordinate) -> List[str]:
-        candidates = [coordinate.schema] if coordinate.schema else []
-        if coordinate.database and coordinate.schema:
-            candidates.append(f"{coordinate.database}.{coordinate.schema}")
-        if coordinate.catalog and coordinate.schema:
-            candidates.append(f"{coordinate.catalog}.{coordinate.schema}")
-        if coordinate.catalog and coordinate.database and coordinate.schema:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}")
-        return candidates
-
-    @staticmethod
-    def _table_scope_candidates(coordinate: TableCoordinate) -> List[str]:
-        candidates = [coordinate.table] if coordinate.table else []
-        if coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.schema}.{coordinate.table}")
-        if coordinate.database and coordinate.table:
-            candidates.append(f"{coordinate.database}.{coordinate.table}")
-        if coordinate.database and coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.database}.{coordinate.schema}.{coordinate.table}")
-        if coordinate.catalog and coordinate.database and coordinate.table:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.table}")
-        if coordinate.catalog and coordinate.database and coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}.{coordinate.table}")
-        return candidates
-
-    def _table_matches_datasource_grant(
-        self,
-        coordinate: TableCoordinate,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        grant = self._datasource_grant(datasource)
-        if isinstance(grant, dict) and grant_uses_tree_scope(grant, self._field_order):
-            return datasource_scope_matches(
-                grant,
-                coordinate={field: getattr(coordinate, field) for field in self._field_order},
-                target_field="table",
-                field_order=self._field_order,
-            )
-
-        return all(
-            (
-                self._grant_scope_matches("catalogs", [coordinate.catalog], datasource),
-                self._grant_scope_matches("databases", [coordinate.database], datasource),
-                self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource),
-                self._grant_scope_matches("tables", self._table_scope_candidates(coordinate), datasource),
-            )
-        )
-
-    def _table_matches_listing_grant(
-        self,
-        coordinate: TableCoordinate,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        if self._table_matches_datasource_grant(coordinate, datasource):
-            return True
-
-        grant = self._datasource_grant(datasource)
-        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-        table_patterns = self._grant_scope_patterns(grant, "tables")
-        if not table_patterns or not coordinate.table:
-            return False
-
-        for raw_pattern in table_patterns:
-            pattern = self._parse_scope_token(raw_pattern)
-            if pattern is None or not _pattern_matches(pattern.table, coordinate.table):
-                continue
-            if any(
-                pattern_value and coordinate_value and not _pattern_matches(pattern_value, coordinate_value)
-                for pattern_value, coordinate_value in (
-                    (pattern.catalog, coordinate.catalog),
-                    (pattern.database, coordinate.database),
-                    (pattern.schema, coordinate.schema),
-                )
-            ):
-                continue
-
-            effective = TableCoordinate(
-                catalog=coordinate.catalog or pattern.catalog,
-                database=coordinate.database or pattern.database,
-                schema=coordinate.schema or pattern.schema,
-                table=coordinate.table,
-            )
-            if self._table_matches_datasource_grant(effective, datasource):
-                return True
-        return False
-
-    def _grant_uses_tree_scope(self, datasource: Optional[str] = "") -> bool:
-        """Return whether this grant contains independently selected tree nodes."""
-        grant = self._datasource_grant(datasource)
-        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-        return grant_uses_tree_scope(grant, self._field_order)
-
-    def _tree_grant_matches_namespace(
-        self,
-        coordinate: TableCoordinate,
-        namespace_field: str,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        """Check whether a namespace intersects an independently selected tree branch."""
-        if not self._grant_uses_tree_scope(datasource) or namespace_field not in self._field_order:
-            return False
-        grant = self._datasource_grant(datasource)
-        return datasource_scope_matches(
-            grant,
-            coordinate={field: getattr(coordinate, field) for field in self._field_order},
-            target_field=namespace_field,
-            field_order=self._field_order,
+    def _datasource_scope_policy(self) -> DatabaseToolScopePolicy:
+        return DatabaseToolScopePolicy(
+            getattr(self, "principal", {}),
+            getattr(self, "_default_datasource", ""),
+            self._field_order,
         )
 
     def _resolve_scoped_context_tables(self) -> Sequence[str]:
@@ -947,8 +800,8 @@ class DBFuncTool:
         coordinate: TableCoordinate,
         datasource: Optional[str] = "",
     ) -> bool:
-        return self._table_matches_scoped_context(coordinate) and self._table_matches_datasource_grant(
-            coordinate, datasource
+        return self._table_matches_scoped_context(coordinate) and self._datasource_scope_policy().table_matches(
+            coordinate, datasource or ""
         )
 
     def _table_matches_scoped_context(self, coordinate: TableCoordinate) -> bool:
@@ -972,8 +825,8 @@ class DBFuncTool:
                 schema=schema,
                 connector=connector,
             )
-            if self._table_matches_scoped_context(coordinate) and self._table_matches_listing_grant(
-                coordinate, datasource
+            if self._table_matches_scoped_context(coordinate) and self._datasource_scope_policy().listing_table_matches(
+                coordinate, datasource or ""
             ):
                 filtered.append(entry)
         return filtered
@@ -1009,10 +862,11 @@ class DBFuncTool:
         if not scoped_context_matches:
             return False
         coordinate = TableCoordinate(catalog=catalog_value, database=database_value)
-        if self._grant_uses_tree_scope(datasource):
-            return self._tree_grant_matches_namespace(coordinate, "database", datasource)
-        return self._grant_scope_matches("catalogs", [catalog_value], datasource) and self._grant_scope_matches(
-            "databases", [database_value], datasource
+        grant_scope = self._datasource_scope_policy()
+        if grant_scope.uses_tree_scope(datasource or ""):
+            return grant_scope.namespace_matches(coordinate, "database", datasource or "")
+        return grant_scope.scope_matches("catalogs", [catalog_value], datasource or "") and grant_scope.scope_matches(
+            "databases", [database_value], datasource or ""
         )
 
     def _schema_matches_scope(
@@ -1045,12 +899,26 @@ class DBFuncTool:
         )
         if not scoped_context_matches:
             return False
-        if self._grant_uses_tree_scope(datasource):
-            return self._tree_grant_matches_namespace(coordinate, "schema", datasource)
+        grant_scope = self._datasource_scope_policy()
+        if grant_scope.uses_tree_scope(datasource or ""):
+            return grant_scope.namespace_matches(coordinate, "schema", datasource or "")
         return (
-            self._grant_scope_matches("catalogs", [catalog_value], datasource)
-            and self._grant_scope_matches("databases", [database_value], datasource)
-            and self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource)
+            grant_scope.scope_matches("catalogs", [catalog_value], datasource or "")
+            and grant_scope.scope_matches("databases", [database_value], datasource or "")
+            and grant_scope.scope_matches(
+                "schemas",
+                [
+                    coordinate.schema,
+                    f"{coordinate.database}.{coordinate.schema}" if coordinate.database and coordinate.schema else "",
+                    f"{coordinate.catalog}.{coordinate.schema}" if coordinate.catalog and coordinate.schema else "",
+                    (
+                        f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}"
+                        if coordinate.catalog and coordinate.database and coordinate.schema
+                        else ""
+                    ),
+                ],
+                datasource or "",
+            )
         )
 
     def _check_sql_table_scope(self, sql: str, connector: Optional[BaseSqlConnector] = None) -> List[str]:
@@ -1062,10 +930,7 @@ class DBFuncTool:
         active_connector = connector or self._primary_connector
         dialect = getattr(active_connector, "dialect", "") or ""
         table_names = extract_table_names(sql, dialect=dialect, ignore_empty=True)
-        table_names.extend(name for name in self._parenthesized_table_expression_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._insert_table_expression_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._ddl_as_table_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._ddl_partition_table_names(sql) if name not in table_names)
+        table_names.extend(name for name in supplemental_table_names(sql) if name not in table_names)
         if not table_names:
             return []  # can't parse → allow (SHOW/DESCRIBE/EXPLAIN have no tables)
         out_of_scope: List[str] = []
@@ -1074,63 +939,6 @@ class DBFuncTool:
             if not self._table_matches_scope(coordinate):
                 out_of_scope.append(name)
         return out_of_scope
-
-    @staticmethod
-    def _ddl_as_table_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMPORARY|TEMP)\s+)?(?:TABLE|VIEW)\s+"
-            rf"(?:IF\s+NOT\s+EXISTS\s+)?(?P<target>{_SQL_IDENTIFIER_RE})(?:\s*\([^)]*\))?\s+"
-            rf"AS\s+TABLE\s+(?:ONLY\s+)?(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if not match:
-            return []
-        return [match.group("target"), match.group("source")]
-
-    @staticmethod
-    def _ddl_partition_table_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
-            rf"(?:ATTACH|DETACH)\s+PARTITION\s+(?P<partition>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if match:
-            return [match.group("target"), match.group("partition")]
-        match = re.search(
-            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
-            rf"EXCHANGE\s+PARTITION\s+{_SQL_IDENTIFIER_RE}\s+WITH\s+TABLE\s+"
-            rf"(?P<table>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if match:
-            return [match.group("target"), match.group("table")]
-        return []
-
-    @staticmethod
-    def _parenthesized_table_expression_names(sql: str) -> List[str]:
-        return [
-            match.group("source")
-            for match in re.finditer(
-                rf"\(\s*TABLE\s+(?P<source>{_SQL_IDENTIFIER_RE})(?=\s|\)|$|;)",
-                sql,
-                re.IGNORECASE,
-            )
-        ]
-
-    @staticmethod
-    def _insert_table_expression_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*INSERT\s+INTO\s+{_SQL_IDENTIFIER_RE}(?:\s*\([^)]*\))?\s+TABLE\s+"
-            rf"(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if not match:
-            return []
-        return [match.group("source")]
 
     @staticmethod
     def all_tools_name() -> List[str]:
@@ -1149,63 +957,6 @@ class DBFuncTool:
         if not isinstance(raw_value, str):
             return ""
         return raw_value.strip().lower()
-
-    @staticmethod
-    def _write_sql_reads_from_source(sql: str, dialect: str) -> bool:
-        try:
-            import sqlglot
-            from sqlglot import expressions as exp
-
-            from datus.utils.sql_utils import parse_read_dialect
-
-            parsed = sqlglot.parse_one(
-                sql,
-                read=parse_read_dialect(dialect),
-                error_level=sqlglot.ErrorLevel.IGNORE,
-            )
-            if not isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
-                return False
-            if any(True for _ in parsed.find_all(exp.Select)):
-                return True
-            if DBFuncTool._insert_table_expression_names(sql):
-                return True
-            if DBFuncTool._parenthesized_table_expression_names(sql):
-                return True
-            if isinstance(parsed, (exp.Update, exp.Delete)):
-                return sum(1 for _ in parsed.find_all(exp.Table)) > 1
-            return False
-        except Exception:
-            return bool(
-                re.search(r"\bSELECT\b", sql, re.IGNORECASE)
-                or DBFuncTool._insert_table_expression_names(sql)
-                or DBFuncTool._parenthesized_table_expression_names(sql)
-                or re.search(r"^\s*UPDATE\b[\s\S]*\b(?:FROM|JOIN)\b", sql, re.IGNORECASE)
-                or re.search(r"^\s*DELETE\b[\s\S]*\bUSING\b", sql, re.IGNORECASE)
-            )
-
-    @staticmethod
-    def _ddl_sql_reads_from_source(sql: str, dialect: str) -> bool:
-        try:
-            import sqlglot
-            from sqlglot import expressions as exp
-
-            from datus.utils.sql_utils import parse_read_dialect
-
-            parsed = sqlglot.parse_one(
-                sql,
-                read=parse_read_dialect(dialect),
-                error_level=sqlglot.ErrorLevel.IGNORE,
-            )
-            if DBFuncTool._parenthesized_table_expression_names(sql):
-                return True
-            if not isinstance(parsed, exp.Create):
-                return bool(re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE))
-            return any(any(True for _ in select.find_all(exp.Table)) for select in parsed.find_all(exp.Select))
-        except Exception:
-            return bool(
-                re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE)
-                or DBFuncTool._parenthesized_table_expression_names(sql)
-            )
 
     def _configured_tool_dialects(self) -> set[str]:
         dialects: set[str] = set()
@@ -2067,7 +1818,7 @@ class DBFuncTool:
                 error=f"Statement references tables outside scoped context: {', '.join(out_of_scope)}",
             )
 
-        if self._ddl_sql_reads_from_source(cleaned, connector.dialect):
+        if ddl_sql_reads_from_source(cleaned, connector.dialect):
             try:
                 effective_datasource = self._resolve_effective_datasource(datasource)
                 policy_sql = self._enforce_sql_policy(
@@ -2195,7 +1946,7 @@ class DBFuncTool:
                     success=0,
                     error=f"Write statement references tables outside scoped context: {', '.join(out_of_scope)}",
                 )
-            if self._write_sql_reads_from_source(normalized_sql, connector.dialect):
+            if write_sql_reads_from_source(normalized_sql, connector.dialect):
                 try:
                     effective_datasource = self._resolve_effective_datasource(datasource)
                     policy_sql = self._enforce_sql_policy(

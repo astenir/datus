@@ -159,9 +159,9 @@ class DatusService:
     @property
     def datasource(self):
         if self._datasource is None:
-            from datus.api.services.database_service import DatasourceService
+            from datus_enterprise.services.database_service import EnterpriseDatasourceService
 
-            self._datasource = DatasourceService(agent_config=self._agent_config)
+            self._datasource = EnterpriseDatasourceService(agent_config=self._agent_config)
         return self._datasource
 
     @property
@@ -175,9 +175,9 @@ class DatusService:
     @property
     def mcp(self):
         if self._mcp is None:
-            from datus.api.services.mcp_service import MCPService
+            from datus_enterprise.services.mcp_service import EnterpriseMCPService
 
-            self._mcp = MCPService(agent_config=self._agent_config)
+            self._mcp = EnterpriseMCPService(agent_config=self._agent_config)
         return self._mcp
 
     @property
@@ -199,9 +199,9 @@ class DatusService:
     @property
     def success_story(self):
         if self._success_story is None:
-            from datus.api.services.success_story_service import SuccessStoryService
+            from datus_enterprise.services.success_story_service import EnterpriseSuccessStoryService
 
-            self._success_story = SuccessStoryService(
+            self._success_story = EnterpriseSuccessStoryService(
                 agent_config=self._agent_config,
                 project_id=self._project_id,
             )
@@ -218,17 +218,17 @@ class DatusService:
     @property
     def dashboard(self):
         if self._dashboard is None:
-            from datus.api.services.dashboard_service import DashboardService
+            from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
 
-            self._dashboard = DashboardService(agent_config=self._agent_config)
+            self._dashboard = EnterpriseDashboardService(agent_config=self._agent_config)
         return self._dashboard
 
     @property
     def report(self):
         if self._report is None:
-            from datus.api.services.report_service import ReportService
+            from datus_enterprise.services.report_service import EnterpriseReportService
 
-            self._report = ReportService(agent_config=self._agent_config)
+            self._report = EnterpriseReportService(agent_config=self._agent_config)
         return self._report
 
     # ------------------------------------------------------------------

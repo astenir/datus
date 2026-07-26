@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from datus.api.services.report_service import ReportService
+from datus_enterprise.services.report_service import EnterpriseReportService
 
 
 def _seed_report(report_dir: Path) -> None:
@@ -37,7 +37,7 @@ async def test_render_html_uses_configured_report_dist(tmp_path: Path):
         },
     )
 
-    result = await ReportService(agent_config=agent_config).render_html(
+    result = await EnterpriseReportService(agent_config=agent_config).render_html(
         project_files_root=tmp_path,
         report_slug="html_offline",
     )

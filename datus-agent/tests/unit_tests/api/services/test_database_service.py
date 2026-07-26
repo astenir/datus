@@ -51,14 +51,6 @@ class TestDatasourceServiceInit:
         svc = DatasourceService(agent_config=real_agent_config)
         assert isinstance(svc.db_manager, DBManager)
 
-    def test_init_reuses_request_scoped_db_manager(self, real_agent_config):
-        """Request-scoped services may share the connector cache without shared selection state."""
-        db_manager = DBManager(real_agent_config.datasource_configs)
-
-        svc = DatasourceService(agent_config=real_agent_config, db_manager=db_manager)
-
-        assert svc.db_manager is db_manager
-
     def test_init_without_datasource_defers_semantic_rag(self, real_agent_config):
         """Init does not open datasource-scoped semantic storage before datasource selection."""
         real_agent_config.current_datasource = ""
@@ -373,29 +365,6 @@ class TestListDatabases:
         result = svc.list_databases(request)
         assert result.data.current_database == "california_schools"
 
-    def test_status_is_unknown_before_first_connection(self, real_agent_config):
-        """Status lookup does not open datasource connections."""
-        svc = DatasourceService(agent_config=real_agent_config)
-
-        statuses = svc.datasource_statuses(["california_schools"])
-
-        assert statuses[0].datasource_id == "california_schools"
-        assert statuses[0].status == "unknown"
-        assert statuses[0].cached is False
-        assert svc.current_db_connector is None
-
-    def test_status_updates_after_catalog_load(self, real_agent_config):
-        """Successful catalog loading records a cached connected status."""
-        svc = DatasourceService(agent_config=real_agent_config)
-
-        result = svc.list_databases(ListDatabasesInput())
-        statuses = svc.datasource_statuses(["california_schools"])
-
-        assert result.success is True
-        assert statuses[0].status == "connected"
-        assert statuses[0].cached is True
-        assert statuses[0].latency_ms is not None
-
 
 class _FakeServerConnector:
     """No-schema (server-style) connector that distinguishes its configured
@@ -424,16 +393,6 @@ class _FakeServerConnector:
         return ["t2", "t1"]
 
 
-class _FakeViewConnector(_FakeServerConnector):
-    """No-schema connector with queryable views for catalog listing."""
-
-    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        return ["v_orders", "v_customers"]
-
-    def get_materialized_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        return ["mv_rollup"]
-
-
 @pytest.fixture
 def _no_schema_dialect(monkeypatch):
     """Force the server-style (no per-database schema) code path."""
@@ -460,16 +419,6 @@ class TestGetConnectionInfoScoping:
         # tables are surfaced (and sorted) for the scoped database
         assert infos[0].tables == ["t1", "t2"]
 
-    def test_catalog_listing_includes_views_for_grant_picker(self, real_agent_config, _no_schema_dialect):
-        """Catalog entries include views so datasource-grant pickers can authorize them."""
-        svc = DatasourceService(agent_config=real_agent_config)
-        connector = _FakeViewConnector(database_name="benchmark")
-
-        infos = svc._get_connection_info(connector, "benchmark", ListDatabasesInput())
-
-        assert infos[0].tables == ["mv_rollup", "t1", "t2", "v_customers", "v_orders"]
-        assert infos[0].tables_count == 5
-
     def test_falls_back_to_server_enumeration_when_unconfigured(self, real_agent_config, _no_schema_dialect):
         """Only when no database is configured do we enumerate the server so the
         connection's reachable databases stay browsable."""
@@ -477,21 +426,6 @@ class TestGetConnectionInfoScoping:
         connector = _FakeServerConnector(database_name="")
 
         infos = svc._get_connection_info(connector, "ds", ListDatabasesInput())
-
-        assert connector.get_databases_calls == 1
-        assert [i.name for i in infos] == ["benchmark", "ga4", "olist", "fund_poc"]
-
-    def test_explicit_enumerate_databases_lists_server_databases(self, real_agent_config, _no_schema_dialect):
-        """A server datasource may opt into instance-wide catalog listing."""
-        real_agent_config.services.datasources["warehouse"] = DbConfig(
-            type="starrocks",
-            database="benchmark",
-            enumerate_databases=True,
-        )
-        svc = DatasourceService(agent_config=real_agent_config)
-        connector = _FakeServerConnector(database_name="benchmark")
-
-        infos = svc._get_connection_info(connector, "warehouse", ListDatabasesInput())
 
         assert connector.get_databases_calls == 1
         assert [i.name for i in infos] == ["benchmark", "ga4", "olist", "fund_poc"]

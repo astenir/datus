@@ -14,10 +14,10 @@ from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
-from datus.api.models.config_models import ProbeResultData
-from datus.api.routes.config_routes import _probe_datasource_sync
+from datus.api.models.downstream import ProbeResultData
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.config_routes import _probe_datasource_sync
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.personal_datasources import (
     datasource_record_to_db_config,

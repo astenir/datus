@@ -27,9 +27,8 @@ from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_ex
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteSQLData
 from datus.api.models.database_models import DatabaseInfo, ListDatabasesData
-from datus.api.routes import cli_routes, database_routes
 from datus.utils.time_utils import now_utc_iso
-from datus_enterprise.api import admin_datasource_routes, me_routes
+from datus_enterprise.api import admin_datasource_routes, cli_routes, database_routes, me_routes
 from datus_enterprise.projection import DatasourceGrantProjector
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

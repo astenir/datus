@@ -10,21 +10,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter
 
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_any_module
 from datus.api.models.base_models import Result
 from datus.api.models.config_models import ModelInfo, ModelPricing, ModelsData
 from datus.cli.provider_model_catalog import load_cache_fetched_at, load_cached_model_details
 from datus.utils.loggings import get_logger
-from datus_enterprise.model_policy import filter_allowed_models, is_model_ref_allowed
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["models"])
-
-_require_model_catalog_access = require_any_module("module.config.view", "module.chat")
 
 
 def _model_spec(catalog: Dict[str, Any], slug: str) -> Dict[str, Any]:
@@ -110,16 +106,14 @@ def _resolve_current_model(
     target = getattr(agent_config, "target", None)
     custom_models = getattr(agent_config, "models", None)
     if target and isinstance(custom_models, dict) and target in custom_models:
-        if any(m.provider == "custom" and m.id == target and "chat" in m.capabilities for m in models):
-            return f"custom/{target}"
+        return f"custom/{target}"
 
     for m in models:
-        if m.provider == "custom" and "chat" in m.capabilities:
+        if m.provider == "custom":
             return f"custom/{m.id}"
 
-    for m in models:
-        if "chat" in m.capabilities:
-            return f"{m.provider}/{m.id}"
+    if models:
+        return f"{models[0].provider}/{models[0].id}"
 
     return None
 
@@ -129,9 +123,8 @@ def _resolve_current_model(
     response_model=Result[ModelsData],
     summary="List Available Models",
     description="Return models for providers with credentials configured in agent.yml.",
-    dependencies=[Depends(_require_model_catalog_access)],
 )
-async def list_models(svc: ServiceDep, request: Request = None) -> Result[ModelsData]:
+async def list_models(svc: ServiceDep) -> Result[ModelsData]:
     """Return every model exposed by providers the current project has credentials for.
 
     Data priority per-model:
@@ -178,7 +171,6 @@ async def list_models(svc: ServiceDep, request: Request = None) -> Result[Models
             models.append(_build_model_info(provider_key, entry, catalog))
 
     custom_models = getattr(agent_config, "models", None)
-    embedding_targets = set(getattr(agent_config, "embedding_model_targets", set()) or set())
     if isinstance(custom_models, dict) and custom_models:
         for model_key, model_cfg in custom_models.items():
             if not isinstance(model_key, str) or not model_key:
@@ -195,7 +187,6 @@ async def list_models(svc: ServiceDep, request: Request = None) -> Result[Models
                     id=model_key,
                     model=actual_model,
                     name=model_key,
-                    capabilities=["embedding"] if model_key in embedding_targets else ["chat"],
                     context_length=spec_ctx if isinstance(spec_ctx, int) else None,
                     max_tokens=spec_max if isinstance(spec_max, int) else None,
                 )
@@ -203,13 +194,7 @@ async def list_models(svc: ServiceDep, request: Request = None) -> Result[Models
         if any(m.provider == "custom" for m in models):
             seen_providers.append("custom")
 
-    ctx = getattr(getattr(request, "state", None), "app_context", None) if request is not None else None
     current_model = _resolve_current_model(agent_config, models)
-    models = filter_allowed_models(ctx, models)
-    if current_model and not is_model_ref_allowed(ctx, current_model):
-        current_model = None
-    filtered_provider_set = {model.provider for model in models}
-    seen_providers = [provider for provider in seen_providers if provider in filtered_provider_set]
 
     return Result(
         success=True,

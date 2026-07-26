@@ -6,13 +6,13 @@ import pytest
 
 from datus.api.enterprise.defaults import InMemoryEnterpriseAgentStore
 from datus.api.models.mcp_models import AddServerInput
-from datus.api.services.mcp_service import MCPService
+from datus_enterprise.services.mcp_service import EnterpriseMCPService
 
 
 @pytest.mark.asyncio
 class TestMCPServerReferenceProtection:
     async def test_remove_server_blocks_enterprise_and_local_agent_references(self, real_agent_config):
-        service = MCPService(agent_config=real_agent_config)
+        service = EnterpriseMCPService(agent_config=real_agent_config)
         service.add_server(AddServerInput(name="shared_mcp", type="stdio", command="echo"))
         real_agent_config.agentic_nodes = {
             **(real_agent_config.agentic_nodes or {}),
@@ -54,7 +54,7 @@ class TestMCPServerReferenceProtection:
         service.remove_server("shared_mcp")
 
     async def test_remove_server_fails_closed_when_reference_check_fails(self, real_agent_config):
-        service = MCPService(agent_config=real_agent_config)
+        service = EnterpriseMCPService(agent_config=real_agent_config)
         service.add_server(AddServerInput(name="guarded_mcp", type="stdio", command="echo"))
         agent_store = AsyncMock()
         agent_store.list_agents.side_effect = RuntimeError("store unavailable")
@@ -67,7 +67,7 @@ class TestMCPServerReferenceProtection:
         service.remove_server("guarded_mcp")
 
     async def test_remove_server_succeeds_without_agent_references(self, real_agent_config):
-        service = MCPService(agent_config=real_agent_config)
+        service = EnterpriseMCPService(agent_config=real_agent_config)
         service.add_server(AddServerInput(name="unused_mcp", type="stdio", command="echo"))
 
         result = await service.remove_server_if_unreferenced("unused_mcp", InMemoryEnterpriseAgentStore())

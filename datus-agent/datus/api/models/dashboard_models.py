@@ -23,7 +23,6 @@ from datus.schemas.gen_visual_report_models import QueryColumnMeta
 __all__ = [
     "ArtifactFile",
     "DashboardDetail",
-    "DashboardEditSession",
     "DashboardQueryRequest",
     "SqlQueryResultEnvelope",
 ]
@@ -88,17 +87,6 @@ class DashboardDetail(BaseModel):
         default_factory=list,
         description="Per-slug Jinja2 template metadata (params declaration, columns, sample_params)",
     )
-
-
-class DashboardEditSession(BaseModel):
-    """Ephemeral handle for editing one dashboard through a locked subagent."""
-
-    edit_session_id: str = Field(..., description="Opaque edit-session identifier.")
-    subagent_id: str = Field(..., description="Subagent id to pass to /api/v1/chat/stream.")
-    artifact_type: str = Field("dashboard", description="Artifact type locked by this edit session.")
-    artifact_slug: str = Field(..., description="Dashboard slug locked by this edit session.")
-    owner_user_id: Optional[str] = Field(None, description="User that created the edit session.")
-    created_at: str = Field(..., description="UTC ISO timestamp when the edit session was created.")
 
 
 class SqlQueryResultEnvelope(BaseModel):

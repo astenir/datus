@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from typing import Any, Dict, Iterable, Optional
 from unittest.mock import MagicMock
 
@@ -18,9 +19,10 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
-from datus.api.routes import models_routes
-from datus.api.routes.models_routes import list_models
+from datus.api.service import create_app
 from datus.configuration.agent_config import ModelConfig
+from datus_enterprise.api import models_routes
+from datus_enterprise.api.models_routes import list_models
 
 
 def _make_svc(
@@ -115,6 +117,19 @@ def _client(ctx: AppContext, svc: MagicMock) -> TestClient:
     return TestClient(app)
 
 
+def test_create_app_registers_authoritative_models_route_once() -> None:
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/models" and "GET" in getattr(route, "methods", set())
+    ]
+
+    assert len(routes) == 1
+    assert routes[0].endpoint.__module__ == "datus_enterprise.api.models_routes"
+
+
 def test_models_route_rejects_users_without_chat_or_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_extensions(monkeypatch)
     svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
@@ -127,8 +142,8 @@ def test_models_route_rejects_users_without_chat_or_config_view(monkeypatch: pyt
 
 def test_models_route_allows_chat_view(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_extensions(monkeypatch)
-    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
-    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cache_fetched_at", lambda: None)
     svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
     with _client(ctx, svc) as client:
@@ -141,8 +156,8 @@ def test_models_route_allows_chat_view(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_models_route_allows_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_extensions(monkeypatch)
-    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
-    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cache_fetched_at", lambda: None)
     svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.config.view"})
     with _client(ctx, svc) as client:
@@ -155,8 +170,8 @@ def test_models_route_allows_config_view(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_models_route_filters_with_enterprise_model_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_extensions(monkeypatch)
-    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
-    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes.upstream_models_routes, "load_cache_fetched_at", lambda: None)
     svc = _make_svc(
         catalog=_basic_catalog(),
         available={"openai", "claude"},
@@ -191,8 +206,8 @@ class TestCustomModelsDownstream:
     async def test_custom_embedding_model_is_marked_and_not_selected_as_current(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
-        monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+        monkeypatch.setattr(models_routes.upstream_models_routes, "load_cached_model_details", lambda: None)
+        monkeypatch.setattr(models_routes.upstream_models_routes, "load_cache_fetched_at", lambda: None)
         svc = _make_svc(
             catalog=_basic_catalog(),
             available=set(),
@@ -200,6 +215,6 @@ class TestCustomModelsDownstream:
             target="qwen-ebd",
         )
         svc.agent_config.embedding_model_targets = {"qwen-ebd"}
-        result = await list_models(svc)
+        result = await list_models(svc, Request({"type": "http"}))
         assert result.data.models[0].capabilities == ["embedding"]
         assert result.data.current_model is None

@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import chat_routes
+from datus.api.service import create_app
 from datus_enterprise.agent_registry import (
     ENTERPRISE_AGENT_NODE_CAPABILITIES,
     ENTERPRISE_AGENT_NODE_CLASSES,
@@ -29,6 +31,19 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+def test_create_app_registers_authoritative_legacy_agent_routes_once():
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    list_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/agent/list" and "GET" in getattr(route, "methods", set())
+    ]
+
+    assert len(list_routes) == 1
+    assert list_routes[0].endpoint.__module__ == "datus_enterprise.api.legacy_agent_routes"
 
 
 def _install_extensions(monkeypatch, agent_store, audit_sink=None, *, enabled=False):

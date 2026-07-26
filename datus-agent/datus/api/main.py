@@ -168,6 +168,8 @@ def _build_agent_args(args: argparse.Namespace) -> argparse.Namespace:
 def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> None:
     from datus.api.service import create_app
 
+    timeout_graceful_shutdown = getattr(args, "timeout_graceful_shutdown", 10)
+
     # reload / multi-worker modes require a string import target, not an app instance.
     if args.reload:
         uvicorn.run(
@@ -177,7 +179,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
             reload=True,
             log_level=args.log_level.lower(),
             access_log=True,
-            timeout_graceful_shutdown=args.timeout_graceful_shutdown,
+            timeout_graceful_shutdown=timeout_graceful_shutdown,
         )
         return
 
@@ -189,7 +191,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
             workers=args.workers,
             log_level=args.log_level.lower(),
             access_log=True,
-            timeout_graceful_shutdown=args.timeout_graceful_shutdown,
+            timeout_graceful_shutdown=timeout_graceful_shutdown,
         )
         return
 
@@ -201,7 +203,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
         workers=1,
         log_level=args.log_level.lower(),
         access_log=True,
-        timeout_graceful_shutdown=args.timeout_graceful_shutdown,
+        timeout_graceful_shutdown=timeout_graceful_shutdown,
     )
     server = uvicorn.Server(config)
     asyncio.run(server.serve())

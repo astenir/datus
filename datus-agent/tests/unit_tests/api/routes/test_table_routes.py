@@ -1,5 +1,6 @@
 """Enterprise authorization coverage for table and semantic model routes."""
 
+import argparse
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,11 +19,26 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.table_models import ColumnInfo, GetTableDetailData, TableDetailData
-from datus.api.routes import table_routes
+from datus.api.service import create_app
 from datus.tools.db_tools import connector_registry
+from datus_enterprise.api import table_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 _CONNECTOR_REGISTRY_SNAPSHOT_ATTRS = ("_capabilities", "_uri_builders", "_context_resolvers")
+
+
+def test_create_app_registers_authoritative_table_routes_once():
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/table/detail"
+        and "GET" in getattr(route, "methods", set())
+    ]
+
+    assert len(routes) == 1
+    assert routes[0].endpoint.__module__ == "datus_enterprise.api.table_routes"
 
 
 @pytest.fixture(autouse=True)

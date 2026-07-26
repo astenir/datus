@@ -9,6 +9,7 @@ from datus_storage_base.vector.base import EmbeddingFunction
 from openai import AzureOpenAI, BadRequestError, OpenAI
 from pydantic import BaseModel
 
+from datus.storage.embedding_openai_requests_downstream import request_openai_embeddings
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -101,44 +102,15 @@ class OpenAIEmbeddings(BaseModel, EmbeddingFunction):
             return [None] * len(texts)
 
         try:
-            kwargs = {
-                "model": self.name,
-            }
-            if self.name != "text-embedding-ada-002" and self.dim is not None:
-                kwargs["dimensions"] = self.dim
-
             logger.debug(f"Calling OpenAI API: model={self.name}, text_count={len(valid_texts)}")
-            valid_embeddings = {}
-
-            def generate_individually() -> None:
-                for text, idx in zip(valid_texts, valid_indices):
-                    try:
-                        response = self._openai_client.embeddings.create(input=text, **kwargs)
-                        if response.data:
-                            valid_embeddings[idx] = response.data[0].embedding
-                    except BadRequestError:
-                        logger.error(
-                            "Bad request when generating embedding: model=%s, input_index=%d, input_chars=%d",
-                            self.name,
-                            idx,
-                            len(text),
-                        )
-
-            if self.single_input_only:
-                generate_individually()
-            else:
-                try:
-                    rs = self._openai_client.embeddings.create(input=valid_texts, **kwargs)
-                    valid_embeddings.update({idx: v.embedding for v, idx in zip(rs.data, valid_indices)})
-                except BadRequestError:
-                    if len(valid_texts) == 1:
-                        raise
-                    logger.warning(
-                        "Embedding batch was rejected; retrying inputs individually: model=%s, text_count=%d",
-                        self.name,
-                        len(valid_texts),
-                    )
-                    generate_individually()
+            valid_embeddings = request_openai_embeddings(
+                self._openai_client,
+                model=self.name,
+                dim=self.dim,
+                texts=valid_texts,
+                indices=valid_indices,
+                single_input_only=self.single_input_only,
+            )
             logger.debug(f"Successfully generated embeddings for {len(valid_embeddings)} texts")
         except BadRequestError:
             logger.error(f"Bad request when generating embeddings: model={self.name}, text_count={len(texts)}")

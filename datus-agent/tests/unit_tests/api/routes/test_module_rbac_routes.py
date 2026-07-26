@@ -25,23 +25,21 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData, ExecuteContextData, ExecuteSQLData, StopExecuteSQLData
-from datus.api.models.dashboard_models import DashboardDetail, DashboardEditSession, SqlQueryResultEnvelope
+from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
 from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData
-from datus.api.models.report_models import ReportDetail, ReportEditSession
+from datus.api.models.downstream import DashboardEditSession, ReportEditSession
+from datus.api.models.report_models import ReportDetail
 from datus.api.routes import (
     chat_routes,
-    cli_routes,
-    dashboard_routes,
-    database_routes,
-    report_routes,
     subject_routes,
-    table_routes,
 )
 from datus.api.services.chat_task_manager import ChatTaskManager
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus_enterprise.api import agent_routes as enterprise_agent_routes
+from datus_enterprise.api import artifact_routes as enterprise_artifact_routes
+from datus_enterprise.api import cli_routes, dashboard_routes, database_routes, table_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 _UNSET = object()
@@ -1239,7 +1237,7 @@ def test_report_detail_requires_module_report_view(monkeypatch):
     svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
 
     assert response.status_code == 403
@@ -1253,7 +1251,7 @@ def test_report_detail_allows_module_report_view(monkeypatch):
     svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.view"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
 
     assert response.status_code == 200
@@ -1274,7 +1272,7 @@ def test_report_detail_rejects_artifact_acl_denial(monkeypatch):
         principal={"artifact_acl": {"report": ["other_report"]}},
     )
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
 
     assert response.status_code == 404
@@ -1289,7 +1287,7 @@ def test_report_edit_session_requires_module_report_edit(monkeypatch):
     svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.post("/api/v1/reports/sales_overview/edit-sessions")
 
     assert response.status_code == 403
@@ -1312,7 +1310,7 @@ def test_report_edit_session_allows_owner_and_returns_locked_subagent(monkeypatc
     )
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.edit"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.post("/api/v1/reports/sales_overview/edit-sessions")
 
     assert response.status_code == 200
@@ -1333,7 +1331,7 @@ def test_report_edit_session_denies_shared_non_owner(monkeypatch):
     svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.edit"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.post("/api/v1/reports/sales_overview/edit-sessions")
 
     assert response.status_code == 404
@@ -1356,7 +1354,7 @@ def test_report_edit_session_allows_artifact_admin(monkeypatch):
     )
     ctx = AppContext(user_id="admin-1", project_id="proj", permissions={"module.admin.artifacts"})
 
-    with _client(report_routes.router, ctx, svc) as client:
+    with _client(enterprise_artifact_routes.router, ctx, svc) as client:
         response = client.post("/api/v1/reports/sales_overview/edit-sessions")
 
     assert response.status_code == 200
@@ -1503,7 +1501,7 @@ def test_artifact_rbac_denial_does_not_resolve_datus_service(monkeypatch):
         return ctx
 
     report_app = FastAPI()
-    report_app.include_router(report_routes.router)
+    report_app.include_router(enterprise_artifact_routes.router)
     report_app.dependency_overrides[deps.get_datus_service] = reject_service
     report_app.dependency_overrides[deps.get_request_app_context] = override_context
 
@@ -1670,6 +1668,8 @@ def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch,
     executed_sql = []
 
     class _Connector:
+        dialect = "sqlite"
+
         def execute_query(self, sql, result_format):
             executed_sql.append((sql, result_format))
             return SimpleNamespace(success=True, sql_return=[{"value": 1}])
@@ -1685,7 +1685,6 @@ def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch,
     import datus.tools.func_tool as func_tool_mod
 
     monkeypatch.setattr(func_tool_mod, "DBFuncTool", _DBFuncTool)
-    monkeypatch.setattr(CLIService, "_authorize_read_sql", staticmethod(lambda sql, connector, agent_config: sql))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
 
     with _client(dashboard_routes.router, ctx, svc) as client:

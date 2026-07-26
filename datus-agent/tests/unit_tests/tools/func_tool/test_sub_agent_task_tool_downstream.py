@@ -7,6 +7,10 @@ import pytest
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.tools.func_tool.sub_agent_task_tool import SubAgentTaskTool
+from datus_enterprise.services.sub_agent_task_policy import (
+    enterprise_agent_acl_denial,
+    inherit_parent_permission_profile,
+)
 
 
 @pytest.fixture
@@ -45,12 +49,10 @@ class TestPermissionProfileInheritance:
             "profile": child_profile,
             "rules": [{"tool": "db_tools", "pattern": "blocked_by_admin", "permission": "deny"}],
         }
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
         parent = MagicMock()
         parent.permission_manager = PermissionManager(
             global_config=get_profile(parent_profile), active_profile=parent_profile
         )
-        tool.set_parent_node(parent)
         child_manager = PermissionManager(
             global_config=get_profile(child_profile),
             node_overrides={
@@ -62,7 +64,11 @@ class TestPermissionProfileInheritance:
         )
         child = MagicMock()
         child.permission_manager = child_manager
-        tool._inherit_parent_permission_profile(child)
+        inherit_parent_permission_profile(
+            parent_node=parent,
+            agent_config=mock_agent_config,
+            node=child,
+        )
         assert child_manager.active_profile == parent_profile
         assert child_manager.check_permission("db_tools", "blocked_by_admin", "ask_metrics") == PermissionLevel.DENY
         assert child_manager.check_permission("semantic_tools", "private_metric", "ask_metrics") == PermissionLevel.DENY
@@ -72,17 +78,19 @@ class TestPermissionProfileInheritance:
         from datus.tools.permission.permission_manager import PermissionManager
         from datus.tools.permission.profiles import get_profile
 
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
         parent = MagicMock()
         parent.permission_manager = PermissionManager(
             global_config=get_profile("dangerous"), active_profile="dangerous"
         )
-        tool.set_parent_node(parent)
         child = MagicMock()
         child.permission_manager.active_profile = "normal"
         child.permission_manager.switch_profile.side_effect = RuntimeError("switch failed")
         with pytest.raises(RuntimeError, match="Failed to inherit permission profile 'dangerous'"):
-            tool._inherit_parent_permission_profile(child)
+            inherit_parent_permission_profile(
+                parent_node=parent,
+                agent_config=mock_agent_config,
+                node=child,
+            )
 
     @pytest.mark.asyncio
     async def test_task_applies_parent_request_profile_to_created_child(self, mock_agent_config):
@@ -156,8 +164,7 @@ class TestEnterpriseAgentAclGate:
     def test_allows_task_target_from_effective_agent_acl(self, mock_agent_config):
         mock_agent_config._enterprise_enabled = True
         mock_agent_config._enterprise_allowed_agent_ids = {"gen_visual_dashboard"}
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-        assert tool._enterprise_acl_denial("gen_visual_dashboard") is None
+        assert enterprise_agent_acl_denial(mock_agent_config, "gen_visual_dashboard") is None
 
     def test_custom_agent_is_filtered_by_acl_not_node_class_module(self):
         config = Mock(spec=AgentConfig)

@@ -28,6 +28,7 @@ from datus.api.services.dashboard_service import (
 )
 from datus.schemas.gen_visual_dashboard_models import TemplateParamDecl
 from datus.tools.sql_policy import EnforcementResult, SqlPolicyConfig
+from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
 
 _SAMPLE_SQL_J2 = "SELECT * FROM sales WHERE region = :region;\n"
 _SAMPLE_META = {
@@ -135,7 +136,7 @@ def _patch_executor(monkeypatch, *, captured: dict) -> None:
 @pytest.mark.asyncio
 async def test_list_dashboards_empty_when_no_dashboards_dir(tmp_path: Path):
     """No ``dashboards/`` directory → empty list, not an error."""
-    result = await DashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
+    result = await EnterpriseDashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
     assert result.success is True
     assert result.data == []
 
@@ -143,7 +144,7 @@ async def test_list_dashboards_empty_when_no_dashboards_dir(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_list_dashboards_returns_single_dashboard(tmp_path: Path):
     _write_dashboard(tmp_path)
-    result = await DashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
+    result = await EnterpriseDashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
     assert result.success is True
     assert len(result.data) == 1
     assert result.data[0].slug == "demo"
@@ -180,7 +181,7 @@ async def test_list_dashboards_returns_multiple_sorted_by_recency(tmp_path: Path
     (newer_dir / "render").mkdir(exist_ok=True)
     (newer_dir / "render" / "app.jsx").write_text(_SAMPLE_APP_JSX, encoding="utf-8")
     (newer_dir / "manifest.json").write_text(json.dumps(newer_manifest), encoding="utf-8")
-    result = await DashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
+    result = await EnterpriseDashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
     assert result.success is True
     assert len(result.data) == 2
     assert result.data[0].slug == "newer"
@@ -203,7 +204,7 @@ async def test_list_dashboards_skips_corrupt_manifest(tmp_path: Path):
     bad_dir = tmp_path / "dashboards" / "bad"
     bad_dir.mkdir(parents=True, exist_ok=True)
     (bad_dir / "manifest.json").write_text("{not-json", encoding="utf-8")
-    result = await DashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
+    result = await EnterpriseDashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
     assert result.success is True
     assert len(result.data) == 1
     assert result.data[0].slug == "good"
@@ -226,7 +227,7 @@ async def test_list_dashboards_skips_dir_without_manifest(tmp_path: Path):
     orphan.mkdir(parents=True, exist_ok=True)
     (orphan / "render").mkdir(exist_ok=True)
     (orphan / "render" / "app.jsx").write_text("const x = 1;\n", encoding="utf-8")
-    result = await DashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
+    result = await EnterpriseDashboardService(agent_config=None).list_dashboards(project_files_root=tmp_path)
     assert result.success is True
     assert len(result.data) == 1
     assert result.data[0].slug == "good"
@@ -238,7 +239,7 @@ async def test_render_html_uses_configured_dashboard_dist(tmp_path: Path):
     dist_dir = tmp_path / "vendor" / "web-artifact-render" / "dist"
     _seed_dist(dist_dir)
     agent_config = SimpleNamespace(agentic_nodes={"gen_visual_dashboard": {"dashboard_dist": str(dist_dir)}})
-    result = await DashboardService(agent_config=agent_config).render_html(
+    result = await EnterpriseDashboardService(agent_config=agent_config).render_html(
         project_files_root=tmp_path, dashboard_slug="html_offline", query_endpoint="/api/v1/dashboard/query"
     )
     assert result.success is True

@@ -7,7 +7,8 @@
 from unittest.mock import MagicMock
 
 from datus.storage.schema_metadata import SchemaStorage
-from datus.storage.schema_metadata.store import SchemaWithValueRAG, _sanitize_sample_rows
+from datus.storage.schema_metadata.sample_rows_downstream import sanitize_sample_rows
+from datus.storage.schema_metadata.store import SchemaWithValueRAG
 
 
 class _EmbeddingModelStub:
@@ -44,14 +45,14 @@ def test_schema_metadata_uses_identifier_storage_key() -> None:
 def test_sanitize_sample_rows_keeps_small_csv_unchanged() -> None:
     sample_rows = "id,name\n1,Alice\n2,Bob\n"
 
-    assert _sanitize_sample_rows(sample_rows, max_cell_chars=100, max_chars=1_000) == sample_rows
+    assert sanitize_sample_rows(sample_rows, max_cell_chars=100, max_chars=1_000) == sample_rows
 
 
 def test_sanitize_sample_rows_replaces_oversized_cells_without_leaking_content() -> None:
     secret = "private-system-prompt-" * 200
     sample_rows = f'id,prompt\n1,"{secret}"\n'
 
-    sanitized = _sanitize_sample_rows(sample_rows, max_cell_chars=128, max_chars=1_000)
+    sanitized = sanitize_sample_rows(sample_rows, max_cell_chars=128, max_chars=1_000)
 
     assert secret not in sanitized
     assert "<DATUS_SAMPLE_CELL_TRUNCATED chars=" in sanitized
@@ -62,7 +63,7 @@ def test_sanitize_sample_rows_replaces_oversized_cells_without_leaking_content()
 def test_sanitize_sample_rows_caps_total_serialized_size() -> None:
     sample_rows = "id,value\n" + "\n".join(f"{idx},value-{idx:04d}" for idx in range(1_000))
 
-    sanitized = _sanitize_sample_rows(sample_rows, max_cell_chars=100, max_chars=512)
+    sanitized = sanitize_sample_rows(sample_rows, max_cell_chars=100, max_chars=512)
 
     assert len(sanitized) <= 512
     assert "<DATUS_SAMPLE_ROWS_TRUNCATED original_chars=" in sanitized
@@ -72,7 +73,7 @@ def test_sanitize_sample_rows_does_not_leak_oversized_unparseable_csv_fields() -
     secret = "s" * 200_000
     sample_rows = f"id,prompt\n1,{secret}\n"
 
-    sanitized = _sanitize_sample_rows(sample_rows, max_cell_chars=1_000, max_chars=8_000)
+    sanitized = sanitize_sample_rows(sample_rows, max_cell_chars=1_000, max_chars=8_000)
 
     assert secret not in sanitized
     assert sanitized == f"<DATUS_SAMPLE_ROWS_UNPARSEABLE original_chars={len(sample_rows)}>"

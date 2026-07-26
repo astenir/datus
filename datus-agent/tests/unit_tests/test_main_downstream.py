@@ -42,7 +42,7 @@ def test_migration_runs_before_agent_initialization():
         patch("datus.main.load_agent_config", return_value=mock_config),
         patch("datus.main.Agent") as mock_agent,
         patch(
-            "datus.api.services.success_story_service.SuccessStoryService",
+            "datus_enterprise.services.success_story_service.EnterpriseSuccessStoryService",
             return_value=mock_service,
         ) as mock_service_class,
         patch("datus.cli.cli_styles.print_success") as mock_print_success,
@@ -85,7 +85,7 @@ def test_migration_os_error_returns_one_without_agent_initialization():
         patch("datus.main.load_agent_config", return_value=mock_config),
         patch("datus.main.Agent") as mock_agent,
         patch(
-            "datus.api.services.success_story_service.SuccessStoryService",
+            "datus_enterprise.services.success_story_service.EnterpriseSuccessStoryService",
             return_value=mock_service,
         ),
         patch("datus.cli.cli_styles.print_error") as mock_print_error,

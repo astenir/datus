@@ -11,7 +11,7 @@ from datus.api.enterprise.defaults import InMemorySessionOwnerStore, LocalAuthor
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardQueryRequest, SqlQueryResultEnvelope
-from datus.api.routes import dashboard_routes
+from datus_enterprise.api import dashboard_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 

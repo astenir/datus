@@ -16,10 +16,15 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import get_artifact_acl_store, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
+from datus.api.models.downstream import ReportEditSession
 from datus.api.models.report_models import ReportDetail
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus.utils.loggings import get_logger
-from datus_enterprise.artifact_acl import filter_visible_artifacts, require_artifact_access
+from datus_enterprise.artifact_acl import (
+    filter_visible_artifacts,
+    require_artifact_access,
+    require_artifact_edit_access,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import ResourceRef, authorize, require_module
 
@@ -198,6 +203,46 @@ async def list_reports(svc: ServiceDep, ctx: ReportViewCtx) -> Result[List[Artif
 async def get_report_detail(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Result[ReportDetail]:
     await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")
     return await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
+
+
+@router.get(
+    "/report/detail",
+    response_model=Result[ReportDetail],
+    summary="Get Report Artifact Detail",
+    dependencies=[Depends(_require_report_view)],
+)
+async def get_report_detail_legacy(
+    svc: ServiceDep,
+    ctx: ReportViewCtx,
+    slug: str = Query(..., description="Report slug, e.g. 'account_activity_q1'"),
+) -> Result[ReportDetail]:
+    """Keep the upstream detail path behind the downstream artifact ACL boundary."""
+    await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")
+    return await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
+
+
+@router.post(
+    "/reports/{slug}/edit-sessions",
+    response_model=Result[ReportEditSession],
+    summary="Create Report Edit Session",
+    dependencies=[Depends(require_platform_active(operation="report.edit_session.create", resource_type="report"))],
+)
+async def create_report_edit_session(
+    svc: ServiceDep,
+    ctx: ShareDirectoryCtx,
+    slug: str,
+) -> Result[ReportEditSession]:
+    await require_artifact_edit_access(ctx, artifact_type="report", slug=slug)
+    detail = await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
+    if not detail.success:
+        return Result(
+            success=False,
+            errorCode=detail.errorCode or "REPORT_NOT_FOUND",
+            errorMessage=detail.errorMessage or "Report not found.",
+        )
+
+    session = svc.task_manager.create_report_edit_session(user_id=ctx.user_id, report_slug=slug)
+    return Result(success=True, data=session)
 
 
 @router.get(

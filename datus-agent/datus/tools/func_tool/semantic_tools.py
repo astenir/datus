@@ -13,10 +13,7 @@ import csv
 import inspect
 import io
 import json
-import re
-from calendar import monthrange
 from collections import OrderedDict
-from datetime import date, timedelta
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
 
 from agents import Tool
@@ -24,6 +21,7 @@ from agents import Tool
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.store import MetricRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
+from datus.tools.func_tool import semantic_query_time_downstream as query_time
 from datus.tools.func_tool.attribution_utils import DimensionAttributionUtil
 from datus.tools.func_tool.base import FuncToolListResult, FuncToolResult, normalize_null, trans_to_function_tool
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
@@ -36,7 +34,6 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 NO_METRICS_PRESENT_MESSAGE = "No metrics present in the model."
-_RELATIVE_QUERY_TIME_RE = re.compile(r"^-(\d+)([dwmy])$", re.IGNORECASE)
 
 
 def _normalize_dimension_rows(raw) -> list:
@@ -345,61 +342,6 @@ class SemanticTools:
         self._attribution_tool: Optional[DimensionAttributionUtil] = None
         self._adapter_load_error: Optional[str] = None
         self._adapter_context_key: Optional[Tuple[str, str, str, str, str]] = None
-
-    @staticmethod
-    def _shift_calendar_months(value: date, months: int) -> date:
-        month_index = value.month - 1 + months
-        year = value.year + month_index // 12
-        month = month_index % 12 + 1
-        day = min(value.day, monthrange(year, month)[1])
-        return value.replace(year=year, month=month, day=day)
-
-    def _query_time_reference_date(self) -> date:
-        from datus.utils.time_utils import get_default_current_date
-
-        configured_date = self._reference_date_provider() if self._reference_date_provider else None
-        reference_text = get_default_current_date(configured_date)
-        try:
-            return date.fromisoformat(reference_text)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"query_metrics reference date must use YYYY-MM-DD format: {reference_text!r}") from exc
-
-    def _normalize_query_time(
-        self,
-        value: Optional[str],
-        *,
-        label: str,
-        reference_date: Optional[date] = None,
-    ) -> Optional[str]:
-        value = normalize_null(value)
-        if value is None or not isinstance(value, str):
-            return value
-
-        text = value.strip()
-        if text.lower() == "now":
-            return (reference_date or self._query_time_reference_date()).isoformat()
-
-        match = _RELATIVE_QUERY_TIME_RE.fullmatch(text)
-        if match:
-            count = int(match.group(1))
-            unit = match.group(2).lower()
-            reference_date = reference_date or self._query_time_reference_date()
-            if unit == "d":
-                resolved = reference_date - timedelta(days=count)
-            elif unit == "w":
-                resolved = reference_date - timedelta(weeks=count)
-            elif unit == "m":
-                resolved = self._shift_calendar_months(reference_date, -count)
-            else:
-                resolved = self._shift_calendar_months(reference_date, -12 * count)
-            return resolved.isoformat()
-
-        if text.startswith("-"):
-            raise ValueError(
-                f"query_metrics {label} must be an ISO date/timestamp or a relative value "
-                "like '-7d', '-2w', '-3m', or '-1y'."
-            )
-        return text
 
     @staticmethod
     def _query_data_row_count(data: Any) -> int:
@@ -1016,22 +958,10 @@ class SemanticTools:
         zero_fill = _normalize_optional_bool(zero_fill)
 
         try:
-            relative_time_values = (time_start, time_end)
-            needs_reference_date = any(
-                isinstance(value, str)
-                and (value.strip().lower() == "now" or _RELATIVE_QUERY_TIME_RE.fullmatch(value.strip()) is not None)
-                for value in relative_time_values
-            )
-            reference_date = self._query_time_reference_date() if needs_reference_date else None
-            time_start = self._normalize_query_time(
+            time_start, time_end = query_time.normalize_query_time_range(
                 time_start,
-                label="time_start",
-                reference_date=reference_date,
-            )
-            time_end = self._normalize_query_time(
                 time_end,
-                label="time_end",
-                reference_date=reference_date,
+                self._reference_date_provider,
             )
             logger.info(
                 f"query_metrics called: metrics={metrics}, dimensions={dimensions}, path={path}, "

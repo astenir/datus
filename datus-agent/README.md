@@ -42,7 +42,7 @@ Built-in evaluation framework supporting **BIRD** and **Spider 2.0-Snow** datase
 ### Open Platform
 
 - **10+ LLM providers** (OpenAI, Claude, Gemini, DeepSeek, Qwen, Kimi, OpenRouter, and more) with per-node model assignment — mix models within a single workflow
-- **15 database types** — Built-in SQLite and DuckDB, plus 13 pluggable adapters including PostgreSQL, MySQL, Snowflake, Oracle, OceanBase Oracle, StarRocks, and ClickHouse
+- **11 databases** — Built-in SQLite & DuckDB, plus pluggable adapters for PostgreSQL, MySQL, Snowflake, StarRocks, ClickHouse, and more
 - **MCP Protocol** — Both an MCP server (exposing Datus tools to Claude Desktop, Cursor, etc.) and an MCP client (consuming external tools via `.mcp` in the CLI). → [MCP docs](https://docs.datus.ai/integration/mcp/)
 - **Skills** — Extend Datus with [agentskills.io](https://agentskills.io)-style packaged tools, configurable permissions, and marketplace support. → [Skills docs](https://docs.datus.ai/integration/skills/)
 
@@ -186,19 +186,15 @@ Per-node model assignment lets you use different providers for different workflo
 |----------|------|---------|
 | SQLite | `sqlite` | Built-in |
 | DuckDB | `duckdb` | Built-in |
-| PostgreSQL | `postgresql` | [`datus-postgresql`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-postgresql) |
-| MySQL | `mysql` | [`datus-mysql`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-mysql) |
-| Snowflake | `snowflake` | [`datus-snowflake`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-snowflake) |
-| StarRocks | `starrocks` | [`datus-starrocks`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-starrocks) |
-| ClickHouse | `clickhouse` | [`datus-clickhouse`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-clickhouse) |
-| ClickZetta | `clickzetta` | [`datus-clickzetta`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-clickzetta) |
-| Greenplum | `greenplum` | [`datus-greenplum`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-greenplum) |
-| Hive | `hive` | [`datus-hive`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-hive) |
-| Oracle Database | `oracle` | [`datus-oracle`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-oracle) |
-| OceanBase Oracle | `oceanbase-oracle` | [`datus-oceanbase-oracle`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-oceanbase-oracle) |
-| Redshift | `redshift` | [`datus-redshift`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-redshift) |
-| Spark | `spark` | [`datus-spark`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-spark) |
-| Trino | `trino` | [`datus-trino`](https://github.com/Datus-ai/datus-db-adapters/tree/main/datus-trino) |
+| PostgreSQL | `postgresql` | [`datus-postgresql`](https://github.com/Datus-ai/Datus-adapters) |
+| MySQL | `mysql` | [`datus-mysql`](https://github.com/Datus-ai/Datus-adapters) |
+| Snowflake | `snowflake` | [`datus-snowflake`](https://github.com/Datus-ai/Datus-adapters) |
+| StarRocks | `starrocks` | [`datus-starrocks`](https://github.com/Datus-ai/Datus-adapters) |
+| ClickHouse | `clickhouse` | [`datus-clickhouse`](https://github.com/Datus-ai/Datus-adapters) |
+| ClickZetta | `clickzetta` | [`datus-clickzetta`](https://github.com/Datus-ai/Datus-adapters) |
+| Hive | `hive` | [`datus-hive`](https://github.com/Datus-ai/Datus-adapters) |
+| Spark | `spark` | [`datus-spark`](https://github.com/Datus-ai/Datus-adapters) |
+| Trino | `trino` | [`datus-trino`](https://github.com/Datus-ai/Datus-adapters) |
 
 See [Database Adapters documentation](https://docs.datus.ai/adapters/db_adapters/) for details.
 

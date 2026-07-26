@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, UploadFile
 
-from datus.api.models.kb_models import KbUploadedFile, KbUploadPurpose, KbUploadRecord, KbUploadStatus
+from datus.api.models.kb_downstream import KbUploadedFile, KbUploadPurpose, KbUploadRecord, KbUploadStatus
 from datus.api.utils.path_utils import safe_resolve
 from datus.utils.exceptions import DatusException
 

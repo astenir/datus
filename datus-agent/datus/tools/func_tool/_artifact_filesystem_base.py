@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import ClassVar, Iterator, Optional
+from typing import ClassVar, Optional
 
 from datus.tools.func_tool.base import FuncToolResult
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
+from datus_enterprise.services import artifact_filesystem_scope as artifact_scope
 
 # Extensions allowed under ``<root>/<id>/render/``. JSON / data files are
 # intentionally excluded — those belong under ``queries/`` and only the
@@ -81,19 +82,16 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._locked_artifact_slug = locked_artifact_slug if locked_artifact_slug else None
-        self._require_authorized_artifact = require_authorized_artifact
+        artifact_scope.initialize_artifact_scope(
+            self,
+            locked_artifact_slug=locked_artifact_slug,
+            require_authorized_artifact=require_authorized_artifact,
+        )
 
     def bind_authorized_artifact(self, artifact_slug: str) -> None:
         """Bind Enterprise filesystem mutations to one ACL-authorized slug."""
 
-        if not self._require_authorized_artifact:
-            return
-        if self._locked_artifact_slug and self._locked_artifact_slug != artifact_slug:
-            raise ValueError(
-                f"Artifact filesystem is already locked to {self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}."
-            )
-        self._locked_artifact_slug = artifact_slug
+        artifact_scope.bind_authorized_artifact(self, artifact_slug)
 
     # ── Path classification ──────────────────────────────────────────────
 
@@ -121,60 +119,6 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         if not self._RENDER_PATH_RE.match(rel.as_posix()):
             return None
         return "render"
-
-    def _artifact_slug_for_path(self, path: str) -> Optional[str]:
-        try:
-            resolved = self._classify(path)
-        except Exception:  # pragma: no cover - defensive
-            return None
-        try:
-            rel = resolved.resolved.relative_to(self._root_resolved).as_posix()
-        except ValueError:
-            return None
-        match = self._ARTIFACT_PATH_RE.match(rel)
-        return match.group(1) if match else None
-
-    def _artifact_slug_for_resolved_path(self, path: Path) -> Optional[str]:
-        try:
-            rel = path.resolve(strict=False).relative_to(self._root_resolved).as_posix()
-        except ValueError:
-            return None
-        match = self._ARTIFACT_PATH_RE.match(rel)
-        return match.group(1) if match else None
-
-    def _violates_locked_artifact(self, path: str) -> bool:
-        slug = self._artifact_slug_for_path(path)
-        if slug is None:
-            return False
-        if self._require_authorized_artifact:
-            return slug != self._locked_artifact_slug
-        return bool(self._locked_artifact_slug and slug != self._locked_artifact_slug)
-
-    def _authorized_mutation_reject(self, path: str) -> Optional[FuncToolResult]:
-        if not self._require_authorized_artifact:
-            return None
-        slug = self._artifact_slug_for_path(path)
-        if self._locked_artifact_slug and slug == self._locked_artifact_slug:
-            return None
-        return FuncToolResult(
-            success=0,
-            error=(
-                f"Artifact filesystem writes require an ACL-authorized binding under "
-                f"{self.ARTIFACT_ROOT_DIR_NAME}/<slug>/; cannot modify {path}."
-            ),
-        )
-
-    def _locked_artifact_not_found(self, path: str) -> FuncToolResult:
-        return FuncToolResult(success=0, error=f"File not found: {path}")
-
-    def _locked_artifact_mutation_reject(self, path: str) -> FuncToolResult:
-        return FuncToolResult(
-            success=0,
-            error=(
-                f"Artifact edit session is locked to "
-                f"{self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}/; cannot modify {path}."
-            ),
-        )
 
     def _artifact_protection_active(self) -> bool:  # type: ignore[override]
         """Artifact-bound filesystem tools enforce artifact ACLs at construction time."""
@@ -214,11 +158,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
     # ── Overrides ────────────────────────────────────────────────────────
 
     def write_file(self, path: str, content: str, file_type: str = "") -> FuncToolResult:  # type: ignore[override]
-        authorization_error = self._authorized_mutation_reject(path)
-        if authorization_error is not None:
-            return authorization_error
-        if self._violates_locked_artifact(path):
-            return self._locked_artifact_mutation_reject(path)
+        scope_error = artifact_scope.reject_artifact_mutation(self, path)
+        if scope_error is not None:
+            return scope_error
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_write_reject())
         if self._classify_render_path(path) == "render":
@@ -228,11 +170,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().write_file(path, content, file_type)
 
     def edit_file(self, path: str, old_string: str, new_string: str) -> FuncToolResult:  # type: ignore[override]
-        authorization_error = self._authorized_mutation_reject(path)
-        if authorization_error is not None:
-            return authorization_error
-        if self._violates_locked_artifact(path):
-            return self._locked_artifact_mutation_reject(path)
+        scope_error = artifact_scope.reject_artifact_mutation(self, path)
+        if scope_error is not None:
+            return scope_error
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_edit_reject())
         if self._classify_render_path(path) == "render":
@@ -242,11 +182,9 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().edit_file(path, old_string, new_string)
 
     def delete_file(self, path: str) -> FuncToolResult:  # type: ignore[override]
-        authorization_error = self._authorized_mutation_reject(path)
-        if authorization_error is not None:
-            return authorization_error
-        if self._violates_locked_artifact(path):
-            return self._locked_artifact_mutation_reject(path)
+        scope_error = artifact_scope.reject_artifact_mutation(self, path)
+        if scope_error is not None:
+            return scope_error
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_delete_reject())
         if self._classify_render_path(path) == "render":
@@ -256,57 +194,13 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().delete_file(path)
 
     def read_file(self, path: str, offset: int = 0, limit: int = 0) -> FuncToolResult:  # type: ignore[override]
-        if self._violates_locked_artifact(path):
-            return self._locked_artifact_not_found(path)
+        scope_error = artifact_scope.reject_artifact_read(self, path)
+        if scope_error is not None:
+            return scope_error
         return super().read_file(path, offset, limit)
 
     def glob(self, pattern: str, path: str = ".") -> FuncToolResult:  # type: ignore[override]
-        """Find files while marking ACL-filtered artifact results.
+        return artifact_scope.decorate_artifact_glob_result(self, pattern, path, super().glob(pattern, path))
 
-        Args:
-            pattern: Glob pattern to match.
-            path: Starting directory for the search. Defaults to the workspace root.
-
-        Returns:
-            The normal Glob result, plus ``visibility_filtered`` and a safe
-            explanatory message when the search targets an ACL-scoped
-            report/dashboard tree.
-        """
-        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
-        normalized_path = path.replace("\\", "/").strip("./")
-        targets_artifact_tree = normalized_pattern == self.ARTIFACT_ROOT_DIR_NAME or normalized_pattern.startswith(
-            f"{self.ARTIFACT_ROOT_DIR_NAME}/"
-        )
-        targets_artifact_tree = (
-            targets_artifact_tree
-            or normalized_path == self.ARTIFACT_ROOT_DIR_NAME
-            or (normalized_path.startswith(f"{self.ARTIFACT_ROOT_DIR_NAME}/"))
-        )
-        result = super().glob(pattern, path)
-        if result.success != 1 or not isinstance(result.result, dict):
-            return result
-        if not targets_artifact_tree or not (self._require_authorized_artifact or self._locked_artifact_slug):
-            return result
-
-        scoped_result = dict(result.result)
-        scoped_result["visibility_filtered"] = True
-        if self._locked_artifact_slug:
-            scoped_result["message"] = (
-                f"Results are limited to the ACL-authorized {self.ARTIFACT_KIND} "
-                f"{self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}."
-            )
-        else:
-            scoped_result["message"] = (
-                f"No {self.ARTIFACT_KIND} is bound yet; existing {self.ARTIFACT_ROOT_DIR_NAME}/ paths "
-                "are intentionally hidden. An empty list does not prove that no artifact exists on disk."
-            )
-        result.result = scoped_result
-        return result
-
-    def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:  # type: ignore[override]
-        for path in super()._walk_files(seed, include_pattern, include_dirs):
-            if self._require_authorized_artifact or self._locked_artifact_slug:
-                slug = self._artifact_slug_for_resolved_path(path)
-                if slug is not None and slug != self._locked_artifact_slug:
-                    continue
-            yield path
+    def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False):  # type: ignore[override]
+        return artifact_scope.filter_artifact_walk(self, super()._walk_files(seed, include_pattern, include_dirs))

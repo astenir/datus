@@ -37,7 +37,6 @@ one UMD bundle now serves both viewers (Datus-saas#412).
 
 from __future__ import annotations
 
-import base64
 import datetime as _dt
 import html
 import json
@@ -47,14 +46,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from datus.agent.node.visual_artifact import artifact_html_bundle_downstream as artifact_bundle
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 # ``index.css`` / ``index.umd.js`` are the package's vite outputs;
 # unchanged across the ``web-report`` → ``web-artifact-render`` rename.
-_DIST_CSS_NAME = "index.css"
-_DIST_JS_NAME = "index.umd.js"
+_DIST_CSS_NAME = artifact_bundle.DIST_CSS_NAME
+_DIST_JS_NAME = artifact_bundle.DIST_JS_NAME
 
 # Pinned package version on unpkg. Keep in lockstep with
 # ``packages/web-artifact-render/package.json`` on the SaaS side.
@@ -69,10 +69,6 @@ CDN_BUNDLE_JS = f"https://unpkg.com/@datus/web-artifact-render@{_CDN_BUNDLE_VERS
 # Subdirectory under ``<artifact_dir>/`` where local dist assets are copied
 # in offline mode.
 _ASSETS_SUBDIR = "_assets"
-
-# Bundled renderer used by default so enterprise/offline deployments do not
-# depend on unpkg at view time.
-_BUNDLED_DIST_DIR = Path(__file__).parent / "vendor" / "web_artifact_render_dist"
 
 # Best-effort title extraction from a JSDoc-style annotation at the top of
 # render/app.jsx, e.g. ``/** @datus-title 2026 Q1 NA Sales Report */``. The
@@ -197,38 +193,10 @@ def _escape_for_script_tag(payload: str) -> str:
     return payload.replace("</", "<\\/")
 
 
-def _validate_dist(dist: Path, *, warn: bool) -> Optional[Path]:
-    """Validate ``dist`` and return the resolved directory or ``None``."""
-
-    resolved = dist.expanduser().resolve()
-    if not resolved.is_dir():
-        if warn:
-            logger.warning("artifact dist %s is not a directory; falling back to CDN.", resolved)
-        return None
-
-    missing = [name for name in (_DIST_CSS_NAME, _DIST_JS_NAME) if not (resolved / name).is_file()]
-    if missing:
-        if warn:
-            logger.warning(
-                "artifact dist %s is missing required assets %s; falling back to CDN.",
-                resolved,
-                missing,
-            )
-        return None
-    return resolved
-
-
 def _resolve_dist(dist: Optional[Path]) -> Optional[Path]:
-    """Resolve an explicit dist, then the bundled dist, then CDN fallback.
+    """Resolve an explicit dist, then the bundled dist, then CDN fallback."""
 
-    Invalid explicit paths intentionally fall back to CDN rather than silently
-    switching to the bundled runtime; if an operator points at a custom dist,
-    a warning should reflect exactly what happened.
-    """
-    if dist:
-        return _validate_dist(Path(dist), warn=True)
-
-    return _validate_dist(_BUNDLED_DIST_DIR, warn=False)
+    return artifact_bundle.resolve_dist(dist)
 
 
 def _copy_offline_assets(artifact_dir: Path, dist_dir: Path) -> Tuple[str, str]:
@@ -245,18 +213,6 @@ def _copy_offline_assets(artifact_dir: Path, dist_dir: Path) -> Tuple[str, str]:
     return (
         f"{_ASSETS_SUBDIR}/{_DIST_CSS_NAME}",
         f"{_ASSETS_SUBDIR}/{_DIST_JS_NAME}",
-    )
-
-
-def _dist_asset_data_url(dist_dir: Path, filename: str, mime_type: str) -> str:
-    encoded = base64.b64encode((dist_dir / filename).read_bytes()).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
-
-
-def _inline_offline_assets(dist_dir: Path) -> Tuple[str, str]:
-    return (
-        _dist_asset_data_url(dist_dir, _DIST_CSS_NAME, "text/css"),
-        _dist_asset_data_url(dist_dir, _DIST_JS_NAME, "text/javascript"),
     )
 
 
@@ -306,7 +262,7 @@ def render_artifact_html_str(
     dist_dir = _resolve_dist(dist)
     if dist_dir is not None:
         if inline_dist_assets:
-            css_url, js_url = _inline_offline_assets(dist_dir)
+            css_url, js_url = artifact_bundle.inline_offline_assets(dist_dir)
             logger.info("Offline mode: inlined web-artifact-render assets from %s", dist_dir)
         else:
             css_url, js_url = _copy_offline_assets(artifact_dir, dist_dir)
@@ -346,33 +302,7 @@ def render_artifact_html(
     slug: str,
     dist: Optional[Path] = None,
 ) -> Path:
-    """Compile ``<artifact_dir>/index.html`` from render/ + queries.
-
-    Delegates to :func:`render_artifact_html_str` for the HTML generation
-    and writes the result to ``<artifact_dir>/index.html``.
-
-    Args:
-        spec: per-kind config (allowlist, template path, placeholders, …).
-        project_root: ``AgentConfig.project_root``; resolved to an
-            absolute path before the artifact dir is composed.
-        slug: target artifact slug (matches the on-disk directory name).
-        dist: optional path to a local ``@datus/web-artifact-render``
-            ``dist/`` directory containing ``index.css`` / ``index.umd.js``.
-            When provided and valid, the two files are copied next to the
-            generated HTML and the template links to them via relative
-            paths (so the page works offline through ``file://``). When
-            ``None``, the bundled renderer dist is used. If the selected
-            local dist is missing or incomplete, the template falls back to
-            the pinned unpkg CDN.
-
-    Returns:
-        Absolute path to the generated ``index.html``.
-
-    Raises:
-        ValueError: if ``slug`` fails ``spec.slug_regex``.
-        FileNotFoundError: if ``render/app.jsx`` is missing.
-        OSError: on read/write failures.
-    """
+    """Render and write ``<artifact_dir>/index.html``."""
     rendered = render_artifact_html_str(
         spec=spec,
         project_root=project_root,

@@ -14,10 +14,10 @@ import pyarrow as pa
 from datus_storage_base.conditions import WhereExpr
 from datus_storage_base.vector.base import VectorDatabase, VectorTable
 
+from datus.storage import embedding_store_backend_downstream as downstream
 from datus.storage.datasource_scope import (
     DATASOURCE_ID_COLUMN,
     STORAGE_KEY_COLUMN,
-    build_storage_key,
     datasource_condition,
 )
 from datus.storage.embedding_models import EmbeddingModel
@@ -190,12 +190,7 @@ class BaseEmbeddingStore(StorageBase):
                 row.setdefault(k, v)
             if DATASOURCE_ID_COLUMN in schema_names:
                 row.setdefault(DATASOURCE_ID_COLUMN, "")
-            source_column = self._storage_key_source_column
-            if STORAGE_KEY_COLUMN in schema_names and row.get(source_column) not in (None, ""):
-                row.setdefault(
-                    STORAGE_KEY_COLUMN,
-                    build_storage_key(row.get(DATASOURCE_ID_COLUMN, ""), row[source_column]),
-                )
+            downstream.apply_storage_key(row, schema_names, self._storage_key_source_column)
         return data
 
     def _scope_column_migration_exprs(self) -> Dict[str, str]:
@@ -207,16 +202,9 @@ class BaseEmbeddingStore(StorageBase):
         exprs: Dict[str, str] = {}
         if DATASOURCE_ID_COLUMN in schema_names:
             exprs[DATASOURCE_ID_COLUMN] = "''"
-        source_column = self._storage_key_source_column
-        if STORAGE_KEY_COLUMN in schema_names and source_column in schema_names:
-            if not source_column.isidentifier():
-                raise ValueError(f"Invalid storage key source column: {source_column!r}")
-            if DATASOURCE_ID_COLUMN in schema_names:
-                exprs[STORAGE_KEY_COLUMN] = (
-                    f"coalesce(nullif({DATASOURCE_ID_COLUMN}, ''), 'legacy') || ':' || {source_column}"
-                )
-            else:
-                exprs[STORAGE_KEY_COLUMN] = f"'legacy:' || {source_column}"
+        storage_key_expr = downstream.storage_key_migration_expr(schema_names, self._storage_key_source_column)
+        if storage_key_expr is not None:
+            exprs[STORAGE_KEY_COLUMN] = storage_key_expr
         return exprs
 
     def _ensure_persisted_scope_columns(self) -> None:
@@ -244,23 +232,7 @@ class BaseEmbeddingStore(StorageBase):
 
     def _ensure_persisted_unique_columns(self) -> None:
         """Repair physical unique keys on pre-existing relational vector tables."""
-
-        if self.table is None or not self._unique_columns:
-            return
-        ensure_unique_columns = getattr(self.table, "ensure_unique_columns", None)
-        if ensure_unique_columns is None:
-            return
-        try:
-            ensure_unique_columns(self._unique_columns)
-        except Exception as exc:
-            raise DatusException(
-                ErrorCode.STORAGE_TABLE_OPERATION_FAILED,
-                message_args={
-                    "operation": "ensure_unique_columns",
-                    "table_name": self.table_name,
-                    "error_message": str(exc),
-                },
-            ) from exc
+        downstream.ensure_persisted_unique_columns(self.table, self._unique_columns, table_name=self.table_name)
 
     def _search_all(
         self, where: WhereExpr = None, select_fields: Optional[List[str]] = None, limit: Optional[int] = None
@@ -268,13 +240,7 @@ class BaseEmbeddingStore(StorageBase):
         table = self._open_existing_table_for_read()
         if table is None:
             return self._empty_result(select_fields)
-        effective_select_fields = select_fields
-        if self.vector_column_name and self._schema is not None:
-            schema_fields = [field.name for field in self._schema if field.name != self.vector_column_name]
-            if select_fields is None:
-                effective_select_fields = schema_fields
-            else:
-                effective_select_fields = [field for field in select_fields if field != self.vector_column_name]
+        effective_select_fields = downstream.read_select_fields(self._schema, self.vector_column_name, select_fields)
         if limit is not None:
             row_limit = limit
         else:
@@ -390,11 +356,7 @@ class BaseEmbeddingStore(StorageBase):
             self._ensure_persisted_unique_columns()
 
     def _set_backend_table_schema(self, schema: Optional[pa.Schema]) -> None:
-        if schema is None:
-            return
-        set_table_schema = getattr(self.db, "set_table_schema", None)
-        if callable(set_table_schema):
-            set_table_schema(self.table_name, schema)
+        downstream.set_backend_table_schema(self.db, self.table_name, schema)
 
     def create_vector_index(
         self,

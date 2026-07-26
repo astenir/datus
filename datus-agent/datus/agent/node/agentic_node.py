@@ -12,10 +12,8 @@ streaming interactions with tool integration and action history management.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +25,10 @@ from agents.mcp import MCPServerStdio
 
 from datus.agent.node.compact_archive import ToolArchive, maybe_truncate_item
 from datus.agent.node.compact_prompts import build_continuation_message, render_major_compact_prompt
+from datus.agent.node.mcp_failure_actions_downstream import (
+    drain_mcp_connection_failure_actions,
+    record_mcp_connection_failure,
+)
 from datus.agent.node.node import Node
 from datus.cli.execution_state import ExecutionInterrupted, InteractionBroker, InterruptController, PendingInputQueue
 from datus.configuration.agent_config import AgentConfig, CompactConfig
@@ -39,6 +41,15 @@ from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import build_structured_content
 from datus.utils.node_utils import build_database_context
+from datus_enterprise.services.agentic_permission_errors import (
+    format_permission_denied_error,
+    is_permission_denied_error,
+)
+from datus_enterprise.services.agentic_session_runtime import (
+    clear_running_turn_usage,
+    delete_system_prompt_snapshot,
+    get_session_system_prompt,
+)
 
 if TYPE_CHECKING:
     from datus.agent.node.stream_run_context import StreamRunContext
@@ -63,22 +74,6 @@ _LANGUAGE_NAME_MAP: Dict[str, str] = {
     "pt": "Portuguese",
     "ru": "Russian",
     "it": "Italian",
-}
-
-_PERMISSION_DENIED_TOOL_RE = re.compile(
-    r"PERMISSION_DENIED:\s*Tool\s+'(?P<tool>[^']+)'\s+\((?P<category>[^)]+)\)\s+"
-    r"is blocked by the\s+'(?P<profile>[^']+)'\s+permission profile",
-    re.IGNORECASE,
-)
-_PERMISSION_MODE_DENIED_RE = re.compile(
-    r"Permission mode '(?P<mode>[^']+)' requires module\.chat\.permission_mode",
-    re.IGNORECASE,
-)
-_FILESYSTEM_WRITE_TOOL_NAMES = {"write_file", "edit_file", "delete_file"}
-_PERMISSION_PROFILE_LABELS = {
-    "normal": "普通",
-    "auto": "自动",
-    "dangerous": "危险",
 }
 
 
@@ -359,33 +354,10 @@ class AgenticNode(Node):
         self.degraded_capabilities[key] = message
 
     def _record_mcp_connection_failure(self, server_name: str, error: str) -> None:
-        failure = (server_name, error)
-        failures = getattr(self, "_mcp_connection_failures", None)
-        if failures is None:
-            failures = []
-            self._mcp_connection_failures = failures
-        if failure not in failures:
-            failures.append(failure)
+        record_mcp_connection_failure(self, server_name, error)
 
     def _drain_mcp_connection_failure_actions(self, manager: ActionHistoryManager) -> List[ActionHistory]:
-        failures = getattr(self, "_mcp_connection_failures", [])
-        self._mcp_connection_failures = []
-        actions: List[ActionHistory] = []
-        for server_name, error in failures:
-            action = ActionHistory(
-                action_id=str(uuid.uuid4()),
-                role=ActionRole.TOOL,
-                action_type=f"mcp.{server_name}.connect",
-                input={"server_name": server_name},
-                output={
-                    "error": error,
-                    "summary": f"MCP Server '{server_name}' connection failed; the Agent continued without it.",
-                },
-                status=ActionStatus.FAILED,
-            )
-            manager.add_action(action)
-            actions.append(action)
-        return actions
+        return drain_mcp_connection_failure_actions(self, manager)
 
     def _record_context_search_degraded(self, error: BaseException | str) -> str:
         from datus.storage.embedding_diagnostics import format_context_degraded_warning
@@ -1157,45 +1129,7 @@ class AgenticNode(Node):
         prompt_version: Optional[str] = None,
         template_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Async request-path variant of :meth:`_get_session_system_prompt`.
-
-        PostgreSQL session body stores use asyncpg resources bound to the
-        current event loop. FastAPI/streaming paths must await them directly
-        instead of entering the synchronous ``run_async()`` bridge.
-        """
-        session_id = getattr(self, "session_id", "") or ""
-        meta = self._system_prompt_snapshot_meta(prompt_version)
-        sm = None
-        if session_id:
-            try:
-                sm = self.session_manager
-            except Exception as exc:  # session manager wiring is optional in some unit paths
-                logger.debug("System-prompt snapshot disabled (no session manager): %s", exc)
-                sm = None
-
-        if sm is not None:
-            load_snapshot = getattr(sm, "load_system_prompt_snapshot_async", None)
-            snapshot = (
-                await load_snapshot(session_id)
-                if inspect.iscoroutinefunction(load_snapshot)
-                else sm.load_system_prompt_snapshot(session_id)
-            )
-            if snapshot is not None and all(snapshot.get(k) == v for k, v in meta.items()):
-                self._ensure_lazy_tools_mounted()
-                return snapshot["prompt"]
-
-        if template_context:
-            prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
-        else:
-            prompt = self._get_system_prompt(prompt_version=prompt_version)
-
-        if sm is not None:
-            save_snapshot = getattr(sm, "save_system_prompt_snapshot_async", None)
-            if inspect.iscoroutinefunction(save_snapshot):
-                await save_snapshot(session_id, prompt, meta)
-            else:
-                sm.save_system_prompt_snapshot(session_id, prompt, meta)
-        return prompt
+        return await get_session_system_prompt(self, prompt_version, template_context)
 
     def _get_system_prompt(
         self,
@@ -1651,11 +1585,7 @@ class AgenticNode(Node):
                 # memory, skills) instead of replaying the pre-compact snapshot.
                 if result.get("success") and self.session_id:
                     try:
-                        delete_snapshot = getattr(self.session_manager, "delete_system_prompt_snapshot_async", None)
-                        if inspect.iscoroutinefunction(delete_snapshot):
-                            await delete_snapshot(self.session_id)
-                        else:
-                            self.session_manager.delete_system_prompt_snapshot(self.session_id)
+                        await delete_system_prompt_snapshot(self.session_manager, self.session_id)
                     except Exception as exc:
                         logger.debug("Failed to drop system-prompt snapshot after compact: %s", exc)
                 # Always emit the terminal action — even on failure — so the
@@ -3151,11 +3081,7 @@ class AgenticNode(Node):
                         except Exception:  # noqa: BLE001
                             sm = None
                         if sm is not None:
-                            clear_running_usage = getattr(sm, "clear_running_turn_usage_async", None)
-                            if inspect.iscoroutinefunction(clear_running_usage):
-                                await clear_running_usage(session_id)
-                            elif hasattr(sm, "clear_running_turn_usage"):
-                                sm.clear_running_turn_usage(session_id)
+                            await clear_running_turn_usage(sm, session_id)
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to drop running_turn_usage on turn end", exc_info=True)
 
@@ -4007,61 +3933,12 @@ class AgenticNode(Node):
         return 0
 
     @staticmethod
-    def _iter_exception_chain(exc: BaseException):
-        seen: set[int] = set()
-        current: BaseException | None = exc
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            yield current
-            current = current.__cause__ or current.__context__
-
-    @classmethod
-    def _is_permission_denied_error(cls, exc: BaseException) -> bool:
-        for current in cls._iter_exception_chain(exc):
-            if type(current).__name__ == "PermissionDeniedException":
-                return True
-            if "PERMISSION_DENIED:" in str(current):
-                return True
-            if _PERMISSION_MODE_DENIED_RE.search(str(current)):
-                return True
-        return False
+    def _is_permission_denied_error(exc: BaseException) -> bool:
+        return is_permission_denied_error(exc)
 
     @staticmethod
-    def _permission_profile_label(profile: str) -> str:
-        return _PERMISSION_PROFILE_LABELS.get(profile, profile)
-
-    @classmethod
-    def _format_permission_denied_error(cls, exc: BaseException) -> str | None:
-        for current in cls._iter_exception_chain(exc):
-            text = str(current).strip()
-            if not text:
-                continue
-
-            tool_match = _PERMISSION_DENIED_TOOL_RE.search(text)
-            if tool_match:
-                tool_name = tool_match.group("tool")
-                category = tool_match.group("category")
-                profile = cls._permission_profile_label(tool_match.group("profile"))
-                if category == "filesystem_tools" and tool_name in _FILESYSTEM_WRITE_TOOL_NAMES:
-                    return (
-                        "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
-                        f"{tool_name} 已被“{profile}”权限模式拦截，换路径或重试不会绕过限制。"
-                        "请联系管理员核对该 Agent 的工具策略。"
-                    )
-                return (
-                    f"权限受限：当前账号没有执行工具 {tool_name} 的权限，"
-                    f"已被“{profile}”权限模式拦截，换参数或重试不会绕过限制。"
-                )
-
-            mode_match = _PERMISSION_MODE_DENIED_RE.search(text)
-            if mode_match:
-                mode = cls._permission_profile_label(mode_match.group("mode"))
-                return (
-                    f"权限受限：当前账号不能切换到 {mode} 对话模式。"
-                    "如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。"
-                )
-
-        return None
+    def _format_permission_denied_error(exc: BaseException) -> str | None:
+        return format_permission_denied_error(exc)
 
     @staticmethod
     def _format_execution_error(exc: BaseException) -> str:

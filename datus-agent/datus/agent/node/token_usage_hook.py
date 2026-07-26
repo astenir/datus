@@ -27,7 +27,6 @@ The hook is a no-op when no ``ActionHistoryManager`` is bound on the node
 
 from __future__ import annotations
 
-import inspect
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -35,6 +34,7 @@ from agents import RunHooks
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
+from datus_enterprise.services.agentic_session_runtime import persist_running_turn_usage
 
 if TYPE_CHECKING:
     from datus.agent.node.agentic_node import AgenticNode
@@ -170,21 +170,13 @@ class TokenUsageHook(RunHooks):
             return
         turn_number = self._current_turn_number()
         try:
-            persist_async = getattr(session_manager, "upsert_running_turn_usage_async", None)
-            if inspect.iscoroutinefunction(persist_async):
-                await persist_async(
-                    session_id=session_id,
-                    user_turn_number=turn_number,
-                    cumulative=cumulative,
-                    context_length=context_length,
-                )
-            else:
-                session_manager.upsert_running_turn_usage(
-                    session_id=session_id,
-                    user_turn_number=turn_number,
-                    cumulative=cumulative,
-                    context_length=context_length,
-                )
+            await persist_running_turn_usage(
+                session_manager,
+                session_id=session_id,
+                user_turn_number=turn_number,
+                cumulative=cumulative,
+                context_length=context_length,
+            )
         except Exception:  # noqa: BLE001
             logger.debug("TokenUsageHook: upsert_running_turn_usage failed", exc_info=True)
 
