@@ -4,9 +4,9 @@
 
 ## 当前基线
 
-基线采样日期：2026-07-26
+基线采样日期：2026-07-27
 
-说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复、第九轮测试迁移、第八轮模型契约归位、差异护栏、MCP/Report/Success Story service 归位、Dashboard service list/render 与 query SQL authorization adapter 归位、CLI connector/task owner、Chat task runtime、SubAgent 委派企业策略与 sidecar runtime、SessionManager scope/sidecar/async store/shared message parser、TokenUsage running snapshot persistence adapter、enterprise request-context policy、Enterprise auth loader policy、Visual Artifact access/locked-edit policy、DBFuncTool datasource-grant scope 与 SQL source 判定、AgenticNode permission/session/MCP runtime helper、Interactive node downstream adapter、Runtime prompt template resolver、Datasource-file project override adapter、Artifact filesystem ACL scope、Filesystem enterprise scope policy、Semantic query-time normalizer、Schema metadata sample-row normalizer、Embedding-store read selection adapter、Embedding-store storage-key adapter、Embedding-store backend repair adapter、OpenAI-compatible embedding request adapter、SSE response/error payload normalizer、Artifact HTML bundle helper、MCPManager config/runtime adapter、Model MCP connection options、Artifact creation ACL、Success Story migration CLI、CLIService/ChatService/deps/ChatTaskManager/Chat routes/feedback/Artifact tools/Database service/OpenAI/Claude stream/Dashboard renderer/Storage read path/KB cancellation 下游测试拆分、ChatService history/session、history-only SSE converter、stream cancellation 安全 wrapper 与 Success Story route 测试归位，以及 KB/Config/Report/Dashboard/Success Story/Models/Legacy Agent/Database/MCP/Table/CLI route 归位后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
+说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复、第九轮测试迁移、第八轮模型契约归位、差异护栏、MCP/Report/Success Story service 归位、Dashboard service list/render 与 query SQL authorization adapter 归位、CLI connector/task owner、Chat task runtime、Chat request config/terminal sidecar runtime、应用 route projection/legacy gate、SubAgent 委派企业策略与 sidecar runtime、SessionManager scope/sidecar/async store/shared message parser、TokenUsage running snapshot persistence adapter、enterprise request-context policy、Enterprise auth loader policy、Visual Artifact access/locked-edit policy 与 locked-edit auto-validation adapter、DBFuncTool datasource-grant scope 与 SQL source 判定、AgenticNode permission/session/MCP runtime helper、Interactive node downstream adapter、Runtime prompt template resolver、Datasource-file project override adapter、Artifact filesystem ACL scope、Filesystem enterprise scope policy、Semantic query-time normalizer、Schema metadata sample-row normalizer、Embedding-store read selection adapter、Embedding-store storage-key adapter、Embedding-store backend repair adapter、OpenAI-compatible embedding request adapter、SSE response/error payload normalizer、Artifact HTML bundle helper、MCPManager config/runtime adapter、Model MCP connection options、Artifact creation ACL、Success Story migration CLI、CLIService/ChatService/deps/ChatTaskManager/Chat routes/feedback/Artifact tools/Database service/OpenAI/Claude stream/Dashboard renderer/Storage read path/KB cancellation 下游测试拆分、ChatService history/session、history-only SSE converter、stream cancellation 安全 wrapper 与 Success Story route 测试归位，以及 KB/Config/Report/Dashboard/Success Story/Models/Legacy Agent/Database/MCP/Table/CLI route 归位后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
 
 对比口径：
 
@@ -19,8 +19,8 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-358 files changed, 79197 insertions(+), 3602 deletions(-)
-258 added
+360 files changed, 79418 insertions(+), 3593 deletions(-)
+260 added
 96 modified
 4 deleted
 ```
@@ -34,11 +34,71 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 4 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 106 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。本轮按这套目录规则重新核对全量清单，并修正了根级 `CLAUDE.md` 及新增文件的历史分类误差。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 108 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。本轮按这套目录规则重新核对全量清单，并修正了根级 `CLAUDE.md` 及新增文件的历史分类误差。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-27：应用 route projection 与 legacy gate 归位
+
+分类：阶段 0/1/3 的应用注册 `core-hook`。处理方式：新增 `datus_enterprise/app_integration.py`，迁入企业权威 route 对上游 route 清单的替换、enterprise-only route 追加、legacy route 注册 gate，以及 legacy OAuth/workflow endpoint 的 fail-closed audit 与 bearer client 解析。上游 `create_app()` 恢复 `v0.3.8` 原始 route 清单，只增加一次 projection 调用；`_include_api_router` 和 legacy endpoint 仅保留兼容别名/薄 wrapper。
+
+不变边界：route projection 保持当前 authoritative handler、注册顺序和 route security matrix 覆盖；上游后续新增 route 会先进入原始清单，再由显式 override/insert 规则投影。企业模式下 legacy auth/workflow 仍在业务执行前返回 404 并审计，legacy explorer/agent/visualization/tool 仍通过注册级 dependency 返回稳定拒绝；本地非 enterprise 行为不变。没有新增、删除或改变对外 FastAPI path/method，因此 route security matrix 内容无需变化。
+
+上游 `datus/api/service.py` 相对 `v0.3.8` 从 `+164/-59` 收敛为 `+73/-48`，冲突行由 223 降至 121，减少 102。新增 1 个 enterprise production/package 文件使 added 由 259 增至 260、总差异文件由 359 增至 360；modified 保持 96（production/package 68、tests 24、config/meta 4）、deleted 保持 4。
+
+验证：app factory、legacy endpoint/route gate、route security matrix 与 module RBAC 的同一组合在迁移前后均为 `161 passed`；迁移文件 Ruff 与 `git diff --check` 通过。
+
+### 2026-07-27：Chat request config 与 terminal sidecar persistence 归位
+
+分类：阶段 2/4 的 Chat `core-hook`。处理方式：扩展 added 文件 `datus_enterprise/services/chat_task_runtime.py`，迁入已 clone 的请求级 `AgentConfig` 对 session body store、principal、user、Artifact ACL/filesystem protection 与私有 workspace 的配置，以及 established session 的 terminal sidecar 构造和 best-effort 持久化。上游 manager 保留 clone、调用时点、task admission/owner 写入、node/SSE 状态机和 terminal outcome 调用顺序；`SessionManager` 类型仍由原模块传入，保留替换边界。
+
+不变边界：enterprise 缺认证用户仍在 workspace 与 task 创建前 fail closed；共享 `DatusService.agent_config` 不被修改；owner store 不由 body store 替代。terminal sidecar 仍只在 session 建立后写入，失败不掩盖主执行结果，cancel/error/timeout 的 task 状态与 event 顺序不变。task slot、buffer cursor、interrupt/release、node lifecycle 和 owner store 写入均未迁出 manager。
+
+上游 `datus/api/services/chat_task_manager.py` 相对 `v0.3.8` 从 `+429/-75` 收敛为 `+402/-77`，冲突行由 504 降至 479，减少 25。复用已有 added production/package 文件，不增加文件数；added、modified 和 deleted 数量不变。
+
+验证：ChatTaskManager、downstream terminal history、workspace 和 DatusService factory 的同一组合在两次迁移前后均为 `126 passed`；迁移文件 Ruff 与 `git diff --check` 通过。
+
+### 2026-07-27：Chat permission-mode RBAC adapter 归位
+
+分类：阶段 3 的企业 Chat `core-hook`。处理方式：扩展 added 文件 `datus_enterprise/services/chat_request_policy.py`，迁入 enterprise 请求省略 permission mode 时的 least-privilege 默认值，以及 `auto` / `dangerous` 模式的 `module.chat.permission_mode` RBAC 校验与稳定 403 映射。上游 `chat_routes.py` 只在 datasource projection 前调用两个 helper。
+
+不变边界：普通 `normal`、未指定 mode 和本地非 enterprise 请求仍不触发额外 RBAC；企业 elevated mode 仍必须在请求级配置投影和 task 启动前授权失败。helper 不修改 Agent Tool Policy 或 runtime policy 上限，也不授予工具、datasource、Artifact 或 session 权限。没有新增、删除或改变 FastAPI route，因此 route security matrix 无需变化。
+
+上游 `datus/api/routes/chat_routes.py` 相对 `v0.3.8` 从 `+611/-54` 收敛为 `+583/-54`，冲突行由 665 降至 637，减少 28。复用已有 added production/package 文件，不增加文件数；added 保持 259、modified 保持 96（production/package 68、tests 24、config/meta 4）、deleted 保持 4，总差异文件保持 359；计入本记录前总差异为 `+79283/-3602`。
+
+验证：Chat route、downstream session/model/SQL policy、module RBAC、Agent registry 和 Artifact edit session 回归迁移前后均为 `238 passed`；downstream 测试的 dependency patch 边界同步移到 enterprise service。迁移文件 Ruff 与 `git diff --check` 通过。
+
+### 2026-07-27：Chat request enterprise policy adapter 归位
+
+分类：阶段 5 的企业 Chat `core-hook`。处理方式：新增 `datus_enterprise/services/chat_request_policy.py`，迁入 Chat SQL-principal denial audit、model policy deny/audit 和 request quota 消费及稳定错误组装。上游 `chat_routes.py` 保留 `v0.3.8` 已有的 SQL policy principal pre-check 与 principal path 解析，只在 stream/feedback 的既有执行顺序中调用企业 policy helpers 并映射为 SSE denial。
+
+不变边界：认证、Agent/Artifact ACL、session owner、请求级 datasource projection 仍先于 SQL/model/quota 检查；SQL principal 缺失继续 fail closed，model deny 与 audit sink failure、quota store unavailable/exceeded 的稳定错误行为不变。helper 不解析身份、不修改共享 `DatusService.agent_config`，route 仍决定 pre-check 顺序、是否启动 task 和 SSE 响应。没有新增、删除或改变 FastAPI route，因此 route security matrix 无需变化。
+
+上游 `datus/api/routes/chat_routes.py` 相对 `v0.3.8` 从 `+723/-54` 收敛为 `+611/-54`，冲突行由 777 降至 665，减少 112。新增 1 个 enterprise production/package 文件使 added 由 258 增至 259、总差异文件由 358 增至 359；modified 保持 96（production/package 68、tests 24、config/meta 4）、deleted 保持 4；计入本记录前总差异为 `+79253/-3602`。
+
+验证：Chat route、downstream session/model/SQL policy、module RBAC、Agent registry 和 Artifact edit session 回归迁移前后均为 `238 passed`；迁移文件 Ruff 与 `git diff --check` 通过。迁移期间曾尝试一并移动上游已有 principal pre-check，但因会删除上游通用实现而收窄方案，最终保留其上游所有权。
+
+### 2026-07-27：Chat Agent runtime materialization adapter 归位
+
+分类：阶段 1/2 的企业 Chat/Artifact `core-hook`。处理方式：扩展已有 added 文件 `datus_enterprise/agent_registry.py`，迁入企业 Agent record 和已授权 Artifact edit session 对请求级 `AgentConfig.agentic_nodes` 的 runtime entry 组装。上游 `chat_routes.py` 只保留 helper import、企业 Agent 可用集遍历和 Artifact edit ACL 成功后的调用点。
+
+不变边界：helper 不查询也不授予 Agent/Artifact ACL，不访问 metadata store；route 仍负责企业 Agent 解析、owner 校验、`require_artifact_edit_access` / query ACL、请求级配置投影、model policy、SQL policy、quota 和最终 dispatch。`_acl_authorized_artifact_edit` marker 仍只在权威 edit ACL 成功后写入请求级 clone，locked slug、bind-first 规则、跨 Artifact 禁止和本地兼容行为均未改变；共享 `DatusService.agent_config` 不被修改。没有新增、删除或改变 FastAPI route，因此 route security matrix 无需变化。
+
+上游 `datus/api/routes/chat_routes.py` 相对 `v0.3.8` 从 `+775/-54` 收敛为 `+723/-54`，冲突行由 829 降至 777，减少 52。复用已有 added production/package 文件，不增加文件数；added 保持 258、modified 保持 96（production/package 68、tests 24、config/meta 4）、deleted 保持 4，总差异文件保持 358；计入本记录前总差异为 `+79227/-3602`。
+
+验证：Chat route、downstream session/model/SQL policy、module RBAC、Agent registry 和 Artifact edit session 回归迁移前后均为 `238 passed`；迁移文件 Ruff 与 `git diff --check` 通过。
+
+### 2026-07-27：Visual Artifact locked-edit auto-validation adapter 归位
+
+分类：阶段 1/2 的企业 Artifact `core-hook`。处理方式：扩展已有 added 文件 `datus_enterprise/services/artifact_filesystem_scope.py`，迁入 locked edit 已绑定 Artifact 的 `validate_render()` 调用、结果规范化、成功/失败 `ActionHistory` 组装和 manager 写入。上游 `BaseVisualArtifactAgenticNode._build_success_result()` 只保留无既有 render 时的一次 helper 调用，以及成功动作对本地 finalize 状态的更新。
+
+不变边界：helper 不查询也不授予 Artifact ACL；企业 edit 仍必须先经过服务端 ACL marker、locked slug 校验和 tool binding。原 node 继续决定调用时点，并负责刷新 `all_actions`、追加成功 `tool_calls`、提取 app.jsx/render files 和最终 result；异常传播、动作顺序、无锁定 Artifact 的 no-op、本地 legacy 行为和跨 slug fail-closed 均未改变。没有新增或修改 FastAPI route，因此 route security matrix 无需变化。
+
+上游 `datus/agent/node/base_visual_artifact_agentic_node.py` 相对 `v0.3.8` 从 `+106/-12` 收敛为 `+93/-12`，冲突行由 118 降至 105，减少 13。复用已有 added production/package 文件，不增加文件数；added 保持 258、modified 保持 96（production/package 68、tests 24、config/meta 4）、deleted 保持 4，总差异文件保持 358。新增文件分类保持 production/package 106、tests 123、docs 4、config/meta 25；计入本记录前总差异为 `+79217/-3602`。
+
+验证：Report/Dashboard 上游与 downstream node、locked-edit auto bind/validate 及 Artifact filesystem authorization 回归迁移前后均为 `64 passed`；迁移文件 Ruff 与 `git diff --check` 通过。企业平台计划与开发指南复核确认 authoritative ACL、唯一 slug 锁定和 fail-closed 边界未改变。
 
 ### 2026-07-26：TokenUsage running snapshot persistence adapter 归位
 
@@ -1088,9 +1148,9 @@ datus/tools/db_tools/db_manager.py
 - PostgreSQL/OceanBase session body store 需要挂入原 session 管理和 streaming 路径。
 - 数据源/connector 入口需要承接企业授权和多库枚举等执行侧限制。
 
-### 应继续迁入企业模块的候选
+### 已完成主体归位的稳定核心 hook
 
-这些文件目前承载了企业权限、平台状态、审计或前端企业契约。后续收敛应优先把主体逻辑移入 `datus_enterprise/`，上游原文件只留下通用 hook 或 route matrix 调用。
+以下文件曾是 `move-to-enterprise` 候选，现已完成逐 hunk 收敛并归入 `core-hook`。当前 allowlist 的 `move-to-enterprise` 为空；后续不为减少 modified 数字整体复制 route/service 状态机，只在发现可独立验证且能降低三方冲突面的新主体时继续迁移。
 
 ```text
 datus/api/routes/chat_routes.py
@@ -1100,12 +1160,13 @@ datus/api/services/dashboard_service.py
 datus/api/services/database_service.py
 ```
 
-迁移方向：
+当前停止线：
 
-- 模块级 RBAC 和平台状态检查集中到 `datus/api/enterprise/route_security_matrix.py` 与企业依赖中。
-- 资源级检查保留在最靠近资源的位置，但实际策略和审计写入应放在企业模块。
-- 原 route 文件不要继续增长企业分支；新增企业执行面优先建在 `datus_enterprise/api/`。
-- 如果企业模式需要覆盖上游同一路径，优先使用明确的 route registration / dedupe 机制，而不是在多个上游 handler 中堆条件。
+- Chat route 只保留认证后的 Agent/Artifact/session/datasource 安全调用顺序、请求级 projection 和 SSE dispatch；Agent materialization、model/quota/audit/permission-mode 策略主体已进入 added 模块。
+- ChatTaskManager 只保留 task/SSE/node 状态所有权、owner/admission、request-config 与 terminal persistence 调用点；workspace/config/sidecar 实现已进入 added runtime。
+- CLIService 的 connector cleanup、SQL task owner 和 execute/context/internal command 前置 policy hook 与上游主状态机不可拆；静态 SQL/datasource 策略主体已进入 added 模块。
+- DashboardService 只保留 query 状态机中的 request-scoped config、quota 和 SQL authorization hook；DatabaseService 只保留共享 manager、lazy connector、目录扩展与 status callback hook。
+- 新增企业执行面继续优先建在 `datus_enterprise/api/`；同路径覆盖通过应用 route projection 维护，不在多个上游 handler 中堆条件。
 
 ### 通用修复或上游化候选
 

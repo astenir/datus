@@ -1,13 +1,17 @@
 """Downstream chat-task limits and stateless buffer helpers."""
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, TypeAlias
+from typing import Any, Literal, Optional, Type, TypeAlias
 
-from datus.api.models.downstream import DashboardEditSession, ReportEditSession
+from datus.api.models.downstream import ChatSessionTerminalEvent, DashboardEditSession, ReportEditSession
+from datus.configuration.agent_config import AgentConfig
+from datus.models.session_manager import SessionManager, session_scope_from_user_id
 from datus.schemas.action_history import ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
+from datus.utils.path_manager import get_path_manager
 from datus.utils.time_utils import now_utc_iso
 
 logger = get_logger(__name__)
@@ -49,6 +53,81 @@ class EventBufferExpiredError(RuntimeError):
 
 class EventBufferOverflowError(RuntimeError):
     """Raised when one SSE event exceeds the complete task buffer budget."""
+
+
+async def prepare_chat_request_config(
+    agent_config: AgentConfig,
+    *,
+    project_id: str,
+    session_body_store: Any,
+    artifact_acl_store: Any,
+    enterprise_enabled: bool,
+    user_id: Optional[str],
+    principal: Optional[dict[str, Any]],
+) -> None:
+    """Attach downstream request state to an already cloned agent config."""
+
+    if session_body_store is not None:
+        agent_config._session_body_store = session_body_store
+        agent_config._session_project_id = project_id
+    agent_config.principal = dict(principal or {})
+    agent_config._request_user_id = user_id
+    agent_config._artifact_acl_store = artifact_acl_store
+    agent_config._enterprise_enabled = enterprise_enabled
+    agent_config._protect_artifact_filesystem = enterprise_enabled
+    if enterprise_enabled and not user_id:
+        raise ValueError("AUTH_REQUIRED")
+    if enterprise_enabled:
+        from datus_enterprise.workspace import prepare_user_workspace
+
+        workspace_root = await asyncio.to_thread(prepare_user_workspace, agent_config, user_id or "")
+        agent_config._request_workspace_root = str(workspace_root)
+
+
+async def persist_terminal_event(
+    *,
+    task: Any,
+    agent_config: AgentConfig,
+    user_id: Optional[str],
+    event_type: Literal["error", "cancelled", "timeout"],
+    error: str,
+    error_type: str,
+    project_id: str,
+    session_body_store: Any,
+    session_manager_type: Type[SessionManager] = SessionManager,
+) -> None:
+    """Best-effort persistence for established-session display outcomes."""
+
+    if not task.session_established or task.terminal_event_persisted:
+        return
+
+    terminal_event = ChatSessionTerminalEvent(
+        event_id=f"{task.run_id}-terminal",
+        event_type=event_type,
+        error=error,
+        error_type=error_type,
+    )
+    base_dir = getattr(agent_config, "session_dir", None) or str(
+        get_path_manager(agent_config=agent_config).sessions_dir
+    )
+    session_manager = session_manager_type(
+        session_dir=base_dir,
+        scope=session_scope_from_user_id(user_id),
+        agent_config=agent_config,
+        project_id=project_id,
+        body_store=session_body_store,
+    )
+    try:
+        await session_manager.append_terminal_event_async(task.session_id, terminal_event)
+    except Exception:
+        logger.warning(
+            "Failed to persist terminal chat event for session %s",
+            task.session_id,
+            exc_info=True,
+        )
+        return
+    task.terminal_event_persisted = True
+    task.terminal_event_type = event_type
 
 
 def _positive_int(value: Any, default: int) -> int:

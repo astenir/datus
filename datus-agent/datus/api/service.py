@@ -12,7 +12,7 @@ from datetime import datetime
 from io import StringIO
 from typing import Any, AsyncGenerator, Dict, List
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -20,7 +20,6 @@ from datus.agent.agent import Agent
 from datus.api.auth import load_auth_provider
 from datus.api.deps import init_deps
 from datus.api.enterprise import load_enterprise_extensions
-from datus.api.enterprise.models import AuditEvent
 from datus.api.services.background_drain import drain_background_tasks
 from datus.api.services.chat_admission import ChatAdmissionController, ChatAdmissionLimits
 from datus.api.services.datus_service_cache import DatusServiceCache
@@ -29,6 +28,12 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.node_models import SqlTask
 from datus.storage.task import TaskStore
 from datus.utils.loggings import get_logger
+from datus_enterprise.app_integration import (
+    get_legacy_current_client,
+    include_api_router,
+    project_enterprise_route_modules,
+    reject_legacy_api_in_enterprise,
+)
 
 from ..utils.json_utils import to_str
 from .legacy_auth import auth_service
@@ -44,32 +49,8 @@ from .legacy_models import (
 
 logger = get_logger(__name__)
 
-_LEGACY_ENTERPRISE_DISABLED_DETAIL = {
-    "errorCode": "ENTERPRISE_LEGACY_API_DISABLED",
-    "errorMessage": "Legacy workflow APIs are disabled when enterprise.enabled=true. Use /api/v1 routes.",
-}
-
-_ROUTE_DISABLED_OPERATIONS = {
-    "agent": "agent.config_legacy",
-    "explorer": "explorer.legacy",
-    "visualization": "visualization.legacy",
-    "tool": "tools.direct_dispatch",
-}
-
-
-def _include_api_router(app: FastAPI, router: APIRouter, name: str) -> None:
-    """Register a route module, applying enterprise legacy gates at the app edge."""
-    disabled_operation = _ROUTE_DISABLED_OPERATIONS.get(name)
-    if disabled_operation:
-        from datus.api.enterprise.deps import require_enterprise_route_disabled
-
-        app.include_router(
-            router,
-            dependencies=[Depends(require_enterprise_route_disabled(operation=disabled_operation))],
-        )
-        return
-
-    app.include_router(router)
+_include_api_router = include_api_router
+_reject_legacy_api_in_enterprise = reject_legacy_api_in_enterprise
 
 
 class DatusAPIService:
@@ -517,34 +498,22 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     # Register new API v1 routes from plugin system (with lazy imports)
     _route_modules = [
         ("datus.api.routes.chat_routes", "chat"),
-        ("datus_enterprise.api.cli_routes", "enterprise_cli"),
-        ("datus_enterprise.api.database_routes", "enterprise_database"),
-        ("datus_enterprise.api.table_routes", "enterprise_table"),
-        ("datus.api.routes.subject_routes", "subject"),
+        ("datus.api.routes.cli_routes", "cli"),
+        ("datus.api.routes.database_routes", "database"),
+        ("datus.api.routes.table_routes", "table"),
         ("datus.api.routes.explorer_routes", "explorer"),
-        ("datus_enterprise.api.config_routes", "enterprise_config"),
-        ("datus_enterprise.api.models_routes", "enterprise_models"),
-        ("datus_enterprise.api.mcp_routes", "enterprise_mcp"),
-        ("datus_enterprise.api.kb_routes", "enterprise_kb"),
-        ("datus_enterprise.api.legacy_agent_routes", "agent"),
+        ("datus.api.routes.config_routes", "config"),
+        ("datus.api.routes.models_routes", "models"),
+        ("datus.api.routes.mcp_routes", "mcp"),
+        ("datus.api.routes.kb_routes", "kb"),
+        ("datus.api.routes.agent_routes", "agent"),
         ("datus.api.routes.visualization_routes", "visualization"),
         ("datus.api.routes.tool_routes", "tool"),
-        ("datus_enterprise.api.success_story_routes", "enterprise_success_story"),
-        ("datus_enterprise.api.dashboard_routes", "enterprise_dashboard"),
-        ("datus_enterprise.api.me_routes", "enterprise_me"),
-        ("datus_enterprise.api.model_credential_routes", "enterprise_model_credentials"),
-        ("datus_enterprise.api.personal_datasource_routes", "enterprise_personal_datasources"),
-        ("datus_enterprise.api.artifact_routes", "enterprise_artifacts"),
-        ("datus_enterprise.api.agent_routes", "enterprise_agents"),
-        ("datus_enterprise.api.admin_datasource_routes", "enterprise_datasource_admin"),
-        ("datus_enterprise.api.admin_audit_routes", "enterprise_audit_admin"),
-        ("datus_enterprise.api.admin_session_routes", "enterprise_session_admin"),
-        ("datus_enterprise.api.admin_user_routes", "enterprise_user_admin"),
-        ("datus_enterprise.api.admin_role_routes", "enterprise_role_admin"),
-        ("datus_enterprise.api.admin_quota_routes", "enterprise_quota_admin"),
-        ("datus_enterprise.api.admin_secret_routes", "enterprise_secret_admin"),
-        ("datus_enterprise.api.system_routes", "enterprise_system"),
+        ("datus.api.routes.success_story_routes", "success_story"),
+        ("datus.api.routes.dashboard_routes", "dashboard"),
+        ("datus.api.routes.report_routes", "report"),
     ]
+    _route_modules = project_enterprise_route_modules(_route_modules)
     import importlib
 
     for module_path, name in _route_modules:
@@ -649,57 +618,8 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     return app
 
 
-async def _reject_legacy_api_in_enterprise(*, operation: str) -> None:
-    """Disable legacy OAuth/workflow endpoints in enterprise mode."""
-
-    from datus.api import deps
-
-    extensions = deps.get_enterprise_extensions()
-    if not extensions.enabled:
-        return
-
-    await extensions.audit_sink.write(
-        AuditEvent(
-            user_id=None,
-            action="system.route_disabled",
-            resource_type="legacy_api",
-            resource_id=None,
-            decision="deny",
-            reason=f"Route operation '{operation}' is disabled in enterprise mode.",
-            metadata={"operation": operation},
-        )
-    )
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_LEGACY_ENTERPRISE_DISABLED_DETAIL)
-
-
 async def _get_legacy_current_client(request: Request) -> str:
-    """Authenticate legacy workflow requests after enterprise-mode rejection."""
-
-    await _reject_legacy_api_in_enterprise(operation="workflow.legacy")
-    raw = request.headers.get("Authorization")
-    if raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    scheme, _, token = raw.strip().partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = auth_service.validate_token(token.strip())
-    client_id = payload.get("client_id")
-    if not client_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return str(client_id)
+    return await get_legacy_current_client(request, auth_service=auth_service)
 
 
 # Global app instance for uvicorn to load

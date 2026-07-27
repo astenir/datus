@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
+from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.tools.func_tool.base import FuncToolResult
 from datus.tools.func_tool.fs_path_policy import PathZone, ResolvedPath
 
@@ -72,6 +73,38 @@ def bind_locked_artifact(
             f"{artifact_root_dir_name}/{artifact_slug}: {getattr(result, 'error', None) or result}"
         )
     return str(artifact_slug)
+
+
+def auto_validate_locked_artifact(
+    node_config: Mapping[str, Any],
+    artifact_slug: str | None,
+    artifact_tools: Any,
+    action_history_manager: Any,
+) -> ActionHistory | None:
+    """Validate a locked edit artifact and append the synthetic tool action."""
+
+    if not node_config.get("edit_locked") or not artifact_slug or artifact_tools is None:
+        return None
+    validate_render = getattr(artifact_tools, "validate_render", None)
+    if validate_render is None:
+        return None
+
+    validate_result = validate_render()
+    output_data = validate_result.model_dump() if hasattr(validate_result, "model_dump") else validate_result
+    validate_action = ActionHistory.create_action(
+        role=ActionRole.TOOL,
+        action_type="validate_render",
+        messages="Auto validate locked artifact before finalizing.",
+        input_data={"function_name": "validate_render", "arguments": "{}"},
+        output_data={
+            "success": getattr(validate_result, "success", 0) == 1,
+            "raw_output": output_data,
+            "summary": "Auto validate locked artifact",
+        },
+        status=ActionStatus.SUCCESS if getattr(validate_result, "success", 0) == 1 else ActionStatus.FAILED,
+    )
+    action_history_manager.add_action(validate_action)
+    return validate_action
 
 
 def apply_global_skills_read_only(

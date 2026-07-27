@@ -26,12 +26,7 @@ from datus.api.models.cli_models import (
     SSESessionData,
     SSEUsageData,
 )
-from datus.api.models.downstream import (
-    ChatSessionTerminalEvent,
-    DashboardEditSession,
-    ReportEditSession,
-    StreamChatInput,
-)
+from datus.api.models.downstream import DashboardEditSession, ReportEditSession, StreamChatInput
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
 from datus.configuration.agent_config import AgentConfig
@@ -53,6 +48,8 @@ from datus_enterprise.services.chat_task_runtime import (
     create_report_edit_session,
     get_artifact_edit_session,
     initialize_chat_task_runtime,
+    persist_terminal_event,
+    prepare_chat_request_config,
     purge_expired_artifact_edit_sessions,
     task_snapshot,
     terminal_outcome_from_action,
@@ -410,21 +407,15 @@ class ChatTaskManager:
         """
         # Clone config to avoid cross-request mutation of shared AgentConfig
         agent_config = copy.deepcopy(agent_config)
-        if self._session_body_store is not None:
-            agent_config._session_body_store = self._session_body_store
-            agent_config._session_project_id = self._project_id
-        agent_config.principal = dict(principal or {})
-        agent_config._request_user_id = user_id
-        agent_config._artifact_acl_store = self._artifact_acl_store
-        agent_config._enterprise_enabled = self._enterprise_enabled
-        agent_config._protect_artifact_filesystem = self._enterprise_enabled
-        if self._enterprise_enabled and not user_id:
-            raise ValueError("AUTH_REQUIRED")
-        if self._enterprise_enabled:
-            from datus_enterprise.workspace import prepare_user_workspace
-
-            workspace_root = await asyncio.to_thread(prepare_user_workspace, agent_config, user_id or "")
-            agent_config._request_workspace_root = str(workspace_root)
+        await prepare_chat_request_config(
+            agent_config,
+            project_id=self._project_id,
+            session_body_store=self._session_body_store,
+            artifact_acl_store=self._artifact_acl_store,
+            enterprise_enabled=self._enterprise_enabled,
+            user_id=user_id,
+            principal=principal,
+        )
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().
@@ -687,37 +678,17 @@ class ChatTaskManager:
         error: str,
         error_type: str,
     ) -> None:
-        """Best-effort persistence for established-session display outcomes."""
-        if not task.session_established or task.terminal_event_persisted:
-            return
-
-        terminal_event = ChatSessionTerminalEvent(
-            event_id=f"{task.run_id}-terminal",
+        await persist_terminal_event(
+            task=task,
+            agent_config=agent_config,
+            user_id=user_id,
             event_type=event_type,
             error=error,
             error_type=error_type,
-        )
-        base_dir = getattr(agent_config, "session_dir", None) or str(
-            get_path_manager(agent_config=agent_config).sessions_dir
-        )
-        session_manager = SessionManager(
-            session_dir=base_dir,
-            scope=session_scope_from_user_id(user_id),
-            agent_config=agent_config,
             project_id=self._project_id,
-            body_store=self._session_body_store,
+            session_body_store=self._session_body_store,
+            session_manager_type=SessionManager,
         )
-        try:
-            await session_manager.append_terminal_event_async(task.session_id, terminal_event)
-        except Exception:
-            logger.warning(
-                "Failed to persist terminal chat event for session %s",
-                task.session_id,
-                exc_info=True,
-            )
-            return
-        task.terminal_event_persisted = True
-        task.terminal_event_type = event_type
 
     _terminal_outcome_from_action = staticmethod(terminal_outcome_from_action)
 

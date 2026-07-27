@@ -15,11 +15,11 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
-from datus.api.routes import chat_routes
 from datus.api.service import create_app
 from datus_enterprise.agent_registry import (
     ENTERPRISE_AGENT_NODE_CAPABILITIES,
     ENTERPRISE_AGENT_NODE_CLASSES,
+    materialize_enterprise_agent,
 )
 from datus_enterprise.api import agent_routes
 from datus_enterprise.postgres_stores import _agent_record, _normalized_agent_metadata
@@ -642,7 +642,7 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
         "acl": {"visibility": "enterprise"},
     }
 
-    chat_routes._materialize_enterprise_agent(agent_config, record)
+    materialize_enterprise_agent(agent_config, record)
 
     assert "sales_sql" in agent_config.agentic_nodes
     entry = agent_config.agentic_nodes["sales_sql"]
@@ -667,7 +667,7 @@ def test_enterprise_agent_materializes_custom_prompt_content():
         "acl": {"visibility": "enterprise"},
     }
 
-    chat_routes._materialize_enterprise_agent(agent_config, record)
+    materialize_enterprise_agent(agent_config, record)
 
     entry = agent_config.agentic_nodes["chat_custom"]
     assert entry["system_prompt"] == "chat_custom"
@@ -689,7 +689,7 @@ def test_enterprise_agent_without_custom_prompt_uses_latest_builtin_template():
         "acl": {"visibility": "enterprise"},
     }
 
-    chat_routes._materialize_enterprise_agent(agent_config, record)
+    materialize_enterprise_agent(agent_config, record)
 
     entry = agent_config.agentic_nodes["chat_custom"]
     assert entry["system_prompt"] == "chat"

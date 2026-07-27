@@ -52,6 +52,7 @@ from datus.tools.func_tool.semantic_tools import SemanticTools
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import build_structured_content
 from datus_enterprise.services.artifact_filesystem_scope import (
+    auto_validate_locked_artifact,
     bind_locked_artifact,
     bind_node_authorized_artifact,
     resolve_artifact_access_mode,
@@ -735,28 +736,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if picked:
             self._active_artifact_slug = picked
 
-        if app_jsx_rel_path is None and self.node_config.get("edit_locked") and self._active_artifact_slug:
-            validate_render = getattr(self.artifact_tools, "validate_render", None) if self.artifact_tools else None
-            if validate_render is not None:
-                validate_result = validate_render()
-                output_data = (
-                    validate_result.model_dump() if hasattr(validate_result, "model_dump") else validate_result
-                )
-                validate_action = ActionHistory.create_action(
-                    role=ActionRole.TOOL,
-                    action_type="validate_render",
-                    messages="Auto validate locked artifact before finalizing.",
-                    input_data={"function_name": "validate_render", "arguments": "{}"},
-                    output_data={
-                        "success": getattr(validate_result, "success", 0) == 1,
-                        "raw_output": output_data,
-                        "summary": "Auto validate locked artifact",
-                    },
-                    status=(
-                        ActionStatus.SUCCESS if getattr(validate_result, "success", 0) == 1 else ActionStatus.FAILED
-                    ),
-                )
-                ctx.action_history_manager.add_action(validate_action)
+        if app_jsx_rel_path is None:
+            validate_action = auto_validate_locked_artifact(
+                self.node_config,
+                self._active_artifact_slug,
+                self.artifact_tools,
+                ctx.action_history_manager,
+            )
+            if validate_action is not None:
                 all_actions = ctx.action_history_manager.get_actions()
                 if validate_action.status == ActionStatus.SUCCESS:
                     tool_calls.append(validate_action)
