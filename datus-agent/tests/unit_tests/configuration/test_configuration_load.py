@@ -173,14 +173,41 @@ def test_init_embedding_models_returns_current_storage_models():
 
 
 def test_get_db_name_type(agent_config: AgentConfig):
+    agent_config.current_datasource = "bird_school"
     db_name, db_type = agent_config.current_db_name_type(db_name="bird_school")
     assert db_name == "bird_school"
     assert db_type == DBType.SQLITE
 
+    agent_config.current_datasource = "local_duckdb"
     db_name, db_type = agent_config.current_db_name_type(db_name="local_duckdb")
     assert db_name == "local_duckdb"
     assert db_type == DBType.DUCKDB
 
+    # Regression: db_name="starrocks" collides with a different datasource key
+    # but must derive the type from current_datasource, not from starrocks
+    agent_config.current_datasource = "bird_school"
     db_name, db_type = agent_config.current_db_name_type(db_name="starrocks")
     assert db_name == "starrocks"
-    assert db_type == "starrocks"
+    assert db_type == DBType.SQLITE
+
+
+def test_get_db_name_type_with_custom_db_name(agent_config: AgentConfig):
+    """When db_name is not a datasource key, it should be preserved as the database name."""
+    agent_config.current_datasource = "bird_school"
+    db_name, db_type = agent_config.current_db_name_type(db_name="my_custom_db")
+    assert db_name == "my_custom_db"
+    assert db_type == DBType.SQLITE
+
+
+def test_get_db_name_type_single_datasource_fallback(agent_config: AgentConfig):
+    """When db_name is provided but current_datasource is not set, falls back to single datasource."""
+    agent_config._current_datasource = ""
+    original = dict(agent_config.services.datasources)
+    single_key = next(iter(original))
+    agent_config.services.datasources = {single_key: original[single_key]}
+    try:
+        db_name, db_type = agent_config.current_db_name_type(db_name="custom_db")
+        assert db_name == "custom_db"
+        assert db_type == original[single_key].type
+    finally:
+        agent_config.services.datasources = original

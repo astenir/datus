@@ -148,6 +148,20 @@ async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filte
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_user_store_pages_after_filtering():
+    store = InMemoryEnterpriseUserStore()
+    await store.upsert_user(user_id="alice", display_name="Finance Alice")
+    await store.upsert_user(user_id="bob", display_name="Engineering Bob")
+    await store.upsert_user(user_id="carol", display_name="Finance Carol")
+
+    first_page = await store.list_users_page(search="finance", limit=1, offset=0)
+    second_page = await store.list_users_page(search="finance", limit=1, offset=1)
+
+    assert [user["user_id"] for user in first_page] == ["alice"]
+    assert [user["user_id"] for user in second_page] == ["carol"]
+
+
+@pytest.mark.asyncio
 async def test_in_memory_enterprise_role_store_supports_permissions_and_delete():
     store = InMemoryEnterpriseRoleStore()
 
@@ -234,9 +248,35 @@ async def test_in_memory_datasource_grant_store_upserts_filters_and_deletes():
         for grant in await store.list_grants(subject_type="role")
     ] == [("role", "analyst", "db_a")]
     assert len(await store.list_grants()) == 2
+    assert await store.count_grants_by_subjects(
+        subject_type="user",
+        subject_ids=["alice", "bob"],
+    ) == {"alice": 1, "bob": 0}
 
     assert await store.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is True
     assert await store.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is False
+
+
+@pytest.mark.asyncio
+async def test_in_memory_datasource_grant_store_pages_after_effect_and_scope_search():
+    store = InMemoryEnterpriseDatasourceGrantStore()
+    for subject_id, datasource_key, effect, table in (
+        ("analyst", "db_a", "allow", "archive"),
+        ("analyst", "db_b", "allow", "orders"),
+        ("auditor", "db_c", "allow", "orders"),
+        ("viewer", "db_d", "deny", "orders"),
+    ):
+        await store.put_grant(
+            subject_type="role",
+            subject_id=subject_id,
+            datasource_key=datasource_key,
+            effect=effect,
+            scope={"tables": [table]},
+        )
+
+    page = await store.list_grants_page(effect="allow", search="ORDERS", limit=1, offset=1)
+
+    assert [(grant["subject_id"], grant["datasource_key"]) for grant in page] == [("auditor", "db_c")]
 
 
 @pytest.mark.asyncio
@@ -365,6 +405,10 @@ async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     assert session["created_at"]
     assert session["updated_at"]
     assert await reopened.get_session("project", "missing") is None
+    assert {item["session_id"] for item in await reopened.get_sessions("project", ["s2", "missing", "s1"])} == {
+        "s1",
+        "s2",
+    }
     assert await reopened.list_session_ids("project", "alice@example.com") == ["s2"]
     sessions = await reopened.list_sessions("project")
     assert [
@@ -376,6 +420,12 @@ async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     ]
     assert sessions[0]["created_at"]
     assert sessions[0]["updated_at"]
+    page = await reopened.list_sessions_page("project", limit=1, offset=1)
+    assert [item["session_id"] for item in page] == ["s2"]
+    assert [
+        item["session_id"]
+        for item in await reopened.list_sessions_page("project", "alice@example.com", limit=2, offset=0)
+    ] == ["s2"]
 
     await reopened.delete_owner("project", "s2")
     assert await reopened.get_owner("project", "s2") is None
@@ -422,6 +472,25 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     assert (await reopened_again.get_chat_preference("alice"))["default_agent_id"] == "sales_sql"
     cleared = await reopened_again.put_chat_preference(user_id="alice", default_agent_id=None)
     assert cleared["default_agent_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_user_store_pages_and_searches_role_ids(tmp_path):
+    db_path = tmp_path / "enterprise_users_page.db"
+    user_store = SqliteEnterpriseUserStore(str(db_path))
+    role_store = SqliteEnterpriseRoleStore(str(db_path))
+    await user_store.upsert_user(user_id="alice", display_name="Alice")
+    await user_store.upsert_user(user_id="bob", display_name="Bob")
+    await role_store.upsert_role(role_id="finance", name="Finance")
+    await role_store.set_user_roles("bob", ["finance"])
+
+    first_page = await user_store.list_users_page(limit=1, offset=0)
+    second_page = await user_store.list_users_page(limit=1, offset=1)
+    role_match = await user_store.list_users_page(search="finance", limit=10, offset=0)
+
+    assert [user["user_id"] for user in first_page] == ["alice"]
+    assert [user["user_id"] for user in second_page] == ["bob"]
+    assert [user["user_id"] for user in role_match] == ["bob"]
 
 
 @pytest.mark.asyncio
@@ -574,9 +643,35 @@ async def test_sqlite_datasource_grant_store_persists_and_replaces_grants(tmp_pa
         for grant in await reopened.list_grants(datasource_key="db_b")
     ] == [("user", "alice", "db_b")]
     assert len(await reopened.list_grants()) == 2
+    assert await reopened.count_grants_by_subjects(
+        subject_type="user",
+        subject_ids=["alice", "bob"],
+    ) == {"alice": 1, "bob": 0}
 
     assert await reopened.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is True
     assert await reopened.get_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_datasource_grant_store_pushes_filters_search_and_pagination_into_query(tmp_path):
+    store = SqliteEnterpriseDatasourceGrantStore(str(tmp_path / "enterprise_datasource_grant_page.db"))
+    for subject_id, datasource_key, effect, table in (
+        ("analyst", "db_a", "allow", "fin%_archive"),
+        ("analyst", "db_b", "allow", "fin%_orders"),
+        ("auditor", "db_c", "allow", "fin%_orders"),
+        ("viewer", "db_d", "deny", "fin%_orders"),
+    ):
+        await store.put_grant(
+            subject_type="role",
+            subject_id=subject_id,
+            datasource_key=datasource_key,
+            effect=effect,
+            scope={"tables": [table]},
+        )
+
+    page = await store.list_grants_page(effect="allow", search="fin%_orders", limit=1, offset=1)
+
+    assert [(grant["subject_id"], grant["datasource_key"]) for grant in page] == [("auditor", "db_c")]
 
 
 @pytest.mark.asyncio

@@ -1979,20 +1979,6 @@ class TestSetupMcpServers:
         mock_setup.assert_called_once_with("custom_server")
         assert result == {"custom_server": mock_server}
 
-    def test_mcp_instance_creation_failure_records_degraded_capability(self, real_agent_config, mock_llm_create):
-        node = _make_node(real_agent_config, mock_llm_create)
-        manager = MagicMock()
-        manager.get_server_config.return_value = MagicMock()
-        manager._create_server_instance.return_value = (None, {"error": "invalid transport config"})
-
-        with patch("datus.tools.mcp_tools.mcp_manager.MCPManager", return_value=manager):
-            result = node._setup_mcp_server_from_config("broken_server")
-
-        assert result is None
-        assert node.degraded_capabilities["mcp.broken_server"] == (
-            "MCP Server 'broken_server' could not be initialized: invalid transport config"
-        )
-
 
 # ---------------------------------------------------------------------------
 # TestSetupInput
@@ -2921,14 +2907,17 @@ class TestGenSQLSystemPromptToolContext:
         assert '"output"' in prompt
         assert "Do not use `tables`, `explanation`, `mode`, or `validation` as final JSON fields." in prompt
 
-    def test_system_prompt_fallback_preserves_prompt_version(self, real_agent_config, mock_llm_create):
+    def test_system_prompt_fallback_uses_latest_builtin_version(self, real_agent_config, mock_llm_create):
+        # Alias template missing: fall back to the built-in gen_sql_system at its
+        # latest version, ignoring the custom prompt_version (which may not exist
+        # for the built-in template).
         from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
         from datus.prompts.prompt_manager import PromptManager
 
         real_agent_config.agentic_nodes["custom_alias"] = {
             "system_prompt": "custom_alias",
             "tools": "db_tools.describe_table",
-            "prompt_version": "1.1",
+            "prompt_version": "1.0",
             "max_turns": 5,
         }
         node = GenSQLAgenticNode(
@@ -2956,12 +2945,11 @@ class TestGenSQLSystemPromptToolContext:
         first_call = mock_prompt_manager.render_template.call_args_list[0].kwargs
         second_call = mock_prompt_manager.render_template.call_args_list[1].kwargs
         assert first_call["template_name"] == "custom_alias_system"
-        assert first_call["version"] == "1.1"
+        assert first_call["version"] == "1.0"
         assert second_call["template_name"] == "gen_sql_system"
-        assert second_call["version"] == "1.1"
+        assert second_call["version"] is None
         assert '"sql"' in prompt
         assert '"output"' in prompt
-        assert "Do not use `tables`, `explanation`, `mode`, or `validation` as final JSON fields." in prompt
 
     def test_system_prompt_context_uses_actual_tools(self, real_agent_config, mock_llm_create):
         from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode

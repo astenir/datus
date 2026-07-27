@@ -23,7 +23,13 @@ def datasource_field_order(datasource_type: str) -> list[str]:
     fields: list[str] = []
     if connector_registry.support_catalog(dialect):
         fields.append("catalog")
-    if connector_registry.support_database(dialect) or dialect == "sqlite":
+    if connector_registry.support_database(dialect) or dialect in {
+        "sqlite",
+        "postgres",
+        "postgresql",
+        "greenplum",
+        "redshift",
+    }:
         fields.append("database")
     if connector_registry.support_schema(dialect) or dialect in {"postgres", "postgresql", "greenplum", "redshift"}:
         fields.append("schema")
@@ -87,15 +93,18 @@ def grant_uses_tree_scope(grant: Mapping[str, Any], field_order: Sequence[str]) 
     selections in that shape are independent branches and must be unioned.
     """
 
-    table_patterns = grant_scope_patterns(grant, "tables")
-    if table_patterns:
-        return all(_complete_scope_pattern(pattern, "table", field_order) for pattern in table_patterns)
-
-    schema_patterns = grant_scope_patterns(grant, "schemas")
-    if schema_patterns:
-        return all(_complete_scope_pattern(pattern, "schema", field_order) for pattern in schema_patterns)
-
-    return False
+    has_qualified_branch = False
+    for field, scope_key in _SCOPE_KEYS.items():
+        patterns = grant_scope_patterns(grant, scope_key)
+        if not patterns:
+            continue
+        if field not in field_order:
+            return False
+        if not all(_complete_scope_pattern(pattern, field, field_order) for pattern in patterns):
+            return False
+        if field in {"schema", "table"} and field_order.index(field) > 0:
+            has_qualified_branch = True
+    return has_qualified_branch
 
 
 def tree_scope_matches(

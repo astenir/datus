@@ -88,6 +88,10 @@ def _dataset_sql(ds: DatasetIR) -> dict:
 def _lower_dimensions(ds: DatasetIR) -> List[dict]:
     dims: List[dict] = []
     for f in ds.fields:
+        if not f.is_dimension:
+            # Plain row-level field (no `dimension:` block in OSI core): it may
+            # back metric expressions but is not exposed for grouping.
+            continue
         if f.type == "time":
             entry: dict = {
                 "name": f.name,
@@ -132,14 +136,38 @@ def _collect_measures_by_dataset(model: SemanticModelIR) -> Dict[str, List[Measu
     return {name: list(measures.values()) for name, measures in by_ds.items()}
 
 
+def _time_dimension_field_names(ds: DatasetIR) -> set:
+    return {f.name for f in ds.fields if f.is_dimension and f.type == "time"}
+
+
+def _kept_identifiers(ds: DatasetIR, keep_names: set) -> List[dict]:
+    """Dataset identifiers minus auto-resolved time-dimension collisions.
+
+    A snapshot-table key component that doubles as the dataset's time dimension
+    (e.g. a monthly ``etl_dt`` inside a composite primary key) is legal in OSI
+    core but MetricFlow forbids one element being both an identifier and a
+    dimension. Keep the time dimension and drop the identifier, unless a
+    relationship joins on it — then the join wins and the dimension is dropped
+    by the existing collision rule instead.
+    """
+    time_names = _time_dimension_field_names(ds)
+    kept: List[dict] = []
+    for i in ds.identifiers:
+        if i.name in time_names and i.name not in keep_names:
+            continue
+        kept.append({"name": i.name, "type": i.type, "expr": i.expr})
+    return kept
+
+
 def _lower_data_source(
-    ds: DatasetIR, measures: List[MeasureIR], extra_identifiers: List[dict] = None
+    ds: DatasetIR,
+    measures: List[MeasureIR],
+    extra_identifiers: List[dict] = None,
+    keep_identifier_names: set = None,
 ) -> dict:
     body: dict = {"name": ds.name, "description": ds.name, "owners": [DEFAULT_OWNER]}
     body.update(_dataset_sql(ds))
-    identifiers = [
-        {"name": i.name, "type": i.type, "expr": i.expr} for i in ds.identifiers
-    ]
+    identifiers = _kept_identifiers(ds, keep_identifier_names or set())
     for extra in extra_identifiers or []:
         if not any(existing["name"] == extra["name"] for existing in identifiers):
             identifiers.append(extra)
@@ -296,15 +324,64 @@ def _relationship_identifiers(model: SemanticModelIR) -> Dict[str, List[dict]]:
     return extras
 
 
+def _relationship_used_identifier_names(model: SemanticModelIR) -> Dict[str, set]:
+    """Identifier names each dataset must keep because a relationship joins on them."""
+    primary_name_by_ds: Dict[str, str] = {}
+    for ds in model.datasets:
+        primary = next((i for i in ds.identifiers if i.type == "primary"), None)
+        if primary:
+            primary_name_by_ds[ds.name] = primary.name
+
+    used: Dict[str, set] = {ds.name: set() for ds in model.datasets}
+    for rel in model.relationships:
+        join_name = primary_name_by_ds.get(rel.to_dataset, rel.to_identifier)
+        used.setdefault(rel.to_dataset, set()).update({join_name, rel.to_identifier})
+        used.setdefault(rel.from_dataset, set()).add(rel.from_identifier)
+    return used
+
+
+def lowered_element_types(model: SemanticModelIR) -> Dict[str, set]:
+    """Element name -> MetricFlow element types the lowering will emit.
+
+    Mirrors ``lower_to_metricflow`` exactly (identifier auto-resolution,
+    relationship-derived foreign identifiers, same-dataset collision shadowing,
+    non-dimension fields) so validation reports precisely the conflicts the
+    backend would reject.
+    """
+    used = _relationship_used_identifier_names(model)
+    rel_extras = _relationship_identifiers(model)
+    element_type: Dict[str, set] = {}
+    for ds in model.datasets:
+        identifier_names = {
+            entry["name"] for entry in _kept_identifiers(ds, used.get(ds.name, set()))
+        }
+        identifier_names.update(
+            extra["name"] for extra in rel_extras.get(ds.name, [])
+        )
+        for name in identifier_names:
+            element_type.setdefault(name, set()).add("identifier")
+        for f in ds.fields:
+            if not f.is_dimension or f.name in identifier_names:
+                continue
+            element_type.setdefault(f.name, set()).add(
+                "time" if f.type == "time" else "dimension"
+            )
+    return element_type
+
+
 def lower_to_metricflow(model: SemanticModelIR) -> MetricFlowArtifact:
     """Lower a SemanticModelIR into MetricFlow YAML documents."""
     measures_by_ds = _collect_measures_by_dataset(model)
     rel_identifiers = _relationship_identifiers(model)
+    rel_used = _relationship_used_identifier_names(model)
     artifact = MetricFlowArtifact()
     for ds in model.datasets:
         artifact.data_source_docs.append(
             _lower_data_source(
-                ds, measures_by_ds.get(ds.name, []), rel_identifiers.get(ds.name, [])
+                ds,
+                measures_by_ds.get(ds.name, []),
+                rel_identifiers.get(ds.name, []),
+                rel_used.get(ds.name, set()),
             )
         )
     for metric in model.metrics:

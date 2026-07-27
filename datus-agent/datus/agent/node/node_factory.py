@@ -10,7 +10,7 @@ Used by CLI print mode and interactive REPL to avoid duplicating node creation l
 
 from typing import TYPE_CHECKING, Literal, Optional
 
-from datus.agent.node_capabilities import get_agent_node_capability
+from datus.agent.node import node_factory_downstream
 
 if TYPE_CHECKING:
     from datus.configuration.agent_config import AgentConfig
@@ -46,32 +46,17 @@ def create_interactive_node(
     """
     if subagent_name:
         node_class_type = _resolve_node_class_type(subagent_name, agent_config)
-        if node_class_type and subagent_name != node_class_type:
-            capability = get_agent_node_capability(node_class_type)
-            if capability is None or not capability.customizable:
-                raise ValueError(f"Unsupported custom Agent node_class '{node_class_type}'.")
+        downstream_node = node_factory_downstream.create_interactive_node(
+            subagent_name, node_class_type, agent_config, node_id_suffix, scope, execution_mode, node_id, session_id
+        )
+        if downstream_node is not None:
+            return downstream_node
 
         if subagent_name == "gen_semantic_model":
             from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
 
             return GenSemanticModelAgenticNode(
                 agent_config=agent_config, execution_mode=execution_mode, scope=scope, session_id=session_id
-            )
-
-        elif subagent_name == "chat" or node_class_type == "chat":
-            from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-            return ChatAgenticNode(
-                node_id=node_id if node_id is not None else f"{subagent_name}{node_id_suffix}",
-                description=f"Chat node for {subagent_name}",
-                node_type="chat",
-                input_data=None,
-                agent_config=agent_config,
-                tools=None,
-                scope=scope,
-                execution_mode=execution_mode,
-                node_name=subagent_name,
-                session_id=session_id,
             )
 
         elif subagent_name == "gen_metrics":

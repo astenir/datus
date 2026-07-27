@@ -28,6 +28,7 @@ from openai.types.shared.reasoning import Reasoning
 from pydantic import AnyUrl
 
 from datus.configuration.agent_config import ModelConfig
+from datus.models import mcp_connection_options_downstream as mcp_options
 from datus.models.base import LLMBaseModel
 from datus.models.litellm_adapter import LiteLLMAdapter, is_known_non_thinking_model, is_official_openai_endpoint
 from datus.models.mcp_result_extractors import extract_sql_contexts
@@ -272,14 +273,27 @@ class OpenAICompatibleModel(LLMBaseModel):
         # its network I/O after returning). A process global is the only mechanism that
         # works across all paths. Blast radius is limited: ``SSL_VERIFY`` is a
         # litellm-specific variable that standard libraries (requests/httpx/curl) ignore.
-        from datus.utils.ssl_utils import normalize_ssl_verify, ssl_verify_to_env
+        from datus.utils.ssl_utils import (
+            is_pem_cert_content,
+            materialize_ca_bundle,
+            resolve_ssl_verify_for_httpx,
+            ssl_verify_to_env,
+        )
 
         ssl_verify_cfg = getattr(self.model_config, "ssl_verify", None)
         # Only act on real bool/str config values; a non-(bool|str) (e.g. unset, or a
         # test double) leaves behavior untouched.
         if isinstance(ssl_verify_cfg, (bool, str)):
-            self.ssl_verify = normalize_ssl_verify(ssl_verify_cfg)
-            os.environ["SSL_VERIFY"] = ssl_verify_to_env(self.ssl_verify)
+            # Native httpx path (ClaudeModel reads self.ssl_verify): inline PEM
+            # content -> in-memory SSLContext (no file); else normalized bool/path.
+            self.ssl_verify = resolve_ssl_verify_for_httpx(ssl_verify_cfg)
+            # litellm path only accepts a CA bundle via a file path, so spill inline
+            # PEM content to a temp file; bool/path reuse the already-normalized
+            # self.ssl_verify (avoids a second normalize + duplicate warning).
+            if is_pem_cert_content(ssl_verify_cfg):
+                os.environ["SSL_VERIFY"] = materialize_ca_bundle(ssl_verify_cfg)
+            else:
+                os.environ["SSL_VERIFY"] = ssl_verify_to_env(self.ssl_verify)
         else:
             self.ssl_verify = None
 
@@ -1144,11 +1158,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             # Use multiple_mcp_servers context manager with empty dict if no MCP servers
             async with multiple_mcp_servers(
                 mcp_servers or {},
-                **(
-                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
-                    if kwargs.get("mcp_connection_failure_callback")
-                    else {}
-                ),
+                **mcp_options.connection_failure_options(kwargs),
             ) as connected_servers:
                 agent_name = kwargs.get("agent_name", "default_agent")
                 agent = self._build_agent(
@@ -1284,11 +1294,7 @@ class OpenAICompatibleModel(LLMBaseModel):
             # Use multiple_mcp_servers context manager with empty dict if no MCP servers
             async with multiple_mcp_servers(
                 mcp_servers or {},
-                **(
-                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
-                    if kwargs.get("mcp_connection_failure_callback")
-                    else {}
-                ),
+                **mcp_options.connection_failure_options(kwargs),
             ) as connected_servers:
                 agent_name = kwargs.get("agent_name", "Tools_Agent")
                 agent = self._build_agent(

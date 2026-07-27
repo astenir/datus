@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import require_platform_active
-from datus.api.models.agent_models import AgentToolsData, AgentUseToolsData
 from datus.api.models.base_models import Result
+from datus.api.models.downstream import AgentToolsData, AgentUseToolsData
 from datus.api.services.agent_service import VALID_TOOL_METHODS, AgentService
 from datus_enterprise.agent_registry import (
     ADMIN_AGENT_PERMISSION,

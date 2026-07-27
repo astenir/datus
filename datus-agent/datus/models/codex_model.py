@@ -22,6 +22,7 @@ from agents.run import RunConfig
 from datus.auth.oauth_config import CODEX_API_BASE_URL
 from datus.auth.oauth_manager import OAuthManager
 from datus.configuration.agent_config import ModelConfig
+from datus.models import mcp_connection_options_downstream as mcp_options
 from datus.models.base import LLMBaseModel
 from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
@@ -448,11 +449,7 @@ class CodexModel(LLMBaseModel):
 
         async with multiple_mcp_servers(
             mcp_servers or {},
-            **(
-                {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
-                if kwargs.get("mcp_connection_failure_callback")
-                else {}
-            ),
+            **mcp_options.connection_failure_options(kwargs),
         ) as connected_servers:
             agent_name = kwargs.get("agent_name", "codex_agent")
             agent_kwargs: Dict[str, Any] = {
@@ -545,11 +542,7 @@ class CodexModel(LLMBaseModel):
 
         async with multiple_mcp_servers(
             mcp_servers or {},
-            **(
-                {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
-                if kwargs.get("mcp_connection_failure_callback")
-                else {}
-            ),
+            **mcp_options.connection_failure_options(kwargs),
         ) as connected_servers:
             agent_name = kwargs.get("agent_name", "codex_agent")
             agent_kwargs: Dict[str, Any] = {

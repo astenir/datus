@@ -12,7 +12,7 @@ Uses _ConcreteAgenticNode (minimal concrete subclass) and patches LLM + sessions
 import asyncio
 import os
 from types import SimpleNamespace
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -120,35 +120,6 @@ class TestGetNodeName:
 
 
 # ---------------------------------------------------------------------------
-# MCP connection failure feedback
-# ---------------------------------------------------------------------------
-
-
-class TestMcpConnectionFailureFeedback:
-    def test_drain_emits_one_failed_action_and_clears_pending_failures(self):
-        node = _make_node()
-        manager = ActionHistoryManager()
-
-        node._record_mcp_connection_failure("filesystem", "connection refused")
-        node._record_mcp_connection_failure("filesystem", "connection refused")
-
-        actions = node._drain_mcp_connection_failure_actions(manager)
-
-        assert len(actions) == 1
-        action = actions[0]
-        assert action.role == ActionRole.TOOL
-        assert action.action_type == "mcp.filesystem.connect"
-        assert action.status == ActionStatus.FAILED
-        assert action.input == {"server_name": "filesystem"}
-        assert action.output == {
-            "error": "connection refused",
-            "summary": "MCP Server 'filesystem' connection failed; the Agent continued without it.",
-        }
-        assert manager.get_actions() == actions
-        assert node._drain_mcp_connection_failure_actions(manager) == []
-
-
-# ---------------------------------------------------------------------------
 # TestParseNodeConfig
 # ---------------------------------------------------------------------------
 
@@ -231,28 +202,6 @@ class TestResolveWorkspaceRoot:
         node.agent_config = cfg
         result = node._resolve_workspace_root()
         assert result == "/project/root"
-
-    def test_request_workspace_overrides_node_and_project_roots_for_opted_in_node(self):
-        node = _make_node()
-        node.USE_REQUEST_WORKSPACE = True
-        node.node_config = {"workspace_root": "/configured/node/root"}
-        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
-        cfg.project_root = "/project/root"
-        cfg._request_workspace_root = "/private/alice"
-        node.agent_config = cfg
-
-        assert node._resolve_workspace_root() == "/private/alice"
-
-    def test_project_authoring_node_ignores_request_workspace(self):
-        node = _make_node()
-        node.USE_REQUEST_WORKSPACE = False
-        node.node_config = {}
-        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
-        cfg.project_root = "/project/root"
-        cfg._request_workspace_root = "/private/alice"
-        node.agent_config = cfg
-
-        assert node._resolve_workspace_root() == "/project/root"
 
     def test_vscode_source_short_circuits_to_dot(self):
         """vscode owns its own filesystem; the resolver returns the literal "."
@@ -469,27 +418,6 @@ class TestUpdateContextAgenticNode:
 
 
 class TestClearSession:
-    def test_session_manager_body_store_subagent_scope_includes_parent_session(self, tmp_path):
-        from datus.models.session_manager import session_scope_from_user_id
-
-        body_store = object()
-        agent_config = SimpleNamespace(
-            session_dir=str(tmp_path / "sessions"),
-            _session_body_store=body_store,
-            _session_project_id="enterprise",
-        )
-        node = _make_node(
-            agent_config=agent_config,
-            scope="alice",
-            session_subdir="chat.session_parent",
-        )
-
-        session_manager = node.session_manager
-
-        assert session_manager._body_store is body_store
-        assert session_manager.project_id == "enterprise"
-        assert session_manager._scope == f"alice__{session_scope_from_user_id('chat.session_parent')}"
-
     def test_clear_session(self):
         node = _make_node()
         node.session_id = "real_session_1"
@@ -627,6 +555,31 @@ class TestSetupPermissionManager:
         node._setup_permission_manager()
 
         assert node.permission_manager.active_profile == "normal"
+
+    def test_workflow_mode_respects_profile_when_print_mode_opts_in(self):
+        """Print mode sets ``workflow_permission_profile`` so ``datus -p``
+        runs under the configured / --permission-mode profile instead of the
+        forced ``dangerous`` baseline."""
+        from datus.tools.permission.permission_config import PermissionLevel
+
+        node, user_config = self._setup_node(execution_mode="workflow")
+        node.agent_config.workflow_permission_profile = "normal"
+        node._setup_permission_manager()
+
+        assert node.permission_manager.active_profile == "normal"
+        # The user's config (rules + posture) is preserved, not replaced.
+        assert any(rule.tool == "custom_marker_tool" for rule in node.permission_manager.global_config.rules)
+        assert node.permission_manager.global_config.default_permission == PermissionLevel.DENY
+
+    def test_workflow_mode_non_string_override_still_forces_dangerous(self):
+        """A mocked / invalid ``workflow_permission_profile`` must not flip the
+        branch — only an explicit profile string opts out of dangerous."""
+        node, _ = self._setup_node(execution_mode="workflow")
+        # MagicMock attribute (truthy but not a str) — same shape as legacy
+        # callers that never set the attribute on a mocked agent_config.
+        node._setup_permission_manager()
+
+        assert node.permission_manager.active_profile == "dangerous"
 
 
 # ---------------------------------------------------------------------------
@@ -1136,28 +1089,6 @@ class TestParseNodeConfigExtended:
         assert result.get("model") == "gpt-4"
         assert result.get("system_prompt") == "You are a SQL assistant"
         assert result.get("max_turns") == 10
-
-    def test_enterprise_tool_and_runtime_policies_are_extracted(self):
-        node = _make_simple_node()
-        mock_config = MagicMock()
-        mock_config.agentic_nodes = {
-            "chat": {
-                "tool_policy": {
-                    "mode": "allowlist",
-                    "allowed": ["db_tools.*"],
-                    "denied": ["filesystem_tools.*"],
-                },
-                "runtime_policy": {
-                    "allow_subagent_delegation": False,
-                    "allowed_subagents": [],
-                },
-            }
-        }
-
-        result = node._parse_node_config(mock_config, "chat")
-
-        assert result["tool_policy"] == mock_config.agentic_nodes["chat"]["tool_policy"]
-        assert result["runtime_policy"] == mock_config.agentic_nodes["chat"]["runtime_policy"]
 
     def test_rules_dict_normalized_to_string(self):
         node = _make_simple_node()
@@ -1876,15 +1807,153 @@ class TestEnsurePermissionHooksProxyWiring:
         kwargs = ph_cls.call_args.kwargs
         assert kwargs["proxied_tool_names"] == set()
 
-    def test_passes_canonical_node_class(self):
-        """Permission hooks receive stable class identity alongside the runtime alias."""
-        node = self._prepare_node(set())
-        node.get_node_name = MagicMock(return_value="dashboard_edit__unit")
-        node.get_node_class_name = MagicMock(return_value="gen_visual_dashboard")
 
-        with patch("datus.tools.permission.permission_hooks.PermissionHooks") as ph_cls:
-            node._ensure_permission_hooks()
+# ---------------------------------------------------------------------------
+# _ensure_tool_transformers (plugin tool argument middleware wiring)
+# ---------------------------------------------------------------------------
 
-        kwargs = ph_cls.call_args.kwargs
-        assert kwargs["node_name"] == "dashboard_edit__unit"
-        assert kwargs["node_class"] == "gen_visual_dashboard"
+
+class TestEnsureToolTransformers:
+    """Drive the unbound method with a minimal fake node.
+
+    The method only touches ``_tool_transformers_applied``, ``agent_config``,
+    ``get_node_name`` and (via ``apply_tool_transformers``) the tool list
+    attributes, so a SimpleNamespace keeps the tests free of the heavyweight
+    AgenticNode constructor.
+    """
+
+    @staticmethod
+    def _make_fake_node(plugins_enabled: bool = True, tools: Optional[List[Any]] = None) -> SimpleNamespace:
+        from agents import FunctionTool
+
+        from datus.tools.registry.tool_registry import ToolRegistry
+
+        async def invoke(tool_ctx: Any, args_str: str) -> dict:
+            return {"success": 1, "result": "ok", "error": None}
+
+        default_tool = FunctionTool(
+            name="execute_sql",
+            description="t",
+            params_json_schema={"type": "object"},
+            on_invoke_tool=invoke,
+            strict_json_schema=False,
+        )
+        return SimpleNamespace(
+            _tool_transformers_applied=False,
+            agent_config=SimpleNamespace(plugins_enabled=plugins_enabled, project_root="/proj"),
+            get_node_name=lambda: "chat",
+            tools=tools if tools is not None else [default_tool],
+            tool_registry=ToolRegistry({"execute_sql": "db_tools"}),
+            proxied_tool_names=set(),
+            db_func_tool=None,
+        )
+
+    def test_wraps_tools_when_plugin_declares_transformers(self):
+        node = self._make_fake_node()
+        original_tool = node.tools[0]
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ):
+            AgenticNode._ensure_tool_transformers(node)
+
+        assert node._tool_transformers_applied is True
+        assert node.tools[0] is not original_tool
+        assert node.tools[0].name == "execute_sql"
+
+    def test_idempotent_across_calls(self):
+        node = self._make_fake_node()
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ) as collect:
+            AgenticNode._ensure_tool_transformers(node)
+            wrapped_once = node.tools[0]
+            AgenticNode._ensure_tool_transformers(node)
+
+        assert collect.call_count == 1
+        assert node.tools[0] is wrapped_once
+
+    def test_noop_when_no_plugin_transformers(self):
+        node = self._make_fake_node()
+        original_tool = node.tools[0]
+
+        with patch("datus.plugins.registry.collect_plugin_tool_transformers", return_value={}):
+            AgenticNode._ensure_tool_transformers(node)
+
+        assert node._tool_transformers_applied is True
+        assert node.tools[0] is original_tool
+
+    def test_gated_by_plugins_enabled(self):
+        node = self._make_fake_node(plugins_enabled=False)
+        original_tool = node.tools[0]
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ) as collect:
+            AgenticNode._ensure_tool_transformers(node)
+
+        collect.assert_not_called()
+        assert node.tools[0] is original_tool
+
+    def test_apply_failure_raises_fail_closed(self):
+        from datus.utils.exceptions import DatusException
+
+        node = self._make_fake_node()
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ):
+            with patch(
+                "datus.tools.middleware.apply_tool_transformers",
+                side_effect=RuntimeError("wrap exploded"),
+            ):
+                with pytest.raises(DatusException):
+                    AgenticNode._ensure_tool_transformers(node)
+
+    def test_apply_failure_stays_unapplied_and_retries_fail_closed(self):
+        """A failed apply must NOT flip the applied flag: the next call has to
+        retry (and keep raising) instead of silently running unwrapped tools."""
+        from datus.utils.exceptions import DatusException
+
+        node = self._make_fake_node()
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ):
+            with patch(
+                "datus.tools.middleware.apply_tool_transformers",
+                side_effect=RuntimeError("wrap exploded"),
+            ):
+                with pytest.raises(DatusException):
+                    AgenticNode._ensure_tool_transformers(node)
+                assert node._tool_transformers_applied is False
+                # Second turn on the same node: still fail closed, not fail open.
+                with pytest.raises(DatusException):
+                    AgenticNode._ensure_tool_transformers(node)
+
+            # Once the transient failure clears, wrapping applies normally.
+            AgenticNode._ensure_tool_transformers(node)
+            assert node._tool_transformers_applied is True
+
+    def test_wrapping_mutates_tool_list_in_place(self):
+        """Callers capture ``self.tools`` before hooks compose (argument
+        evaluation order); the wrap must be visible through that reference."""
+        node = self._make_fake_node()
+        captured = node.tools
+        original_tool = captured[0]
+
+        with patch(
+            "datus.plugins.registry.collect_plugin_tool_transformers",
+            return_value={"execute_sql": [lambda n, a, c: a]},
+        ):
+            AgenticNode._ensure_tool_transformers(node)
+
+        assert node.tools is captured
+        assert captured[0] is not original_tool
+        assert captured[0].name == "execute_sql"

@@ -65,10 +65,11 @@ const kbComponentOptions: ReadonlyArray<{ value: BootstrapComponent; label: stri
   { value: "reference_sql", label: "参考 SQL", description: "可复用查询样例" },
 ]
 
-const strategyOptions: ReadonlyArray<{ value: BootstrapStrategy; label: string }> = [
+const baseStrategyOptions: ReadonlyArray<{ value: BootstrapStrategy; label: string }> = [
   { value: "incremental", label: "增量" },
   { value: "check", label: "检查" },
   { value: "overwrite", label: "覆盖" },
+  { value: "refresh-profile", label: "刷新画像" },
 ]
 
 const buildModeOptions: ReadonlyArray<{ value: BootstrapBuildMode; label: string }> = [
@@ -90,6 +91,15 @@ const usesSuccessStoryFields = computed(() => {
   return component === "semantic_model" || component === "metrics"
 })
 const usesReferenceSqlFields = computed(() => manager.forms.value.kb.component === "reference_sql")
+const usesSemanticYamlPath = computed(() =>
+  manager.forms.value.kb.component === "semantic_model"
+  && manager.forms.value.kb.strategy === "refresh-profile",
+)
+const strategyOptions = computed(() =>
+  baseStrategyOptions.filter((option) =>
+    option.value !== "refresh-profile" || manager.forms.value.kb.component === "semantic_model",
+  ),
+)
 const usesSubjectTreeField = computed(() => {
   const component = manager.forms.value.kb.component
   return component === "metrics" || component === "reference_sql"
@@ -130,11 +140,19 @@ function statusBadgeVariant(status: KnowledgeBootstrapStatus): BadgeVariant {
 function updateKbComponent(value: unknown) {
   if (value === "metadata" || value === "semantic_model" || value === "metrics" || value === "reference_sql") {
     manager.forms.value.kb.component = value
+    if (value !== "semantic_model" && manager.forms.value.kb.strategy === "refresh-profile") {
+      manager.forms.value.kb.strategy = "incremental"
+    }
   }
 }
 
 function updateStrategy(value: unknown) {
-  if (value === "overwrite" || value === "check" || value === "incremental") {
+  if (
+    value === "overwrite"
+    || value === "check"
+    || value === "incremental"
+    || (value === "refresh-profile" && manager.forms.value.kb.component === "semantic_model")
+  ) {
     manager.forms.value.kb.strategy = value
   }
 }
@@ -285,6 +303,33 @@ function updateBuildMode(value: unknown) {
                     </Select>
                   </Field>
                 </div>
+
+                <Field v-if="usesSemanticYamlPath">
+                  <div class="flex items-center gap-2">
+                    <FieldLabel for="kb-semantic-yaml">语义模型 YAML 路径</FieldLabel>
+                    <Tooltip>
+                      <TooltipTrigger as-child>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          class="size-5"
+                          aria-label="语义模型 YAML 路径说明"
+                        >
+                          <CircleHelpIcon />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        填写项目根目录下已有 YAML 的相对路径；刷新画像会原地更新其中的描述。
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Input
+                    id="kb-semantic-yaml"
+                    v-model="manager.forms.value.kb.semanticYamlPath"
+                    placeholder="semantic_models/orders.yml"
+                  />
+                </Field>
 
                 <div class="grid gap-3 lg:grid-cols-2">
                   <FieldGroup class="gap-3">

@@ -3,6 +3,8 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 # -*- coding: utf-8 -*-
+import csv
+import io
 import json
 import os
 import re
@@ -16,25 +18,27 @@ from datus_db_core import BaseSqlConnector, connector_registry
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
+from datus.storage.kb_retrieval import metadata_fts_enabled
+from datus.storage.schema_metadata import create_metadata_rag
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
+from datus.tools.func_tool.sql_scope_downstream import (
+    ddl_sql_reads_from_source,
+    supplemental_table_names,
+    write_sql_reads_from_source,
+)
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import DBType, SQLType
-from datus.utils.datasource_scope import datasource_scope_matches, grant_uses_tree_scope
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
+from datus_enterprise.services.database_tool_scope import DatabaseToolScopePolicy
 
 logger = get_logger(__name__)
 
-_SQL_IDENTIFIER_RE = (
-    r"(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)"
-    r"(?:\s*\.\s*(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*))*"
-)
-_SQL_IDENTIFIER_END_RE = r"(?=\s|$|;)"
 _FALLBACK_SCHEMA_DIALECTS = {"postgres", "postgresql", "greenplum", "redshift"}
 
 
@@ -177,7 +181,10 @@ class DBFuncTool:
         self.principal: Dict[str, Any] = dict(principal_source) if isinstance(principal_source, dict) else {}
         self.sub_agent_name = sub_agent_name
         self.read_only = read_only
-        self.schema_rag = SchemaWithValueRAG(agent_config, sub_agent_name) if agent_config else None
+        if agent_config and metadata_fts_enabled(agent_config):
+            self.schema_rag = create_metadata_rag(agent_config, sub_agent_name)
+        else:
+            self.schema_rag = SchemaWithValueRAG(agent_config, sub_agent_name) if agent_config else None
         self._field_order = self._determine_field_order()
         self._scoped_patterns = self._load_scoped_patterns(scoped_tables)
 
@@ -188,7 +195,7 @@ class DBFuncTool:
                 self._table_semantic_profiles = TableSemanticProfileRAG(agent_config, sub_agent_name)
             except Exception as exc:
                 logger.debug(f"Failed to initialize table semantic profile storage: {exc}")
-        self.has_schema = self.schema_rag and self.schema_rag.schema_store.table_size() > 0
+        self.has_schema = self._has_schema_storage()
 
         self.has_semantic_models = self._semantic_storage and self._semantic_storage.get_size() > 0
         try:
@@ -198,6 +205,133 @@ class DBFuncTool:
         except Exception:
             self._table_semantic_profiles = None
             self.has_table_semantic_profiles = False
+
+    def _has_schema_storage(self) -> bool:
+        if not self.schema_rag:
+            return False
+        get_schema_size = getattr(self.schema_rag, "get_schema_size", None)
+        if callable(get_schema_size):
+            try:
+                return get_schema_size() > 0
+            except Exception:
+                return False
+        schema_store = getattr(self.schema_rag, "schema_store", None)
+        table_size = getattr(schema_store, "table_size", None)
+        if callable(table_size):
+            try:
+                return table_size() > 0
+            except Exception:
+                return False
+        return False
+
+    @staticmethod
+    def _metadata_search_rows(metadata: Any) -> List[Dict[str, Any]]:
+        rows = metadata.to_pylist()
+        result: List[Dict[str, Any]] = []
+        metadata_fields = [
+            "catalog_name",
+            "database_name",
+            "schema_name",
+            "table_name",
+            "table_type",
+            "identifier",
+        ]
+        for row in rows:
+            payload: Dict[str, Any] = {}
+            payload_json = row.get("payload_json")
+            if payload_json:
+                try:
+                    decoded = json.loads(payload_json)
+                    if isinstance(decoded, dict):
+                        description = decoded.get("description")
+                        if description:
+                            payload["description"] = description
+                except (TypeError, ValueError):
+                    pass
+            for field in metadata_fields:
+                if row.get(field) not in (None, ""):
+                    payload[field] = row[field]
+                else:
+                    payload.setdefault(field, "")
+            result.append(payload)
+        return result
+
+    @staticmethod
+    def _qualified_table_name(row: Dict[str, Any]) -> str:
+        parts = [
+            str(row.get("catalog_name") or "").strip(),
+            str(row.get("database_name") or "").strip(),
+            str(row.get("schema_name") or "").strip(),
+            str(row.get("table_name") or "").strip(),
+        ]
+        qualified_name = ".".join(part for part in parts if part)
+        return qualified_name or str(row.get("identifier") or row.get("table_name") or "").strip()
+
+    @staticmethod
+    def _format_sample_rows(value: Any) -> list[Any]:
+        if value in (None, "", [], {}):
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return parsed
+                if isinstance(parsed, dict):
+                    return [parsed]
+            except (TypeError, ValueError):
+                pass
+        try:
+            rows = list(csv.DictReader(io.StringIO(text)))
+            if rows:
+                return rows
+        except csv.Error:
+            pass
+        return [text]
+
+    @classmethod
+    def _sample_rows_by_identifier(cls, sample_values: Any) -> Dict[str, list[Any]]:
+        if sample_values is None:
+            return {}
+        if getattr(sample_values, "num_rows", None) == 0:
+            return {}
+        selected_fields = ["identifier", "sample_rows"]
+        available_fields = getattr(sample_values, "column_names", None)
+        if available_fields is not None:
+            selected_fields = [field for field in selected_fields if field in available_fields]
+        if not selected_fields:
+            return {}
+        rows = sample_values.select(selected_fields).to_pylist()
+        result: Dict[str, list[Any]] = {}
+        for row in rows:
+            identifier = str(row.get("identifier") or "").strip()
+            if not identifier:
+                continue
+            sample_rows = cls._format_sample_rows(row.get("sample_rows"))
+            if sample_rows:
+                result[identifier] = sample_rows
+        return result
+
+    @classmethod
+    def _search_table_result_row(
+        cls,
+        metadata_row: Dict[str, Any],
+        sample_rows_by_identifier: Dict[str, list[Any]],
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"table_name": cls._qualified_table_name(metadata_row)}
+        description = str(metadata_row.get("description") or "").strip()
+        if description:
+            result["description"] = description
+        sample_rows = sample_rows_by_identifier.get(str(metadata_row.get("identifier") or "").strip())
+        if sample_rows:
+            result["sample_rows"] = sample_rows
+        return result
 
     def _init_single_db_connector(self, connector: BaseSqlConnector):
         # Legacy single connector mode
@@ -315,158 +449,11 @@ class DBFuncTool:
                 patterns.append(scoped_pattern)
         return patterns
 
-    @staticmethod
-    def _grant_scope_patterns(grant: Dict[str, Any], scope_key: str) -> Optional[List[str]]:
-        if scope_key not in grant or grant.get(scope_key) is None:
-            return None
-        raw_patterns = grant[scope_key]
-        if isinstance(raw_patterns, str):
-            raw_patterns = [part.strip() for part in raw_patterns.split(",")]
-        if not isinstance(raw_patterns, (list, tuple, set)):
-            return []
-        return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
-
-    def _datasource_grant(self, datasource: Optional[str] = "") -> Any:
-        grants = self.principal.get("datasource_grants")
-        if not isinstance(grants, dict):
-            return None
-        datasource_key = str(datasource or self.principal.get("datasource") or self._default_datasource or "")
-        return grants.get(datasource_key, grants.get("*", False))
-
-    def _grant_scope_matches(
-        self,
-        scope_key: str,
-        candidates: Iterable[str],
-        datasource: Optional[str] = "",
-    ) -> bool:
-        grant = self._datasource_grant(datasource)
-        if grant is None or grant is True:
-            return True
-        if not isinstance(grant, dict):
-            return False
-        if str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-
-        patterns = self._grant_scope_patterns(grant, scope_key)
-        if patterns is None:
-            return True
-        values = [str(candidate).strip() for candidate in candidates if str(candidate).strip()]
-        if not patterns:
-            return False
-        if not values:
-            return any(pattern in ("*", "%") for pattern in patterns)
-        return any(fnmatchcase(value, pattern) for value in values for pattern in patterns)
-
-    @staticmethod
-    def _schema_scope_candidates(coordinate: TableCoordinate) -> List[str]:
-        candidates = [coordinate.schema] if coordinate.schema else []
-        if coordinate.database and coordinate.schema:
-            candidates.append(f"{coordinate.database}.{coordinate.schema}")
-        if coordinate.catalog and coordinate.schema:
-            candidates.append(f"{coordinate.catalog}.{coordinate.schema}")
-        if coordinate.catalog and coordinate.database and coordinate.schema:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}")
-        return candidates
-
-    @staticmethod
-    def _table_scope_candidates(coordinate: TableCoordinate) -> List[str]:
-        candidates = [coordinate.table] if coordinate.table else []
-        if coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.schema}.{coordinate.table}")
-        if coordinate.database and coordinate.table:
-            candidates.append(f"{coordinate.database}.{coordinate.table}")
-        if coordinate.database and coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.database}.{coordinate.schema}.{coordinate.table}")
-        if coordinate.catalog and coordinate.database and coordinate.table:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.table}")
-        if coordinate.catalog and coordinate.database and coordinate.schema and coordinate.table:
-            candidates.append(f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}.{coordinate.table}")
-        return candidates
-
-    def _table_matches_datasource_grant(
-        self,
-        coordinate: TableCoordinate,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        grant = self._datasource_grant(datasource)
-        if isinstance(grant, dict) and grant_uses_tree_scope(grant, self._field_order):
-            return datasource_scope_matches(
-                grant,
-                coordinate={field: getattr(coordinate, field) for field in self._field_order},
-                target_field="table",
-                field_order=self._field_order,
-            )
-
-        return all(
-            (
-                self._grant_scope_matches("catalogs", [coordinate.catalog], datasource),
-                self._grant_scope_matches("databases", [coordinate.database], datasource),
-                self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource),
-                self._grant_scope_matches("tables", self._table_scope_candidates(coordinate), datasource),
-            )
-        )
-
-    def _table_matches_listing_grant(
-        self,
-        coordinate: TableCoordinate,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        if self._table_matches_datasource_grant(coordinate, datasource):
-            return True
-
-        grant = self._datasource_grant(datasource)
-        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-        table_patterns = self._grant_scope_patterns(grant, "tables")
-        if not table_patterns or not coordinate.table:
-            return False
-
-        for raw_pattern in table_patterns:
-            pattern = self._parse_scope_token(raw_pattern)
-            if pattern is None or not _pattern_matches(pattern.table, coordinate.table):
-                continue
-            if any(
-                pattern_value and coordinate_value and not _pattern_matches(pattern_value, coordinate_value)
-                for pattern_value, coordinate_value in (
-                    (pattern.catalog, coordinate.catalog),
-                    (pattern.database, coordinate.database),
-                    (pattern.schema, coordinate.schema),
-                )
-            ):
-                continue
-
-            effective = TableCoordinate(
-                catalog=coordinate.catalog or pattern.catalog,
-                database=coordinate.database or pattern.database,
-                schema=coordinate.schema or pattern.schema,
-                table=coordinate.table,
-            )
-            if self._table_matches_datasource_grant(effective, datasource):
-                return True
-        return False
-
-    def _grant_uses_tree_scope(self, datasource: Optional[str] = "") -> bool:
-        """Return whether this grant contains independently selected tree nodes."""
-        grant = self._datasource_grant(datasource)
-        if not isinstance(grant, dict) or str(grant.get("effect", "allow")).strip().lower() != "allow":
-            return False
-        return grant_uses_tree_scope(grant, self._field_order)
-
-    def _tree_grant_matches_namespace(
-        self,
-        coordinate: TableCoordinate,
-        namespace_field: str,
-        datasource: Optional[str] = "",
-    ) -> bool:
-        """Check whether a namespace intersects an independently selected tree branch."""
-        if not self._grant_uses_tree_scope(datasource) or namespace_field not in self._field_order:
-            return False
-        grant = self._datasource_grant(datasource)
-        return datasource_scope_matches(
-            grant,
-            coordinate={field: getattr(coordinate, field) for field in self._field_order},
-            target_field=namespace_field,
-            field_order=self._field_order,
+    def _datasource_scope_policy(self) -> DatabaseToolScopePolicy:
+        return DatabaseToolScopePolicy(
+            getattr(self, "principal", {}),
+            getattr(self, "_default_datasource", ""),
+            self._field_order,
         )
 
     def _resolve_scoped_context_tables(self) -> Sequence[str]:
@@ -813,8 +800,8 @@ class DBFuncTool:
         coordinate: TableCoordinate,
         datasource: Optional[str] = "",
     ) -> bool:
-        return self._table_matches_scoped_context(coordinate) and self._table_matches_datasource_grant(
-            coordinate, datasource
+        return self._table_matches_scoped_context(coordinate) and self._datasource_scope_policy().table_matches(
+            coordinate, datasource or ""
         )
 
     def _table_matches_scoped_context(self, coordinate: TableCoordinate) -> bool:
@@ -838,8 +825,8 @@ class DBFuncTool:
                 schema=schema,
                 connector=connector,
             )
-            if self._table_matches_scoped_context(coordinate) and self._table_matches_listing_grant(
-                coordinate, datasource
+            if self._table_matches_scoped_context(coordinate) and self._datasource_scope_policy().listing_table_matches(
+                coordinate, datasource or ""
             ):
                 filtered.append(entry)
         return filtered
@@ -875,10 +862,11 @@ class DBFuncTool:
         if not scoped_context_matches:
             return False
         coordinate = TableCoordinate(catalog=catalog_value, database=database_value)
-        if self._grant_uses_tree_scope(datasource):
-            return self._tree_grant_matches_namespace(coordinate, "database", datasource)
-        return self._grant_scope_matches("catalogs", [catalog_value], datasource) and self._grant_scope_matches(
-            "databases", [database_value], datasource
+        grant_scope = self._datasource_scope_policy()
+        if grant_scope.uses_tree_scope(datasource or ""):
+            return grant_scope.namespace_matches(coordinate, "database", datasource or "")
+        return grant_scope.scope_matches("catalogs", [catalog_value], datasource or "") and grant_scope.scope_matches(
+            "databases", [database_value], datasource or ""
         )
 
     def _schema_matches_scope(
@@ -911,12 +899,26 @@ class DBFuncTool:
         )
         if not scoped_context_matches:
             return False
-        if self._grant_uses_tree_scope(datasource):
-            return self._tree_grant_matches_namespace(coordinate, "schema", datasource)
+        grant_scope = self._datasource_scope_policy()
+        if grant_scope.uses_tree_scope(datasource or ""):
+            return grant_scope.namespace_matches(coordinate, "schema", datasource or "")
         return (
-            self._grant_scope_matches("catalogs", [catalog_value], datasource)
-            and self._grant_scope_matches("databases", [database_value], datasource)
-            and self._grant_scope_matches("schemas", self._schema_scope_candidates(coordinate), datasource)
+            grant_scope.scope_matches("catalogs", [catalog_value], datasource or "")
+            and grant_scope.scope_matches("databases", [database_value], datasource or "")
+            and grant_scope.scope_matches(
+                "schemas",
+                [
+                    coordinate.schema,
+                    f"{coordinate.database}.{coordinate.schema}" if coordinate.database and coordinate.schema else "",
+                    f"{coordinate.catalog}.{coordinate.schema}" if coordinate.catalog and coordinate.schema else "",
+                    (
+                        f"{coordinate.catalog}.{coordinate.database}.{coordinate.schema}"
+                        if coordinate.catalog and coordinate.database and coordinate.schema
+                        else ""
+                    ),
+                ],
+                datasource or "",
+            )
         )
 
     def _check_sql_table_scope(self, sql: str, connector: Optional[BaseSqlConnector] = None) -> List[str]:
@@ -928,10 +930,7 @@ class DBFuncTool:
         active_connector = connector or self._primary_connector
         dialect = getattr(active_connector, "dialect", "") or ""
         table_names = extract_table_names(sql, dialect=dialect, ignore_empty=True)
-        table_names.extend(name for name in self._parenthesized_table_expression_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._insert_table_expression_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._ddl_as_table_names(sql) if name not in table_names)
-        table_names.extend(name for name in self._ddl_partition_table_names(sql) if name not in table_names)
+        table_names.extend(name for name in supplemental_table_names(sql) if name not in table_names)
         if not table_names:
             return []  # can't parse → allow (SHOW/DESCRIBE/EXPLAIN have no tables)
         out_of_scope: List[str] = []
@@ -940,63 +939,6 @@ class DBFuncTool:
             if not self._table_matches_scope(coordinate):
                 out_of_scope.append(name)
         return out_of_scope
-
-    @staticmethod
-    def _ddl_as_table_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMPORARY|TEMP)\s+)?(?:TABLE|VIEW)\s+"
-            rf"(?:IF\s+NOT\s+EXISTS\s+)?(?P<target>{_SQL_IDENTIFIER_RE})(?:\s*\([^)]*\))?\s+"
-            rf"AS\s+TABLE\s+(?:ONLY\s+)?(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if not match:
-            return []
-        return [match.group("target"), match.group("source")]
-
-    @staticmethod
-    def _ddl_partition_table_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
-            rf"(?:ATTACH|DETACH)\s+PARTITION\s+(?P<partition>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if match:
-            return [match.group("target"), match.group("partition")]
-        match = re.search(
-            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
-            rf"EXCHANGE\s+PARTITION\s+{_SQL_IDENTIFIER_RE}\s+WITH\s+TABLE\s+"
-            rf"(?P<table>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if match:
-            return [match.group("target"), match.group("table")]
-        return []
-
-    @staticmethod
-    def _parenthesized_table_expression_names(sql: str) -> List[str]:
-        return [
-            match.group("source")
-            for match in re.finditer(
-                rf"\(\s*TABLE\s+(?P<source>{_SQL_IDENTIFIER_RE})(?=\s|\)|$|;)",
-                sql,
-                re.IGNORECASE,
-            )
-        ]
-
-    @staticmethod
-    def _insert_table_expression_names(sql: str) -> List[str]:
-        match = re.search(
-            rf"^\s*INSERT\s+INTO\s+{_SQL_IDENTIFIER_RE}(?:\s*\([^)]*\))?\s+TABLE\s+"
-            rf"(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
-            sql,
-            re.IGNORECASE,
-        )
-        if not match:
-            return []
-        return [match.group("source")]
 
     @staticmethod
     def all_tools_name() -> List[str]:
@@ -1015,63 +957,6 @@ class DBFuncTool:
         if not isinstance(raw_value, str):
             return ""
         return raw_value.strip().lower()
-
-    @staticmethod
-    def _write_sql_reads_from_source(sql: str, dialect: str) -> bool:
-        try:
-            import sqlglot
-            from sqlglot import expressions as exp
-
-            from datus.utils.sql_utils import parse_read_dialect
-
-            parsed = sqlglot.parse_one(
-                sql,
-                read=parse_read_dialect(dialect),
-                error_level=sqlglot.ErrorLevel.IGNORE,
-            )
-            if not isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
-                return False
-            if any(True for _ in parsed.find_all(exp.Select)):
-                return True
-            if DBFuncTool._insert_table_expression_names(sql):
-                return True
-            if DBFuncTool._parenthesized_table_expression_names(sql):
-                return True
-            if isinstance(parsed, (exp.Update, exp.Delete)):
-                return sum(1 for _ in parsed.find_all(exp.Table)) > 1
-            return False
-        except Exception:
-            return bool(
-                re.search(r"\bSELECT\b", sql, re.IGNORECASE)
-                or DBFuncTool._insert_table_expression_names(sql)
-                or DBFuncTool._parenthesized_table_expression_names(sql)
-                or re.search(r"^\s*UPDATE\b[\s\S]*\b(?:FROM|JOIN)\b", sql, re.IGNORECASE)
-                or re.search(r"^\s*DELETE\b[\s\S]*\bUSING\b", sql, re.IGNORECASE)
-            )
-
-    @staticmethod
-    def _ddl_sql_reads_from_source(sql: str, dialect: str) -> bool:
-        try:
-            import sqlglot
-            from sqlglot import expressions as exp
-
-            from datus.utils.sql_utils import parse_read_dialect
-
-            parsed = sqlglot.parse_one(
-                sql,
-                read=parse_read_dialect(dialect),
-                error_level=sqlglot.ErrorLevel.IGNORE,
-            )
-            if DBFuncTool._parenthesized_table_expression_names(sql):
-                return True
-            if not isinstance(parsed, exp.Create):
-                return bool(re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE))
-            return any(any(True for _ in select.find_all(exp.Table)) for select in parsed.find_all(exp.Select))
-        except Exception:
-            return bool(
-                re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE)
-                or DBFuncTool._parenthesized_table_expression_names(sql)
-            )
 
     def _configured_tool_dialects(self) -> set[str]:
         dialects: set[str] = set()
@@ -1137,10 +1022,10 @@ class DBFuncTool:
         simple_sample_data: bool = True,
     ) -> FuncToolResult:
         """
-        Retrieve table candidates by semantic similarity over stored schema metadata and optional sample rows.
+        Retrieve table candidates from indexed metadata and optional semantic profile text.
         Use this tool when the agent needs tables matching a natural-language description.
         This tool helps find relevant tables by searching through table names, schemas (DDL),
-        and sample data using semantic search.
+        and sample data using configured metadata search.
 
         Use this tool when you need to:
         - Find tables related to a specific business concept or domain
@@ -1149,7 +1034,7 @@ class DBFuncTool:
         - Understand what tables are available in a datasource
 
         **Application Guidance**:
-        1. If table matches (via definition/description/dimensions/measures/sample_data), use it directly
+        1. If table matches (via description/sample_rows), inspect it with describe_table before writing SQL
         2. If partitioned (e.g., date-based in definition), explore correct partition via describe_table
         3. If no match, use list_tables for broader exploration
 
@@ -1163,11 +1048,12 @@ class DBFuncTool:
                 Leave empty for MySQL (database = schema), StarRocks, SQLite.
             datasource: Optional datasource to route the search to. Defaults to the current datasource.
             top_n: Maximum number of rows to return after scoping filters.
-            simple_sample_data: If True, sample rows omit catalog/database/schema fields for brevity.
+            simple_sample_data: Deprecated compatibility argument; sample rows are returned inline.
 
         Returns:
             FuncToolResult where:
-                - success=1 with result={"metadata": [...], "sample_data": [...]} (empty lists when no matches).
+                - success=1 with result={"metadata": [...]} (empty list when no matches).
+                  Each metadata item contains table_name, optional description, and optional sample_rows.
                 - success=0 with error text if schema storage is unavailable or lookup fails.
         """
         if not self.has_schema:
@@ -1180,32 +1066,35 @@ class DBFuncTool:
                 schema_name,
                 datasource,
             )
-            metadata, sample_values = self.schema_rag.search_similar(
-                query_text,
-                catalog_name=catalog,
-                database_name=database or self._reset_database_for_rag(datasource),
-                schema_name=schema_name,
-                table_type="full",
-                top_n=top_n,
-            )
-            result_dict: Dict[str, List[Dict[str, Any]]] = {"metadata": [], "sample_data": []}
+            result_dict: Dict[str, Any] = {"metadata": []}
+            rag_database = database or self._reset_database_for_rag(datasource)
+
+            if metadata_fts_enabled(self.agent_config) and hasattr(self.schema_rag, "search_table"):
+                metadata = self.schema_rag.search_table(
+                    query_text,
+                    catalog_name=catalog,
+                    database_name=rag_database,
+                    schema_name=schema_name,
+                    table_type="full",
+                    top_n=top_n,
+                )
+                sample_rows_for_search_results = getattr(self.schema_rag, "sample_rows_for_search_results", None)
+                sample_values = (
+                    sample_rows_for_search_results(metadata) if callable(sample_rows_for_search_results) else None
+                )
+            else:
+                metadata, sample_values = self.schema_rag.search_similar(
+                    query_text,
+                    catalog_name=catalog,
+                    database_name=rag_database,
+                    schema_name=schema_name,
+                    table_type="full",
+                    top_n=top_n,
+                )
 
             metadata_rows: List[Dict[str, Any]] = []
-            if metadata:
-                metadata_fields = [
-                    "catalog_name",
-                    "database_name",
-                    "schema_name",
-                    "table_name",
-                    "table_type",
-                    "identifier",
-                ]
-                if "_distance" in metadata.column_names:
-                    metadata_fields.append("_distance")
-                metadata_rows = metadata.select(metadata_fields).to_pylist()
-            if not metadata_rows:
-                return FuncToolResult(success=1, result=result_dict)
-
+            if metadata is not None and getattr(metadata, "num_rows", 1) != 0:
+                metadata_rows = self._metadata_search_rows(metadata)
             metadata_rows = [
                 row
                 for row in metadata_rows
@@ -1222,7 +1111,6 @@ class DBFuncTool:
             if not metadata_rows:
                 return FuncToolResult(success=1, result=result_dict)
 
-            current_has_semantic = False
             if self.has_semantic_models:
                 for metadata_row in metadata_rows:
                     semantic_model = self._get_semantic_model(
@@ -1232,45 +1120,12 @@ class DBFuncTool:
                         metadata_row["table_name"],
                     )
                     if semantic_model:
-                        current_has_semantic = True
-                        metadata_row["semantic_model_name"] = semantic_model["semantic_model_name"]
-                        metadata_row["description"] = semantic_model["description"]
-                        metadata_row["dimensions"] = semantic_model["dimensions"]
-                        metadata_row["measures"] = semantic_model["measures"]
-                        metadata_row["identifiers"] = semantic_model["identifiers"]
-                        # Only enrich the top match to prioritize the most relevant table
-                        break
+                        metadata_row["description"] = semantic_model.get("description", "")
 
-            result_dict["metadata"] = metadata_rows
-            if current_has_semantic:
-                result_dict["sample_data"] = self.compressor.compress([])
-                return FuncToolResult(success=1, result=result_dict)
-
-            sample_rows: List[Dict[str, Any]] = []
-            if sample_values:
-                if simple_sample_data:
-                    selected_fields = ["identifier", "table_type", "sample_rows"]
-                else:
-                    selected_fields = [
-                        "identifier",
-                        "catalog_name",
-                        "database_name",
-                        "schema_name",
-                        "table_type",
-                        "table_name",
-                        "sample_rows",
-                    ]
-                if "_distance" in sample_values.column_names:
-                    selected_fields.append("_distance")
-                sample_rows = [
-                    row
-                    for row in sample_values.select(selected_fields).to_pylist()
-                    if self._table_matches_scope(
-                        self._build_table_coordinate(raw_name=str(row.get("identifier") or "")),
-                        datasource,
-                    )
-                ]
-            result_dict["sample_data"] = self.compressor.compress(sample_rows)
+            sample_rows_by_identifier = self._sample_rows_by_identifier(sample_values)
+            result_dict["metadata"] = [
+                self._search_table_result_row(metadata_row, sample_rows_by_identifier) for metadata_row in metadata_rows
+            ]
             return FuncToolResult(result=result_dict)
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
@@ -1448,6 +1303,11 @@ class DBFuncTool:
               - name (str): Column name (required)
               - type (str): Column data type (required)
               - comment (str): Column description/comment, enriched with semantic model description if available
+              - pk (bool, optional): present and true when the database reports the column
+                as part of the table's primary key; absent when not a key or unknown
+              - nullable (bool, optional): present and false when the column is NOT NULL;
+                absent when nullable or unknown
+              - default_value (str, optional): column default expression, when defined
               - is_dimension (bool): Whether this column is a dimension in semantic model
                 (semantic fields only present if semantic model exists)
             - table (dict, optional): Table-level metadata from semantic model (only if model exists):
@@ -1507,6 +1367,19 @@ class DBFuncTool:
                     "type": col.get("type", ""),
                     "comment": col.get("comment", "") or "",  # Ensure empty string if None
                 }
+                # Constraint facts are emitted only when informative: several
+                # connectors hardcode pk=False / nullable=True when the engine
+                # exposes no constraint metadata, so those values mean
+                # "unknown", not "verified absent".
+                pk_flag = col.get("pk")
+                # bool is an int subclass; SQLite reports the 1-based position
+                # within a composite key instead of a bool.
+                if isinstance(pk_flag, int) and pk_flag:
+                    normalized_col["pk"] = True
+                if col.get("nullable") is False:
+                    normalized_col["nullable"] = False
+                if col.get("default_value") not in (None, ""):
+                    normalized_col["default_value"] = str(col["default_value"])
                 columns.append(normalized_col)
 
             # 3. Enrich with Semantic Model Info if available
@@ -1945,7 +1818,7 @@ class DBFuncTool:
                 error=f"Statement references tables outside scoped context: {', '.join(out_of_scope)}",
             )
 
-        if self._ddl_sql_reads_from_source(cleaned, connector.dialect):
+        if ddl_sql_reads_from_source(cleaned, connector.dialect):
             try:
                 effective_datasource = self._resolve_effective_datasource(datasource)
                 policy_sql = self._enforce_sql_policy(
@@ -2073,7 +1946,7 @@ class DBFuncTool:
                     success=0,
                     error=f"Write statement references tables outside scoped context: {', '.join(out_of_scope)}",
                 )
-            if self._write_sql_reads_from_source(normalized_sql, connector.dialect):
+            if write_sql_reads_from_source(normalized_sql, connector.dialect):
                 try:
                     effective_datasource = self._resolve_effective_datasource(datasource)
                     policy_sql = self._enforce_sql_policy(

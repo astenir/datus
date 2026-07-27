@@ -22,10 +22,15 @@ def _make_db_tool(agent_config=None, sub_agent_name="test_agent"):
     return db_tool
 
 
-def _make_tools(db_tool=None) -> SemanticDiscoveryTools:
+def _make_tools(
+    db_tool: MagicMock | None = None, enable_semantic_model_profiler: bool = False
+) -> SemanticDiscoveryTools:
     if db_tool is None:
         db_tool = _make_db_tool()
-    return SemanticDiscoveryTools(db_tool=db_tool)
+    return SemanticDiscoveryTools(
+        db_tool=db_tool,
+        enable_semantic_model_profiler=enable_semantic_model_profiler,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +396,7 @@ class TestAnalyzeColumnUsagePatterns:
     def test_finds_function_pattern(self):
         db_tool = _make_db_tool()
         db_tool.describe_table.return_value = FuncToolResult(success=1, result={"columns": [{"name": "tags"}]})
-        sql_entries = [{"sql": "SELECT * FROM orders WHERE FIND_IN_SET('vip', tags)"}]
+        sql_entries = [{"sql": "SELECT * FROM orders WHERE CUSTOM_MATCH(tags, 'vip')"}]
         mock_rag = MagicMock()
         mock_rag.search_reference_sql.return_value = sql_entries
         with patch("datus.storage.reference_sql.store.ReferenceSqlRAG", return_value=mock_rag):
@@ -399,7 +404,8 @@ class TestAnalyzeColumnUsagePatterns:
             result = tools.analyze_column_usage_patterns("orders", columns=["tags"])
         assert result.success == 1
         assert "tags" in result.result["column_patterns"]
-        assert "FIND_IN_SET" in result.result["column_patterns"]["tags"]["functions"]
+        assert "CUSTOM_MATCH" in result.result["column_patterns"]["tags"]["functions"]
+        assert "Function predicates: CUSTOM_MATCH" in result.result["column_patterns"]["tags"]["usage_description"]
 
     def test_filters_sql_not_containing_table(self):
         db_tool = _make_db_tool()
@@ -438,6 +444,239 @@ class TestAnalyzeColumnUsagePatterns:
 
 
 # ---------------------------------------------------------------------------
+# profile_semantic_model_evidence
+# ---------------------------------------------------------------------------
+
+
+class TestProfileSemanticModelEvidence:
+    def test_sql_only_mines_fields_filters_aggregates_and_joins(self):
+        tools = _make_tools()
+        result = tools.profile_semantic_model_evidence(
+            sql_queries=[
+                """
+                SELECT c.region, SUM(o.amount) AS revenue
+                FROM orders o
+                JOIN customers c ON o.customer_id = c.id
+                WHERE o.status = 'paid'
+                GROUP BY c.region
+                """
+            ],
+            profile_mode="sql_only",
+        )
+
+        assert result.success == 1
+        assert result.result["data_profiled"] is False
+        tables = result.result["tables"]
+        assert set(tables) == {"orders", "customers"}
+        assert tables["orders"]["field_usage_statistics"]["status"]["operators"] == ["="]
+        assert tables["orders"]["common_filter_conditions"][0]["condition"] == "o.status = '<REDACTED>'"
+        filter_template = tables["orders"]["common_business_filter_templates"][0]
+        assert filter_template["condition_template"] == "o.status = '<REDACTED>'"
+        assert filter_template["fields"] == ["status"]
+        assert filter_template["literal_values"] == ["paid"]
+        assert filter_template["usage_kind"] == "categorical_filter"
+        assert tables["orders"]["aggregate_expressions"][0]["expression"] == "SUM(o.amount)"
+        assert tables["customers"]["group_by_expressions"][0]["expression"] == "c.region"
+        assert tables["orders"]["join_relationships"][0]["evidence"] == "historical_sql_join"
+        assert "compact distribution notes" in result.result["yaml_guidance"]
+
+    def test_lightweight_profiles_used_columns(self):
+        db_tool = _make_db_tool()
+        db_tool.describe_table.return_value = FuncToolResult(
+            success=1,
+            result={
+                "columns": [
+                    {"name": "status", "type": "VARCHAR"},
+                    {"name": "amount", "type": "DECIMAL"},
+                ]
+            },
+        )
+        db_tool.read_query.side_effect = [
+            FuncToolResult(success=1, result={"compressed_data": "index,row_count\n0,10\n"}),
+            FuncToolResult(
+                success=1,
+                result={"compressed_data": "index,row_count,non_null_count,distinct_count\n0,10,9,2\n"},
+            ),
+            FuncToolResult(success=1, result={"compressed_data": "index,value,count\n0,paid,7\n1,refund,2\n"}),
+            FuncToolResult(
+                success=1,
+                result={
+                    "compressed_data": "index,row_count,non_null_count,distinct_count,min_value,max_value\n0,10,10,8,1,99\n"
+                },
+            ),
+            FuncToolResult(
+                success=1,
+                result={"compressed_data": "index,p25,p50,p75,p90,p95\n0,10,50,75,90,95\n"},
+            ),
+        ]
+        tools = _make_tools(db_tool)
+
+        result = tools.profile_semantic_model_evidence(
+            sql_queries=["SELECT SUM(amount) AS revenue FROM orders WHERE status = 'paid'"],
+            profile_mode="lightweight",
+            max_columns_per_table=2,
+        )
+
+        assert result.success == 1
+        assert result.result["data_profiled"] is True
+        profile = result.result["tables"]["orders"]["data_distribution_profile"]
+        assert profile["row_count"] == 10
+        assert profile["columns"]["status"]["stats"]["null_rate"] == 0.1
+        assert profile["columns"]["status"]["top_values"][0] == {"value": "paid", "count": 7}
+        assert profile["columns"]["amount"]["stats"]["min_value"] == 1
+        assert profile["columns"]["amount"]["stats"]["max_value"] == 99
+        assert profile["columns"]["amount"]["percentiles"]["p50"] == 50
+
+    def test_top_values_profile_skips_error_rows(self):
+        db_tool = _make_db_tool()
+        db_tool.read_query.side_effect = [
+            FuncToolResult(
+                success=1, result={"compressed_data": "index,row_count,non_null_count,distinct_count\n0,10,9,2\n"}
+            ),
+            FuncToolResult(success=0, result=[{"error": "top values failed"}]),
+        ]
+        tools = _make_tools(db_tool)
+
+        profile = tools._profile_single_column(
+            table_ref="orders",
+            column_name="status",
+            column_type="VARCHAR",
+            kind="categorical",
+            database="",
+            top_n=2,
+        )
+
+        assert "top_values_sql" in profile
+        assert "top_values" not in profile
+
+    def test_deep_profiles_explicit_table_without_sql_evidence(self):
+        db_tool = _make_db_tool()
+        db_tool.describe_table.return_value = FuncToolResult(
+            success=1,
+            result={"columns": [{"name": "amount", "type": "DECIMAL"}]},
+        )
+        db_tool.read_query.side_effect = [
+            FuncToolResult(success=1, result={"compressed_data": "index,row_count\n0,10\n"}),
+            FuncToolResult(
+                success=1,
+                result={
+                    "compressed_data": "index,row_count,non_null_count,distinct_count,min_value,max_value\n0,10,10,8,1,99\n"
+                },
+            ),
+            FuncToolResult(
+                success=1,
+                result={"compressed_data": "index,p25,p50,p75,p90,p95\n0,10,50,75,90,95\n"},
+            ),
+        ]
+        tools = _make_tools(db_tool)
+
+        result = tools.profile_semantic_model_evidence(
+            tables=["orders"],
+            profile_mode="deep",
+            max_columns_per_table=1,
+        )
+
+        assert result.success == 1
+        assert result.result["tables"]["orders"]["query_count"] == 0
+        profile = result.result["tables"]["orders"]["data_distribution_profile"]
+        assert profile["columns"]["amount"]["stats"]["max_value"] == 99
+        assert profile["columns"]["amount"]["percentiles"]["p90"] == 90
+
+    def test_deep_profiles_temporal_span_and_duration_pairs(self):
+        db_tool = _make_db_tool()
+        db_tool.describe_table.return_value = FuncToolResult(
+            success=1,
+            result={
+                "columns": [
+                    {"name": "opened_at", "type": "DATE"},
+                    {"name": "closed_at", "type": "DATE"},
+                ]
+            },
+        )
+        db_tool.read_query.side_effect = [
+            FuncToolResult(success=1, result={"compressed_data": "index,row_count\n0,3\n"}),
+            FuncToolResult(
+                success=1,
+                result={
+                    "compressed_data": (
+                        "index,row_count,non_null_count,distinct_count,min_value,max_value\n"
+                        "0,3,3,3,2025-01-01,2025-01-05\n"
+                    )
+                },
+            ),
+            FuncToolResult(
+                success=1,
+                result={
+                    "compressed_data": (
+                        "index,row_count,non_null_count,distinct_count,min_value,max_value\n"
+                        "0,3,3,3,2025-01-03,2025-01-10\n"
+                    )
+                },
+            ),
+            FuncToolResult(
+                success=1,
+                result={
+                    "compressed_data": (
+                        "index,left_value,right_value\n"
+                        "0,2025-01-01,2025-01-03\n"
+                        "1,2025-01-02,2025-01-05\n"
+                        "2,2025-01-05,2025-01-10\n"
+                    )
+                },
+            ),
+        ]
+        tools = _make_tools(db_tool)
+
+        result = tools.profile_semantic_model_evidence(
+            tables=["events"],
+            profile_mode="deep",
+            max_columns_per_table=2,
+        )
+
+        assert result.success == 1
+        profile = result.result["tables"]["events"]["data_distribution_profile"]
+        assert profile["columns"]["opened_at"]["temporal_summary"]["span_days"] == 4
+        duration = profile["date_duration_profiles"][0]
+        assert duration["candidate_reason"] == "shared_stem_boundary_tokens"
+        assert duration["left_column"] == "opened_at"
+        assert duration["right_column"] == "closed_at"
+        assert duration["delta_days"] == {"min": 2, "p50": 3, "p90": 5, "max": 5}
+
+    def test_join_relationship_profile_reports_coverage_and_fanout_generically(self):
+        db_tool = _make_db_tool()
+        db_tool.read_query.return_value = FuncToolResult(
+            success=1,
+            result={
+                "compressed_data": (
+                    "index,source_rows,non_null_source_rows,distinct_source_keys,"
+                    "matched_join_rows,matched_distinct_source_keys\n"
+                    "0,10,9,3,8,2\n"
+                )
+            },
+        )
+        tools = _make_tools(db_tool)
+
+        profiles = tools._profile_join_relationship_profiles(
+            relationships=[
+                {
+                    "source_table": "events",
+                    "source_column": "user_id",
+                    "target_table": "users",
+                    "target_column": "id",
+                }
+            ],
+            catalog="",
+            database="",
+            schema_name="",
+        )
+
+        assert profiles[0]["referential_coverage"] == 0.666667
+        assert profiles[0]["join_fanout_ratio"] == 0.888889
+        assert profiles[0]["join_cardinality_hint"] == "many_to_one_or_one_to_one"
+        assert "matched_row_ratio" not in profiles[0]
+
+
+# ---------------------------------------------------------------------------
 # analyze_metric_candidates_from_history
 # ---------------------------------------------------------------------------
 
@@ -452,6 +691,12 @@ class TestAnalyzeMetricCandidatesFromHistory:
             "analyze_column_usage_patterns",
             "analyze_metric_candidates_from_history",
         }.issubset(tool_names)
+        assert "profile_semantic_model_evidence" not in tool_names
+
+    def test_available_tools_includes_profiler_when_enabled(self):
+        tools = _make_tools(enable_semantic_model_profiler=True)
+        tool_names = {tool.name for tool in tools.available_tools()}
+        assert "profile_semantic_model_evidence" in tool_names
 
     def test_ratio_candidate_preserves_base_measures(self):
         tools = _make_tools()
@@ -668,7 +913,7 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert row_count["window"] == "3 months"
         assert row_count["window_aggregation"] == "row_count"
 
-    def test_lag_period_aggregation_becomes_previous_and_delta_metrics(self):
+    def test_lag_period_aggregation_becomes_fixed_period_metrics(self):
         tools = _make_tools()
         result = tools.analyze_metric_candidates_from_history(
             sql_queries=[
@@ -700,35 +945,32 @@ class TestAnalyzeMetricCandidatesFromHistory:
         )
 
         assert result.success == 1
-        assert [candidate["name"] for candidate in result.result["direct_metric_candidates"]] == ["order_count"]
+        direct = {candidate["name"]: candidate for candidate in result.result["direct_metric_candidates"]}
+        assert sorted(direct) == ["order_count", "order_count_period_delta", "order_count_previous_period"]
+        assert result.result["derived_metric_candidates"] == []
 
-        derived = {candidate["name"]: candidate for candidate in result.result["derived_metric_candidates"]}
-        assert sorted(derived) == ["order_count_period_delta", "order_count_previous_period"]
+        previous = direct["order_count_previous_period"]
+        assert previous["metric_type"] == "period_over_period"
+        assert previous["expression"] == "COUNT(DISTINCT order_id)"
+        assert previous["time_dimension"] == "order_date"
+        assert previous["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "previous_value",
+        }
+        assert "inputs" not in previous
 
-        previous = derived["order_count_previous_period"]
-        assert previous["metric_type"] == "derived"
-        assert previous["metric_kind"] == "derived"
-        assert previous["expression"] == "order_count_previous_period"
-        assert previous["inputs"] == [
-            {
-                "name": "order_count",
-                "alias": "order_count_previous_period",
-                "offset_window": "1 month",
-            }
-        ]
-
-        delta = derived["order_count_period_delta"]
-        assert delta["metric_type"] == "derived"
-        assert delta["metric_kind"] == "derived"
-        assert delta["expression"] == "order_count - order_count_previous_period"
-        assert delta["inputs"] == [
-            {"name": "order_count"},
-            {
-                "name": "order_count",
-                "alias": "order_count_previous_period",
-                "offset_window": "1 month",
-            },
-        ]
+        delta = direct["order_count_period_delta"]
+        assert delta["metric_type"] == "period_over_period"
+        assert delta["expression"] == "COUNT(DISTINCT order_id)"
+        assert delta["source_expression"] == "order_count - order_count_previous_period"
+        assert delta["time_dimension"] == "order_date"
+        assert delta["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "delta",
+        }
+        assert "inputs" not in delta
 
     def test_period_shift_source_lookup_accepts_legacy_from_key(self):
         from sqlglot import parse_one
@@ -782,23 +1024,29 @@ class TestAnalyzeMetricCandidatesFromHistory:
         )
 
         assert result.success == 1
-        derived = {candidate["name"]: candidate for candidate in result.result["derived_metric_candidates"]}
-        assert sorted(derived) == ["order_count_mom_delta", "previous_month_order_count"]
-        assert derived["previous_month_order_count"]["inputs"] == [
-            {
-                "name": "order_count",
-                "alias": "previous_month_order_count",
-                "offset_window": "1 month",
-            }
-        ]
-        assert derived["order_count_mom_delta"]["inputs"] == [
-            {"name": "order_count"},
-            {
-                "name": "order_count",
-                "alias": "previous_month_order_count",
-                "offset_window": "1 month",
-            },
-        ]
+        direct = {candidate["name"]: candidate for candidate in result.result["direct_metric_candidates"]}
+        assert sorted(direct) == ["order_count_mom_delta", "previous_month_order_count"]
+        assert result.result["derived_metric_candidates"] == []
+
+        previous = direct["previous_month_order_count"]
+        assert previous["metric_type"] == "period_over_period"
+        assert previous["expression"] == "COUNT(DISTINCT order_id)"
+        assert previous["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "previous_value",
+        }
+        assert "inputs" not in previous
+
+        delta = direct["order_count_mom_delta"]
+        assert delta["metric_type"] == "period_over_period"
+        assert delta["expression"] == "COUNT(DISTINCT order_id)"
+        assert delta["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "delta",
+        }
+        assert "inputs" not in delta
 
     def test_inline_lag_metric_math_uses_source_time_grain_context(self):
         tools = _make_tools()
@@ -825,20 +1073,184 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert result.success == 1
         matches = [
             candidate
-            for candidate in result.result["derived_metric_candidates"]
+            for candidate in result.result["direct_metric_candidates"]
             if candidate["name"] == "order_count_period_delta"
         ]
         assert len(matches) == 1
         delta = matches[0]
-        assert delta["expression"] == "order_count - order_count_prev"
-        assert delta["inputs"] == [
-            {"name": "order_count"},
-            {
-                "name": "order_count",
-                "alias": "order_count_prev",
-                "offset_window": "1 month",
-            },
+        assert delta["metric_type"] == "period_over_period"
+        assert delta["expression"] == "COUNT(DISTINCT order_id)"
+        assert delta["source_expression"] == "order_count - order_count_prev"
+        assert delta["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "delta",
+        }
+        assert "inputs" not in delta
+
+    def test_inline_lag_aliases_do_not_leak_to_later_plain_columns(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count,
+                        SUM(previous_count) AS order_count_prev
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                )
+                SELECT
+                    metric_month,
+                    order_count - LAG(order_count) OVER (ORDER BY metric_month) AS order_count_period_delta,
+                    order_count_prev
+                FROM monthly_orders
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        direct = result.result["direct_metric_candidates"]
+        delta = next(candidate for candidate in direct if candidate["name"] == "order_count_period_delta")
+        assert delta["metric_type"] == "period_over_period"
+        assert delta["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "delta",
+        }
+        leaked = [
+            candidate
+            for candidate in direct
+            if candidate["name"] == "order_count_prev" and candidate.get("metric_type") == "period_over_period"
         ]
+        assert leaked == []
+
+    def test_lag_percent_change_becomes_fixed_period_metric(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                ),
+                compared AS (
+                    SELECT
+                        metric_month,
+                        order_count,
+                        LAG(order_count) OVER (ORDER BY metric_month) AS previous_month_order_count
+                    FROM monthly_orders
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    (order_count - previous_month_order_count) * 1.0
+                        / NULLIF(previous_month_order_count, 0) AS order_count_mom_percent_change
+                FROM compared
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        percent_change = next(
+            candidate
+            for candidate in result.result["direct_metric_candidates"]
+            if candidate["name"] == "order_count_mom_percent_change"
+        )
+        assert percent_change["metric_type"] == "period_over_period"
+        assert percent_change["expression"] == "COUNT(DISTINCT order_id)"
+        assert percent_change["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "percent_change",
+        }
+        assert "inputs" not in percent_change
+
+    def test_lag_ratio_becomes_fixed_period_metric(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                ),
+                compared AS (
+                    SELECT
+                        metric_month,
+                        order_count,
+                        LAG(order_count) OVER (ORDER BY metric_month) AS previous_month_order_count
+                    FROM monthly_orders
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    order_count * 1.0 / NULLIF(previous_month_order_count, 0) AS order_count_mom_ratio
+                FROM compared
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        ratio = next(
+            candidate
+            for candidate in result.result["direct_metric_candidates"]
+            if candidate["name"] == "order_count_mom_ratio"
+        )
+        assert ratio["metric_type"] == "period_over_period"
+        assert ratio["expression"] == "COUNT(DISTINCT order_id)"
+        assert ratio["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "ratio",
+        }
+        assert "inputs" not in ratio
+
+    def test_lag_with_explicit_offset_count_sets_offset_window(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    LAG(order_count, 2) OVER (ORDER BY metric_month) AS order_count_two_months_ago
+                FROM monthly_orders
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        previous = next(
+            candidate
+            for candidate in result.result["direct_metric_candidates"]
+            if candidate["name"] == "order_count_two_months_ago"
+        )
+        assert previous["metric_type"] == "period_over_period"
+        assert previous["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "2 months",
+            "calculation": "previous_value",
+        }
+        assert "inputs" not in previous
 
     def test_period_shift_aliases_are_scoped_to_source_select(self):
         tools = _make_tools()
@@ -887,17 +1299,16 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert result.success == 1
         delta = next(
             candidate
-            for candidate in result.result["derived_metric_candidates"]
+            for candidate in result.result["direct_metric_candidates"]
             if candidate["name"] == "order_count_period_delta"
         )
-        assert delta["inputs"] == [
-            {"name": "order_count"},
-            {
-                "name": "order_count",
-                "alias": "order_count_previous_period",
-                "offset_window": "1 month",
-            },
-        ]
+        assert delta["metric_type"] == "period_over_period"
+        assert delta["period_over_period"] == {
+            "time_grain": "month",
+            "offset_window": "1 month",
+            "calculation": "delta",
+        }
+        assert "inputs" not in delta
 
     def test_conditional_aggregation_keeps_case_measure_evidence(self):
         tools = _make_tools()
@@ -1048,7 +1459,7 @@ class TestAnalyzeMetricCandidatesFromHistory:
                 SELECT COUNT(*) AS order_row_count,
                        COUNT(DISTINCT order_id) AS order_count
                 FROM fact_orders
-                WHERE buyer_name LIKE '%test%' AND FIND_IN_SET('priority', order_tags)
+                WHERE buyer_name LIKE '%test%' AND CUSTOM_MATCH(order_tags, 'priority')
                 """
             ]
         )
@@ -1101,6 +1512,23 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert {candidate["expression"] for candidate in candidates} == {"COUNT(*)", "SUM(amount)"}
         assert all(candidate["name"] == "revenue" for candidate in candidates)
         assert all(candidate["source_count"] == 1 for candidate in candidates)
+
+    def test_period_over_period_merge_key_includes_time_dimension(self):
+        tools = _make_tools()
+        candidate = {
+            "name": "order_count_yoy",
+            "metric_type": "period_over_period",
+            "expression": "COUNT(DISTINCT order_id)",
+            "time_dimension": "order_date",
+            "period_over_period": {
+                "time_grain": "month",
+                "offset_window": "1 year",
+                "calculation": "percent_change",
+            },
+        }
+        alternate = {**candidate, "time_dimension": "ship_date"}
+
+        assert tools._metric_candidate_merge_key(candidate) != tools._metric_candidate_merge_key(alternate)
 
     def test_repeated_blocked_candidates_do_not_reappear_as_direct_candidates(self):
         tools = _make_tools()

@@ -1,5 +1,6 @@
-"""HTTP-level module RBAC coverage for datus/api/routes/mcp_routes.py."""
+"""HTTP-level module RBAC coverage for the enterprise MCP routes."""
 
+import argparse
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,7 +17,8 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
-from datus.api.routes import mcp_routes
+from datus.api.service import create_app
+from datus_enterprise.api import mcp_routes
 
 
 class CollectingAuditSink:
@@ -25,6 +27,19 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+def test_create_app_registers_authoritative_mcp_routes_once():
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/mcp/servers" and "GET" in getattr(route, "methods", set())
+    ]
+
+    assert len(routes) == 1
+    assert routes[0].endpoint.__module__ == "datus_enterprise.api.mcp_routes"
 
 
 def _enterprise_extensions(audit_sink=None) -> EnterpriseExtensions:

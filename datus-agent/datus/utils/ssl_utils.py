@@ -7,16 +7,26 @@
 The ``ssl_verify`` model setting mirrors the ``verify`` argument of httpx and
 litellm:
 
-* ``True``  -> verify against the system / certifi CA bundle (default)
-* ``False`` -> disable verification entirely (discouraged; MITM-exposed)
-* ``str``   -> path to a CA bundle (PEM) to trust, e.g. a private gateway CA
+* ``True``      -> verify against the system / certifi CA bundle (default)
+* ``False``     -> disable verification entirely (discouraged; MITM-exposed)
+* ``str`` path  -> path to a CA bundle (PEM) to trust, e.g. a private gateway CA
+* ``str`` PEM   -> the CA certificate content itself (``-----BEGIN CERTIFICATE...``)
 
-These helpers normalize a user-supplied value into that ``bool | str`` shape and
-render it back for the ``SSL_VERIFY`` environment variable so the litellm code
-paths (which only accept SSL configuration via env / module globals) honor the
-same setting as the native client path.
+The PEM-content form lets a caller (e.g. Datus SaaS) forward a private CA inline
+without materializing a file on disk. It is consumed differently per path:
+
+* native httpx path -> an in-memory ``ssl.SSLContext`` (no file), via
+  :func:`resolve_ssl_verify_for_httpx`.
+* litellm path -> litellm only accepts a CA bundle via a file path (SSL_VERIFY /
+  SSL_CERT_FILE), so :func:`materialize_ca_bundle` spills the content to a
+  temp file under a private per-process directory. That is the single
+  unavoidable file.
 """
 
+import hashlib
+import os
+import ssl
+import tempfile
 from typing import Optional, Union
 
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -27,6 +37,14 @@ logger = get_logger(__name__)
 # String spellings accepted as booleans (case-insensitive), matching litellm.
 _TRUE_STRINGS = {"true"}
 _FALSE_STRINGS = {"false"}
+
+# Marks a value as inline PEM certificate content rather than a path/bool.
+_PEM_CERT_MARKER = "-----BEGIN CERTIFICATE-----"
+
+
+def is_pem_cert_content(value: object) -> bool:
+    """Return True if ``value`` is an inline PEM certificate (vs a path/bool)."""
+    return isinstance(value, str) and _PEM_CERT_MARKER in value
 
 
 def normalize_ssl_verify(value: Union[bool, str]) -> Union[bool, str]:
@@ -127,3 +145,58 @@ def ssl_verify_to_env(value: Union[bool, str]) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def resolve_ssl_verify_for_httpx(value: Union[bool, str]) -> Union[bool, str, ssl.SSLContext]:
+    """Resolve a config ``ssl_verify`` into an httpx ``verify`` value.
+
+    Inline PEM content becomes an in-memory ``ssl.SSLContext`` that trusts the
+    system roots plus the supplied private CA — no file is written (mirrors how
+    the Snowflake connector loads a ``private_key`` from content). Anything else
+    is delegated to :func:`normalize_ssl_verify` (bool or path).
+    """
+    if is_pem_cert_content(value):
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=value)
+        logger.debug("ssl_verify resolved to in-memory CA context (PEM content, %d bytes)", len(value))
+        return context
+    return normalize_ssl_verify(value)
+
+
+# Private per-process directory (0700, unguessable) that holds materialized CA
+# bundles. Created lazily so processes that never use a custom CA pay nothing.
+_ca_bundle_dir: Optional[str] = None
+
+
+def _get_ca_bundle_dir() -> str:
+    global _ca_bundle_dir
+    if _ca_bundle_dir is None:
+        # mkdtemp yields a 0700, uniquely-named dir owned by us — an attacker
+        # cannot pre-plant a file or symlink at our target paths.
+        _ca_bundle_dir = tempfile.mkdtemp(prefix="datus-ca-")
+    return _ca_bundle_dir
+
+
+def materialize_ca_bundle(pem: str) -> str:
+    """Write inline PEM CA content to a temp file and return its path.
+
+    The litellm path only accepts a CA bundle via a file path, so PEM content
+    must be spilled to disk there. Files live in a private per-process directory
+    and are content-addressed (sha256) so repeated calls and shared CAs reuse
+    the same file. A CA certificate is public, so no encryption is needed; the
+    file is intentionally not cleaned up (tiny, bounded by distinct CAs, and
+    cleared when the process's temp dir goes away).
+    """
+    digest = hashlib.sha256(pem.encode("utf-8")).hexdigest()[:16]
+    path = os.path.join(_get_ca_bundle_dir(), f"{digest}.pem")
+    try:
+        # Atomic exclusive create: O_EXCL refuses to follow a symlink or reuse an
+        # existing file, and dedups concurrent writers of the same content.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path
+    try:
+        os.write(fd, pem.encode("utf-8"))
+    finally:
+        os.close(fd)
+    return path

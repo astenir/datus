@@ -44,6 +44,7 @@ export interface AdminManagementTabProps {
   overview: AdminOverviewController
   requestArtifactAcl: (artifact: AdminArtifactListItem) => void
   requestAuditNextPage: () => void
+  requestAuditPageSizeChange: (value: number) => void
   requestAuditPreviousPage: () => void
   requestAuditReset: () => void
   requestAuditSearch: () => void

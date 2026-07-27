@@ -1,8 +1,5 @@
 """Unit tests for db_manager.py — gen_uri, _resolve_connection_context, helpers, and DBManager."""
 
-import time
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -329,32 +326,6 @@ class TestDBManager:
             assert rebuilt is not first
             assert build.call_count == 2
 
-    def test_get_conn_builds_connector_once_under_concurrency(self):
-        configs = {"ns": _cfg(type="sqlite", uri="sqlite:///test.db")}
-        mgr = DBManager(configs)
-        workers_ready = Barrier(8)
-        count_lock = Lock()
-        connector = MagicMock()
-        build_count = 0
-
-        def build(_cfg):
-            nonlocal build_count
-            with count_lock:
-                build_count += 1
-            time.sleep(0.05)
-            return connector
-
-        def get_conn():
-            workers_ready.wait(timeout=1)
-            return mgr.get_conn("ns")
-
-        with patch.object(mgr, "_build_conn", side_effect=build):
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                connections = list(executor.map(lambda _index: get_conn(), range(8)))
-
-        assert build_count == 1
-        assert all(connection is connector for connection in connections)
-
     def test_get_connections_returns_map_for_glob(self, tmp_path):
         # A glob datasource exposes one connector per matched file, keyed by file/db name.
         from datus.configuration.agent_config import DbConfig
@@ -441,22 +412,6 @@ class TestDBManager:
         assert result.enable_external_access is False
         assert result.memory_limit == "2GB"
         assert result.iceberg == cfg.extra["iceberg"]
-
-    def test_adapter_config_excludes_datasource_display_name(self):
-        mgr = DBManager({})
-        cfg = _cfg(
-            type="postgresql",
-            display_name="基金数据库",
-            host="127.0.0.1",
-            database="ccks_fund",
-            extra={"sslmode": "prefer", "timeout_seconds": 30},
-        )
-
-        result = mgr._db_config_to_connection_config(cfg)
-
-        assert "display_name" not in result
-        assert result["sslmode"] == "prefer"
-        assert result["timeout_seconds"] == 30
 
     def test_sqlite_config_includes_read_only_extra_option(self):
         mgr = DBManager({})

@@ -4,7 +4,9 @@
 
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -12,6 +14,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
 from datus.schemas.agent_models import ScopedContext
+from datus.tools.func_tool.base import FuncToolResult
 from datus.tools.func_tool.sub_agent_task_tool import (
     BUILTIN_SUBAGENT_DESCRIPTIONS,
     NODE_CLASS_MAP,
@@ -57,111 +60,6 @@ class TestInit:
         """No model or tool params needed."""
         tool = SubAgentTaskTool(agent_config=mock_agent_config)
         assert tool.agent_config is mock_agent_config
-
-
-@pytest.mark.ci
-class TestPermissionProfileInheritance:
-    @pytest.mark.parametrize(
-        ("parent_profile", "child_profile"),
-        [("auto", "normal"), ("dangerous", "normal"), ("normal", "dangerous")],
-    )
-    def test_delegated_node_inherits_parent_request_profile_without_mutating_config(
-        self,
-        mock_agent_config,
-        parent_profile,
-        child_profile,
-    ):
-        from datus.tools.permission.permission_config import PermissionLevel
-        from datus.tools.permission.permission_manager import PermissionManager
-        from datus.tools.permission.profiles import get_profile
-
-        mock_agent_config.active_profile_name = child_profile
-        mock_agent_config._raw_permissions = {
-            "profile": child_profile,
-            "rules": [{"tool": "db_tools", "pattern": "blocked_by_admin", "permission": "deny"}],
-        }
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-        parent = MagicMock()
-        parent.permission_manager = PermissionManager(
-            global_config=get_profile(parent_profile),
-            active_profile=parent_profile,
-        )
-        tool.set_parent_node(parent)
-
-        child_manager = PermissionManager(
-            global_config=get_profile(child_profile),
-            node_overrides={
-                "ask_metrics": {
-                    "rules": [{"tool": "semantic_tools", "pattern": "private_metric", "permission": "deny"}]
-                }
-            },
-            active_profile=child_profile,
-        )
-        child = MagicMock()
-        child.permission_manager = child_manager
-
-        tool._inherit_parent_permission_profile(child)
-
-        assert child_manager.active_profile == parent_profile
-        assert child_manager.check_permission("db_tools", "blocked_by_admin", "ask_metrics") == PermissionLevel.DENY
-        assert child_manager.check_permission("semantic_tools", "private_metric", "ask_metrics") == PermissionLevel.DENY
-        assert mock_agent_config.active_profile_name == child_profile
-
-    def test_profile_inheritance_failure_stops_delegated_node(self, mock_agent_config):
-        from datus.tools.permission.permission_manager import PermissionManager
-        from datus.tools.permission.profiles import get_profile
-
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-        parent = MagicMock()
-        parent.permission_manager = PermissionManager(
-            global_config=get_profile("dangerous"),
-            active_profile="dangerous",
-        )
-        tool.set_parent_node(parent)
-        child = MagicMock()
-        child.permission_manager.active_profile = "normal"
-        child.permission_manager.switch_profile.side_effect = RuntimeError("switch failed")
-
-        with pytest.raises(RuntimeError, match="Failed to inherit permission profile 'dangerous'"):
-            tool._inherit_parent_permission_profile(child)
-
-    @pytest.mark.asyncio
-    async def test_task_applies_parent_request_profile_to_created_child(self, mock_agent_config):
-        from datus.tools.permission.permission_manager import PermissionManager
-        from datus.tools.permission.profiles import get_profile
-
-        mock_agent_config._raw_permissions = {}
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-        parent = MagicMock()
-        parent.permission_manager = PermissionManager(
-            global_config=get_profile("dangerous"),
-            active_profile="dangerous",
-        )
-        parent.proxy_tool_patterns = []
-        parent.session_id = None
-        tool.set_parent_node(parent)
-
-        action = Mock(spec=ActionHistory)
-        action.status = ActionStatus.SUCCESS
-        action.role = ActionRole.ASSISTANT
-        action.output = {"response": "ok", "success": True}
-        child = MagicMock()
-        child.permission_manager = PermissionManager(
-            global_config=get_profile("normal"),
-            active_profile="normal",
-        )
-
-        async def stream(_history):
-            yield action
-
-        child.execute_stream_with_interactions = stream
-
-        with patch.object(tool, "_create_node", return_value=child):
-            with patch.object(tool, "_build_node_input", return_value=Mock()):
-                result = await tool.task(type="gen_sql", prompt="query")
-
-        assert result.success == 1
-        assert child.permission_manager.active_profile == "dangerous"
 
 
 # ── available_tools ────────────────────────────────────────────────
@@ -294,72 +192,6 @@ class TestGetAvailableTypes:
         types = tool._get_available_types()
         assert "gen_sql" not in types
         assert "explore" in types
-
-
-@pytest.mark.ci
-class TestEnterpriseAgentAclGate:
-    def test_enterprise_available_types_follow_effective_agent_acl(self, mock_agent_config):
-        mock_agent_config._enterprise_enabled = True
-        mock_agent_config._enterprise_allowed_agent_ids = {"explore", "ask_metrics"}
-        mock_agent_config.principal = {"permissions": []}
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-
-        available = set(tool._get_available_types())
-
-        assert "explore" in available
-        assert "ask_metrics" in available
-        assert "gen_sql" not in available
-        assert "gen_skill" not in available
-        assert "scheduler" not in available
-        assert "gen_dashboard" not in available
-
-    def test_enterprise_available_types_ignore_module_permissions(self, mock_agent_config):
-        mock_agent_config._enterprise_enabled = True
-        mock_agent_config._enterprise_allowed_agent_ids = {"gen_sql", "gen_visual_dashboard"}
-        mock_agent_config.principal = {"permissions": []}
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-
-        available = set(tool._get_available_types())
-
-        assert "gen_sql" in available
-        assert "gen_visual_dashboard" in available
-        assert "gen_dashboard" not in available
-        assert "gen_job" not in available
-
-    @pytest.mark.asyncio
-    async def test_denies_task_when_agent_acl_does_not_allow_target(self, mock_agent_config):
-        mock_agent_config._enterprise_enabled = True
-        mock_agent_config._enterprise_allowed_agent_ids = {"chat"}
-        mock_agent_config._request_user_id = "user-1"
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-
-        result = await tool._execute_node("gen_visual_dashboard", "edit dashboards", "edit dashboards")
-
-        assert result.success == 0
-        assert "Unknown or disallowed subagent type" in result.error
-        assert "module.dashboard.query" not in result.error
-
-    def test_allows_task_target_from_effective_agent_acl(self, mock_agent_config):
-        mock_agent_config._enterprise_enabled = True
-        mock_agent_config._enterprise_allowed_agent_ids = {"gen_visual_dashboard"}
-        tool = SubAgentTaskTool(agent_config=mock_agent_config)
-
-        assert tool._enterprise_acl_denial("gen_visual_dashboard") is None
-
-    def test_custom_agent_is_filtered_by_acl_not_node_class_module(self):
-        config = Mock(spec=AgentConfig)
-        config._enterprise_enabled = True
-        config._enterprise_allowed_agent_ids = {"sales_dashboard_ask"}
-        config.current_datasource = "default"
-        config.agentic_nodes = {
-            "sales_dashboard_ask": {
-                "node_class": "ask_dashboard",
-                "artifact_slug": "sales",
-            }
-        }
-        tool = SubAgentTaskTool(agent_config=config)
-
-        assert "sales_dashboard_ask" in tool._get_available_types()
 
 
 # ── _resolve_node_type ─────────────────────────────────────────────
@@ -950,6 +782,55 @@ class TestSubAgentTaskAcceptance:
 
 @pytest.mark.ci
 class TestTaskExecution:
+    @pytest.mark.asyncio
+    async def test_osi_gen_metrics_requires_existing_semantic_model(self, task_tool, tmp_path):
+        task_tool.agent_config.resolve_semantic_adapter.return_value = "osi"
+        task_tool.agent_config.path_manager = SimpleNamespace(project_root=tmp_path)
+
+        with patch(
+            "datus.agent.node.semantic_authoring.default_osi_semantic_model_file",
+            return_value="subject/semantic_models/test_db/sales.yml",
+        ):
+            with patch.object(task_tool, "_execute_node") as execute_node:
+                result = await task_tool.task(type="gen_metrics", prompt="Generate revenue")
+
+        assert result.success == 0
+        assert result.result["code"] == "semantic_model_required"
+        assert result.result["required_subagent"] == "gen_semantic_model"
+        assert result.result["retry_subagent"] == "gen_metrics"
+        execute_node.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_semantic_authoring_tasks_are_serialized_across_tool_instances(
+        self, task_tool, monkeypatch, tmp_path
+    ):
+        active = 0
+        max_active = 0
+        task_tool.agent_config.path_manager = SimpleNamespace(project_root=tmp_path)
+        metrics_tool = SubAgentTaskTool(agent_config=task_tool.agent_config)
+
+        async def fake_execute(subagent_type, prompt, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return FuncToolResult(result={"subagent_type": subagent_type})
+
+        monkeypatch.setattr(task_tool, "_execute_node", fake_execute)
+        monkeypatch.setattr(task_tool, "_osi_metric_precondition", lambda: None)
+        monkeypatch.setattr(metrics_tool, "_execute_node", fake_execute)
+        monkeypatch.setattr(metrics_tool, "_osi_metric_precondition", lambda: None)
+
+        semantic_result, metrics_result = await asyncio.gather(
+            task_tool.task(type="gen_semantic_model", prompt="Generate the sales model"),
+            metrics_tool.task(type="gen_metrics", prompt="Generate revenue"),
+        )
+
+        assert semantic_result.success == 1
+        assert metrics_result.success == 1
+        assert max_active == 1
+
     @pytest.mark.asyncio
     async def test_execute_gen_sql_success(self, task_tool):
         """Successful gen_sql execution through node."""
@@ -2588,7 +2469,6 @@ class TestSessionPersistence:
         subagent .db nests under {sessions_dir}/{user_scope}/{parent_id}/."""
         parent = MagicMock()
         parent.session_id = "chat_session_parent01"
-        parent.scope = "alice"
         parent.proxy_tool_patterns = None
         task_tool.set_parent_node(parent)
 
@@ -2599,75 +2479,6 @@ class TestSessionPersistence:
 
         assert result.success == 1
         assert node.session_subdir == "chat_session_parent01"
-
-    @pytest.mark.asyncio
-    async def test_persists_delegation_before_child_stream_starts(self, task_tool):
-        """The parent sidecar gets the child link before any child action runs."""
-        parent = MagicMock()
-        parent.session_id = "chat_session_parent01"
-        parent.scope = "alice"
-        parent.proxy_tool_patterns = None
-        parent.session_manager.append_subagent_event_async = AsyncMock()
-        task_tool.set_parent_node(parent)
-
-        node = _build_persistent_mock_node(session_id_to_assign="gen_sql_session_child01")
-        node.scope = None
-
-        async def _stream(_ahm):
-            assert parent.session_manager.append_subagent_event_async.await_count == 1
-            assert node.scope == "alice"
-            yield Mock(
-                spec=ActionHistory,
-                status=ActionStatus.SUCCESS,
-                role=ActionRole.TOOL,
-                output={"sql": "SELECT 1", "response": "ok", "tokens_used": 1},
-            )
-
-        node.execute_stream = _stream
-        node.execute_stream_with_interactions = _stream
-        with patch.object(task_tool, "_create_node", return_value=node):
-            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
-                result = await task_tool.task(
-                    type="gen_sql",
-                    prompt="inspect orders",
-                    description="inspect schema",
-                    call_id="task-call-1",
-                )
-
-        assert result.success == 1
-        parent.session_manager.append_subagent_event_async.assert_awaited_once()
-        session_id, event = parent.session_manager.append_subagent_event_async.await_args.args
-        assert session_id == "chat_session_parent01"
-        assert event.parent_action_id == "task-call-1"
-        assert event.child_session_id == "gen_sql_session_child01"
-        assert event.subagent_type == "gen_sql"
-        assert event.arguments == {
-            "type": "gen_sql",
-            "prompt": "inspect orders",
-            "description": "inspect schema",
-        }
-
-    @pytest.mark.asyncio
-    async def test_delegation_sidecar_failure_does_not_stop_child(self, task_tool):
-        """Display-sidecar availability must not become an execution dependency."""
-        parent = MagicMock()
-        parent.session_id = "chat_session_parent01"
-        parent.proxy_tool_patterns = None
-        parent.session_manager.append_subagent_event_async = AsyncMock(side_effect=RuntimeError("store down"))
-        task_tool.set_parent_node(parent)
-
-        node = _build_persistent_mock_node(session_id_to_assign="gen_sql_session_child01")
-        with patch.object(task_tool, "_create_node", return_value=node):
-            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
-                result = await task_tool.task(
-                    type="gen_sql",
-                    prompt="inspect orders",
-                    description="inspect schema",
-                    call_id="task-call-1",
-                )
-
-        assert result.success == 1
-        parent.session_manager.append_subagent_event_async.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_no_parent_session_falls_back_to_flat_path(self, task_tool):

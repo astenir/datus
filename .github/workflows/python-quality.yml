@@ -113,7 +113,7 @@ jobs:
           tests/unit_tests/api/enterprise/test_defaults.py
           tests/unit_tests/api/enterprise/test_route_security_matrix.py
           tests/unit_tests/configuration
-          tests/unit_tests/tools/func_tool/test_semantic_tools.py::TestRuntimeDbContext::test_metricflow_adapter_initializes_for_oceanbase_oracle
+          tests/unit_tests/tools/func_tool/test_semantic_tools_downstream.py::test_metricflow_adapter_initializes_for_oceanbase_oracle
           --tb=short
           --disable-warnings
 
@@ -223,10 +223,15 @@ jobs:
           datus-semantic-core
           datus-semantic-metricflow
           datus-semantic-osi
+          datus-semantic-osi-engine
           --exclude examples
 
-      - name: Run tests
+      - name: Run workspace tests
         run: .venv/bin/python -m pytest -q --asyncio-mode=auto --tb=short
+
+      - name: Run OSI Engine unit tests
+        working-directory: datus-semantic-adapter/datus-semantic-osi-engine
+        run: ../.venv/bin/python -m pytest -q tests/unit --asyncio-mode=auto --tb=short
 
   metricflow-quality:
     name: MetricFlow quality

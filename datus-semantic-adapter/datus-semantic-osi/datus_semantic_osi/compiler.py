@@ -264,6 +264,7 @@ def _compile_dataset(ds: OSIDataset) -> DatasetIR:
                 name=dim.name,
                 expr=dim.expr or dim.name,
                 type=dim.type,
+                is_dimension=dim.is_dimension,
                 time_granularity=dim.granularity,
             )
         )
@@ -276,6 +277,15 @@ def _compile_dataset(ds: OSIDataset) -> DatasetIR:
         )
         for key in keys:
             identifiers.append(IdentifierIR(name=key, type="primary", expr=key))
+
+    identifier_names = {i.name for i in identifiers}
+    for key in ds.unique_keys:
+        # Composite unique keys have no single-identifier representation in the
+        # backend; they are kept on the authoring side only.
+        if len(key) != 1 or key[0] in identifier_names:
+            continue
+        identifiers.append(IdentifierIR(name=key[0], type="unique", expr=key[0]))
+        identifier_names.add(key[0])
 
     return DatasetIR(
         name=ds.name,
@@ -456,13 +466,68 @@ def _namespace_measures(metric: MetricIR, prefix: str) -> None:
             metric.expression = re.sub(rf"\b{re.escape(old)}\b", new, metric.expression)
 
 
+def _resolve_qualified_columns(
+    metric: OSIMetric, dataset_names: set, *, dialect: str
+) -> tuple:
+    """Strip dataset qualifiers from metric column refs; infer the owning dataset.
+
+    OSI core metric expressions qualify columns with the dataset name
+    (``SUM(orders.sales)``). Backing measures execute inside the dataset's own
+    data source, so the qualifier must not survive into the measure expression;
+    when exactly one dataset is referenced it also determines the metric's
+    dataset without needing a DATUS hint.
+    """
+    if not metric.expression:
+        return metric, None
+    try:
+        tree = sqlglot.parse_one(metric.expression, read=dialect)
+    except Exception:  # noqa: BLE001 - parse errors surface during compilation
+        return metric, None
+    if tree is None:
+        return metric, None
+    referenced: set = set()
+    for column in tree.find_all(exp.Column):
+        if column.table and column.table in dataset_names:
+            referenced.add(column.table)
+    if len(referenced) != 1:
+        return metric, None
+    inferred = next(iter(referenced))
+
+    def _strip(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column) and node.table == inferred:
+            return exp.column(node.this)
+        return node
+
+    updated = metric.model_copy(
+        update={"expression": tree.transform(_strip).sql(dialect=dialect)}
+    )
+    return updated, inferred
+
+
+def _infer_relationship_type(rel, datasets_by_name: dict) -> str:
+    """Upgrade the default many_to_one to one_to_one when the from-side key is unique."""
+    if rel.type != "many_to_one":
+        return rel.type
+    ds = datasets_by_name.get(rel.from_dataset)
+    if ds is None:
+        return rel.type
+    primary = (
+        [ds.primary_key] if isinstance(ds.primary_key, str) else list(ds.primary_key or [])
+    )
+    unique_columns = {key[0] for key in ds.unique_keys if len(key) == 1}
+    if primary == [rel.from_identifier] or rel.from_identifier in unique_columns:
+        return "one_to_one"
+    return rel.type
+
+
 def compile_document(doc: OSIDocument, *, dialect: str = DEFAULT_SQLGLOT_DIALECT) -> SemanticModelIR:
     """Compile a parsed OSI authoring document into a SemanticModelIR."""
     datasets = [_compile_dataset(ds) for ds in doc.datasets]
+    datasets_by_name = {ds.name: ds for ds in doc.datasets}
     relationships = [
         RelationshipIR(
             name=rel.name,
-            type=rel.type,
+            type=_infer_relationship_type(rel, datasets_by_name),
             from_dataset=rel.from_dataset,
             from_identifier=rel.from_identifier,
             to_dataset=rel.to_dataset,
@@ -471,9 +536,25 @@ def compile_document(doc: OSIDocument, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
         for rel in doc.relationships
     ]
     default_dataset = doc.datasets[0].name if doc.datasets else None
+    dataset_names = {ds.name for ds in doc.datasets}
     metrics = []
     for m in doc.metrics:
+        m, inferred_dataset = _resolve_qualified_columns(m, dataset_names, dialect=dialect)
         metric_ir = _compile_metric(m, dialect=dialect)
+        if not metric_ir.dataset and inferred_dataset:
+            metric_ir.dataset = inferred_dataset
+        elif (
+            metric_ir.dataset
+            and inferred_dataset
+            and metric_ir.dataset != inferred_dataset
+        ):
+            raise OSIValidationError(
+                f"declares dataset `{metric_ir.dataset}` but its expression qualifies "
+                f"columns with dataset `{inferred_dataset}`.",
+                metric=metric_ir.name,
+                hint="Qualify the expression columns with the owning dataset, or drop "
+                "the conflicting DATUS `dataset` hint.",
+            )
         if len(doc.datasets) > 1 and metric_ir.measures and not metric_ir.dataset:
             raise OSIValidationError(
                 "metric must declare `dataset` when the semantic model has multiple datasets.",

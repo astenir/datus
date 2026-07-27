@@ -69,8 +69,6 @@ agent:
         dags_folder: "${AIRFLOW_DAGS_DIR}"
 
   agentic_nodes:
-    gen_metrics:
-      semantic_adapter: metricflow
     gen_dashboard:
       bi_platform: superset
     scheduler:
@@ -109,24 +107,18 @@ timeout: ${API_TIMEOUT:-30}
 connection_string: "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}"
 ```
 
-## 配置文件选择
+## 多环境配置
 
-仓库 `conf/` 中同时包含完整配置、示例、企业配置片段和内置模型目录：
+通过多份配置文件管理不同环境：
 
 ```text
 conf/
-├── agent.yml                              # 本机实际配置，Git 忽略
-├── agent.yml.example                      # 上游默认完整示例
-├── agent.downstream.zh-CN.yml.example     # 下游中文完整起步模板
-├── agent.compose.yml                      # Docker Compose 完整运行配置
-├── agent.enterprise.*.yml.example         # 企业能力片段，需合并到 agent: 下
-├── agent.local-enterprise-pg.yml.example  # 本地企业 PG 联调完整示例
-├── auth_clients.yml.example               # 旧 /auth/token 独立认证示例
-└── providers.yml                          # 程序内置 provider/model 目录
+├── agent.yml              # 主配置
+├── agent.yml.dev          # 开发环境覆盖
+├── agent.yml.staging      # 预发布环境
+├── agent.yml.production   # 生产环境
+└── .mcp.json              # MCP 服务器配置
 ```
-
-不要把企业片段当作完整配置直接启动。加载顺序、每个文件的适用场景以及
-YAML、环境变量、`.env` 的边界见 [`conf/README.zh-CN.md`](../../conf/README.zh-CN.md)。
 
 ## 下一步
 - **[Agent 设置](agent.md)**：配置模型、提供方与全局设置

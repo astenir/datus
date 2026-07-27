@@ -62,7 +62,6 @@ class GetSemanticModelData(BaseModel):
 class SemanticModelInput(BaseModel):
     """Save semantic model input."""
 
-    datasource_id: Optional[str] = Field(None, description="Datasource selected for this request")
     table: str = Field(..., description="Full table name")
     yaml: str = Field(..., description="SemanticModel YAML content")
     catalog: Optional[str] = Field(None, description="Current catalog context")

@@ -30,6 +30,7 @@ from agents.tool_context import ToolContext
 from agents.usage import InputTokensDetails, OutputTokensDetails, RequestUsage
 
 from datus.configuration.agent_config import ModelConfig
+from datus.models import mcp_connection_options_downstream as mcp_options
 from datus.models.litellm_adapter import is_official_anthropic_endpoint
 from datus.models.mcp_utils import multiple_mcp_servers
 from datus.models.openai_compatible import OpenAICompatibleModel
@@ -622,11 +623,7 @@ class ClaudeModel(OpenAICompatibleModel):
             # Use context manager to manage multiple MCP servers
             async with multiple_mcp_servers(
                 mcp_servers,
-                **(
-                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
-                    if kwargs.get("mcp_connection_failure_callback")
-                    else {}
-                ),
+                **mcp_options.connection_failure_options(kwargs),
             ) as connected_servers:
                 # Get all tools and build tool-name-to-server mapping once
                 tool_server_map = {}  # tool_name -> connected_server

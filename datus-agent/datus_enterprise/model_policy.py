@@ -6,7 +6,7 @@ from fnmatch import fnmatchcase
 from typing import Any, Iterable, Sequence
 
 from datus.api.auth.context import AppContext
-from datus.api.models.config_models import ModelInfo
+from datus.api.models.downstream import ModelInfo
 
 
 def filter_allowed_models(ctx: AppContext | None, models: Sequence[ModelInfo]) -> list[ModelInfo]:

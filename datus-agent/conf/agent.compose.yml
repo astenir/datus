@@ -17,6 +17,7 @@ agent:
 
   api:
     chat:
+      web_filesystem_executor: ${DATUS_WEB_FILESYSTEM_EXECUTOR:-server}
       max_active_global: ${DATUS_CHAT_MAX_ACTIVE_GLOBAL:-32}
       max_active_per_project: ${DATUS_CHAT_MAX_ACTIVE_PER_PROJECT:-16}
       max_active_per_user: ${DATUS_CHAT_MAX_ACTIVE_PER_USER:-4}

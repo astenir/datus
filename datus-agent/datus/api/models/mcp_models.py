@@ -5,19 +5,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class MCPServerConfigInput(BaseModel):
-    """Common MCP server configuration input."""
-
-    type: str = Field(..., description="Server type (stdio, sse, http)")
-    command: Optional[str] = Field(None, description="Command for stdio servers")
-    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
-    url: Optional[str] = Field(None, description="URL for sse/http servers")
-    headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
-    timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
-    env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
-    cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
-
-
+# Server management models
 class MCPServerInfo(BaseModel):
     """Information about an MCP server."""
 
@@ -33,7 +21,7 @@ class MCPServerInfo(BaseModel):
     cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
 
 
-class AddServerInput(MCPServerConfigInput):
+class AddServerInput(BaseModel):
     """Input model for adding a new MCP server."""
 
     model_config = ConfigDict(
@@ -43,14 +31,14 @@ class AddServerInput(MCPServerConfigInput):
     )
 
     name: str = Field(..., description="Server name/identifier")
-
-
-class UpdateServerInput(MCPServerConfigInput):
-    """Input model for updating an existing MCP server."""
-
-    model_config = ConfigDict(
-        json_schema_extra={"example": {"type": "stdio", "command": "python", "args": ["-m", "new_server"]}}
-    )
+    type: str = Field(..., description="Server type (stdio, sse, http)")
+    command: Optional[str] = Field(None, description="Command for stdio servers")
+    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
+    url: Optional[str] = Field(None, description="URL for sse/http servers")
+    headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
+    timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
+    env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
+    cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
 
 
 # Connectivity models

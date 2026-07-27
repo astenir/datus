@@ -156,13 +156,12 @@ class TestAutoProfile:
 
     def test_workspace_writes_allowed(self):
         config = AUTO
-        # ``write_file`` / ``edit_file`` / ``delete_file`` are the full set of
-        # write tools ``FilesystemFuncTool`` exposes today (``create_directory``
-        # / ``move_file`` were removed in the #561 refactor and used to live
-        # here as dead rules — see ``test_dead_filesystem_rules_absent``).
+        # General filesystem writes plus the OSI metrics-only upsert are all
+        # non-interactive under the auto profile.
         assert _resolve(config, "filesystem_tools", "write_file") == PermissionLevel.ALLOW
         assert _resolve(config, "filesystem_tools", "edit_file") == PermissionLevel.ALLOW
         assert _resolve(config, "filesystem_tools", "delete_file") == PermissionLevel.ALLOW
+        assert _resolve(config, "filesystem_tools", "upsert_osi_metrics") == PermissionLevel.ALLOW
 
     def test_bi_write_allowed_delete_asks(self):
         """Auto downgrades NORMAL's DENY on destructives to ASK — user is
@@ -207,17 +206,24 @@ class TestDangerousProfile:
 
 
 class TestFilesystemRuleSurface:
-    """Filesystem rules must match the tool surface exposed by
-    ``FilesystemFuncTool.available_tools``.
+    """Filesystem rules must match the general and OSI metric tool surfaces.
 
     ``#561`` reduced the toolset to five methods (``read_file``,
     ``write_file``, ``edit_file``, ``glob``, ``grep``) but the rule tables
-    kept five stale patterns until this PR. The asserts below lock in that
-    cleanup so a future refactor doesn't silently grow another dead rule.
+    kept five stale patterns until this PR. OSI metric generation additionally
+    exposes ``upsert_osi_metrics``. The asserts below lock in both surfaces.
     """
 
     _DEAD_PATTERNS = ("list_*", "directory_tree", "search_files", "create_directory", "move_file")
-    _LIVE_PATTERNS = ("read_*", "glob", "grep", "write_file", "edit_file", "delete_file")
+    _LIVE_PATTERNS = (
+        "read_*",
+        "glob",
+        "grep",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "upsert_osi_metrics",
+    )
 
     def test_dead_filesystem_rules_absent(self):
         for cfg in (NORMAL, AUTO):
@@ -305,3 +311,154 @@ class TestBuildEffectiveConfig:
 
         with pytest.raises(ValueError, match="Unknown profile"):
             build_effective_config("yolo", {})
+
+
+class TestProfileBashCommands:
+    """Command-level bash rules attached to each profile."""
+
+    def test_normal_allows_readonly_commands(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import NORMAL
+
+        assert evaluate_bash_command("git status", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("ls -la", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("git log --oneline -5", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        # File readers / text filters are now allowed in normal (read-only).
+        assert evaluate_bash_command("cat README.md", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("head -5 data.csv", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("grep -n TODO src.py", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        # Read-only pipeline of allow-listed commands auto-allows.
+        assert evaluate_bash_command("cat log | grep err | wc -l", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+
+    def test_normal_asks_for_writes_and_codeexec(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import NORMAL
+
+        # Writes stay ASK.
+        assert evaluate_bash_command("rm -rf build", NORMAL.bash_commands).level == PermissionLevel.ASK
+        assert evaluate_bash_command("touch x", NORMAL.bash_commands).level == PermissionLevel.ASK
+        # Programmable tools (can exec / write in place) are NOT whitelisted.
+        assert evaluate_bash_command("awk '{print $1}' f", NORMAL.bash_commands).level == PermissionLevel.ASK
+        assert evaluate_bash_command("sed -i s/a/b/ f", NORMAL.bash_commands).level == PermissionLevel.ASK
+        assert evaluate_bash_command("find . -name x", NORMAL.bash_commands).level == PermissionLevel.ASK
+        # sort can write via -o, so it's auto-only.
+        assert evaluate_bash_command("sort f", NORMAL.bash_commands).level == PermissionLevel.ASK
+
+    def test_normal_date_hostname_readonly_forms_only(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import NORMAL
+
+        # Bare inspection and ``date +FORMAT`` auto-allow.
+        assert evaluate_bash_command("date", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("date +%Y-%m-%d", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("hostname", NORMAL.bash_commands).level == PermissionLevel.ALLOW
+        # Mutating forms (``date -s`` / ``hostname NAME``) fall through to ASK.
+        assert evaluate_bash_command("date -s 2026-01-01", NORMAL.bash_commands).level == PermissionLevel.ASK
+        assert evaluate_bash_command("hostname newname", NORMAL.bash_commands).level == PermissionLevel.ASK
+
+    def test_auto_extends_normal(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import AUTO
+
+        assert evaluate_bash_command("cat README.md", AUTO.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("git status", AUTO.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("sort data.txt", AUTO.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("mkdir newdir", AUTO.bash_commands).level == PermissionLevel.ALLOW
+        assert evaluate_bash_command("rm -rf build", AUTO.bash_commands).level == PermissionLevel.ASK
+
+    def test_dangerous_has_no_bash_rules(self):
+        from datus.tools.permission.profiles import DANGEROUS
+
+        assert DANGEROUS.bash_commands is None
+
+    def test_user_bash_commands_layer_over_profile(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import build_effective_config
+
+        effective = build_effective_config(
+            "normal",
+            {"bash_commands": {"allow": ["make:*"], "deny": ["git diff:*"]}},
+        )
+        # user allow appended after profile whitelist
+        assert evaluate_bash_command("make test", effective.bash_commands).level == PermissionLevel.ALLOW
+        # profile whitelist retained
+        assert evaluate_bash_command("git status", effective.bash_commands).level == PermissionLevel.ALLOW
+        # user deny overrides the profile's allow (deny wins by decision order)
+        assert evaluate_bash_command("git diff HEAD~1", effective.bash_commands).level == PermissionLevel.DENY
+
+
+class TestPluginBashRulesMerge:
+    """Plugin-declared bash rules layered into build_effective_config."""
+
+    @staticmethod
+    def _plugin_rules():
+        from datus.tools.permission.bash_rules import BashCommandRules
+
+        return BashCommandRules(
+            allow=["datus hello greet:*"],
+            ask=["datus hello config set:*"],
+            deny=["datus hello config wipe:*"],
+        )
+
+    def test_plugin_rules_merged_into_normal(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import build_effective_config
+
+        effective = build_effective_config("normal", None, plugin_bash_rules=self._plugin_rules())
+
+        assert evaluate_bash_command("datus hello greet Ada", effective.bash_commands).level == PermissionLevel.ALLOW
+        ask = evaluate_bash_command("datus hello config set k v", effective.bash_commands)
+        assert ask.level == PermissionLevel.ASK
+        assert ask.bucket == "datus hello config set:*"
+        assert evaluate_bash_command("datus hello config wipe all", effective.bash_commands).level == (
+            PermissionLevel.DENY
+        )
+        # Profile whitelist retained alongside plugin rules.
+        assert evaluate_bash_command("git status", effective.bash_commands).level == PermissionLevel.ALLOW
+
+    def test_profile_singleton_not_mutated(self):
+        from datus.tools.permission.profiles import NORMAL, build_effective_config, get_profile
+
+        before_allow = list(NORMAL.bash_commands.allow)
+        build_effective_config("normal", None, plugin_bash_rules=self._plugin_rules())
+        assert get_profile("normal").bash_commands.allow == before_allow
+
+    def test_user_deny_beats_plugin_allow(self):
+        from datus.tools.permission.bash_rules import evaluate_bash_command
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import build_effective_config
+
+        effective = build_effective_config(
+            "normal",
+            {"bash_commands": {"deny": ["datus hello greet:*"]}},
+            plugin_bash_rules=self._plugin_rules(),
+        )
+        assert evaluate_bash_command("datus hello greet Ada", effective.bash_commands).level == PermissionLevel.DENY
+
+    def test_user_explicit_default_still_wins(self):
+        from datus.tools.permission.permission_config import PermissionLevel
+        from datus.tools.permission.profiles import build_effective_config
+
+        effective = build_effective_config(
+            "normal", {"default": "allow", "rules": []}, plugin_bash_rules=self._plugin_rules()
+        )
+        assert effective.default_permission == PermissionLevel.ALLOW
+
+    def test_dangerous_ignores_plugin_rules(self):
+        from datus.tools.permission.profiles import build_effective_config
+
+        effective = build_effective_config("dangerous", None, plugin_bash_rules=self._plugin_rules())
+        assert effective.bash_commands is None
+
+    def test_empty_plugin_rules_are_noop(self):
+        from datus.tools.permission.bash_rules import BashCommandRules
+        from datus.tools.permission.profiles import NORMAL, build_effective_config
+
+        effective = build_effective_config("normal", None, plugin_bash_rules=BashCommandRules())
+        assert effective is NORMAL

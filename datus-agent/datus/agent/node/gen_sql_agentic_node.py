@@ -315,7 +315,9 @@ class GenSQLAgenticNode(AgenticNode):
     def _setup_semantic_tools(self):
         """Setup semantic tools for metric/dimension exploration."""
         try:
-            adapter_type = self.node_config.get("adapter_type", "metricflow")
+            from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
+
+            adapter_type = resolve_semantic_adapter_type(self.agent_config)
             self.semantic_tools = SemanticTools(
                 agent_config=self.agent_config,
                 sub_agent_name=self.node_config.get("system_prompt"),
@@ -453,7 +455,9 @@ class GenSQLAgenticNode(AgenticNode):
                 tool_instance = self.context_search_tools
             elif tool_type == "semantic_tools":
                 if not self.semantic_tools:
-                    adapter_type = self.node_config.get("adapter_type", "metricflow")
+                    from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
+
+                    adapter_type = resolve_semantic_adapter_type(self.agent_config)
                     self.semantic_tools = SemanticTools(
                         agent_config=self.agent_config,
                         sub_agent_name=self.node_config.get("system_prompt"),
@@ -692,9 +696,13 @@ class GenSQLAgenticNode(AgenticNode):
             return self._finalize_system_prompt(base_prompt)
 
         except FileNotFoundError:
-            # Template not found - throw DatusException
-            logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-            base_prompt = pm.render_template(template_name="gen_sql_system", version=prompt_version, **context)
+            # Alias template missing: fall back to the built-in gen_sql_system
+            # at its latest version.
+            logger.warning(
+                f"Failed to render system prompt '{system_prompt_name}' (version={prompt_version}), "
+                "falling back to built-in gen_sql_system"
+            )
+            base_prompt = pm.render_template(template_name="gen_sql_system", version=None, **context)
             return self._finalize_system_prompt(base_prompt)
         except Exception as e:
             # Other template errors - wrap in DatusException

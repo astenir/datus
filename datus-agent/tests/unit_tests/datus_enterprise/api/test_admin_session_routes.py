@@ -259,14 +259,20 @@ def test_admin_sessions_list_merges_owner_records_and_running_tasks(monkeypatch)
         "created_at": None,
         "updated_at": None,
         "event_count": 0,
-        "exists_on_disk": True,
+        "exists_on_disk": None,
     }
     assert sessions["s2"]["owner_user_id"] == "bob"
     assert sessions["s2"]["status"] == "running"
     assert sessions["s2"]["is_running"] is True
-    assert sessions["s2"]["exists_on_disk"] is True
+    assert sessions["s2"]["exists_on_disk"] is None
     assert audit_sink.events[-1].decision == "allow"
-    assert audit_sink.events[-1].metadata == {"operation": "list_admin_sessions", "count": 2, "user_id": None}
+    assert audit_sink.events[-1].metadata == {
+        "operation": "list_admin_sessions",
+        "count": 2,
+        "user_id": None,
+        "offset": 0,
+        "has_more": False,
+    }
 
 
 def test_admin_sessions_user_filter_does_not_include_other_user_runtime_only_tasks(monkeypatch):
@@ -285,7 +291,110 @@ def test_admin_sessions_user_filter_does_not_include_other_user_runtime_only_tas
     body = response.json()
     assert body["success"] is True
     assert [item["session_id"] for item in body["data"]] == ["s1"]
-    assert audit_sink.events[-1].metadata == {"operation": "list_admin_sessions", "count": 1, "user_id": "alice"}
+    assert audit_sink.events[-1].metadata == {
+        "operation": "list_admin_sessions",
+        "count": 1,
+        "user_id": "alice",
+        "offset": 0,
+        "has_more": False,
+    }
+
+
+def test_admin_sessions_filters_before_pagination_and_skips_disk_probes(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    asyncio.run(owner_store.set_owner("project", "s2", "bob"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc()
+    svc.chat = FailingSessionLookupChatService()
+    _add_running_task(svc.task_manager, "s2", "bob")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        stopped_response = client.get(
+            "/api/v1/admin/sessions",
+            params={"state": "stopped", "search": "alice", "limit": 1, "offset": 0},
+        )
+        first_page = client.get("/api/v1/admin/sessions", params={"limit": 1, "offset": 0})
+        second_page = client.get("/api/v1/admin/sessions", params={"limit": 1, "offset": 1})
+
+    assert [item["session_id"] for item in stopped_response.json()["data"]] == ["s1"]
+    assert stopped_response.json()["data"][0]["exists_on_disk"] is None
+    assert first_page.json()["pagination"] == {"limit": 1, "offset": 0, "has_more": True}
+    assert second_page.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": False}
+    assert {first_page.json()["data"][0]["session_id"], second_page.json()["data"][0]["session_id"]} == {"s1", "s2"}
+
+
+def test_admin_sessions_use_native_page_when_runtime_tasks_are_owner_backed(monkeypatch):
+    class RecordingOwnerStore(TimestampedOwnerStore):
+        def __init__(self):
+            super().__init__()
+            self.page_calls = []
+
+        async def list_sessions(self, project_id, user_id=None):
+            raise AssertionError("native page path must not load all owner records")
+
+        async def list_sessions_page(self, project_id, user_id=None, *, limit, offset):
+            self.page_calls.append((project_id, user_id, limit, offset))
+            records = await InMemorySessionOwnerStore.list_sessions(self, project_id, user_id)
+            for record in records:
+                record["created_at"] = "2026-07-01T08:00:00+00:00"
+                record["updated_at"] = "2026-07-02T09:30:00+00:00"
+            return records[offset : offset + limit]
+
+    owner_store = RecordingOwnerStore()
+    for session_id in ("s1", "s2", "s3"):
+        asyncio.run(owner_store.set_owner("project", session_id, "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc()
+    _add_running_task(svc.task_manager, "s2", "alice")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.get(
+            "/api/v1/admin/sessions",
+            params={"user_id": "alice", "limit": 1, "offset": 1},
+        )
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()["data"]] == ["s2"]
+    assert response.json()["data"][0]["is_running"] is True
+    assert response.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": True}
+    assert owner_store.page_calls == [("project", "alice", 2, 1)]
+
+
+def test_admin_sessions_fall_back_to_full_merge_for_runtime_only_task(monkeypatch):
+    class RecordingOwnerStore(InMemorySessionOwnerStore):
+        def __init__(self):
+            super().__init__()
+            self.list_calls = 0
+            self.page_calls = 0
+
+        async def list_sessions(self, project_id, user_id=None):
+            self.list_calls += 1
+            return await super().list_sessions(project_id, user_id)
+
+        async def list_sessions_page(self, project_id, user_id=None, *, limit, offset):
+            self.page_calls += 1
+            return await super().list_sessions_page(project_id, user_id, limit=limit, offset=offset)
+
+    owner_store = RecordingOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc()
+    _add_running_task(svc.task_manager, "runtime-only", "bob")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/admin/sessions", params={"limit": 10})
+
+    assert response.status_code == 200
+    assert {item["session_id"] for item in response.json()["data"]} == {"s1", "runtime-only"}
+    assert owner_store.list_calls == 1
+    assert owner_store.page_calls == 0
 
 
 def test_admin_session_detail_returns_owner_and_runtime_status(monkeypatch):
@@ -542,7 +651,7 @@ def test_admin_sessions_list_handles_invalid_owner_record_session_id(monkeypatch
     body = response.json()
     assert body["success"] is True
     assert body["data"][0]["session_id"] == "bad/session"
-    assert body["data"][0]["exists_on_disk"] is False
+    assert body["data"][0]["exists_on_disk"] is None
 
 
 def test_admin_session_routes_register_expected_paths():

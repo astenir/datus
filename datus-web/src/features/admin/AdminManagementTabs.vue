@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue"
+import { watchDebounced } from "@vueuse/core"
 import { toast } from "vue-sonner"
 import {
   CalendarIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   DownloadIcon,
   EyeIcon,
   KeyRoundIcon,
@@ -23,7 +22,7 @@ import { parseDate } from "@internationalized/date"
 import type { DateValue } from "@internationalized/date"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Popover,
@@ -51,6 +50,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePermission } from "@/composables/usePermission"
 import AdminMobileRecord from "@/features/admin/AdminMobileRecord.vue"
+import AdminPaginationBar from "@/features/admin/AdminPaginationBar.vue"
 import type { AdminManagementTabProps } from "@/features/admin/types"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
@@ -97,6 +97,100 @@ const secretSearchKeyword = shallowRef("")
 const artifactTypeFilter = shallowRef<ArtifactTypeFilter>("all")
 const artifactSearchKeyword = shallowRef("")
 const auditDateRangeOpen = shallowRef(false)
+
+function enabledFilterValue(filter: EnabledStatusFilter): boolean | undefined {
+  if (filter === "enabled") return true
+  if (filter === "disabled") return false
+  return undefined
+}
+
+function normalizedSearch(value: string): string | undefined {
+  return value.trim() || undefined
+}
+
+watchDebounced(
+  [userStatusFilter, userSearchKeyword],
+  () => {
+    if (props.activeTab !== "users") return
+    props.users.applyListFilters({
+      enabled: enabledFilterValue(userStatusFilter.value),
+      search: normalizedSearch(userSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [roleTypeFilter, roleSearchKeyword],
+  () => {
+    if (props.activeTab !== "roles") return
+    props.roles.applyListFilters({
+      builtIn: roleTypeFilter.value === "all" ? undefined : roleTypeFilter.value === "built_in",
+      search: normalizedSearch(roleSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [grantEffectFilter, grantSearchKeyword],
+  () => {
+    if (props.activeTab !== "grants") return
+    props.overview.applyGrantListFilters({
+      effect: grantEffectFilter.value === "all" ? undefined : grantEffectFilter.value,
+      search: normalizedSearch(grantSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [sessionStateFilter, sessionSearchKeyword],
+  () => {
+    if (props.activeTab !== "sessions") return
+    props.overview.applySessionListFilters({
+      state: sessionStateFilter.value === "all" ? undefined : sessionStateFilter.value,
+      search: normalizedSearch(sessionSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [quotaStatusFilter, quotaSearchKeyword],
+  () => {
+    if (props.activeTab !== "quotas") return
+    props.overview.applyQuotaListFilters({
+      enabled: enabledFilterValue(quotaStatusFilter.value),
+      search: normalizedSearch(quotaSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [secretStatusFilter, secretSearchKeyword],
+  () => {
+    if (props.activeTab !== "secrets") return
+    props.overview.applySecretListFilters({
+      enabled: enabledFilterValue(secretStatusFilter.value),
+      search: normalizedSearch(secretSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [artifactTypeFilter, artifactSearchKeyword],
+  () => {
+    if (props.activeTab !== "artifacts") return
+    props.overview.applyArtifactListFilters({
+      artifactType: artifactTypeFilter.value === "all" ? undefined : artifactTypeFilter.value,
+      search: normalizedSearch(artifactSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
 
 function parseAuditCalendarDate(value: string): DateValue | undefined {
   const datePart = value.trim().slice(0, 10)
@@ -589,6 +683,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="users.pagination.currentPage.value"
+            :page-size="users.pagination.pageSize.value"
+            :has-previous="users.pagination.hasPrevious.value"
+            :has-more="users.pagination.hasMore.value"
+            :item-count="users.users.value.length"
+            :loading="users.loading.value"
+            @previous="users.loadPreviousPage"
+            @next="users.loadNextPage"
+            @update:page-size="users.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -771,6 +878,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="roles.pagination.currentPage.value"
+            :page-size="roles.pagination.pageSize.value"
+            :has-previous="roles.pagination.hasPrevious.value"
+            :has-more="roles.pagination.hasMore.value"
+            :item-count="roles.roles.value.length"
+            :loading="roles.loading.value"
+            @previous="roles.loadPreviousPage"
+            @next="roles.loadNextPage"
+            @update:page-size="roles.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -918,6 +1038,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.grantPagination.currentPage.value"
+            :page-size="overview.grantPagination.pageSize.value"
+            :has-previous="overview.grantPagination.hasPrevious.value"
+            :has-more="overview.grantPagination.hasMore.value"
+            :item-count="overview.data.value.datasourceGrants.length"
+            :loading="overview.loading.value"
+            @previous="overview.grantPageActions.previous"
+            @next="overview.grantPageActions.next"
+            @update:page-size="overview.grantPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1075,6 +1208,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.sessionPagination.currentPage.value"
+            :page-size="overview.sessionPagination.pageSize.value"
+            :has-previous="overview.sessionPagination.hasPrevious.value"
+            :has-more="overview.sessionPagination.hasMore.value"
+            :item-count="overview.data.value.sessions.length"
+            :loading="overview.loading.value"
+            @previous="overview.sessionPageActions.previous"
+            @next="overview.sessionPageActions.next"
+            @update:page-size="overview.sessionPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1227,6 +1373,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.quotaPagination.currentPage.value"
+            :page-size="overview.quotaPagination.pageSize.value"
+            :has-previous="overview.quotaPagination.hasPrevious.value"
+            :has-more="overview.quotaPagination.hasMore.value"
+            :item-count="overview.data.value.quotas.length"
+            :loading="overview.loading.value"
+            @previous="overview.quotaPageActions.previous"
+            @next="overview.quotaPageActions.next"
+            @update:page-size="overview.quotaPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1374,6 +1533,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.secretPagination.currentPage.value"
+            :page-size="overview.secretPagination.pageSize.value"
+            :has-previous="overview.secretPagination.hasPrevious.value"
+            :has-more="overview.secretPagination.hasMore.value"
+            :item-count="overview.data.value.secrets.length"
+            :loading="overview.loading.value"
+            @previous="overview.secretPageActions.previous"
+            @next="overview.secretPageActions.next"
+            @update:page-size="overview.secretPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1489,6 +1661,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.artifactPagination.currentPage.value"
+            :page-size="overview.artifactPagination.pageSize.value"
+            :has-previous="overview.artifactPagination.hasPrevious.value"
+            :has-more="overview.artifactPagination.hasMore.value"
+            :item-count="overview.data.value.artifacts.length"
+            :loading="overview.loading.value"
+            @previous="overview.artifactPageActions.previous"
+            @next="overview.artifactPageActions.next"
+            @update:page-size="overview.artifactPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1499,7 +1684,15 @@ function setPermittedActiveTab(value: unknown): void {
     >
       <Card class="flex min-h-0 min-w-0 flex-1 flex-col">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <CardTitle class="text-lg">审计</CardTitle>
+          <div class="flex items-center gap-2">
+            <CardTitle class="text-lg">审计</CardTitle>
+            <Badge
+              v-if="audits.hasActiveFilters.value"
+              variant="secondary"
+            >
+              {{ audits.activeFilterCount.value }} 个筛选条件
+            </Badge>
+          </div>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
             <Select v-model="audits.decisionFilterValue.value">
               <SelectTrigger
@@ -1514,26 +1707,6 @@ function setPermittedActiveTab(value: unknown): void {
                   <SelectItem value="__all__">全部决策</SelectItem>
                   <SelectItem value="allow">allow</SelectItem>
                   <SelectItem value="deny">deny</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select v-model="audits.limitValue.value">
-              <SelectTrigger
-                class="w-full sm:w-28"
-                size="sm"
-                aria-label="审计每页数量"
-              >
-                <SelectValue placeholder="每页" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem
-                    v-for="limitOption in auditLogLimitOptions"
-                    :key="limitOption"
-                    :value="String(limitOption)"
-                  >
-                    {{ limitOption }} 条
-                  </SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -1727,45 +1900,21 @@ function setPermittedActiveTab(value: unknown): void {
               </TableBody>
             </Table>
           </div>
-
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span>第 {{ audits.currentPage.value }} 页，本页 {{ audits.total.value }} 条</span>
-              <Badge
-                v-if="audits.hasMore.value"
-                variant="outline"
-              >
-                还有更多
-              </Badge>
-              <Badge
-                v-if="audits.hasActiveFilters.value"
-                variant="secondary"
-              >
-                {{ audits.activeFilterCount.value }} 个筛选条件
-              </Badge>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.loading.value || !audits.hasPreviousPage.value"
-                @click="requestAuditPreviousPage"
-              >
-                <ChevronLeftIcon data-icon="inline-start" />
-                上一页
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.loading.value || !audits.hasNextPage.value"
-                @click="requestAuditNextPage"
-              >
-                下一页
-                <ChevronRightIcon data-icon="inline-end" />
-              </Button>
-            </div>
-          </div>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="audits.currentPage.value"
+            :page-size="audits.limit.value"
+            :page-size-options="auditLogLimitOptions"
+            :has-previous="audits.hasPreviousPage.value"
+            :has-more="audits.hasNextPage.value"
+            :item-count="audits.total.value"
+            :loading="audits.loading.value"
+            @previous="requestAuditPreviousPage"
+            @next="requestAuditNextPage"
+            @update:page-size="requestAuditPageSizeChange"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
   </Tabs>

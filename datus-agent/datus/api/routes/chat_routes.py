@@ -24,7 +24,6 @@ from datus.api.enterprise.deps import (
     authorize_session_access,
     delete_session_owner,
     project_request_config,
-    require_authorized_module,
     require_platform_active,
 )
 from datus.api.hooks import (
@@ -47,33 +46,41 @@ from datus.api.models.cli_models import (
     ChatSessionData,
     CompactSessionData,
     CompactSessionInput,
-    FeedbackChatInput,
     SSEErrorData,
     SSEEvent,
-    StreamChatInput,
-    UserInteractionData,
     UserInteractionInput,
 )
-from datus.api.models.dashboard_models import DashboardEditSession
-from datus.api.models.report_models import ReportEditSession
+from datus.api.models.downstream import (
+    DashboardEditSession,
+    FeedbackChatInput,
+    ReportEditSession,
+    StreamChatInput,
+    UserInteractionData,
+)
 from datus.api.services.background_drain import track_background_task
 from datus.api.services.chat_task_manager import EventBufferExpiredError
+from datus.api.utils.stream_errors import humanize_stream_error
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.agent_registry import (
-    agent_record_to_runtime_entry,
     list_available_agent_records,
+    materialize_artifact_edit_agent,
+    materialize_enterprise_agent,
     resolve_effective_default_agent,
     resolve_enterprise_agent_for_dispatch,
 )
 from datus_enterprise.artifact_acl import require_artifact_access, require_artifact_edit_access
-from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.model_credentials import apply_user_model_credential
-from datus_enterprise.model_policy import is_model_ref_allowed
-from datus_enterprise.quota import consume_enterprise_quota
+from datus_enterprise.services.chat_request_policy import (
+    audit_chat_sql_policy_denial,
+    authorize_chat_permission_mode,
+    consume_chat_request_quota,
+    default_enterprise_chat_permission_mode,
+    enforce_chat_model_policy,
+)
 
 logger = get_logger(__name__)
 
@@ -83,7 +90,6 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 _require_chat_context = api_deps.get_request_app_context
 ChatCtx = Annotated[AppContext, Depends(_require_chat_context)]
-_ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
 SSE_RESPONSE = {
     200: {
         "description": "Server-Sent Events stream",
@@ -110,34 +116,6 @@ _FUSE_IO_TIMEOUT = 15.0
 _EXTRA_BUILTIN_SUBAGENTS = {"feedback"}
 
 ArtifactEditSession = ReportEditSession | DashboardEditSession
-
-
-def _default_enterprise_chat_permission_mode(request: StreamChatInput, *, enterprise_enabled: bool) -> None:
-    """Keep omitted enterprise permission modes on the least permissive profile."""
-
-    if enterprise_enabled and request.permission_mode is None:
-        request.permission_mode = "normal"
-
-
-async def _authorize_chat_permission_mode(
-    request: StreamChatInput,
-    ctx: AppContext,
-    *,
-    enterprise_enabled: bool,
-) -> None:
-    """Require user RBAC before an enterprise request raises its tool profile."""
-
-    if not enterprise_enabled or request.permission_mode not in _ELEVATED_PERMISSION_MODES:
-        return
-    try:
-        await require_authorized_module(ctx, "module.chat.permission_mode")
-    except HTTPException as exc:
-        if exc.status_code != 403:
-            raise
-        raise HTTPException(
-            status_code=403,
-            detail=(f"Permission mode '{request.permission_mode}' requires module.chat.permission_mode."),
-        ) from exc
 
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
@@ -170,14 +148,9 @@ def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Option
 
 def _resolve_artifact_edit_session(svc, subagent_id: Optional[str]) -> Optional[ArtifactEditSession]:
     task_manager = getattr(svc, "task_manager", None)
-    if getattr(task_manager, "_supports_artifact_edit_sessions", False) is True:
-        getter = getattr(task_manager, "get_artifact_edit_session", None)
-        if getter is None:
-            return None
-        return getter(subagent_id)
-    if getattr(task_manager, "_supports_report_edit_sessions", False) is not True:
+    if getattr(task_manager, "_supports_artifact_edit_sessions", False) is not True:
         return None
-    getter = getattr(task_manager, "get_report_edit_session", None)
+    getter = getattr(task_manager, "get_artifact_edit_session", None)
     if getter is None:
         return None
     return getter(subagent_id)
@@ -233,59 +206,6 @@ def _subagent_artifact_acl_requirement(
     return artifact_type, artifact_slug
 
 
-def _materialize_enterprise_agent(agent_config: Any, record: dict[str, Any]) -> None:
-    """Install one enterprise agent into a request-scoped AgentConfig clone."""
-
-    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
-    agentic_nodes[str(record["agent_id"])] = agent_record_to_runtime_entry(record)
-    agent_config.agentic_nodes = agentic_nodes
-
-
-def _materialize_artifact_edit_agent(agent_config: Any, session: ArtifactEditSession) -> None:
-    """Install one artifact-edit subagent into a request-scoped AgentConfig clone."""
-
-    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
-    if session.artifact_type == "dashboard":
-        node_type = "gen_visual_dashboard"
-        root_dir = "dashboards"
-        bind_call = f"bind_existing_dashboard('{session.artifact_slug}')"
-        start_call = "start_new_dashboard"
-    else:
-        node_type = "gen_visual_report"
-        root_dir = "reports"
-        bind_call = f"bind_existing_report('{session.artifact_slug}')"
-        start_call = "start_new_report"
-    agentic_nodes[session.subagent_id] = {
-        "id": session.subagent_id,
-        "type": node_type,
-        "node_class": node_type,
-        "artifact_slug": session.artifact_slug,
-        "edit_locked": True,
-        # Internal capability marker: this entry is created only after
-        # ``require_artifact_edit_access`` succeeds above.  Visual artifact
-        # nodes fail closed on Enterprise edit configs that lack this marker.
-        "_acl_authorized_artifact_edit": True,
-        "agent_description": (
-            f"This is a private edit session locked to {root_dir}/{session.artifact_slug}. "
-            f"Call {bind_call} first; do not create a new {session.artifact_type}."
-        ),
-        "rules": [
-            f"You are editing exactly {root_dir}/{session.artifact_slug}/.",
-            f"Your first artifact tool call must be {bind_call}.",
-            f"Do not call read_file, glob, list_tables, describe_table, execute_sql, or any other tool before {bind_call}.",
-            (
-                f"If {root_dir}/{session.artifact_slug}/ is empty, missing manifest.json, or missing render/app.jsx, "
-                f"still call {bind_call}; the bind tool bootstraps incomplete locked edit artifacts."
-            ),
-            "After bind returns bootstrap_warning, inspect the restored tree, write or repair render/app.jsx, "
-            "save required queries, and call validate_render.",
-            f"Do not call {start_call} in this edit session.",
-            f"Do not inspect, write, edit, or delete any other {session.artifact_type} artifact.",
-        ],
-    }
-    agent_config.agentic_nodes = agentic_nodes
-
-
 def _sql_policy_principal_pre_check(
     svc: "DatusService",
     ctx: "AppContext",
@@ -320,120 +240,6 @@ def _sql_policy_principal_pre_check(
         error_type="SQL_POLICY_PRINCIPAL_REQUIRED",
         extra={"missing_principal_paths": missing_paths},
     )
-
-
-async def _audit_chat_sql_policy_denial(
-    ctx: AppContext,
-    request: StreamChatInput,
-    denial: ChatPreCheckOutcome,
-    *,
-    operation: str,
-) -> None:
-    """Record a sanitized audit event for chat SQL-policy pre-check denial."""
-
-    try:
-        await audit_decision(
-            ctx,
-            AuditEvent(
-                action="sql.policy.principal",
-                resource_type="chat",
-                resource_id=request.session_id,
-                decision="deny",
-                reason=denial.error_type or "SQL_POLICY_PRINCIPAL_REQUIRED",
-                metadata={
-                    "operation": operation,
-                    "session_id": request.session_id,
-                    "subagent_id": request.subagent_id,
-                    "datasource": request.datasource,
-                    "database": request.database,
-                    "error_code": denial.error_type,
-                    "missing_principal_paths": denial.extra.get("missing_principal_paths", []),
-                },
-            ),
-        )
-    except Exception:
-        logger.warning("Chat SQL policy denial audit failed for operation=%s", operation, exc_info=True)
-
-
-async def _consume_chat_request_quota(
-    ctx: AppContext,
-    request: StreamChatInput,
-    *,
-    operation: str,
-) -> Optional[ChatPreCheckOutcome]:
-    quota_error = await consume_enterprise_quota(
-        ctx,
-        resource=operation,
-        amount=1,
-        resource_type="chat",
-        resource_id=request.session_id,
-        metadata={
-            "operation": operation,
-            "session_id": request.session_id,
-            "subagent_id": request.subagent_id,
-            "datasource": request.datasource,
-            "database": request.database,
-            "model": request.model,
-        },
-    )
-    if quota_error is None:
-        return None
-    return ChatPreCheckOutcome(
-        allow=False,
-        error=quota_error.errorMessage or "Quota exceeded.",
-        error_type=quota_error.errorCode or "QUOTA_DENIED",
-    )
-
-
-async def _enforce_chat_model_policy(
-    ctx: AppContext,
-    request: StreamChatInput,
-    *,
-    agent_config: Any,
-    operation: str,
-) -> Optional[ChatPreCheckOutcome]:
-    model_ref = request.model or _active_model_ref(agent_config)
-    if is_model_ref_allowed(ctx, model_ref):
-        return None
-
-    try:
-        await audit_decision(
-            ctx,
-            AuditEvent(
-                action="model.select",
-                resource_type="model",
-                resource_id=model_ref,
-                decision="deny",
-                reason="MODEL_FORBIDDEN",
-                metadata={
-                    "operation": operation,
-                    "session_id": request.session_id,
-                    "subagent_id": request.subagent_id,
-                    "requested_model": request.model,
-                },
-            ),
-        )
-    except Exception:
-        logger.warning("Chat model policy denial audit failed for operation=%s", operation, exc_info=True)
-    return ChatPreCheckOutcome(
-        allow=False,
-        error=f"Model '{model_ref}' is not authorized for this request.",
-        error_type="MODEL_FORBIDDEN",
-    )
-
-
-def _active_model_ref(agent_config: Any) -> Optional[str]:
-    provider = getattr(agent_config, "_target_provider", None)
-    model = getattr(agent_config, "_target_model", None)
-    if isinstance(provider, str) and provider and isinstance(model, str) and model:
-        return f"{provider}/{model}"
-
-    target = getattr(agent_config, "target", None)
-    custom_models = getattr(agent_config, "models", None)
-    if isinstance(target, str) and target and isinstance(custom_models, dict) and target in custom_models:
-        return f"custom/{target}"
-
-    return None
 
 
 def _required_principal_paths(raw: Any) -> list[str]:
@@ -540,8 +346,8 @@ async def stream_chat(
                 headers=_sse_headers(),
             )
 
-    _default_enterprise_chat_permission_mode(request, enterprise_enabled=enterprise_extensions.enabled)
-    await _authorize_chat_permission_mode(
+    default_enterprise_chat_permission_mode(request, enterprise_enabled=enterprise_extensions.enabled)
+    await authorize_chat_permission_mode(
         request,
         ctx,
         enterprise_enabled=enterprise_extensions.enabled,
@@ -587,17 +393,18 @@ async def stream_chat(
         projection.config._enterprise_enabled = True
         projection.config._enterprise_allowed_agent_ids = {str(record["agent_id"]) for record in available_records}
         for record in available_records:
-            _materialize_enterprise_agent(projection.config, record)
+            materialize_enterprise_agent(projection.config, record)
 
+    requested_credential_id = getattr(request, "model_credential_id", None)
     try:
         applied_credential = await apply_user_model_credential(
             store=getattr(enterprise_extensions, "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=request.model,
-            requested_credential_id=request.model_credential_id,
+            requested_credential_id=requested_credential_id,
         )
-        if applied_credential is not None and (request.model_credential_id or not request.model):
+        if applied_credential is not None and (requested_credential_id or not request.model):
             request.model = f"{applied_credential['provider']}/{applied_credential['model']}"
     except Exception as exc:
         logger.info("User model credential resolution failed: %s", exc)
@@ -621,14 +428,14 @@ async def stream_chat(
         principal=projection.principal,
     )
     if sql_policy_denial:
-        await _audit_chat_sql_policy_denial(ctx, request, sql_policy_denial, operation="chat.stream")
+        await audit_chat_sql_policy_denial(ctx, request, sql_policy_denial, operation="chat.stream")
         return StreamingResponse(
             _emit_pre_check_denial(request, sql_policy_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
 
-    model_denial = await _enforce_chat_model_policy(
+    model_denial = await enforce_chat_model_policy(
         ctx, request, agent_config=projection.config, operation="chat.stream"
     )
     if model_denial:
@@ -638,7 +445,7 @@ async def stream_chat(
             headers=_sse_headers(),
         )
 
-    quota_denial = await _consume_chat_request_quota(ctx, request, operation="chat.stream")
+    quota_denial = await consume_chat_request_quota(ctx, request, operation="chat.stream")
     if quota_denial:
         return StreamingResponse(
             _emit_pre_check_denial(request, quota_denial),
@@ -647,7 +454,7 @@ async def stream_chat(
         )
 
     if artifact_edit_session is not None:
-        _materialize_artifact_edit_agent(projection.config, artifact_edit_session)
+        materialize_artifact_edit_agent(projection.config, artifact_edit_session)
 
     hooks = get_chat_hooks()
     pre_outcome = await _run_pre_chat_hook(hooks, http_request, request, ctx.user_id)
@@ -798,14 +605,14 @@ async def stream_chat_feedback(
         principal=projection.principal,
     )
     if sql_policy_denial:
-        await _audit_chat_sql_policy_denial(ctx, stream_input, sql_policy_denial, operation="chat.feedback")
+        await audit_chat_sql_policy_denial(ctx, stream_input, sql_policy_denial, operation="chat.feedback")
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, sql_policy_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
 
-    model_denial = await _enforce_chat_model_policy(
+    model_denial = await enforce_chat_model_policy(
         ctx,
         stream_input,
         agent_config=projection.config,
@@ -818,7 +625,7 @@ async def stream_chat_feedback(
             headers=_sse_headers(),
         )
 
-    quota_denial = await _consume_chat_request_quota(ctx, stream_input, operation="chat.feedback")
+    quota_denial = await consume_chat_request_quota(ctx, stream_input, operation="chat.feedback")
     if quota_denial:
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, quota_denial),
@@ -1365,12 +1172,13 @@ async def _stream_with_post_hook(
         # outer bare ``raise`` below still re-propagates the original
         # ``exc`` instead of being masked.
         try:
+            error_type, error_message = humanize_stream_error(exc)
             error_event = SSEEvent(
                 id=last_event_id + 1,
                 event="error",
                 data=SSEErrorData(
-                    error=str(exc) or type(exc).__name__,
-                    error_type=type(exc).__name__,
+                    error=error_message,
+                    error_type=error_type,
                     session_id=request.session_id,
                 ),
                 timestamp=now_utc_iso(),

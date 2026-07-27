@@ -247,6 +247,75 @@ def test_admin_users_enabled_filter_and_toggle(monkeypatch):
     assert audit_sink.events[-1].metadata["operation"] == "enable_admin_user"
 
 
+def test_admin_users_searches_before_pagination_and_bounds_limit(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    _install_extensions(monkeypatch, user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Finance Alice"))
+    asyncio.run(user_store.upsert_user(user_id="bob", display_name="Engineering Bob"))
+    asyncio.run(user_store.upsert_user(user_id="carol", display_name="Finance Carol"))
+
+    with _client(ctx) as client:
+        first_page = client.get(
+            "/api/v1/admin/users",
+            params={"search": "finance", "limit": 1, "offset": 0},
+        )
+        second_page = client.get(
+            "/api/v1/admin/users",
+            params={"search": "finance", "limit": 1, "offset": 1},
+        )
+        invalid_limit = client.get("/api/v1/admin/users", params={"limit": 101})
+
+    assert [item["user_id"] for item in first_page.json()["data"]] == ["alice"]
+    assert first_page.json()["pagination"] == {"limit": 1, "offset": 0, "has_more": True}
+    assert [item["user_id"] for item in second_page.json()["data"]] == ["carol"]
+    assert second_page.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": False}
+    assert invalid_limit.status_code == 422
+
+
+def test_admin_users_legacy_grant_store_only_reads_current_page_subjects(monkeypatch):
+    class LegacyGrantStore:
+        def __init__(self, delegate):
+            self.delegate = delegate
+            self.calls = []
+
+        async def list_grants(self, **filters):
+            self.calls.append(filters)
+            return await self.delegate.list_grants(**filters)
+
+    user_store = InMemoryEnterpriseUserStore()
+    delegate = InMemoryEnterpriseDatasourceGrantStore()
+    grant_store = LegacyGrantStore(delegate)
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice"))
+    asyncio.run(user_store.upsert_user(user_id="bob", display_name="Bob"))
+    asyncio.run(
+        delegate.put_grant(
+            subject_type="user",
+            subject_id="alice",
+            datasource_key="finance",
+            effect="allow",
+            scope={},
+        )
+    )
+    asyncio.run(
+        delegate.put_grant(
+            subject_type="user",
+            subject_id="bob",
+            datasource_key="sales",
+            effect="allow",
+            scope={},
+        )
+    )
+    _install_extensions(monkeypatch, user_store, grant_store=grant_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/users", params={"limit": 1, "offset": 0})
+
+    assert response.json()["data"][0]["direct_datasource_grant_count"] == 1
+    assert grant_store.calls == [{"subject_type": "user", "subject_id": "alice"}]
+
+
 def test_admin_user_disable_rejects_current_user(monkeypatch):
     user_store = InMemoryEnterpriseUserStore()
     audit_sink = CollectingAuditSink()

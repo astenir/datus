@@ -114,31 +114,6 @@ def test_render_dashboard_html_bakes_default_query_endpoint(tmp_path: Path):
     assert "projectId" not in body
 
 
-def test_vendored_dashboard_renderer_supports_optional_message_transport():
-    """The bundled renderer owns the nested-frame transport implementation.
-
-    The HTML template merely selects it through an optional global. Keeping
-    these assertions beside the template tests prevents a vendor refresh from
-    silently restoring the old frontend ``srcdoc`` rewrite dependency.
-    """
-    bundle_path = (
-        Path(__file__).parents[4]
-        / "datus"
-        / "agent"
-        / "node"
-        / "visual_artifact"
-        / "vendor"
-        / "web_artifact_render_dist"
-        / "index.umd.js"
-    )
-    bundle = bundle_path.read_text(encoding="utf-8")
-
-    assert 'e.provider.mode==="post-message"' in bundle
-    assert "DatusPostMessageQueryProvider" in bundle
-    assert "queryTransport" in bundle
-    assert "datus-artifact/query-result" in bundle
-
-
 def test_render_dashboard_html_threads_custom_endpoint_through(tmp_path: Path):
     _seed_dashboard(tmp_path, dashboard_slug="custom_be")
     out_path = render_dashboard_html(

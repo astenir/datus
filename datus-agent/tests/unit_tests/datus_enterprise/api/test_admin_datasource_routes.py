@@ -454,6 +454,99 @@ def test_admin_datasource_grants_upsert_get_list_delete_and_audit(monkeypatch):
     assert audit_sink.events[-4].metadata["new"]["effect"] == "deny"
 
 
+def test_admin_datasource_grants_use_store_native_limit_plus_one_page(monkeypatch):
+    class RecordingGrantStore(InMemoryEnterpriseDatasourceGrantStore):
+        def __init__(self):
+            super().__init__()
+            self.page_calls = []
+
+        async def list_grants(self, **kwargs):
+            raise AssertionError("native page path must not load all grants")
+
+        async def list_grants_page(self, **kwargs):
+            self.page_calls.append(kwargs)
+            return await super().list_grants_page(**kwargs)
+
+    grant_store = RecordingGrantStore()
+    for subject_id, datasource_key in (("a", "db_a"), ("b", "db_b"), ("c", "db_c")):
+        asyncio.run(
+            grant_store.put_grant(
+                subject_type="role",
+                subject_id=subject_id,
+                datasource_key=datasource_key,
+                effect="allow",
+                scope={"tables": ["orders"]},
+            )
+        )
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, datasource_grant_store=grant_store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/admin/datasource-grants",
+            params={"effect": "allow", "search": "orders", "limit": 1, "offset": 1},
+        )
+
+    assert response.status_code == 200
+    assert [grant["subject_id"] for grant in response.json()["data"]] == ["b"]
+    assert response.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": True}
+    assert grant_store.page_calls == [
+        {
+            "subject_type": None,
+            "subject_id": None,
+            "datasource_key": None,
+            "effect": "allow",
+            "search": "orders",
+            "limit": 2,
+            "offset": 1,
+        }
+    ]
+
+
+def test_admin_datasource_grants_keep_legacy_store_filter_and_pagination_fallback(monkeypatch):
+    class LegacyGrantStore:
+        def __init__(self):
+            self.calls = []
+
+        async def list_grants(self, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {
+                    "subject_type": "role",
+                    "subject_id": subject_id,
+                    "datasource_key": datasource_key,
+                    "effect": effect,
+                    "scope": {"tables": [table]},
+                }
+                for subject_id, datasource_key, effect, table in (
+                    ("a", "db_a", "allow", "orders"),
+                    ("b", "db_b", "deny", "orders"),
+                    ("c", "db_c", "allow", "orders"),
+                )
+            ]
+
+    grant_store = LegacyGrantStore()
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, datasource_grant_store=grant_store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/admin/datasource-grants",
+            params={"effect": "allow", "search": "orders", "limit": 1, "offset": 1},
+        )
+
+    assert response.status_code == 200
+    assert [grant["subject_id"] for grant in response.json()["data"]] == ["c"]
+    assert response.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": False}
+    assert grant_store.calls == [{"subject_type": None, "subject_id": None, "datasource_key": None}]
+
+
 def test_admin_datasource_grant_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
     user_store = InMemoryEnterpriseUserStore()
     grant_store = InMemoryEnterpriseDatasourceGrantStore()

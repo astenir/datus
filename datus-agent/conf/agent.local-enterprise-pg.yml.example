@@ -52,6 +52,9 @@ agent:
   target_model: deepseek-v4-flash
 
   api:
+    chat:
+      # 当前 Vue 客户端不执行浏览器侧文件工具；上游兼容客户端可改为 client。
+      web_filesystem_executor: server
     auth_provider:
       class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
       kwargs:

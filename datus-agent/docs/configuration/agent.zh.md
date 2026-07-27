@@ -37,7 +37,7 @@ Chat API 请求可通过请求体中的 `language` 字段按任务覆盖该默�
 - `base_url`：接口基础地址
 - `api_key`：访问密钥（支持环境变量）
 - `model`：具体模型名
-- `ssl_verify`（可选）：该端点的 TLS 校验方式。`true`（默认）、`false`（关闭校验，不推荐），或指向 CA 证书包（PEM）的路径以信任私有/自签名网关 CA。优先级高于 `SSL_VERIFY` / `SSL_CERT_FILE` 环境变量。参见[私有或自签名证书](#private-or-self-signed-certificates)。
+- `ssl_verify`（可选）：该端点的 TLS 校验方式。`true`（默认）、`false`（关闭校验，不推荐）、指向 CA 证书包（PEM）的路径，或直接内联 CA 证书内容（以 `-----BEGIN CERTIFICATE-----` 开头的值），以信任私有/自签名网关 CA。优先级高于 `SSL_VERIFY` / `SSL_CERT_FILE` 环境变量。参见[私有或自签名证书](#private-or-self-signed-certificates)。
 
 ```yaml
 agent:
@@ -79,6 +79,20 @@ agent:
       model: claude-3-7-sonnet
       ssl_verify: /etc/ssl/internal-ca.pem   # 信任私有 CA，校验保持开启
 ```
+
+`ssl_verify` 也可直接**内联 CA 证书内容**（任何以 `-----BEGIN CERTIFICATE-----`
+开头的值），无需在磁盘上放置文件——当配置是由程序生成（例如来自数据库）而非与
+`.pem` 一起部署时尤其有用：
+
+```yaml
+      ssl_verify: |
+        -----BEGIN CERTIFICATE-----
+        MIIB...snip...IDAQAB
+        -----END CERTIFICATE-----
+```
+
+原生客户端会把内联内容加载进内存信任库；litellm 代码路径只接受 CA 证书包的路径，
+因此会将其落到一个进程私有目录下、按内容哈希命名的临时文件。
 
 **解析优先级**（取首个命中项）：
 
@@ -280,9 +294,10 @@ codex:
 - `workspace_root`
 - `scoped_context`
 - `subagents`
-- semantic 节点使用的 `semantic_adapter`
 - dashboard agent 使用的 `bi_platform`
 - scheduler 节点使用的 `scheduler_service`
+
+语义适配器选择统一配置在 `agent.services.semantic_layer`。旧的 node 级 `semantic_adapter` 和 `authoring_format` 字段会被忽略。
 
 `scoped_kb_path` 已废弃。新配置使用共享的全局存储，并在查询时应用过滤，而不是为每个 subagent 持有独立 scoped KB 目录。
 
@@ -346,7 +361,6 @@ agent:
     semantic_metrics:
       node_class: gen_metrics
       model: claude
-      semantic_adapter: metricflow
       max_turns: 30
 
     etl_scheduler:

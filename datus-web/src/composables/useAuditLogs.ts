@@ -92,11 +92,7 @@ export function useAuditLogs() {
   const limitValue = computed({
     get: () => String(limit.value),
     set: (value: string) => {
-      const nextLimit = Number(value);
-      if (isAuditLogLimitOption(nextLimit)) {
-        limit.value = nextLimit;
-        resetPagination();
-      }
+      setPageSize(Number(value));
     },
   });
 
@@ -147,6 +143,13 @@ export function useAuditLogs() {
     previousBeforeIds.value = [];
     nextBeforeId.value = null;
     hasMore.value = false;
+  }
+
+  function setPageSize(value: number): boolean {
+    if (!isAuditLogLimitOption(value) || limit.value === value) return false;
+    limit.value = value;
+    resetPagination();
+    return true;
   }
 
   function applyRouteFilters(filters: AdminAuditRouteState): boolean {
@@ -310,6 +313,7 @@ export function useAuditLogs() {
     handleSearch,
     handleReset,
     resetPagination,
+    setPageSize,
     prepareNextPage,
     preparePreviousPage,
     exportLogs,

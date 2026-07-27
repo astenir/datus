@@ -90,10 +90,8 @@ These suites exercise `MetricFlowAdapter` against real databases:
 and live `query_metrics(...)` behavior including time filters, multi-metric queries,
 and `where`-clause SQL generation.
 
-The DuckDB, MySQL, and PostgreSQL suites seed a minimal `mf_orders` fact table
-plus `mf_time_spine` and clean up on teardown. The OceanBase Oracle suite is
-different: it is a read-only production acceptance test against an existing
-table or view and never creates, mutates, or drops database objects.
+Each suite seeds a minimal `mf_orders` fact table plus `mf_time_spine` (required
+by MetricFlow) and cleans up on teardown.
 
 ### DuckDB (no Docker)
 
@@ -125,45 +123,6 @@ ADAPTERS_METRICFLOW_PG=1 uv run pytest tests/integration/adapters/test_semantic_
 MetricFlow tables are created in the `mf_nightly` schema within the existing
 `test` database and dropped on teardown.
 
-### OceanBase Oracle
-
-This suite requires an existing Oracle-mode tenant and a local OceanBase
-Connector/J jar. It does not use the public OceanBase CE Docker fixture.
-
-```bash
-ADAPTERS_METRICFLOW_OCEANBASE_ORACLE=1 \
-OCEANBASE_ORACLE_HOST=ob.example.com \
-OCEANBASE_ORACLE_PORT=2883 \
-OCEANBASE_ORACLE_USERNAME='app@tenant#cluster' \
-OCEANBASE_ORACLE_PASSWORD='...' \
-OCEANBASE_ORACLE_DATABASE=tenant \
-OCEANBASE_ORACLE_SCHEMA=APP \
-OCEANBASE_ORACLE_JAR_PATH=/opt/oceanbase-client.jar \
-OCEANBASE_ORACLE_METRICFLOW_RELATION=DATUS_MF_ORDERS_RO \
-OCEANBASE_ORACLE_METRICFLOW_TIME_START=2025-01-01 \
-OCEANBASE_ORACLE_METRICFLOW_TIME_END=2025-01-31 \
-uv run pytest tests/integration/adapters/test_semantic_metricflow_oceanbase_oracle.py -v
-```
-
-The selected relation must be readable by the runtime account and contain a
-stable, non-empty acceptance window. Its default column contract is `ID`,
-`AMOUNT`, and `CREATED_AT`; override it with
-`OCEANBASE_ORACLE_METRICFLOW_ID_COLUMN`,
-`OCEANBASE_ORACLE_METRICFLOW_AMOUNT_COLUMN`, and
-`OCEANBASE_ORACLE_METRICFLOW_TIME_COLUMN` when necessary. Identifiers must be
-standard unquoted Oracle identifiers.
-
-The suite computes `SUM(AMOUNT)` and `COUNT(ID)` with a direct parameterized
-`SELECT`, compares MetricFlow results against that baseline, and checks the
-baseline again at teardown. Use a closed historical period or immutable view so
-concurrent data changes do not invalidate the acceptance evidence. No
-`CREATE`, `DROP`, `INSERT`, `UPDATE`, or `DELETE` privilege is required.
-
-This suite covers non-cumulative measures, ratio metrics, filters, and time
-grouping, so it does not require `mf_time_spine`. Cumulative or offset metrics
-still require a pre-provisioned, readable `MF_TIME_SPINE`; the read-only client
-will fail rather than create it.
-
 ### MetricFlow env vars
 
 | Suite | Opt-in flag | Connection env | Notes |
@@ -171,4 +130,3 @@ will fail rather than create it.
 | DuckDB | `ADAPTERS_METRICFLOW_DUCKDB=1` | none | DB file auto-generated in tmp dir |
 | MySQL | `ADAPTERS_METRICFLOW_MYSQL=1` | same as `ADAPTERS_MYSQL` vars | tables in `test` DB |
 | PostgreSQL | `ADAPTERS_METRICFLOW_PG=1` | same as `ADAPTERS_PG` vars | tables in `mf_nightly` schema |
-| OceanBase Oracle | `ADAPTERS_METRICFLOW_OCEANBASE_ORACLE=1` | connection vars plus `OCEANBASE_ORACLE_METRICFLOW_RELATION/TIME_START/TIME_END`; optional `ID_COLUMN/AMOUNT_COLUMN/TIME_COLUMN` | real Oracle-mode tenant, read-only stable relation |

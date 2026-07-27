@@ -187,6 +187,23 @@ describe("useAuditLogs", () => {
     })).toBe(false);
   });
 
+  it("resets cursor pagination when the page size changes", async () => {
+    const { useAuditLogs } = await import("./useAuditLogs");
+    const audit = useAuditLogs();
+    audit.hasMore.value = true;
+    audit.nextBeforeId.value = 42;
+
+    expect(audit.prepareNextPage()).toBe(42);
+    expect(audit.currentPage.value).toBe(2);
+    expect(audit.setPageSize(200)).toBe(true);
+    expect(audit.limit.value).toBe(200);
+    expect(audit.currentPage.value).toBe(1);
+    expect(audit.beforeId.value).toBeNull();
+    expect(audit.hasMore.value).toBe(false);
+    expect(audit.setPageSize(200)).toBe(false);
+    expect(audit.setPageSize(25)).toBe(false);
+  });
+
   it("tracks cursor pagination for audit logs", async () => {
     const firstEntry = {
       id: 5,

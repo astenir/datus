@@ -16,6 +16,11 @@ from agents import Tool
 from datus_storage_base.conditions import And, eq
 
 from datus.configuration.agent_config import AgentConfig
+from datus.storage.artifact_replacement import (
+    delete_stale_artifact_rows,
+    restore_artifact_replacements,
+    snapshot_artifact_replacements,
+)
 from datus.storage.metric.store import MetricRAG, build_metric_id, metric_definition_conflict, normalize_metric_name
 from datus.storage.semantic_model.store import SemanticModelRAG, _identifier_variants, _normalized_identifier
 from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
@@ -83,11 +88,16 @@ class GenerationTools:
         self,
         agent_config: AgentConfig,
         generation_evidence: Optional[GenerationEvidence] = None,
-        authoring_format: str = "metricflow",
+        authoring_format: Optional[str] = None,
     ):
         self.agent_config = agent_config
         self.generation_evidence = generation_evidence or GenerationEvidence()
-        self.authoring_format = (authoring_format or "metricflow").strip().lower()
+        if authoring_format:
+            self.authoring_format = str(authoring_format).strip().lower()
+        else:
+            from datus.agent.node.semantic_authoring import resolve_authoring_format
+
+            self.authoring_format = resolve_authoring_format(agent_config)
         self.metric_rag = MetricRAG(agent_config)
         self.semantic_rag = SemanticModelRAG(agent_config)
         self.table_semantic_profile_rag = None
@@ -369,7 +379,11 @@ class GenerationTools:
         import json
 
         try:
-            if semantic_model_files is None and semantic_model_file:
+            if self._is_osi_authoring():
+                # OSI gen_metrics owns only the metrics collection. Semantic
+                # objects are authored and synced by gen_semantic_model.
+                semantic_model_files = []
+            elif semantic_model_files is None and semantic_model_file:
                 semantic_model_files = [semantic_model_file]
             semantic_model_files = semantic_model_files or []
 
@@ -474,7 +488,9 @@ class GenerationTools:
                 )
 
             if self._is_osi_authoring():
-                sync_result = self._sync_osi_metric_to_db(abs_metric, abs_semantic_files, metric_sqls)
+                sync_result = self._sync_osi_metric_to_db(
+                    abs_metric, abs_semantic_files, metric_sqls, replace_metric_artifact=False
+                )
                 if not sync_result.get("success"):
                     return FuncToolResult(
                         success=0,
@@ -1185,8 +1201,13 @@ class GenerationTools:
     def _upsert_table_semantic_profiles(self, profiles: List[dict]) -> int:
         if not profiles or self.table_semantic_profile_rag is None:
             return 0
+        yaml_path = str(profiles[0].get("yaml_path") or "")
         self.table_semantic_profile_rag.upsert_batch(profiles)
         self.table_semantic_profile_rag.create_indices()
+        if yaml_path:
+            self.table_semantic_profile_rag.delete_artifact_rows_except(
+                yaml_path, [profile.get("id", "") for profile in profiles]
+            )
         return len(profiles)
 
     @staticmethod
@@ -1219,6 +1240,23 @@ class GenerationTools:
         source = getattr(dataset, "source", None)
         table = getattr(source, "table", None) or getattr(dataset, "name", "")
         return str(table).split(".")[-1]
+
+    def _dataset_db_parts(self, dataset: Any, default_db_parts: dict[str, str]) -> dict[str, str]:
+        """Hierarchy for one dataset: a qualified source table overrides the
+        connection defaults, so same-named tables in different databases keep
+        distinct storage ids (issue #1084)."""
+        from datus.utils.sql_utils import parse_table_name_parts
+
+        source = getattr(dataset, "source", None)
+        table_ref = str(getattr(source, "table", "") or "")
+        if "." not in table_ref:
+            return default_db_parts
+        parsed = parse_table_name_parts(table_ref, dialect=self.agent_config.db_type or "snowflake")
+        return {
+            "catalog_name": parsed.get("catalog_name") or default_db_parts["catalog_name"],
+            "database_name": parsed.get("database_name") or default_db_parts["database_name"],
+            "schema_name": parsed.get("schema_name") or default_db_parts["schema_name"],
+        }
 
     @staticmethod
     def _dataset_lookup(doc: Any) -> dict[str, Any]:
@@ -1435,7 +1473,7 @@ class GenerationTools:
                 }
 
             doc = self._load_osi_document(semantic_model_file=semantic_model_path)
-            db_parts = self._current_db_parts(self.agent_config)
+            default_db_parts = self._current_db_parts(self.agent_config)
             semantic_objects: List[dict] = []
             table_profiles: List[dict] = []
             synced_items: List[str] = []
@@ -1445,6 +1483,7 @@ class GenerationTools:
                 if dataset_name not in target_dataset_names:
                     continue
                 table_name = self._dataset_table_name(dataset)
+                db_parts = self._dataset_db_parts(dataset, default_db_parts)
                 fq_parts = [db_parts["catalog_name"], db_parts["database_name"], db_parts["schema_name"], table_name]
                 table_fq_name = ".".join(part for part in fq_parts if part)
                 yaml_path = semantic_model_path
@@ -1461,7 +1500,7 @@ class GenerationTools:
 
                 semantic_objects.append(
                     {
-                        "id": f"table:{table_name}",
+                        "id": f"table:{table_fq_name}",
                         "kind": "table",
                         "name": table_name,
                         "fq_name": table_fq_name,
@@ -1485,7 +1524,7 @@ class GenerationTools:
                         "entity": "",
                     }
                 )
-                synced_items.append(f"table:{table_name}")
+                synced_items.append(f"table:{table_fq_name}")
 
                 primary_keys = getattr(dataset, "primary_key", None) or []
                 if isinstance(primary_keys, str):
@@ -1552,9 +1591,29 @@ class GenerationTools:
                         f"context: {', '.join(sorted(target_dataset_names))}"
                     ),
                 }
-            self.semantic_rag.upsert_batch(semantic_objects)
-            self.semantic_rag.create_indices()
-            profile_count = self._upsert_table_semantic_profiles(table_profiles)
+            replacement_plans = [(self.semantic_rag, semantic_model_path, semantic_objects)]
+            if table_profiles and self.table_semantic_profile_rag is not None:
+                replacement_plans.append((self.table_semantic_profile_rag, semantic_model_path, table_profiles))
+            snapshots = snapshot_artifact_replacements(replacement_plans)
+            try:
+                self.semantic_rag.upsert_batch(semantic_objects)
+                self.semantic_rag.create_indices()
+                profile_count = 0
+                if table_profiles and self.table_semantic_profile_rag is not None:
+                    self.table_semantic_profile_rag.upsert_batch(table_profiles)
+                    self.table_semantic_profile_rag.create_indices()
+                    profile_count = len(table_profiles)
+                delete_stale_artifact_rows(replacement_plans)
+            except Exception as sync_exc:
+                restore_failures = restore_artifact_replacements(snapshots)
+                if restore_failures:
+                    raise RuntimeError(
+                        "OSI semantic replacement failed and rollback was incomplete for: "
+                        f"{', '.join(restore_failures)}"
+                    ) from sync_exc
+                raise
+            # Post-commit, best-effort cleanup of shadowed stale rows; never raises.
+            self.semantic_rag.delete_shadowed_table_rows(semantic_objects)
             return {
                 "success": True,
                 "message": f"Synced {len(semantic_objects)} OSI semantic object(s): {', '.join(synced_items[:5])}",
@@ -1582,7 +1641,7 @@ class GenerationTools:
         time_granularity: str = "",
     ) -> dict:
         return {
-            "id": f"column:{table_name}.{name}",
+            "id": f"column:{table_fq_name}.{name}",
             "kind": "column",
             "name": name,
             "fq_name": f"{table_fq_name}.{name}",
@@ -1611,6 +1670,7 @@ class GenerationTools:
         metric_file: str,
         semantic_model_file: Optional[str | List[str]] = None,
         metric_sqls: Optional[Dict[str, str]] = None,
+        replace_metric_artifact: bool = True,
     ) -> dict:
         """Sync OSI metrics into MetricRAG using the OSI document as source of truth."""
         try:
@@ -1693,8 +1753,20 @@ class GenerationTools:
                     return sem_result
                 synced_semantic_files.append(current_semantic_file)
 
-            self.metric_rag.upsert_batch(metric_objects)
-            self.metric_rag.create_indices()
+            metric_plan = (self.metric_rag, metric_file, metric_objects)
+            replacement_plans = [metric_plan] if replace_metric_artifact else []
+            snapshots = snapshot_artifact_replacements([metric_plan])
+            try:
+                self.metric_rag.upsert_batch(metric_objects)
+                self.metric_rag.create_indices()
+                delete_stale_artifact_rows(replacement_plans)
+            except Exception as sync_exc:
+                restore_failures = restore_artifact_replacements(snapshots)
+                if restore_failures:
+                    raise RuntimeError(
+                        f"OSI metric replacement failed and rollback was incomplete for: {', '.join(restore_failures)}"
+                    ) from sync_exc
+                raise
             return {
                 "success": True,
                 "message": f"Synced {len(metric_objects)} OSI metric(s): {', '.join(synced_items[:5])}",
@@ -1705,6 +1777,31 @@ class GenerationTools:
             }
         except Exception as e:
             logger.error(f"Error syncing OSI metrics to DB: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def sync_osi_to_db(self, osi_file_path: str) -> dict:
+        """Sync a complete OSI document (datasets + metrics) into the Knowledge Base.
+
+        Public composition entry for callers that materialize a self-contained OSI
+        file and need it vectorized (e.g. the SaaS Semantic Hub pull) without
+        reaching into the per-kind sync internals.
+
+        A metrics-bearing document is synced in one pass: ``_sync_osi_metric_to_db``
+        already vectorizes the referenced datasets before the metrics when a
+        ``semantic_model_file`` is given, so no separate dataset sync is needed. A
+        dataset-only document syncs just its datasets. The result always carries a
+        ``synced`` count for uniform accounting across both shapes.
+        """
+        try:
+            if self.extract_osi_metric_names(osi_file_path):
+                result = self._sync_osi_metric_to_db(metric_file=osi_file_path, semantic_model_file=osi_file_path)
+                synced = len(result.get("metric_artifact_ids") or [])
+            else:
+                result = self.sync_osi_semantic_to_db(osi_file_path)
+                synced = int(result.get("semantic_objects") or 0)
+            return {**result, "synced": synced}
+        except Exception as e:
+            logger.error(f"Error syncing OSI document to DB: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
     def _sync_metric_to_db(
@@ -1766,6 +1863,7 @@ class GenerationTools:
                     include_metrics=True,
                     metric_sqls=sync_metric_sqls,
                     original_yaml_path=metric_file,
+                    replace_metric_artifact=False,
                 )
             finally:
                 if temp_metric_file and os.path.exists(temp_metric_file):

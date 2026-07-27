@@ -238,6 +238,60 @@ class PgEnterpriseUserStore(_PgStoreBase):
             )
         return [_user_record(row) for row in rows]
 
+    async def list_users_page(
+        self,
+        *,
+        enabled: bool | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        filters: list[str] = []
+        params: list[Any] = []
+        if enabled is not None:
+            params.append(bool(enabled))
+            filters.append(f"u.enabled = ${len(params)}")
+        if search and search.strip():
+            params.append(_like_contains_pattern(search.strip()))
+            placeholder = f"${len(params)}"
+            filters.append(
+                f"""(
+                    u.user_id ILIKE {placeholder} ESCAPE '\\'
+                    OR COALESCE(u.display_name, '') ILIKE {placeholder} ESCAPE '\\'
+                    OR COALESCE(u.email, '') ILIKE {placeholder} ESCAPE '\\'
+                    OR COALESCE(u.external_user_id, '') ILIKE {placeholder} ESCAPE '\\'
+                    OR COALESCE(u.department, '') ILIKE {placeholder} ESCAPE '\\'
+                    OR COALESCE(u.title, '') ILIKE {placeholder} ESCAPE '\\'
+                    OR EXISTS (
+                        SELECT 1 FROM enterprise_user_roles ur
+                        WHERE ur.user_id = u.user_id AND ur.role_id ILIKE {placeholder} ESCAPE '\\'
+                    )
+                )"""
+            )
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetch(
+            f"""
+            SELECT
+                u.user_id,
+                u.display_name,
+                u.email,
+                u.enabled,
+                u.external_user_id,
+                u.department,
+                u.title,
+                u.last_seen_at,
+                u.created_at,
+                u.updated_at
+            FROM enterprise_users u
+            {where_sql}
+            ORDER BY u.user_id ASC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+            """,
+            *params,
+        )
+        return [_user_record(row) for row in rows]
+
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         row = await self._fetchrow(
             """
@@ -567,6 +621,77 @@ class PgEnterpriseDatasourceGrantStore(_PgStoreBase):
             *params,
         )
         return [_datasource_grant_record(row) for row in rows]
+
+    async def list_grants_page(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+        effect: str | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        filters: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("subject_type", subject_type),
+            ("subject_id", subject_id),
+            ("datasource_key", datasource_key),
+            ("effect", effect),
+        ):
+            if value is not None:
+                params.append(value)
+                filters.append(f"{column} = ${len(params)}")
+        if search and search.strip():
+            params.append(_like_contains_pattern(search.strip()))
+            placeholder = f"${len(params)}"
+            filters.append(
+                f"""(
+                    subject_type ILIKE {placeholder} ESCAPE '\\'
+                    OR subject_id ILIKE {placeholder} ESCAPE '\\'
+                    OR datasource_key ILIKE {placeholder} ESCAPE '\\'
+                    OR effect ILIKE {placeholder} ESCAPE '\\'
+                    OR scope_json::text ILIKE {placeholder} ESCAPE '\\'
+                )"""
+            )
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetch(
+            f"""
+            SELECT subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+            FROM enterprise_datasource_grants
+            {where_sql}
+            ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+            """,
+            *params,
+        )
+        return [_datasource_grant_record(row) for row in rows]
+
+    async def count_grants_by_subjects(
+        self,
+        *,
+        subject_type: str,
+        subject_ids: list[str],
+    ) -> dict[str, int]:
+        counts = {subject_id: 0 for subject_id in subject_ids}
+        if not subject_ids:
+            return counts
+        rows = await self._fetch(
+            """
+            SELECT subject_id, COUNT(*) AS grant_count
+            FROM enterprise_datasource_grants
+            WHERE subject_type = $1 AND subject_id = ANY($2::text[])
+            GROUP BY subject_id
+            """,
+            subject_type,
+            subject_ids,
+        )
+        for row in rows:
+            counts[str(row["subject_id"])] = int(row["grant_count"])
+        return counts
 
     async def get_grant(
         self,
@@ -960,6 +1085,20 @@ class PgSessionOwnerStore(_PgStoreBase):
         )
         return _session_owner_record(row) if row else None
 
+    async def get_sessions(self, project_id: str, session_ids: list[str]) -> list[dict[str, Any]]:
+        if not session_ids:
+            return []
+        rows = await self._fetch(
+            """
+            SELECT project_id, session_id, user_id, created_at, updated_at
+            FROM session_owners
+            WHERE project_id = $1 AND session_id = ANY($2::text[])
+            """,
+            project_id,
+            session_ids,
+        )
+        return [_session_owner_record(row) for row in rows]
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         await self._execute(
             "DELETE FROM session_owners WHERE project_id = $1 AND session_id = $2",
@@ -1002,6 +1141,32 @@ class PgSessionOwnerStore(_PgStoreBase):
                 project_id,
                 user_id,
             )
+        return [_session_owner_record(row) for row in rows]
+
+    async def list_sessions_page(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [project_id]
+        filters = ["project_id = $1"]
+        if user_id is not None:
+            params.append(user_id)
+            filters.append(f"user_id = ${len(params)}")
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetch(
+            f"""
+            SELECT project_id, session_id, user_id, created_at, updated_at
+            FROM session_owners
+            WHERE {" AND ".join(filters)}
+            ORDER BY updated_at DESC, session_id ASC
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+            """,
+            *params,
+        )
         return [_session_owner_record(row) for row in rows]
 
 
@@ -1975,6 +2140,11 @@ def _load_jsonb(value: Any) -> dict[str, Any]:
 def _like_prefix_pattern(prefix: str) -> str:
     escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{escaped}%"
+
+
+def _like_contains_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _normalized_quota_subjects(subjects: list[dict[str, str]]) -> list[dict[str, str]]:

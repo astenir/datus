@@ -72,6 +72,7 @@ class OSIDimension(BaseModel):
     name: str
     expr: Optional[str] = None
     type: str = "categorical"  # categorical | time | numeric
+    is_dimension: bool = True
     granularity: Optional[str] = None
     description: Optional[str] = None
     ai_context: Optional[Union[str, Dict[str, Any]]] = None
@@ -90,6 +91,7 @@ class OSIDataset(BaseModel):
     description: Optional[str] = None
     ai_context: Optional[Union[str, Dict[str, Any]]] = None
     primary_key: Optional[Union[str, List[str]]] = None
+    unique_keys: List[List[str]] = Field(default_factory=list)
     time_dimension: Optional[OSITimeDimension] = None
     dimensions: List[OSIDimension] = Field(default_factory=list)
 
@@ -487,6 +489,10 @@ def _core_dataset_to_profile(dataset: Dict[str, Any]) -> Dict[str, Any]:
     if dataset.get("primary_key"):
         keys = list(dataset["primary_key"])
         profile["primary_key"] = keys[0] if len(keys) == 1 else keys
+    if dataset.get("unique_keys"):
+        profile["unique_keys"] = [
+            [str(column) for column in key] for key in dataset["unique_keys"] if key
+        ]
 
     explicit_time_dimension = _time_dimension_from_hint(hints.get("time_dimension"))
     primary_time_field = None
@@ -503,6 +509,12 @@ def _core_dataset_to_profile(dataset: Dict[str, Any]) -> Dict[str, Any]:
         )
         if not name:
             continue
+        # OSI core: the presence of a `dimension:` block opts a field into
+        # grouping/filtering. Legacy Datus documents carried a `type` hint on
+        # every field instead of blocks, so a type hint also marks a dimension
+        # for backward compatibility.
+        has_dimension_block = "dimension" in field
+        is_dimension = has_dimension_block or bool(field_hints.get("type"))
         is_time = bool((field.get("dimension") or {}).get("is_time"))
         expr = _first_core_expression(field) or str(name)
         granularity = field_hints.get("time_granularity") or field_hints.get(
@@ -534,6 +546,7 @@ def _core_dataset_to_profile(dataset: Dict[str, Any]) -> Dict[str, Any]:
             "name": str(name),
             "expr": expr,
             "type": dim_type,
+            "is_dimension": is_dimension,
         }
         if field.get("description"):
             dim["description"] = field["description"]
@@ -631,8 +644,8 @@ def load_osi_path(
     normalize: bool = False,
     *,
     allow_legacy_profile: bool = False,
-) -> OSIDocument:
-    """Load a strict OSI core document from a YAML file or directory.
+) -> Dict[str, OSIDocument]:
+    """Load OSI models from a YAML file or directory, keyed by model name.
 
     The public authoring contract is the official OSI core schema. Legacy Datus
     profile documents are accepted only when ``allow_legacy_profile`` is set,
@@ -674,19 +687,160 @@ def load_osi_path(
         )
     if legacy_docs:
         doc = parse_osi_profile(_merge_legacy_profile_documents(legacy_docs))
+        models = {doc.name: doc}
     elif core_docs:
-        doc = parse_osi(_merge_core_documents(core_docs))
+        models = parse_osi(_merge_core_documents(core_docs))
     else:
         raise OSIValidationError(f"No OSI YAML documents found under {path}.")
 
     if normalize:
         from datus_semantic_osi.normalizer import normalize_document
 
-        result = normalize_document(doc)
+        normalized: Dict[str, OSIDocument] = {}
+        for name, doc in models.items():
+            result = normalize_document(doc)
+            if result.errors:
+                raise OSIValidationError(
+                    f"Semantic model `{name}`: {' '.join(result.errors)}"
+                )
+            normalized[name] = result.document
+        return normalized
+    return models
+
+
+def load_osi_model(
+    path: str,
+    semantic_model_name: Optional[str] = None,
+    normalize: bool = False,
+    *,
+    allow_legacy_profile: bool = False,
+) -> OSIDocument:
+    """Load one named OSI model from a file or directory.
+
+    Omitting ``semantic_model_name`` is allowed only when the path contains one
+    model. Callers that operate on datasource directories must choose a model
+    explicitly once more than one model exists.
+    """
+    if semantic_model_name:
+        return _load_named_osi_model(
+            path,
+            semantic_model_name,
+            normalize=normalize,
+            allow_legacy_profile=allow_legacy_profile,
+        )
+
+    models = load_osi_path(
+        path,
+        normalize=normalize,
+        allow_legacy_profile=allow_legacy_profile,
+    )
+    if len(models) == 1:
+        return next(iter(models.values()))
+    candidates = ", ".join(sorted(models))
+    raise OSIValidationError(
+        "semantic_model_name is required when an OSI path contains multiple "
+        f"models. Available models: {candidates}."
+    )
+
+
+def _load_named_osi_model(
+    path: str,
+    semantic_model_name: str,
+    *,
+    normalize: bool,
+    allow_legacy_profile: bool,
+) -> OSIDocument:
+    """Load only fragments owned by one model, isolating unrelated bad files."""
+    import glob as _glob
+    import os as _os
+
+    if _os.path.isdir(path):
+        files = sorted(
+            _glob.glob(_os.path.join(path, "**", "*.yaml"), recursive=True)
+            + _glob.glob(_os.path.join(path, "**", "*.yml"), recursive=True)
+        )
+    else:
+        files = [path]
+
+    core_docs: List[Dict[str, Any]] = []
+    legacy_docs: List[Dict[str, Any]] = []
+    candidates: set[str] = set()
+    target_parse_error: Optional[Exception] = None
+    for filename in files:
+        try:
+            with open(filename, encoding="utf-8") as fh:
+                docs = list(yaml.safe_load_all(fh.read())) or []
+        except (OSError, yaml.YAMLError) as exc:
+            if _os.path.splitext(_os.path.basename(filename))[0] == semantic_model_name:
+                target_parse_error = exc
+            continue
+
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            if _looks_like_core_document(doc):
+                models = doc.get("semantic_model")
+                if not isinstance(models, list):
+                    continue
+                named_models = []
+                for model in models:
+                    if not isinstance(model, dict):
+                        continue
+                    name = str(model.get("name") or "")
+                    if name:
+                        candidates.add(name)
+                    if name == semantic_model_name:
+                        named_models.append(model)
+                if named_models:
+                    target_doc = dict(doc)
+                    target_doc["semantic_model"] = named_models
+                    core_docs.append(target_doc)
+                continue
+
+            model = doc.get("semantic_model")
+            legacy_name = (
+                str(model.get("name") or "") if isinstance(model, dict) else ""
+            )
+            if legacy_name:
+                candidates.add(legacy_name)
+            if legacy_name == semantic_model_name:
+                legacy_docs.append(doc)
+
+    if core_docs and legacy_docs:
+        raise OSIValidationError(
+            f"Semantic model `{semantic_model_name}` mixes strict OSI core and legacy profile documents."
+        )
+    if legacy_docs:
+        if not allow_legacy_profile:
+            raise OSIValidationError(
+                "OSI authoring files must conform to OSI core schema "
+                f"(version: {CORE_SCHEMA_VERSION}, semantic_model: [...]). "
+                "Legacy Datus profile YAML with top-level datasets/metrics is not accepted."
+            )
+        document = parse_osi_profile(_merge_legacy_profile_documents(legacy_docs))
+    elif core_docs:
+        document = parse_osi(_merge_core_documents(core_docs))[semantic_model_name]
+    elif target_parse_error is not None:
+        raise OSIValidationError(
+            f"Failed to parse semantic model `{semantic_model_name}` under {path}: {target_parse_error}"
+        ) from target_parse_error
+    else:
+        available = ", ".join(sorted(candidates)) or "<none>"
+        raise OSIValidationError(
+            f"Semantic model `{semantic_model_name}` was not found under {path}. "
+            f"Available models: {available}."
+        )
+
+    if normalize:
+        from datus_semantic_osi.normalizer import normalize_document
+
+        result = normalize_document(document)
         if result.errors:
-            raise OSIValidationError(" ".join(result.errors))
+            raise OSIValidationError(
+                f"Semantic model `{semantic_model_name}`: {' '.join(result.errors)}"
+            )
         return result.document
-    return doc
+    return document
 
 
 def _merge_legacy_profile_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -722,13 +876,7 @@ def _dedupe_exact(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _merge_core_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    model_name: Optional[str] = None
-    merged_model: Dict[str, Any] = {
-        "name": "",
-        "datasets": [],
-        "relationships": [],
-        "metrics": [],
-    }
+    merged_models: Dict[str, Dict[str, Any]] = {}
     for doc in docs:
         validate_osi_core_schema(doc)
         if doc.get("version") != CORE_SCHEMA_VERSION:
@@ -738,25 +886,27 @@ def _merge_core_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
             )
         for model in doc.get("semantic_model") or []:
             name = str(model.get("name") or "")
-            if model_name is None:
-                model_name = name
-                merged_model["name"] = name
-                if model.get("description"):
-                    merged_model["description"] = model["description"]
-            elif name != model_name:
-                raise OSIValidationError(
-                    "Datus OSI currently executes one semantic model per datasource; "
-                    f"found both `{model_name}` and `{name}`."
-                )
+            merged_model = merged_models.setdefault(
+                name,
+                {
+                    "name": name,
+                    "datasets": [],
+                    "relationships": [],
+                    "metrics": [],
+                },
+            )
+            if model.get("description") and not merged_model.get("description"):
+                merged_model["description"] = model["description"]
             merged_model["datasets"].extend(model.get("datasets") or [])
             merged_model["relationships"].extend(model.get("relationships") or [])
             merged_model["metrics"].extend(model.get("metrics") or [])
 
-    merged_model["datasets"] = _dedupe_datasets(merged_model["datasets"])
-    merged_model["relationships"] = _dedupe_exact(merged_model["relationships"])
+    for merged_model in merged_models.values():
+        merged_model["datasets"] = _dedupe_datasets(merged_model["datasets"])
+        merged_model["relationships"] = _dedupe_exact(merged_model["relationships"])
     return {
         "version": CORE_SCHEMA_VERSION,
-        "semantic_model": [merged_model],
+        "semantic_model": list(merged_models.values()),
     }
 
 
@@ -791,27 +941,52 @@ def parse_osi(
     data: Union[str, dict],
     *,
     allow_legacy_profile: bool = False,
-) -> OSIDocument:
-    """Parse strict OSI core YAML (or an already-loaded dict) into OSIDocument."""
+) -> Dict[str, OSIDocument]:
+    """Parse strict OSI core YAML into model-name keyed documents."""
     if isinstance(data, str):
         data = yaml.safe_load(data)
     if not isinstance(data, dict):
         raise ValueError("OSI document must be a mapping")
     if not _looks_like_core_document(data):
         if allow_legacy_profile:
-            return parse_osi_profile(data)
+            doc = parse_osi_profile(data)
+            return {doc.name: doc}
         raise OSIValidationError(
             "OSI document must conform to OSI core schema: root keys must be "
             f"`version: {CORE_SCHEMA_VERSION}` and `semantic_model: [...]`."
         )
     validate_osi_core_schema(data)
-    models = data.get("semantic_model") or []
-    if len(models) != 1:
-        raise OSIValidationError(
-            "Datus OSI currently supports exactly one OSI core semantic_model per "
-            f"executable document; found {len(models)}."
-        )
-    return _core_model_to_profile(models[0])
+    merged = _merge_core_documents([data])
+    return {
+        str(model.get("name") or "datus_semantic_model"): _core_model_to_profile(model)
+        for model in merged.get("semantic_model") or []
+    }
+
+
+def parse_osi_model(
+    data: Union[str, dict],
+    semantic_model_name: Optional[str] = None,
+    *,
+    allow_legacy_profile: bool = False,
+) -> OSIDocument:
+    """Parse one named model from strict OSI core YAML."""
+    models = parse_osi(data, allow_legacy_profile=allow_legacy_profile)
+    if semantic_model_name:
+        try:
+            return models[semantic_model_name]
+        except KeyError as exc:
+            candidates = ", ".join(sorted(models)) or "<none>"
+            raise OSIValidationError(
+                f"Semantic model `{semantic_model_name}` was not found. "
+                f"Available models: {candidates}."
+            ) from exc
+    if len(models) == 1:
+        return next(iter(models.values()))
+    candidates = ", ".join(sorted(models))
+    raise OSIValidationError(
+        "semantic_model_name is required when an OSI document contains multiple "
+        f"models. Available models: {candidates}."
+    )
 
 
 def parse_osi_profile(data: Union[str, dict]) -> OSIDocument:
@@ -867,6 +1042,8 @@ def to_core_schema_document(doc: OSIDocument) -> Dict[str, Any]:
                 else list(dataset.primary_key)
             )
             core_dataset["primary_key"] = keys
+        if dataset.unique_keys:
+            core_dataset["unique_keys"] = [list(key) for key in dataset.unique_keys]
 
         fields: List[Dict[str, Any]] = []
         if dataset.time_dimension:
@@ -893,13 +1070,18 @@ def to_core_schema_document(doc: OSIDocument) -> Dict[str, Any]:
             field: Dict[str, Any] = {
                 "name": dim.name,
                 "expression": _core_expression(dim.expr or dim.name),
-                "dimension": {"is_time": dim.type == "time"},
             }
+            if dim.is_dimension:
+                field["dimension"] = {"is_time": dim.type == "time"}
+                hints = {"type": dim.type, "time_granularity": dim.granularity}
+            else:
+                # Plain row-level field: no `dimension:` block, and no `type`
+                # hint either — a type hint marks a legacy dimension on reload.
+                hints = {"time_granularity": dim.granularity}
             if dim.description:
                 field["description"] = dim.description
             if dim.ai_context:
                 field["ai_context"] = dim.ai_context
-            hints = {"type": dim.type, "time_granularity": dim.granularity}
             ext = _datus_extension(hints)
             if ext:
                 field["custom_extensions"] = ext

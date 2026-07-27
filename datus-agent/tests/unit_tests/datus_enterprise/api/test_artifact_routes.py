@@ -21,9 +21,9 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.enterprise.models import AccessDecision
 from datus.api.service import create_app
-from datus.api.services.dashboard_service import DashboardService
-from datus.api.services.report_service import ReportService
 from datus_enterprise.api import artifact_routes
+from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
+from datus_enterprise.services.report_service import EnterpriseReportService
 
 
 class CollectingAuditSink:
@@ -70,8 +70,8 @@ def _svc(tmp_path: Path):
     agent_config = SimpleNamespace(project_root=str(tmp_path))
     return SimpleNamespace(
         agent_config=agent_config,
-        dashboard=DashboardService(agent_config=agent_config),
-        report=ReportService(agent_config=agent_config),
+        dashboard=EnterpriseDashboardService(agent_config=agent_config),
+        report=EnterpriseReportService(agent_config=agent_config),
     )
 
 
@@ -478,7 +478,50 @@ def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: P
     assert event.resource_type == "artifact"
     assert event.resource_id is None
     assert event.decision == "allow"
-    assert event.metadata == {"operation": "list_admin_artifacts", "count": 3}
+    assert event.metadata == {
+        "operation": "list_admin_artifacts",
+        "count": 3,
+        "artifact_type": None,
+        "offset": 0,
+        "has_more": False,
+    }
+
+
+def test_admin_artifacts_type_filter_skips_unrequested_directory_scan(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    svc = _svc(tmp_path)
+
+    async def reject_dashboard_scan(**kwargs):
+        raise AssertionError(f"dashboard directory was scanned: {kwargs}")
+
+    svc.dashboard.list_dashboards = reject_dashboard_scan
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+
+    result = asyncio.run(
+        artifact_routes.list_admin_artifacts(
+            svc,
+            ctx,
+            artifact_type="report",
+            search=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert result.success is True
+    assert [(item.artifact_type, item.manifest.slug) for item in result.data] == [("report", "sales")]
 
 
 def test_admin_artifacts_list_survives_audit_failure(monkeypatch, tmp_path: Path):
@@ -1220,16 +1263,39 @@ def test_admin_artifacts_rejects_without_admin_artifacts(monkeypatch, tmp_path: 
     assert "module.admin.artifacts" in response.json()["detail"]
 
 
-def test_enterprise_artifact_routes_expose_resource_paths_only():
+def test_enterprise_artifact_routes_expose_authoritative_paths_once():
     args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
     app = create_app(args)
     route_paths = {route.path for route in app.routes if hasattr(route, "path")}
+    report_detail_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/report/detail" and "GET" in getattr(route, "methods", set())
+    ]
+    dashboard_detail_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/dashboard/detail" and "GET" in getattr(route, "methods", set())
+    ]
+    dashboard_query_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/dashboard/query" and "POST" in getattr(route, "methods", set())
+    ]
+    dashboard_edit_session_routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/dashboards/{slug}/edit-sessions"
+        and "POST" in getattr(route, "methods", set())
+    ]
 
     assert "/api/v1/admin/artifacts" in route_paths
     assert "/api/v1/admin/artifacts/{artifact_type}/{slug}/acl" in route_paths
     assert "/api/v1/artifact-share/users" in route_paths
     assert "/api/v1/artifact-share/roles" in route_paths
     assert "/api/v1/reports" in route_paths
+    assert "/api/v1/report/detail" in route_paths
+    assert "/api/v1/reports/{slug}/edit-sessions" in route_paths
     assert "/api/v1/reports/{slug}/acl" in route_paths
     assert "/api/v1/reports/{slug}/html" in route_paths
     assert "/api/v1/dashboards" in route_paths
@@ -1239,3 +1305,7 @@ def test_enterprise_artifact_routes_expose_resource_paths_only():
     assert "/api/v1/report/html" not in route_paths
     assert "/api/v1/dashboard/list" not in route_paths
     assert "/api/v1/dashboard/html" not in route_paths
+    assert len(report_detail_routes) == 1
+    assert len(dashboard_detail_routes) == 1
+    assert len(dashboard_query_routes) == 1
+    assert len(dashboard_edit_session_routes) == 1

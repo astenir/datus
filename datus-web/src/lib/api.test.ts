@@ -781,6 +781,29 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/roles/admin");
   });
 
+  it("forwards admin list filters and pagination", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: [], pagination: { limit: 20, offset: 0, has_more: false } }))
+    );
+
+    await adminUserApi.listUsers({ enabled: true, search: "alice", limit: 20, offset: 40 });
+    await adminRoleApi.listRoles({ builtIn: false, search: "analyst", limit: 50, offset: 50 });
+    await adminSessionApi.listSessions({ state: "running", search: "session", limit: 20, offset: 20 });
+    await adminDatasourceApi.listGrants({ effect: "deny", search: "fund", limit: 20, offset: 0 });
+    await adminQuotaApi.listQuotas({ enabled: false, search: "chat", limit: 100, offset: 100 });
+    await adminSecretApi.listSecrets({ enabled: true, search: "openai", limit: 20, offset: 0 });
+    await adminArtifactApi.listArtifacts({ artifactType: "dashboard", search: "fund", limit: 50, offset: 0 });
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[0]?.[0]).toBe("/api/v1/admin/users?enabled=true&search=alice&limit=20&offset=40");
+    expect(calls[1]?.[0]).toBe("/api/v1/admin/roles?built_in=false&search=analyst&limit=50&offset=50");
+    expect(calls[2]?.[0]).toBe("/api/v1/admin/sessions?state=running&search=session&limit=20&offset=20");
+    expect(calls[3]?.[0]).toBe("/api/v1/admin/datasource-grants?effect=deny&search=fund&limit=20&offset=0");
+    expect(calls[4]?.[0]).toBe("/api/v1/admin/quotas?enabled=false&search=chat&limit=100&offset=100");
+    expect(calls[5]?.[0]).toBe("/api/v1/admin/secrets?enabled=true&search=openai&limit=20&offset=0");
+    expect(calls[6]?.[0]).toBe("/api/v1/admin/artifacts?artifact_type=dashboard&search=fund&limit=50&offset=0");
+  });
+
   it("uses current enterprise admin operations routes", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => Promise.resolve(mockJsonResponse({ success: true, data: [] })))

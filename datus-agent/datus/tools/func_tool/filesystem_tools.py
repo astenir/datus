@@ -4,7 +4,6 @@
 
 import os
 import re
-from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, List, Optional
 
@@ -21,6 +20,7 @@ from datus.tools.func_tool.fs_path_policy import (
 )
 from datus.utils.loggings import get_logger
 from datus.utils.memory_loader import apply_single_replacement
+from datus_enterprise.services import artifact_filesystem_scope as artifact_scope
 
 logger = get_logger(__name__)
 
@@ -71,10 +71,6 @@ class FilesystemFuncTool(BaseTool):
     """
 
     permission_category: str = "filesystem_tools"
-    _PROTECTED_ARTIFACT_ROOTS: frozenset[str] = frozenset({"reports", "dashboards"})
-    _ARTIFACT_BOUND_NODES: frozenset[str] = frozenset(
-        {"gen_visual_report", "gen_visual_dashboard", "ask_report", "ask_dashboard"}
-    )
 
     def __init__(
         self,
@@ -178,14 +174,11 @@ class FilesystemFuncTool(BaseTool):
             datus_home=self._datus_home,
             session_data_dir=self._session_data_dir,
         )
-        if not self._global_skills_read_only or resolved.zone != PathZone.WHITELIST:
-            return resolved
-
-        datus_home = self._datus_home or (Path.home() / ".datus").resolve(strict=False)
-        global_skills = (datus_home / "skills").resolve(strict=False)
-        if resolved.resolved.is_relative_to(global_skills):
-            return replace(resolved, read_only=True)
-        return resolved
+        return artifact_scope.apply_global_skills_read_only(
+            resolved,
+            enabled=self._global_skills_read_only,
+            datus_home=self._datus_home,
+        )
 
     def _read_only_reject(self, resolved: ResolvedPath) -> FuncToolResult:
         """Reject writes to a read-only whitelist (e.g. the session compact archive)."""
@@ -218,30 +211,16 @@ class FilesystemFuncTool(BaseTool):
         )
 
     def _artifact_protection_active(self) -> bool:
-        return self._protect_artifact_paths and self._current_node not in self._ARTIFACT_BOUND_NODES
+        return artifact_scope.generic_artifact_protection_active(
+            enabled=self._protect_artifact_paths,
+            current_node=self._current_node,
+        )
 
     def _is_protected_artifact_path(self, resolved: ResolvedPath) -> bool:
-        if not self._artifact_protection_active():
-            return False
-        if resolved.zone not in (PathZone.INTERNAL, PathZone.WHITELIST):
-            return False
-        try:
-            rel = resolved.resolved.relative_to(self._root_resolved).as_posix()
-        except ValueError:
-            return False
-        head = rel.split("/", 1)[0]
-        return head in self._PROTECTED_ARTIFACT_ROOTS
-
-    def _artifact_not_found(self, resolved: ResolvedPath) -> FuncToolResult:
-        return FuncToolResult(success=0, error=f"File not found: {resolved.display}")
-
-    def _artifact_mutation_reject(self, resolved: ResolvedPath) -> FuncToolResult:
-        return FuncToolResult(
-            success=0,
-            error=(
-                f"Artifact path is protected by report/dashboard ACLs: {resolved.display}. "
-                "Use the report/dashboard artifact APIs or an ACL-bound artifact agent."
-            ),
+        return artifact_scope.is_generic_protected_artifact_path(
+            resolved,
+            active=self._artifact_protection_active(),
+            root_path=self._root_resolved,
         )
 
     def _get_safe_path(self, path: str) -> Optional[Path]:
@@ -291,7 +270,7 @@ class FilesystemFuncTool(BaseTool):
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
             if self._is_protected_artifact_path(resolved):
-                return self._artifact_not_found(resolved)
+                return artifact_scope.generic_artifact_not_found(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
 
@@ -376,7 +355,7 @@ class FilesystemFuncTool(BaseTool):
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
             if self._is_protected_artifact_path(resolved):
-                return self._artifact_mutation_reject(resolved)
+                return artifact_scope.generic_artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -423,7 +402,7 @@ class FilesystemFuncTool(BaseTool):
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
             if self._is_protected_artifact_path(resolved):
-                return self._artifact_mutation_reject(resolved)
+                return artifact_scope.generic_artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -481,7 +460,7 @@ class FilesystemFuncTool(BaseTool):
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
             if self._is_protected_artifact_path(resolved):
-                return self._artifact_mutation_reject(resolved)
+                return artifact_scope.generic_artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -764,17 +743,7 @@ class FilesystemFuncTool(BaseTool):
             if seed.zone == PathZone.HIDDEN:
                 return FuncToolResult(result={"files": [], "truncated": False})
             if self._is_protected_artifact_path(seed):
-                return FuncToolResult(
-                    result={
-                        "files": [],
-                        "truncated": False,
-                        "visibility_filtered": True,
-                        "message": (
-                            "Results are hidden by the current artifact authorization scope; "
-                            "an empty list does not prove that no artifact exists on disk."
-                        ),
-                    }
-                )
+                return artifact_scope.generic_artifact_visibility_filtered()
             if self._strict and seed.zone == PathZone.EXTERNAL:
                 return self._strict_reject(seed)
 

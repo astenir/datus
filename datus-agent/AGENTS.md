@@ -25,6 +25,7 @@ Read the most specific doc before editing:
 - Enterprise product/security contract: `ENTERPRISE_PLATFORM_PLAN.zh.md`
 - Enterprise implementation checklist: `ENTERPRISE_AI_DEVELOPMENT_GUIDE.zh.md`
 - Local enterprise backend bring-up: `LOCAL_ENTERPRISE_BACKEND_TESTING.zh.md`
+- Downstream build, release, and adapter maintenance: `docs/downstream-maintenance.zh-CN.md`
 - Public user/developer overview: `README.md` and `docs/develop/`
 
 For enterprise-related code, read both enterprise docs before changing code. They define the stage boundary and fail-closed requirements. Do not rely on chat history alone.

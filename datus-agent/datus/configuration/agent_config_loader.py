@@ -2,13 +2,13 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import os
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
 
-from datus.configuration.agent_config import AgentConfig, NodeConfig, _load_datasources_file
+from datus.configuration.agent_config import AgentConfig, NodeConfig
+from datus.configuration.agent_config_loader_downstream import merge_datasources_file
 from datus.configuration.node_type import NodeType
 from datus.configuration.project_config import ProjectTarget, load_project_override
 from datus.utils.constants import DBType
@@ -16,28 +16,6 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
-
-
-def _merge_datasources_file(agent_raw: Dict[str, Any]) -> None:
-    """Merge ``services.datasources_file`` before project override validation."""
-    services_raw = agent_raw.get("services") or {}
-    if not isinstance(services_raw, dict):
-        return
-
-    datasources_file = services_raw.get("datasources_file") or os.getenv("DATUS_DATASOURCES_FILE", "")
-    if not datasources_file:
-        return
-
-    inline_datasources = services_raw.get("datasources") or {}
-    if not isinstance(inline_datasources, dict):
-        return
-
-    datasources = dict(inline_datasources)
-    datasources.update(_load_datasources_file(datasources_file))
-    services_raw["datasources"] = datasources
-    # Avoid re-loading the same file later in AgentConfig, which would undo
-    # default flags flipped by .datus/config.yml.
-    services_raw["datasources_file"] = ""
 
 
 def load_node_config(node_type: str, data: dict) -> NodeConfig:
@@ -301,7 +279,7 @@ def _apply_project_override(agent_raw: Dict[str, Any]) -> None:
     override = load_project_override()
     if override is None or override.is_empty():
         return
-    _merge_datasources_file(agent_raw)
+    merge_datasources_file(agent_raw)
     if override.target is not None:
         if isinstance(override.target, ProjectTarget):
             if override.target.custom:
@@ -344,6 +322,35 @@ def _apply_project_override(agent_raw: Dict[str, Any]) -> None:
         agent_raw["language"] = override.language
     if override.reasoning_effort is not None:
         agent_raw["target_reasoning_effort"] = override.reasoning_effort
+    if override.bash_allow:
+        # Append project-level bash allow patterns into the permissions raw
+        # dict so they ride the normal parse/merge pipeline
+        # (AgentConfig._init_permissions_config -> build_effective_config).
+        # Tolerate malformed YAML shapes (string/list where a mapping is
+        # expected) the same way ``AgentConfig._init_permissions_config`` and
+        # the ``permission_mode`` override below do: replace with an empty
+        # container instead of crashing config loading.
+        permissions = agent_raw.get("permissions")
+        if not isinstance(permissions, dict):
+            permissions = {}
+        agent_raw["permissions"] = permissions
+        bash_commands = permissions.get("bash_commands")
+        if not isinstance(bash_commands, dict):
+            bash_commands = {}
+        permissions["bash_commands"] = bash_commands
+        allow = bash_commands.get("allow")
+        if not isinstance(allow, list):
+            allow = []
+        bash_commands["allow"] = allow
+        for pattern in override.bash_allow:
+            if pattern not in allow:
+                allow.append(pattern)
+        # Also forward the raw grant list: merged allow entries cannot beat
+        # ask rules (deny > ask > allow), so PermissionManager keeps these as
+        # an exact-match grant set that lets a project grant bypass an
+        # ask-rule hit (e.g. a plugin-declared ask persisted via the
+        # "allow (project)" prompt choice).
+        agent_raw["project_bash_allow"] = list(override.bash_allow)
     # ``dashboard`` / ``scheduler`` overrides reach AgentConfig through
     # dedicated kwargs so the project-level pin is consulted between the
     # explicit call-site argument and the global default flag at lookup
@@ -356,6 +363,12 @@ def _apply_project_override(agent_raw: Dict[str, Any]) -> None:
         agent_raw["active_scheduler"] = override.scheduler
     if override.semantic is not None:
         agent_raw["active_semantic"] = override.semantic
+    # ``plugins`` pins the active profile per plugin for ``datus <plugin>``
+    # invocations; forwarded to AgentConfig and consulted by
+    # ``get_plugin_profile`` between the explicit ``--profile`` argument and
+    # the profile ``default: true`` flag.
+    if override.plugins is not None:
+        agent_raw["active_plugins"] = override.plugins
 
 
 _PRE_INIT_OVERRIDE_KEYS = {"home", "project_root", "project_name"}
@@ -393,6 +406,17 @@ def load_agent_config(reload: bool = False, create_if_missing: bool = False, **k
         ).data
     )
     _apply_project_override(agent_raw)
+    # ``--permission-mode`` CLI override: reshapes ``permissions.profile`` before
+    # AgentConfig parses it, so ``permissions_config`` / ``active_profile_name``
+    # reflect the override everywhere (REPL status bar, print mode, hooks).
+    # User rules / bash_commands still layer on top via build_effective_config.
+    permission_mode = kwargs.get("permission_mode")
+    if permission_mode:
+        permissions_raw = agent_raw.get("permissions") or {}
+        if not isinstance(permissions_raw, dict):
+            permissions_raw = {}
+        permissions_raw["profile"] = permission_mode
+        agent_raw["permissions"] = permissions_raw
     pre_init_override_keys = _apply_pre_init_overrides(agent_raw, kwargs)
     nodes = {}
     if "nodes" in agent_raw:

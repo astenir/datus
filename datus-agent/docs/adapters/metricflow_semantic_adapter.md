@@ -27,16 +27,6 @@ agent:
         timeout: 300
         config_path: ./conf/agent.yml   # optional advanced override
         default: true
-
-  agentic_nodes:
-    gen_semantic_model:
-      semantic_adapter: metricflow
-
-    gen_metrics:
-      semantic_adapter: metricflow
-
-    ask_metrics:
-      semantic_adapter: metricflow
 ```
 
 `config_path` is optional. In normal use, Datus builds the MetricFlow runtime config from:
@@ -44,41 +34,6 @@ agent:
 1. the selected datasource in `services.datasources`
 2. the current project semantic model directory
 3. the active `agent.home`
-
-### OceanBase Oracle read-only preview
-
-OceanBase Oracle uses the selected datasource; connection fields are not
-duplicated under `semantic_layer.metricflow`:
-
-```yaml
-agent:
-  services:
-    datasources:
-      oceanbase_oracle:
-        type: oceanbase-oracle
-        host: ${OCEANBASE_ORACLE_HOST}
-        port: 2883
-        username: ${OCEANBASE_ORACLE_USERNAME}
-        password: ${OCEANBASE_ORACLE_PASSWORD}
-        database: ${OCEANBASE_ORACLE_DATABASE}  # Oracle-mode tenant
-        schema: ${OCEANBASE_ORACLE_SCHEMA}      # Oracle owner/schema
-        jar_path: ${OCEANBASE_ORACLE_JAR_PATH}  # runtime/container path
-        connection_mode: odp
-        connect_timeout_seconds: 30
-        query_timeout_seconds: 60
-        default: true
-
-    semantic_layer:
-      metricflow:
-        default: true
-```
-
-The runtime also needs Java, OceanBase Connector/J, and the
-`datus-oceanbase-oracle` package. The initial engine profile permits semantic
-validation, dry runs, and metric reads. MetricFlow-managed schema/table writes,
-query cancellation, and percentile capabilities are not supported. Run the
-real Oracle-mode tenant nightly suite before declaring a release
-production-ready; mocked and unit tests are not sufficient.
 
 ## Semantic Model Directory
 
@@ -129,7 +84,7 @@ metric:
 
 ## Generation Flow
 
-With `semantic_adapter: metricflow`:
+With MetricFlow as the active semantic layer:
 
 1. `gen_semantic_model` writes MetricFlow semantic model YAML.
 2. `gen_metrics` writes MetricFlow metric YAML.

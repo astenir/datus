@@ -12,6 +12,19 @@ docs/API/frontend_contract.md
 
 该文档记录当前 Vue 前端使用的 OpenAPI 类型生成、`Result[T]` 响应包裹、SSE 处理和错误形态约定。它是下游前端维护文档，不作为上游 API 文档导航的一部分。
 
+### 浏览器文件工具
+
+上游 `v0.3.8` 在 `normal` 权限模式下默认把 `write_file`、`edit_file`、`delete_file` 代理给浏览器执行。当前下游 Vue 客户端只消费工具事件，不提供浏览器文件系统执行器，因此下游服务使用：
+
+```yaml
+agent:
+  api:
+    chat:
+      web_filesystem_executor: server
+```
+
+这个兼容策略由 `DatusService` 装配，`ChatTaskManager` 的类级默认值仍保持上游的 `client`。这样直接复用上游客户端时可显式切回 `client`，下游前端也不会等待无法返回的代理执行结果。
+
 ## Chat 历史交互摘要
 
 `interaction-summary` 只会在持久化历史 `GET /chat/history` 中返回，用于展示已经发生过的 `ask_user` 交互。这是只读 transcript 块：后端会刻意不返回 `interactionKey`，客户端也不应把它提交到 `POST /chat/user_interaction`。
@@ -61,6 +74,64 @@ agent:
 ```
 
 `enumerate_databases: true` 时，`catalog/list` 会枚举同一服务上可连接的所有数据库，而不是只返回配置中的 `database`。这用于企业目录浏览场景；它不授予权限，最终可见范围仍由企业数据源授权和 SQL policy 决定。
+
+## KB 构建的数据源边界
+
+下游 `POST /api/v1/kb/bootstrap` 要求显式传入 `datasource_id`。缺失、空白、不存在或未授权的数据源都会被拒绝，接口不会回退到服务端全局默认数据源；后端基于请求级配置副本执行，不能修改共享 `DatusService.agent_config`。
+
+当 `semantic_model` 或 `metrics` 使用 success-story CSV 时，推荐按数据源隔离：
+
+```text
+{agent.home}/benchmark/{datasource}/{subagent}/success_story.csv
+```
+
+新格式 CSV 包含 `datasource_id` 列，且文件中只能有一个非空数据源；它必须与 KB 请求中的 `datasource_id` 一致。空值、混合数据源或不匹配返回 `422`。缺少该列的旧 CSV 暂时兼容，但后端会记录警告和审计事件。
+
+## Success story 保存与迁移
+
+前端保存 SQL success story 时，后端从该次 `execute_sql` / `read_query` 的规范会话历史中恢复真实数据源，不以页面 URL、当前选择或默认数据源决定目录。如果历史没有数据源，或开始/完成事件记录冲突，保存会失败关闭。
+
+新版 CSV 格式为：
+
+```csv
+question,sql,datasource_id,source_id,session_id,session_link,subagent_name,timestamp
+"Show revenue by category",SELECT ...,ccks_fund,ss_...,abc123...,http://localhost:8501?session=...,chat,2025-01-15T02:30:00Z
+```
+
+API 只返回相对于 benchmark 目录的 `storage_key`，例如 `ccks_fund/chat/success_story.csv`，不会暴露服务器绝对路径。旧文件不会被自动移动或删除；确认所有记录属于一个数据源后，可以显式复制迁移：
+
+```bash
+datus-agent migrate-success-stories \
+  --source ~/.datus/benchmark/chat/success_story.csv \
+  --datasource ccks_fund \
+  --subagent chat
+```
+
+迁移按 `source_id` 去重，可以重复执行，并保留源文件；如果新版 CSV 已声明其他 `datasource_id`，迁移会被拒绝。
+
+## Metadata embedding 样例限制
+
+下游数据库 metadata embedding 支持两个防止超长样例进入 embedding provider 的配置：
+
+```yaml
+agent:
+  storage:
+    database:
+      sample_cell_max_chars: 1000
+      sample_max_chars: 8000
+```
+
+- `sample_cell_max_chars`：单个样例单元格的最大字符数；超长内容会被替换为长度标记。
+- `sample_max_chars`：单张表完整样例序列化后的最大字符数，默认 `8000`。
+
+## MetricFlow 与 OceanBase Oracle
+
+当前 monorepo 的 MetricFlow 扩展支持 DuckDB、SQLite、MySQL、PostgreSQL、Greenplum、ClickHouse、StarRocks、Trino、Snowflake，以及只读预览的 OceanBase Oracle。引擎支持不只取决于 Python driver 或 SQLAlchemy dialect；还需要显式注册 SQL client、renderer、数据类型、时间函数、行数限制、参数绑定和 capability profile。
+
+OceanBase Oracle 的首个 profile 支持语义校验、dry-run、只读指标查询、常见聚合与分组，以及日/周/月/季度/年时间截断；不支持 MetricFlow 管理的 schema/table 写入、查询取消和 percentile。连接示例、跨仓库归属、依赖发布顺序和真实 Oracle 模式租户验收见：
+
+- `datus_enterprise/docs/metricflow_oceanbase_oracle.md`
+- `datus_enterprise/docs/metricflow_oceanbase_oracle.zh.md`
 
 ## 普通用户自配模型与数据源
 

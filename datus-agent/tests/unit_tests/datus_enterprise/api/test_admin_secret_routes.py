@@ -158,6 +158,28 @@ def test_admin_secret_upsert_get_list_delete_and_audit_redaction(monkeypatch):
     assert "WAREHOUSE_PASSWORD" not in str(allow_events[0].metadata)
 
 
+def test_admin_secret_search_uses_only_redacted_list_fields(monkeypatch):
+    secret_store = InMemoryEnterpriseSecretStore()
+    asyncio.run(
+        secret_store.put_secret(
+            name="datasource/warehouse/password",
+            provider="env",
+            reference="WAREHOUSE_PASSWORD",
+            description="Warehouse credential",
+            enabled=True,
+        )
+    )
+    _install_extensions(monkeypatch, secret_store=secret_store)
+    ctx = AppContext(user_id="admin", permissions={"module.admin.secrets"})
+
+    with _client(ctx) as client:
+        raw_reference_search = client.get("/api/v1/admin/secrets", params={"search": "WAREHOUSE_PASSWORD"})
+        redacted_hint_search = client.get("/api/v1/admin/secrets", params={"search": "WORD"})
+
+    assert raw_reference_search.json()["data"] == []
+    assert [secret["name"] for secret in redacted_hint_search.json()["data"]] == ["datasource/warehouse/password"]
+
+
 @pytest.mark.asyncio
 async def test_admin_secret_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
     secret_store = InMemoryEnterpriseSecretStore()

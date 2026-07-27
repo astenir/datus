@@ -4,6 +4,7 @@ Service for handling Database Management operations.
 
 import asyncio
 import os
+import tempfile
 import time
 from typing import List, Optional
 
@@ -13,7 +14,6 @@ from datus.api.models.base_models import Result
 from datus.api.models.config_models import ErrorCode
 from datus.api.models.database_models import (
     DatabaseInfo,
-    DatasourceConnectionStatus,
     ListDatabasesData,
     ListDatabasesInput,
 )
@@ -37,7 +37,6 @@ from datus.utils.time_utils import now_utc_iso
 logger = get_logger(__name__)
 # Database types that do NOT support schema switching
 _NO_SCHEMA_TYPES = {"sqlite", "duckdb", "mysql"}
-_TABLE_LIKE_VIEW_METHODS = ("get_views", "get_materialized_views")
 
 
 class DatasourceService:
@@ -63,8 +62,6 @@ class DatasourceService:
 
         self.current_db_connector = None
         self.current_db_name = None
-        self._connection_status: dict[str, DatasourceConnectionStatus] = {}
-        self._prewarm_in_progress: set[str] = set()
 
     def _ensure_semantic_rag(self) -> SemanticModelRAG:
         """Create semantic model storage only after a datasource is selected."""
@@ -82,6 +79,39 @@ class DatasourceService:
             )
         self.semantic_rag = SemanticModelRAG(self.agent_config, datasource_id=self.current_datasource)
         return self.semantic_rag
+
+    def _active_semantic_adapter(self) -> str:
+        resolver = getattr(self.agent_config, "resolve_semantic_adapter", None)
+        if callable(resolver):
+            return str(resolver() or "").strip().lower()
+        return ""
+
+    def _is_osi_semantic_layer(self) -> bool:
+        return self._active_semantic_adapter() == "osi"
+
+    @staticmethod
+    def _validate_osi_semantic_yaml(yaml_content: str, file_path: str) -> tuple[bool, List[str]]:
+        try:
+            from datus_semantic_osi.profile import load_osi_path
+        except ImportError as exc:
+            return False, [f"datus-semantic-osi is required to validate OSI semantic YAML: {exc}"]
+
+        suffix = os.path.splitext(file_path or "")[1] or ".yml"
+        temp_file_path = ""
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=suffix, delete=False) as tmp:
+                tmp.write(yaml_content)
+                temp_file_path = tmp.name
+            load_osi_path(temp_file_path, normalize=True)
+            return True, []
+        except Exception as exc:
+            return False, [str(exc)]
+        finally:
+            if temp_file_path:
+                try:
+                    os.unlink(temp_file_path)
+                except OSError:
+                    pass
 
     def _get_database_type(self, database_name: Optional[str] = None) -> tuple[str, str]:
         """
@@ -133,78 +163,7 @@ class DatasourceService:
         started_at: float | None = None,
         error_message: str | None = None,
     ) -> None:
-        if not datasource_id:
-            return
-        latency_ms = None
-        if started_at is not None:
-            latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
-        self._connection_status[datasource_id] = DatasourceConnectionStatus(
-            datasource_id=datasource_id,
-            status=status,
-            last_checked=now_utc_iso(),
-            latency_ms=latency_ms,
-            error_message=error_message,
-            cached=True,
-        )
-
-    def record_datasource_timeout(self, datasource_id: str) -> None:
-        """Record a route-level timeout for datasource operations."""
-
-        self._record_connection_status(datasource_id, "timeout", error_message="Datasource query timed out")
-
-    def datasource_statuses(self, datasource_ids: List[str] | None = None) -> List[DatasourceConnectionStatus]:
-        """Return cached datasource statuses without opening any database connection."""
-
-        configured = self.agent_config.datasource_configs if self.agent_config else {}
-        requested = datasource_ids if datasource_ids is not None else list(configured)
-        statuses: List[DatasourceConnectionStatus] = []
-        for datasource_id in requested:
-            cached = self._connection_status.get(datasource_id)
-            if cached is not None:
-                statuses.append(cached)
-                continue
-            statuses.append(
-                DatasourceConnectionStatus(
-                    datasource_id=datasource_id,
-                    status="unknown",
-                    last_checked=None,
-                    latency_ms=None,
-                    error_message=None,
-                    cached=False,
-                )
-            )
-        return statuses
-
-    def start_prewarm(self, datasource_id: str) -> bool:
-        """Mark a datasource as prewarming.
-
-        Returns True when a new background prewarm should be scheduled, or False
-        when another prewarm is already in progress for the datasource.
-        """
-
-        if datasource_id in self._prewarm_in_progress:
-            return False
-        self._prewarm_in_progress.add(datasource_id)
-        self._record_connection_status(datasource_id, "connecting")
-        return True
-
-    def prewarm_datasource(self, datasource_id: str) -> None:
-        """Open and test the selected datasource in the background."""
-
-        started_at = time.perf_counter()
-        try:
-            connections = self.db_manager.get_connections(datasource_id)
-            for connector in connections.values():
-                connect = getattr(connector, "connect", None)
-                if callable(connect):
-                    connect()
-                connector.test_connection()
-            self._record_connection_status(datasource_id, "connected", started_at=started_at)
-        except Exception as exc:
-            self._record_connection_status(datasource_id, "failed", started_at=started_at, error_message=str(exc))
-            logger.warning("Datasource prewarm failed for %s: %s", datasource_id, exc)
-        finally:
-            self._prewarm_in_progress.discard(datasource_id)
+        """Extension hook for downstream connection-status caches."""
 
     def _get_connection_info(
         self,
@@ -380,46 +339,16 @@ class DatasourceService:
         database_name: str | None = "",
         schema_name: str | None = "",
     ) -> List[str]:
-        """Return tables plus view-like objects for catalog browsing.
-
-        The catalog API keeps its legacy ``tables: list[str]`` response shape, but
-        admin grant pickers need all queryable objects to be discoverable. Views
-        and materialized views are therefore folded into the same name list while
-        unsupported view metadata remains best-effort.
-        """
-
-        names = [
-            str(table_name).strip()
-            for table_name in connector.get_tables(
-                catalog_name=catalog_name or "",
-                database_name=database_name or "",
-                schema_name=schema_name or "",
-            )
-            if str(table_name).strip()
-        ]
-
-        for method_name in _TABLE_LIKE_VIEW_METHODS:
-            method = getattr(connector, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                names.extend(
-                    str(table_name).strip()
-                    for table_name in method(
-                        catalog_name=catalog_name or "",
-                        database_name=database_name or "",
-                        schema_name=schema_name or "",
-                    )
-                    if str(table_name).strip()
-                )
-            except Exception as e:
-                logger.debug("%s unavailable on %s: %s", method_name, getattr(connector, "dialect", "unknown"), e)
-
-        return sorted(set(names))
+        tables = connector.get_tables(
+            catalog_name=catalog_name or "",
+            database_name=database_name or "",
+            schema_name=schema_name or "",
+        )
+        tables.sort()
+        return tables
 
     def _should_enumerate_databases(self, datasource: str) -> bool:
-        config = getattr(getattr(self.agent_config, "services", None), "datasources", {}).get(datasource)
-        return bool(getattr(config, "enumerate_databases", False))
+        return False
 
     def list_databases(self, request: ListDatabasesInput) -> Result[ListDatabasesData]:
         """
@@ -725,13 +654,24 @@ class DatasourceService:
 
         # Step 4: Sync semantic model to database
         try:
-            sync_result = await asyncio.to_thread(
-                GenerationHooks._sync_semantic_to_db,
-                semantic_file_path,
-                self.agent_config,
-                include_semantic_objects=True,
-                include_metrics=False,
-            )
+            if self._is_osi_semantic_layer():
+                from datus.tools.func_tool.generation_tools import GenerationTools
+
+                sync_result = await asyncio.to_thread(
+                    GenerationTools(
+                        agent_config=self.agent_config,
+                        authoring_format="osi",
+                    ).sync_osi_semantic_to_db,
+                    semantic_file_path,
+                )
+            else:
+                sync_result = await asyncio.to_thread(
+                    GenerationHooks._sync_semantic_to_db,
+                    semantic_file_path,
+                    self.agent_config,
+                    include_semantic_objects=True,
+                    include_metrics=False,
+                )
             if not sync_result.get("success", False):
                 error_msg = sync_result.get("error", "Unknown error")
                 return Result[dict](
@@ -789,18 +729,21 @@ class DatasourceService:
             # Get semantic file path from result
             semantic_file_path = semantic_model.get("yaml_path", "")
 
-            # Validate using shared utility (deep validation when metricflow is available)
-            from datus.api.utils.semantic_validation import validate_semantic_yaml
+            if self._is_osi_semantic_layer():
+                is_valid, error_messages = self._validate_osi_semantic_yaml(request.yaml, semantic_file_path)
+            else:
+                # Validate using shared utility (deep validation when metricflow is available)
+                from datus.api.utils.semantic_validation import validate_semantic_yaml
 
-            is_valid, error_messages = validate_semantic_yaml(
-                yaml_content=request.yaml,
-                file_path=semantic_file_path,
-                datus_home=self.agent_config.home,
-                datasource=self.agent_config.current_datasource,
-                catalog=request.catalog,
-                database=request.database,
-                db_schema=request.db_schema,
-            )
+                is_valid, error_messages = validate_semantic_yaml(
+                    yaml_content=request.yaml,
+                    file_path=semantic_file_path,
+                    datus_home=self.agent_config.home,
+                    datasource=self.agent_config.current_datasource,
+                    catalog=request.catalog,
+                    database=request.database,
+                    db_schema=request.db_schema,
+                )
 
             if not is_valid:
                 return Result[ValidateSemanticModelData](

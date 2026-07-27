@@ -12,10 +12,8 @@ streaming interactions with tool integration and action history management.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +25,10 @@ from agents.mcp import MCPServerStdio
 
 from datus.agent.node.compact_archive import ToolArchive, maybe_truncate_item
 from datus.agent.node.compact_prompts import build_continuation_message, render_major_compact_prompt
+from datus.agent.node.mcp_failure_actions_downstream import (
+    drain_mcp_connection_failure_actions,
+    record_mcp_connection_failure,
+)
 from datus.agent.node.node import Node
 from datus.cli.execution_state import ExecutionInterrupted, InteractionBroker, InterruptController, PendingInputQueue
 from datus.configuration.agent_config import AgentConfig, CompactConfig
@@ -39,6 +41,15 @@ from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import build_structured_content
 from datus.utils.node_utils import build_database_context
+from datus_enterprise.services.agentic_permission_errors import (
+    format_permission_denied_error,
+    is_permission_denied_error,
+)
+from datus_enterprise.services.agentic_session_runtime import (
+    clear_running_turn_usage,
+    delete_system_prompt_snapshot,
+    get_session_system_prompt,
+)
 
 if TYPE_CHECKING:
     from datus.agent.node.stream_run_context import StreamRunContext
@@ -63,22 +74,6 @@ _LANGUAGE_NAME_MAP: Dict[str, str] = {
     "pt": "Portuguese",
     "ru": "Russian",
     "it": "Italian",
-}
-
-_PERMISSION_DENIED_TOOL_RE = re.compile(
-    r"PERMISSION_DENIED:\s*Tool\s+'(?P<tool>[^']+)'\s+\((?P<category>[^)]+)\)\s+"
-    r"is blocked by the\s+'(?P<profile>[^']+)'\s+permission profile",
-    re.IGNORECASE,
-)
-_PERMISSION_MODE_DENIED_RE = re.compile(
-    r"Permission mode '(?P<mode>[^']+)' requires module\.chat\.permission_mode",
-    re.IGNORECASE,
-)
-_FILESYSTEM_WRITE_TOOL_NAMES = {"write_file", "edit_file", "delete_file"}
-_PERMISSION_PROFILE_LABELS = {
-    "normal": "普通",
-    "auto": "自动",
-    "dangerous": "危险",
 }
 
 
@@ -107,6 +102,14 @@ class AgenticNode(Node):
     # the box without forcing users to wire each skill manually. Set to an explicit
     # empty string in yml to opt out of the defaults.
     DEFAULT_SKILLS: Optional[str] = None
+
+    # Skills whose full content is injected into the system prompt by the host
+    # at render time instead of being advertised in ``<available_skills>`` for
+    # LLM-initiated ``load_skill`` calls. Use for specifications the node needs
+    # on every run (e.g. authoring format specs); optional, conditionally
+    # useful workflows belong in ``DEFAULT_SKILLS``. Subclasses may override
+    # ``_get_required_skills()`` to derive the list from configuration.
+    REQUIRED_SKILLS: Optional[str] = None
 
     # When True, this node's ``SkillFuncTool`` loads skills in *authoring* mode:
     # ``allowed_agents`` scoping on ``load_skill`` is bypassed so the agent can
@@ -231,6 +234,11 @@ class AgenticNode(Node):
 
         self.tool_registry = ToolRegistry()
 
+        # Plugin-declared tool argument transformers are applied lazily on the
+        # first ``_compose_hooks`` call, after ``setup_tools`` and any
+        # ``apply_proxy_tools`` rewrites — see ``_ensure_tool_transformers``.
+        self._tool_transformers_applied = False
+
         # Parse node configuration from agent.yml (available to all agentic nodes)
         self.node_config = self._parse_node_config(agent_config, self.get_node_name())
 
@@ -346,33 +354,10 @@ class AgenticNode(Node):
         self.degraded_capabilities[key] = message
 
     def _record_mcp_connection_failure(self, server_name: str, error: str) -> None:
-        failure = (server_name, error)
-        failures = getattr(self, "_mcp_connection_failures", None)
-        if failures is None:
-            failures = []
-            self._mcp_connection_failures = failures
-        if failure not in failures:
-            failures.append(failure)
+        record_mcp_connection_failure(self, server_name, error)
 
     def _drain_mcp_connection_failure_actions(self, manager: ActionHistoryManager) -> List[ActionHistory]:
-        failures = getattr(self, "_mcp_connection_failures", [])
-        self._mcp_connection_failures = []
-        actions: List[ActionHistory] = []
-        for server_name, error in failures:
-            action = ActionHistory(
-                action_id=str(uuid.uuid4()),
-                role=ActionRole.TOOL,
-                action_type=f"mcp.{server_name}.connect",
-                input={"server_name": server_name},
-                output={
-                    "error": error,
-                    "summary": f"MCP Server '{server_name}' connection failed; the Agent continued without it.",
-                },
-                status=ActionStatus.FAILED,
-            )
-            manager.add_action(action)
-            actions.append(action)
-        return actions
+        return drain_mcp_connection_failure_actions(self, manager)
 
     def _record_context_search_degraded(self, error: BaseException | str) -> str:
         from datus.storage.embedding_diagnostics import format_context_degraded_warning
@@ -1144,45 +1129,7 @@ class AgenticNode(Node):
         prompt_version: Optional[str] = None,
         template_context: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Async request-path variant of :meth:`_get_session_system_prompt`.
-
-        PostgreSQL session body stores use asyncpg resources bound to the
-        current event loop. FastAPI/streaming paths must await them directly
-        instead of entering the synchronous ``run_async()`` bridge.
-        """
-        session_id = getattr(self, "session_id", "") or ""
-        meta = self._system_prompt_snapshot_meta(prompt_version)
-        sm = None
-        if session_id:
-            try:
-                sm = self.session_manager
-            except Exception as exc:  # session manager wiring is optional in some unit paths
-                logger.debug("System-prompt snapshot disabled (no session manager): %s", exc)
-                sm = None
-
-        if sm is not None:
-            load_snapshot = getattr(sm, "load_system_prompt_snapshot_async", None)
-            snapshot = (
-                await load_snapshot(session_id)
-                if inspect.iscoroutinefunction(load_snapshot)
-                else sm.load_system_prompt_snapshot(session_id)
-            )
-            if snapshot is not None and all(snapshot.get(k) == v for k, v in meta.items()):
-                self._ensure_lazy_tools_mounted()
-                return snapshot["prompt"]
-
-        if template_context:
-            prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
-        else:
-            prompt = self._get_system_prompt(prompt_version=prompt_version)
-
-        if sm is not None:
-            save_snapshot = getattr(sm, "save_system_prompt_snapshot_async", None)
-            if inspect.iscoroutinefunction(save_snapshot):
-                await save_snapshot(session_id, prompt, meta)
-            else:
-                sm.save_system_prompt_snapshot(session_id, prompt, meta)
-        return prompt
+        return await get_session_system_prompt(self, prompt_version, template_context)
 
     def _get_system_prompt(
         self,
@@ -1267,6 +1214,11 @@ class AgenticNode(Node):
         base_prompt = self._inject_runtime_context(base_prompt)
         base_prompt = self._inject_datasource_runtime_context(base_prompt)
 
+        # Inject installed-plugin context (available scheduling/plugin
+        # environments and what they do), grouped with the other "what's
+        # available" context above.
+        base_prompt = self._inject_plugin_context(base_prompt)
+
         # Inject AGENTS.md project context if present in cwd
         agents_md = self._load_agents_md()
         if agents_md:
@@ -1274,6 +1226,11 @@ class AgenticNode(Node):
 
         # Mount the lazily injected skill/bash/memory tools.
         self._ensure_lazy_tools_mounted()
+
+        # Inject required-skill specifications deterministically. These are
+        # host-mandated (e.g. authoring format specs) and must not depend on
+        # the LLM choosing to call ``load_skill``.
+        base_prompt = self._inject_required_skills(base_prompt)
 
         # Inject available skills XML into system prompt when skill_func_tool is active.
         if self.skill_func_tool:
@@ -1362,6 +1319,31 @@ class AgenticNode(Node):
             return base_prompt
         if section and section.strip():
             base_prompt = base_prompt + "\n\n" + section.strip()
+        return base_prompt
+
+    def _inject_plugin_context(self, base_prompt: str) -> str:
+        """Append self-describing context contributed by installed plugins.
+
+        Each ``datus.plugins`` package may expose a class-level
+        ``system_prompt(profiles)`` returning a markdown block (e.g. the
+        available scheduler environments). datus collects those sections and
+        appends them verbatim — the plugin owns formatting and is responsible
+        for surfacing only non-secret fields. Skipped entirely when the
+        plugin system is disabled (``agent.plugins_enabled: false``).
+        """
+        agent_config = getattr(self, "agent_config", None)
+        if agent_config is None or not getattr(agent_config, "plugins_enabled", True):
+            return base_prompt
+        try:
+            from datus.plugins.registry import plugin_system_prompt_sections
+
+            sections = plugin_system_prompt_sections(agent_config)
+        except Exception as e:
+            logger.warning(f"Failed to inject plugin context: {e}")
+            return base_prompt
+        for section in sections:
+            if section and section.strip():
+                base_prompt = base_prompt + "\n\n" + section.strip()
         return base_prompt
 
     def _inject_response_language(self, base_prompt: str) -> str:
@@ -1603,11 +1585,7 @@ class AgenticNode(Node):
                 # memory, skills) instead of replaying the pre-compact snapshot.
                 if result.get("success") and self.session_id:
                     try:
-                        delete_snapshot = getattr(self.session_manager, "delete_system_prompt_snapshot_async", None)
-                        if inspect.iscoroutinefunction(delete_snapshot):
-                            await delete_snapshot(self.session_id)
-                        else:
-                            self.session_manager.delete_system_prompt_snapshot(self.session_id)
+                        await delete_system_prompt_snapshot(self.session_manager, self.session_id)
                     except Exception as exc:
                         logger.debug("Failed to drop system-prompt snapshot after compact: %s", exc)
                 # Always emit the terminal action — even on failure — so the
@@ -2173,7 +2151,6 @@ class AgenticNode(Node):
             "scoped_context",
             "scoped_kb_path",
             "adapter_type",
-            "semantic_adapter",
             "subject_tree_prompt_limit",
             "require_final_result_selection",
             "sql_file_threshold",
@@ -2239,7 +2216,18 @@ class AgenticNode(Node):
             from datus.tools.permission.permission_manager import PermissionManager
 
             is_workflow = getattr(self, "execution_mode", None) == "workflow"
-            if is_workflow:
+            # Print mode opts out of the forced-``dangerous`` posture by
+            # setting ``agent_config.workflow_permission_profile`` (the
+            # configured or ``--permission-mode`` profile), so ``datus -p``
+            # only auto-runs what the profile's allow rules cover. Unattended
+            # flows (bootstrap, scheduler, benchmarks) leave it ``None`` and
+            # keep the historical dangerous baseline. isinstance guards
+            # against mocked agent_configs in tests.
+            workflow_profile = getattr(self.agent_config, "workflow_permission_profile", None)
+            if is_workflow and isinstance(workflow_profile, str) and workflow_profile:
+                permissions_config = self.agent_config.permissions_config
+                active_profile = workflow_profile
+            elif is_workflow:
                 from datus.tools.permission.profiles import get_profile
 
                 permissions_config = get_profile("dangerous")
@@ -2258,6 +2246,8 @@ class AgenticNode(Node):
                 global_config=permissions_config,
                 node_overrides={self.get_node_name(): node_permissions} if node_permissions else {},
                 active_profile=active_profile,
+                plugin_bash_rules=getattr(self.agent_config, "plugin_bash_rules", None),
+                project_bash_allows=getattr(self.agent_config, "project_bash_allow", None),
             )
             # Forward existing callback to permission manager
             if self._permission_callback:
@@ -2358,6 +2348,68 @@ class AgenticNode(Node):
             )
         except Exception as e:
             logger.error(f"Failed to setup skill func tools: {e}")
+
+    def _get_required_skills(self) -> List[str]:
+        """Return skill names whose content is host-injected into the prompt.
+
+        Defaults to parsing the class-level ``REQUIRED_SKILLS`` string.
+        Subclasses may override to derive the list from configuration (e.g.
+        the active semantic authoring format).
+        """
+        patterns = type(self).REQUIRED_SKILLS
+        if not patterns:
+            return []
+        return [pattern.strip() for pattern in patterns.split(",") if pattern.strip()]
+
+    def _inject_required_skills(self, base_prompt: str) -> str:
+        """Append required-skill content to the system prompt deterministically.
+
+        Required skills carry specifications the node needs on every run, so
+        the host injects them at prompt-build time instead of advertising them
+        in ``<available_skills>`` and hoping the LLM calls ``load_skill``.
+        Permission checks are skipped — the node itself mandates these skills —
+        but ``allowed_agents`` scoping still applies.
+
+        Raises:
+            DatusException: When a required skill cannot be loaded. A missing
+                authoring spec would silently degrade every generation, so this
+                fails fast instead.
+        """
+        required_skills = self._get_required_skills()
+        if not required_skills:
+            return base_prompt
+
+        if not self.skill_manager:
+            from datus.tools.skill_tools.skill_manager import SkillManager
+
+            self.skill_manager = SkillManager(permission_manager=self.permission_manager)
+
+        from xml.sax.saxutils import quoteattr as xml_quoteattr
+
+        sections = []
+        for skill_name in required_skills:
+            success, message, content = self.skill_manager.load_skill(
+                skill_name,
+                self.get_node_name(),
+                check_permission=False,
+                node_class=self.get_node_class_name(),
+            )
+            if not success or not content:
+                from datus.utils.exceptions import DatusException, ErrorCode
+
+                raise DatusException(
+                    code=ErrorCode.COMMON_CONFIG_ERROR,
+                    message_args={
+                        "config_error": (
+                            f"Required skill '{skill_name}' could not be loaded for node "
+                            f"'{self.get_node_name()}': {message}"
+                        )
+                    },
+                )
+            sections.append(f"<required_skill name={xml_quoteattr(skill_name)}>\n{content}\n</required_skill>")
+            logger.info(f"Injected required skill '{skill_name}' into system prompt for '{self.get_node_name()}'")
+
+        return base_prompt + "\n\n" + "\n\n".join(sections)
 
     @staticmethod
     def _merge_skill_patterns(existing_skills: Any, injected_skills: List[str]) -> str:
@@ -2481,7 +2533,7 @@ class AgenticNode(Node):
 
         Available to every agentic node when ``agent.bash.enabled`` is
         ``True`` (the default). ``allowed_patterns=["*"]`` means the tool
-        exposes ``execute_command`` for any shell command; per-call gating
+        exposes ``bash`` for any shell command; per-call gating
         is the responsibility of the ``bash_tools`` ASK rule in the
         permission profile, not a static pattern whitelist.
 
@@ -2507,14 +2559,40 @@ class AgenticNode(Node):
             self.bash_tool = BashTool(
                 workspace_root=self._resolve_workspace_root(),
                 allowed_patterns=["*"],
+                # Offload oversized command output to the session data dir (the
+                # same location minor compact uses). Resolved lazily: this method
+                # runs before ``session_id`` is finalized, so the closure reads it
+                # at execute time. Returns None until a session id exists → the
+                # tool falls back to in-memory truncation.
+                output_dir_provider=self._bash_output_dir,
             )
             logger.debug(f"Setup bash tool with workspace: {self.bash_tool.workspace_root}")
         except Exception as e:
             logger.error(f"Failed to setup bash tool: {e}")
             self.bash_tool = None
 
+    def _bash_output_dir(self) -> Optional[Path]:
+        """Session data dir for bash output offload, or None if unavailable.
+
+        Reused directory convention as the compact archive
+        (``path_manager.session_data_dir(session_id)``). Returns None before a
+        session id is allocated, when there is no ``agent_config`` (mirrors
+        ``_resolve_session_data_dir`` — otherwise ``get_path_manager`` would fall
+        back to a process-wide default rooted at ``~/.datus``), or when the path
+        manager can't be built, so the bash tool degrades to in-memory truncation.
+        """
+        if not self.agent_config or not self.session_id:
+            return None
+        try:
+            from datus.utils.path_manager import get_path_manager
+
+            return get_path_manager(agent_config=self.agent_config).session_data_dir(self.session_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Failed to resolve bash output dir: %s", exc)
+            return None
+
     def _ensure_bash_tool_in_tools(self) -> None:
-        """Ensure the BashTool's ``execute_command`` is in ``self.tools``.
+        """Ensure the BashTool's ``bash`` is in ``self.tools``.
 
         Mirrors :meth:`_ensure_skill_tools_in_tools` — called lazily so the
         late ``setup_tools()`` reset in subclasses doesn't strip the tool.
@@ -2572,6 +2650,14 @@ class AgenticNode(Node):
         existing = [t for t in (getattr(self, "tools", None) or []) if getattr(t, "name", None) not in web_names]
         existing.extend(desired)
         self.tools = existing
+        # The tool list was rebuilt: freshly mounted web tools are unwrapped, so
+        # clear the "transformers applied" flag to force a re-wrap on the next
+        # ``_ensure_tool_transformers`` pass. Without this, a runtime ``/model``
+        # switch that remounts web tools would leave them unwrapped and matching
+        # plugin transformers (policy enforcement) would silently fail open.
+        # ``apply_tool_transformers`` skips already-wrapped tools, so the re-wrap
+        # never double-transforms the tools carried over above.
+        self._tool_transformers_applied = False
         if desired:
             logger.info(
                 f"Web tools injected into node '{self.get_node_name()}': "
@@ -2995,11 +3081,7 @@ class AgenticNode(Node):
                         except Exception:  # noqa: BLE001
                             sm = None
                         if sm is not None:
-                            clear_running_usage = getattr(sm, "clear_running_turn_usage_async", None)
-                            if inspect.iscoroutinefunction(clear_running_usage):
-                                await clear_running_usage(session_id)
-                            elif hasattr(sm, "clear_running_turn_usage"):
-                                sm.clear_running_turn_usage(session_id)
+                            await clear_running_turn_usage(sm, session_id)
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to drop running_turn_usage on turn end", exc_info=True)
 
@@ -3040,6 +3122,11 @@ class AgenticNode(Node):
         from datus.agent.tool_policy import apply_agent_runtime_policy
 
         apply_agent_runtime_policy(self)
+        # Wrap tools with plugin transformers BEFORE the stream call below
+        # captures ``self.tools``: call arguments evaluate left to right, so
+        # deferring to ``hooks=self._compose_run_hooks(ctx)`` would be one
+        # argument too late and the first run would execute unwrapped tools.
+        self._ensure_tool_transformers()
         self._current_action_history = ctx.action_history_manager
         try:
             async for stream_action in self.model.generate_with_tools_stream(
@@ -3718,6 +3805,13 @@ class AgenticNode(Node):
 
             # Never call ``_get_or_create_broker`` here — it resets the queue
             # and orphans any parent CLI listener when running as a sub-agent.
+            # Reserved LLM-classifier seam for bash commands: returns None
+            # until ``permissions.bash_commands.classifier.enabled`` gains a
+            # real implementation (see bash_classifier.py).
+            from datus.tools.permission.bash_classifier import create_bash_classifier
+
+            bash_rules = getattr(getattr(self.agent_config, "permissions_config", None), "bash_commands", None)
+
             self.permission_hooks = PermissionHooks(
                 broker=self.interaction_broker,
                 permission_manager=self.permission_manager,
@@ -3728,6 +3822,7 @@ class AgenticNode(Node):
                 non_interactive=non_interactive,
                 proxied_tool_names=self.proxied_tool_names,
                 project_root=getattr(self.agent_config, "project_root", None),
+                bash_classifier=create_bash_classifier(bash_rules, self.agent_config),
             )
             logger.debug(
                 f"PermissionHooks attached to node '{self.get_node_name()}' "
@@ -3745,6 +3840,59 @@ class AgenticNode(Node):
             raise DatusException(
                 code=ErrorCode.COMMON_CONFIG_ERROR,
                 message_args={"config_error": f"Permission hook setup failed for {self.get_node_name()}: {e}"},
+            ) from e
+
+    def _ensure_tool_transformers(self) -> None:
+        """Wrap ``self.tools`` with plugin-declared argument transformers, once.
+
+        Invoked lazily from :meth:`_compose_hooks` so wrapping happens after
+        ``setup_tools`` and any ``apply_proxy_tools`` rewrite (proxied tools
+        are skipped — they execute client-side). Idempotent via a flag so a
+        node reused across turns never double-wraps.
+
+        Gated by ``agent.plugins_enabled`` like every other plugin surface.
+        Collection failures are swallowed inside the registry (a broken plugin
+        must not break the agent), but once a plugin *has* declared
+        transformers, a failure to apply them raises: transformers are policy
+        code, and running without them would silently drop enforcement.
+        """
+        # Defensive getattr: test doubles that bypass ``AgenticNode.__init__``
+        # may carry neither the flag nor an agent_config (same rationale as the
+        # ``interaction_broker`` getattr in ``_stream_once``).
+        if getattr(self, "_tool_transformers_applied", False):
+            return
+        if not getattr(getattr(self, "agent_config", None), "plugins_enabled", True):
+            self._tool_transformers_applied = True
+            return
+        from datus.plugins.registry import collect_plugin_tool_transformers
+
+        transformers_by_pattern = collect_plugin_tool_transformers()
+        if not transformers_by_pattern:
+            self._tool_transformers_applied = True
+            return
+        try:
+            from datus.tools.middleware import apply_tool_transformers
+
+            wrapped = apply_tool_transformers(self, transformers_by_pattern)
+            logger.debug(
+                "Applied plugin tool transformers on node '%s': %d tool(s) wrapped",
+                self.get_node_name(),
+                wrapped,
+            )
+            # Only mark applied on success: setting the flag before the
+            # attempt would turn the fail-closed raise below into fail-open
+            # on the next turn (the early return above would skip wrapping
+            # entirely and matched tools would run unenforced).
+            self._tool_transformers_applied = True
+        except Exception as e:
+            # Fail closed: a declared transformer that cannot be applied means
+            # policy enforcement would silently vanish for matched tools.
+            from datus.utils.exceptions import DatusException, ErrorCode
+
+            logger.exception("Failed to apply plugin tool transformers for %s", self.get_node_name())
+            raise DatusException(
+                code=ErrorCode.COMMON_CONFIG_ERROR,
+                message_args={"config_error": f"Tool transformer setup failed for {self.get_node_name()}: {e}"},
             ) from e
 
     @staticmethod
@@ -3785,61 +3933,12 @@ class AgenticNode(Node):
         return 0
 
     @staticmethod
-    def _iter_exception_chain(exc: BaseException):
-        seen: set[int] = set()
-        current: BaseException | None = exc
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            yield current
-            current = current.__cause__ or current.__context__
-
-    @classmethod
-    def _is_permission_denied_error(cls, exc: BaseException) -> bool:
-        for current in cls._iter_exception_chain(exc):
-            if type(current).__name__ == "PermissionDeniedException":
-                return True
-            if "PERMISSION_DENIED:" in str(current):
-                return True
-            if _PERMISSION_MODE_DENIED_RE.search(str(current)):
-                return True
-        return False
+    def _is_permission_denied_error(exc: BaseException) -> bool:
+        return is_permission_denied_error(exc)
 
     @staticmethod
-    def _permission_profile_label(profile: str) -> str:
-        return _PERMISSION_PROFILE_LABELS.get(profile, profile)
-
-    @classmethod
-    def _format_permission_denied_error(cls, exc: BaseException) -> str | None:
-        for current in cls._iter_exception_chain(exc):
-            text = str(current).strip()
-            if not text:
-                continue
-
-            tool_match = _PERMISSION_DENIED_TOOL_RE.search(text)
-            if tool_match:
-                tool_name = tool_match.group("tool")
-                category = tool_match.group("category")
-                profile = cls._permission_profile_label(tool_match.group("profile"))
-                if category == "filesystem_tools" and tool_name in _FILESYSTEM_WRITE_TOOL_NAMES:
-                    return (
-                        "权限受限：当前 Agent 或会话的工具策略不允许直接修改文件。"
-                        f"{tool_name} 已被“{profile}”权限模式拦截，换路径或重试不会绕过限制。"
-                        "请联系管理员核对该 Agent 的工具策略。"
-                    )
-                return (
-                    f"权限受限：当前账号没有执行工具 {tool_name} 的权限，"
-                    f"已被“{profile}”权限模式拦截，换参数或重试不会绕过限制。"
-                )
-
-            mode_match = _PERMISSION_MODE_DENIED_RE.search(text)
-            if mode_match:
-                mode = cls._permission_profile_label(mode_match.group("mode"))
-                return (
-                    f"权限受限：当前账号不能切换到 {mode} 对话模式。"
-                    "如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。"
-                )
-
-        return None
+    def _format_permission_denied_error(exc: BaseException) -> str | None:
+        return format_permission_denied_error(exc)
 
     @staticmethod
     def _format_execution_error(exc: BaseException) -> str:
@@ -3880,6 +3979,7 @@ class AgenticNode(Node):
         ``datus/agent/node/token_usage_hook.py``).
         """
         self._ensure_permission_hooks()
+        self._ensure_tool_transformers()
         compact_hook = self._get_or_create_compact_hook()
         token_usage_hook = self._get_or_create_token_usage_hook()
         tool_lifecycle_hook = self._get_or_create_tool_lifecycle_hook()

@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import hashlib
 import os
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,7 @@ import yaml
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.base import EmbeddingModel
 from datus.storage.datasource_scope import datasource_condition, resolve_datasource_id
+from datus.storage.fts import FtsField, FtsSpec
 from datus.storage.knowledge_provenance import enrich_reference_sql_results, is_knowledge_provenance_enabled
 from datus.storage.subject_tree.store import BaseSubjectEmbeddingStore, base_schema_columns
 from datus.utils.loggings import get_logger
@@ -55,7 +57,17 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         self._create_scalar_index("filepath")
 
         self.create_subject_index()
-        self.create_fts_index(["sql", "name", "summary", "tags", "search_text"])
+        self.create_fts_index(
+            FtsSpec(
+                (
+                    FtsField("name", boost=3.0),
+                    FtsField("summary", boost=2.0),
+                    FtsField("search_text", boost=2.0),
+                    FtsField("tags", boost=1.5),
+                    FtsField("sql"),
+                )
+            )
+        )
 
     def batch_store_sql(self, sql_items: List[Dict[str, Any]], subject_path_field: str = "subject_path") -> None:
         """Store multiple reference SQL items in batch with subject path processing.
@@ -93,7 +105,10 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
                 )
                 continue
 
-            valid_items.append(item)
+            normalized_item = item.copy()
+            if normalized_item.get("id") in (None, ""):
+                normalized_item["id"] = hashlib.md5(sql.encode("utf-8"), usedforsecurity=False).hexdigest()
+            valid_items.append(normalized_item)
 
         # Use base class batch_store method
         self.batch_store(valid_items)

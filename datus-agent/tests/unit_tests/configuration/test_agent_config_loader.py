@@ -306,30 +306,6 @@ class TestApplyProjectOverride:
         assert agent_raw["services"]["datasources"]["db1"]["default"] is False
         assert agent_raw["services"]["datasources"]["db2"]["default"] is True
 
-    def test_default_datasource_can_target_datasources_file_entry(self, tmp_path):
-        datasources_file = tmp_path / "datasources.yml"
-        datasources_file.write_text(
-            """
-datasources:
-  external_pg:
-    type: postgresql
-    host: pg-host
-    database: warehouse
-""",
-            encoding="utf-8",
-        )
-        agent_raw = self._base_raw()
-        agent_raw["services"]["datasources_file"] = str(datasources_file)
-        with patch(
-            "datus.configuration.agent_config_loader.load_project_override",
-            return_value=ProjectOverride(default_datasource="external_pg"),
-        ):
-            _apply_project_override(agent_raw)
-
-        assert agent_raw["services"]["datasources"]["external_pg"]["default"] is True
-        assert agent_raw["services"]["datasources"]["db1"]["default"] is False
-        assert agent_raw["services"]["datasources_file"] == ""
-
     def test_invalid_default_datasource_raises(self):
         agent_raw = self._base_raw()
         with patch(
@@ -350,6 +326,26 @@ datasources:
             _apply_project_override(agent_raw)
         assert agent_raw["target"] == "deepseek"
         assert agent_raw["project_name"] == "p"
+
+    def test_plugins_pin_forwarded_as_active_plugins(self):
+        """A ``plugins:`` pin rides into ``agent_raw["active_plugins"]`` so
+        ``get_plugin_profile`` can resolve the project-selected profile."""
+        agent_raw = self._base_raw()
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(plugins={"hello": "staging"}),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["active_plugins"] == {"hello": "staging"}
+
+    def test_no_plugins_pin_leaves_active_plugins_unset(self):
+        agent_raw = self._base_raw()
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(project_name="p"),
+        ):
+            _apply_project_override(agent_raw)
+        assert "active_plugins" not in agent_raw
 
     def test_language_merged(self):
         agent_raw = self._base_raw()
@@ -612,3 +608,101 @@ class TestLoadAgentConfigResolution:
         ):
             agent_config = load_agent_config(config=str(cfg), home=str(tmp_path), reload=True)
         assert agent_config.current_datasource == ""
+
+
+class TestApplyProjectOverrideBashAllow:
+    """bash_allow from .datus/config.yml merges into permissions.bash_commands.allow."""
+
+    def test_bash_allow_merged_into_permissions(self):
+        agent_raw = {"target": "openai", "models": {"openai": {}}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(bash_allow=["make:*", "uv run:*"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["permissions"]["bash_commands"]["allow"] == ["make:*", "uv run:*"]
+
+    def test_bash_allow_appends_to_existing_allow(self):
+        agent_raw = {
+            "permissions": {"profile": "normal", "bash_commands": {"allow": ["git log:*"], "deny": ["rm:*"]}},
+        }
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(bash_allow=["make:*", "git log:*"]),
+        ):
+            _apply_project_override(agent_raw)
+        # appended without duplicating the existing entry; deny untouched
+        assert agent_raw["permissions"]["bash_commands"]["allow"] == ["git log:*", "make:*"]
+        assert agent_raw["permissions"]["bash_commands"]["deny"] == ["rm:*"]
+
+    def test_malformed_permissions_replaced_not_crashed(self):
+        """A non-dict ``permissions`` section must not crash config loading."""
+        agent_raw = {"permissions": "oops"}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(bash_allow=["make:*"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["permissions"] == {"bash_commands": {"allow": ["make:*"]}}
+
+    def test_malformed_nested_bash_commands_replaced(self):
+        agent_raw = {"permissions": {"profile": "normal", "bash_commands": ["not", "a", "dict"]}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(bash_allow=["make:*"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["permissions"]["profile"] == "normal"
+        assert agent_raw["permissions"]["bash_commands"] == {"allow": ["make:*"]}
+
+    def test_raw_grant_list_forwarded_for_ask_rule_bypass(self):
+        """The raw bash_allow list also rides as ``project_bash_allow`` so
+        PermissionManager can bypass ask-rule hits on an exact grant match
+        (merged allow entries lose to ask rules at evaluation time)."""
+        agent_raw = {"target": "openai", "models": {"openai": {}}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(bash_allow=["datus hello config set:*"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["project_bash_allow"] == ["datus hello config set:*"]
+
+    def test_no_bash_allow_leaves_grant_list_unset(self):
+        agent_raw = {"target": "openai", "models": {"openai": {}}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(project_name="p"),
+        ):
+            _apply_project_override(agent_raw)
+        assert "project_bash_allow" not in agent_raw
+
+
+class TestPermissionModeCliOverride:
+    """--permission-mode kwarg reshapes permissions.profile at load time."""
+
+    def test_override_injected_into_raw_permissions(self):
+        agent_raw = {"permissions": {"profile": "normal", "rules": []}}
+        # Reuse the same code path load_agent_config runs (inline for isolation).
+        permission_mode = "dangerous"
+        permissions_raw = agent_raw.get("permissions") or {}
+        permissions_raw["profile"] = permission_mode
+        agent_raw["permissions"] = permissions_raw
+        assert agent_raw["permissions"]["profile"] == "dangerous"
+
+    def test_load_agent_config_applies_permission_mode(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text("agent:\n  permissions:\n    profile: normal\n")
+        monkeypatch.chdir(tmp_path)
+        from datus.configuration.agent_config_loader import load_agent_config
+
+        config = load_agent_config(reload=True, config=str(cfg), permission_mode="dangerous")
+        assert config.active_profile_name == "dangerous"
+
+    def test_load_agent_config_without_permissions_section(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text("agent: {}\n")
+        monkeypatch.chdir(tmp_path)
+        from datus.configuration.agent_config_loader import load_agent_config
+
+        config = load_agent_config(reload=True, config=str(cfg), permission_mode="auto")
+        assert config.active_profile_name == "auto"

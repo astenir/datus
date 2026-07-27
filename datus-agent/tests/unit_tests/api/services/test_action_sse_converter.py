@@ -14,7 +14,6 @@ from datus.api.services.action_sse_converter import (
     _build_tool_result_content,
     _build_user_content,
     _extract_function,
-    action_to_history_sse_event,
     action_to_sse_event,
 )
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
@@ -146,6 +145,25 @@ class TestBuildToolCallContent:
         )
         contents = _build_tool_call_content(action)
         assert contents[0].payload["toolParams"] == {}
+
+    def test_omits_proxied_flag_without_tool_names(self):
+        """History conversion (no live node) must not stamp ``proxied`` at all,
+        so legacy clients keep their own execute-or-not heuristic."""
+        action = _make_action(input={"function_name": "write_file", "arguments": {}})
+        contents = _build_tool_call_content(action)
+        assert "proxied" not in contents[0].payload
+
+    def test_marks_proxied_true_for_client_executed_tool(self):
+        action = _make_action(input={"function_name": "write_file", "arguments": {}})
+        contents = _build_tool_call_content(action, proxied_tool_names={"write_file", "edit_file"})
+        assert contents[0].payload["proxied"] is True
+
+    def test_marks_proxied_false_for_server_executed_tool(self):
+        """An empty proxied set (auto/dangerous web session) stamps False so the
+        client neither shows a confirm bar nor re-executes the tool."""
+        action = _make_action(input={"function_name": "write_file", "arguments": {}})
+        contents = _build_tool_call_content(action, proxied_tool_names=set())
+        assert contents[0].payload["proxied"] is False
 
 
 class TestBuildToolResultContent:
@@ -581,15 +599,6 @@ class TestBuildErrorContent:
         assert contents[0].type == "error"
         assert contents[0].payload["content"] == "Connection timeout"
 
-    def test_preserves_structured_error_type(self):
-        """Structured error type is available to real-time SSE consumers."""
-        action = _make_action(output={"error": "Permission denied", "error_type": "PERMISSION_DENIED"})
-        contents = _build_error_content(action)
-        assert contents[0].payload == {
-            "content": "Permission denied",
-            "error_type": "PERMISSION_DENIED",
-        }
-
     def test_falls_back_to_messages(self):
         """Uses action.messages when output has no error key."""
         action = _make_action(output={}, messages="Something went wrong")
@@ -814,79 +823,6 @@ class TestBuildInteractionContent:
         assert requests[2]["multiSelect"] is False
 
 
-class TestActionToHistorySseEvent:
-    """Tests for persisted-history-only action conversion."""
-
-    def test_ask_user_result_becomes_read_only_summary(self):
-        action = _make_action(
-            role=ActionRole.TOOL,
-            status=ActionStatus.SUCCESS,
-            action_type="ask_user",
-            input={
-                "function_name": "ask_user",
-                "arguments": json.dumps(
-                    {
-                        "questions": [
-                            {
-                                "title": "County",
-                                "question": "Which county?",
-                                "options": ["Los Angeles", "San Francisco"],
-                                "multi_select": False,
-                            }
-                        ]
-                    }
-                ),
-            },
-            output={
-                "success": 1,
-                "result": json.dumps([{"question": "Which county?", "answer": "Los Angeles"}]),
-            },
-        )
-
-        event = action_to_history_sse_event(action, event_id=1, message_id="msg-1")
-
-        event = _assert_sse_event(event)
-        content = event.data.payload.content[0]
-        assert content.type == "interaction-summary"
-        assert "interactionKey" not in content.payload
-        assert content.payload["status"] == "answered"
-        assert content.payload["requests"][0]["content"] == "Which county?"
-        assert content.payload["requests"][0]["options"] == [
-            {"key": "1", "title": "Los Angeles"},
-            {"key": "2", "title": "San Francisco"},
-        ]
-        assert content.payload["answers"] == [{"question": "Which county?", "answer": "Los Angeles"}]
-
-    def test_history_does_not_replay_live_interaction_control(self):
-        action = _make_action(
-            role=ActionRole.INTERACTION,
-            status=ActionStatus.PROCESSING,
-            action_type="request_choice",
-            input={"events": [{"content": "Choose"}]},
-        )
-
-        assert action_to_history_sse_event(action, event_id=1, message_id="msg-1") is None
-
-    def test_cancelled_ask_user_result_is_read_only_summary(self):
-        action = _make_action(
-            role=ActionRole.TOOL,
-            status=ActionStatus.SUCCESS,
-            action_type="ask_user",
-            input={
-                "function_name": "ask_user",
-                "arguments": {"questions": [{"question": "Continue?"}]},
-            },
-            output={"success": 0, "error": "User cancelled the question"},
-        )
-
-        event = _assert_sse_event(action_to_history_sse_event(action, event_id=1, message_id="msg-1"))
-        content = event.data.payload.content[0]
-
-        assert content.type == "interaction-summary"
-        assert content.payload["status"] == "cancelled"
-        assert content.payload["error"] == "User cancelled the question"
-
-
 class TestBuildInteractionResultContent:
     """Tests for _build_interaction_result_content."""
 
@@ -925,7 +861,7 @@ class TestActionToSSEEvent:
         action = _make_action(
             role=ActionRole.ASSISTANT,
             status=ActionStatus.FAILED,
-            output={"error": "Permission denied", "error_type": "PERMISSION_DENIED"},
+            output={"error": "Timeout"},
         )
         event = action_to_sse_event(action, event_id=1, message_id="msg-1")
         event = _assert_sse_event(event)
@@ -934,10 +870,7 @@ class TestActionToSSEEvent:
         assert event.data.type == SSEDataType.CREATE_MESSAGE
         content = event.data.payload.content[0]
         assert content.type == "error"
-        assert content.payload == {
-            "content": "Permission denied",
-            "error_type": "PERMISSION_DENIED",
-        }
+        assert content.payload["content"] == "Timeout"
 
     def test_tool_failed_produces_call_tool_result_with_error(self):
         """TOOL + FAILED stays on the call-tool-result channel and adds an error field.
@@ -986,6 +919,20 @@ class TestActionToSSEEvent:
         event = action_to_sse_event(action, event_id=2, message_id="msg-2")
         event = _assert_sse_event(event)
         assert event.data.payload.content[0].type == "call-tool"
+
+    def test_tool_processing_passes_proxied_tool_names_through(self):
+        """The streaming caller's proxied set reaches the call-tool payload."""
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.PROCESSING,
+            input={"function_name": "write_file", "arguments": {"path": "a.sql"}},
+        )
+        event = action_to_sse_event(action, event_id=2, message_id="msg-2", proxied_tool_names=set())
+        event = _assert_sse_event(event)
+        assert event.data.payload.content[0].payload["proxied"] is False
+
+        event = action_to_sse_event(action, event_id=3, message_id="msg-3", proxied_tool_names={"write_file"})
+        assert _assert_sse_event(event).data.payload.content[0].payload["proxied"] is True
 
     def test_tool_success_produces_call_tool_result(self):
         """TOOL + SUCCESS maps to call-tool-result content."""
@@ -1395,38 +1342,6 @@ class TestActionToSSEEvent:
         content = event.data.payload.content[0]
         assert content.type == "thinking"
         assert content.payload["content"] == "world"
-
-    def test_response_delta_uses_markdown_content(self):
-        """Normal assistant response chunks stream as markdown, not reasoning."""
-        action = _make_action(
-            role=ActionRole.ASSISTANT,
-            status=ActionStatus.PROCESSING,
-            action_type="response_delta",
-            output={"delta": "Normal answer"},
-        )
-        event = action_to_sse_event(
-            action,
-            event_id=22,
-            message_id="response-22",
-            stream_thinking=True,
-            is_first_delta=True,
-        )
-        event = _assert_sse_event(event)
-        assert event.data.type == SSEDataType.CREATE_MESSAGE
-        assert event.data.payload.content[0].type == "markdown"
-        assert event.data.payload.content[0].payload["content"] == "Normal answer"
-
-    def test_markdown_content_type_overrides_internal_phase_flag(self):
-        """Pre-tool assistant text remains markdown even when it is not the final turn response."""
-        action = _make_action(
-            role=ActionRole.ASSISTANT,
-            status=ActionStatus.SUCCESS,
-            action_type="response",
-            output={"raw_output": "I will inspect the schema.", "is_thinking": True, "content_type": "markdown"},
-        )
-        event = action_to_sse_event(action, event_id=23, message_id="response-23")
-        event = _assert_sse_event(event)
-        assert event.data.payload.content[0].type == "markdown"
 
     def test_thinking_delta_skipped_when_stream_disabled(self):
         """thinking_delta returns None when stream_thinking=False (default)."""

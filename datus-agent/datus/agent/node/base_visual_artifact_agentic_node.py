@@ -51,6 +51,13 @@ from datus.tools.func_tool._visual_artifact_helpers import (
 from datus.tools.func_tool.semantic_tools import SemanticTools
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import build_structured_content
+from datus_enterprise.services.artifact_filesystem_scope import (
+    auto_validate_locked_artifact,
+    bind_locked_artifact,
+    bind_node_authorized_artifact,
+    resolve_artifact_access_mode,
+    resolve_locked_artifact_slug,
+)
 
 logger = get_logger(__name__)
 
@@ -106,37 +113,13 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
     # ── Construction ──────────────────────────────────────────────────────
 
     def _artifact_access_mode(self) -> Literal["legacy", "create", "edit"]:
-        """Return the request-authorized Artifact operation mode.
-
-        Local/CLI execution keeps the historical behavior. Enterprise nodes
-        are create-only unless the API materialized an edit session after a
-        successful resource ACL check.
-        """
-
-        if not bool(getattr(self.agent_config, "_enterprise_enabled", False)):
-            return "legacy"
-        if self.node_config.get("_acl_authorized_artifact_edit"):
-            if not self.node_config.get("edit_locked") or not self.node_config.get("artifact_slug"):
-                raise ValueError("ACL-authorized artifact edit is missing its locked artifact slug.")
-            return "edit"
-        if self.node_config.get("edit_locked"):
-            raise ValueError("Enterprise artifact edit requires an ACL-authorized edit session.")
-        return "create"
+        return resolve_artifact_access_mode(self.agent_config, self.node_config)
 
     def _locked_artifact_slug(self) -> Optional[str]:
-        mode = self._artifact_access_mode()
-        if mode == "edit" or (mode == "legacy" and self.node_config.get("edit_locked")):
-            value = self.node_config.get("artifact_slug")
-            return str(value) if value else None
-        return None
+        return resolve_locked_artifact_slug(self.node_config, access_mode=self._artifact_access_mode())
 
     def _bind_authorized_artifact_slug(self, artifact_slug: str) -> None:
-        filesystem_tool = self.filesystem_func_tool
-        if filesystem_tool is None:
-            return
-        bind = getattr(filesystem_tool, "bind_authorized_artifact", None)
-        if bind is not None:
-            bind(artifact_slug)
+        bind_node_authorized_artifact(self.filesystem_func_tool, artifact_slug)
 
     def __init__(
         self,
@@ -314,7 +297,9 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
 
     def _setup_semantic_tools(self) -> None:
         try:
-            adapter_type = self.node_config.get("adapter_type", "metricflow")
+            from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
+
+            adapter_type = resolve_semantic_adapter_type(self.agent_config)
             self.semantic_tools = SemanticTools(
                 agent_config=self.agent_config,
                 sub_agent_name=self.node_config.get("system_prompt"),
@@ -345,10 +330,12 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         try:
             if tool_type == "semantic_tools":
                 if not self.semantic_tools:
+                    from datus.agent.node.semantic_authoring import resolve_semantic_adapter_type
+
                     self.semantic_tools = SemanticTools(
                         agent_config=self.agent_config,
                         sub_agent_name=self.node_config.get("system_prompt"),
-                        adapter_type=self.node_config.get("adapter_type", "metricflow"),
+                        adapter_type=resolve_semantic_adapter_type(self.agent_config),
                         runtime_db_context_provider=self._semantic_runtime_db_context,
                     )
                 tool_instance = self.semantic_tools
@@ -590,21 +577,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
 
     def _auto_bind_locked_artifact(self) -> None:
         """Bind locked edit artifacts before the LLM can inspect the tree."""
-        if not self.node_config.get("edit_locked"):
+        artifact_slug = bind_locked_artifact(
+            self.node_config,
+            self.artifact_tools,
+            artifact_kind=self.ARTIFACT_KIND,
+            artifact_root_dir_name=self.ARTIFACT_ROOT_DIR_NAME,
+        )
+        if artifact_slug is None:
             return
-        artifact_slug = self.node_config.get("artifact_slug")
-        if not artifact_slug or self.artifact_tools is None:
-            return
-        bind_name = f"bind_existing_{self.ARTIFACT_KIND}"
-        bind_tool = getattr(self.artifact_tools, bind_name, None)
-        if bind_tool is None:
-            return
-        result = bind_tool(artifact_slug)
-        if getattr(result, "success", 0) != 1:
-            raise ValueError(
-                f"Failed to bind locked {self.ARTIFACT_KIND} artifact "
-                f"{self.ARTIFACT_ROOT_DIR_NAME}/{artifact_slug}: {getattr(result, 'error', None) or result}"
-            )
         self._active_artifact_slug = artifact_slug
         logger.info(
             "%s auto-bound locked %s artifact %s/%s",
@@ -756,28 +736,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if picked:
             self._active_artifact_slug = picked
 
-        if app_jsx_rel_path is None and self.node_config.get("edit_locked") and self._active_artifact_slug:
-            validate_render = getattr(self.artifact_tools, "validate_render", None) if self.artifact_tools else None
-            if validate_render is not None:
-                validate_result = validate_render()
-                output_data = (
-                    validate_result.model_dump() if hasattr(validate_result, "model_dump") else validate_result
-                )
-                validate_action = ActionHistory.create_action(
-                    role=ActionRole.TOOL,
-                    action_type="validate_render",
-                    messages="Auto validate locked artifact before finalizing.",
-                    input_data={"function_name": "validate_render", "arguments": "{}"},
-                    output_data={
-                        "success": getattr(validate_result, "success", 0) == 1,
-                        "raw_output": output_data,
-                        "summary": "Auto validate locked artifact",
-                    },
-                    status=(
-                        ActionStatus.SUCCESS if getattr(validate_result, "success", 0) == 1 else ActionStatus.FAILED
-                    ),
-                )
-                ctx.action_history_manager.add_action(validate_action)
+        if app_jsx_rel_path is None:
+            validate_action = auto_validate_locked_artifact(
+                self.node_config,
+                self._active_artifact_slug,
+                self.artifact_tools,
+                ctx.action_history_manager,
+            )
+            if validate_action is not None:
                 all_actions = ctx.action_history_manager.get_actions()
                 if validate_action.status == ActionStatus.SUCCESS:
                     tool_calls.append(validate_action)

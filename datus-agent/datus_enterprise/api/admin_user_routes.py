@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -13,6 +14,12 @@ from datus.api.constants import USER_ID_PATTERN
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -85,15 +92,30 @@ class AdminUserDetail(AdminUserSummary):
     effective_datasource_grant_count: int = 0
 
 
-@router.get("/admin/users", response_model=Result[list[AdminUserSummary]], summary="List Admin Users")
+@router.get("/admin/users", response_model=AdminListResult[AdminUserSummary], summary="List Admin Users")
 async def list_admin_users(
     ctx: AdminUsersCtx,
     enabled: Annotated[bool | None, Query(description="Filter by enabled state.")] = None,
-) -> Result[list[AdminUserSummary]]:
+    search: Annotated[str | None, Query(max_length=200, description="Search user profile fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminUserSummary] | Result[Any]:
     """Return sanitized enterprise user metadata for admin workflows."""
 
     try:
-        records = await deps.get_enterprise_extensions().user_store.list_users(enabled=enabled)
+        store = deps.get_enterprise_extensions().user_store
+        list_page = getattr(store, "list_users_page", None)
+        records_are_offset = callable(list_page)
+        if records_are_offset:
+            records = await list_page(
+                enabled=enabled,
+                search=search,
+                limit=limit + 1,
+                offset=offset,
+            )
+        else:
+            records = await store.list_users(enabled=enabled)
+            records = [record for record in records if _user_matches_search(record, search)]
     except Exception:
         await _audit_user_mutation(
             ctx,
@@ -105,7 +127,13 @@ async def list_admin_users(
         return _user_error("USER_LIST_FAILED", "User list failed.")
 
     try:
-        users = await _list_summaries_from_records(records)
+        page = paginate_admin_records(
+            records,
+            limit=limit,
+            offset=offset,
+            records_are_offset=records_are_offset,
+        )
+        users = await _list_summaries_from_records(page.data or [])
     except Exception:
         await _audit_user_mutation(
             ctx,
@@ -120,9 +148,9 @@ async def list_admin_users(
         user_id=None,
         operation="list_admin_users",
         decision="allow",
-        metadata={"count": len(users), "enabled": enabled},
+        metadata={"count": len(users), "enabled": enabled, "offset": offset, "has_more": page.pagination.has_more},
     )
-    return Result(success=True, data=users)
+    return AdminListResult(success=True, data=users, pagination=page.pagination)
 
 
 @router.get("/admin/users/{user_id}", response_model=Result[AdminUserDetail], summary="Get Admin User")
@@ -465,21 +493,42 @@ def _summary_from_record(record: dict[str, Any]) -> AdminUserSummary:
 
 async def _list_summaries_from_records(records: list[dict[str, Any]]) -> list[AdminUserSummary]:
     summaries = [_summary_from_record(record) for record in records]
-    extensions = deps.get_enterprise_extensions()
-    direct_grants = await extensions.datasource_grant_store.list_grants(subject_type="user")
-    direct_grant_counts: dict[str, int] = {}
-    for grant in direct_grants:
-        subject_id = _optional_str(grant.get("subject_id"))
-        if subject_id is None:
-            continue
-        direct_grant_counts[subject_id] = direct_grant_counts.get(subject_id, 0) + 1
+    if not summaries:
+        return []
 
-    for summary in summaries:
-        role_ids = sorted(await extensions.role_store.list_user_roles(summary.user_id))
+    extensions = deps.get_enterprise_extensions()
+    user_ids = [summary.user_id for summary in summaries]
+    count_grants = getattr(extensions.datasource_grant_store, "count_grants_by_subjects", None)
+    if callable(count_grants):
+        direct_grant_counts = await count_grants(subject_type="user", subject_ids=user_ids)
+    else:
+        grant_groups = await asyncio.gather(
+            *(
+                extensions.datasource_grant_store.list_grants(subject_type="user", subject_id=user_id)
+                for user_id in user_ids
+            )
+        )
+        direct_grant_counts = {user_id: len(grants) for user_id, grants in zip(user_ids, grant_groups, strict=True)}
+
+    role_id_groups = await asyncio.gather(
+        *(extensions.role_store.list_user_roles(summary.user_id) for summary in summaries)
+    )
+    for summary, role_ids_for_user in zip(summaries, role_id_groups, strict=True):
+        role_ids = sorted(role_ids_for_user)
         summary.role_ids = role_ids
         summary.role_count = len(role_ids)
         summary.direct_datasource_grant_count = direct_grant_counts.get(summary.user_id, 0)
     return summaries
+
+
+def _user_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    return any(
+        query in str(record.get(field) or "").casefold()
+        for field in ("user_id", "display_name", "email", "external_user_id", "department", "title")
+    )
 
 
 def _has_enterprise_admin_access(detail: AdminUserDetail) -> bool:

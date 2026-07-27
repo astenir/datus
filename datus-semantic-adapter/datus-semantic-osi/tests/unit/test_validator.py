@@ -292,7 +292,9 @@ def test_identical_duplicate_datasets_are_merged(tmp_path):
     (tmp_path / "b.yml").write_text(
         f'datasets: [{ds}]\nmetrics: [{{name: s, expression: "SUM(amount)", dataset: orders}}]\n'
     )
-    doc = load_osi_path(str(tmp_path), allow_legacy_profile=True)
+    doc = next(
+        iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values())
+    )
     # the identical `orders` dataset declared in both files collapses to one
     assert [d.name for d in doc.datasets] == ["orders"]
     assert {m.name for m in doc.metrics} == {"c", "s"}
@@ -307,7 +309,9 @@ def test_conflicting_duplicate_datasets_are_kept_for_validation(tmp_path):
     (tmp_path / "b.yml").write_text(
         "datasets: [{name: orders, source: {table: other}, primary_key: id}]\n"
     )
-    doc = load_osi_path(str(tmp_path), allow_legacy_profile=True)
+    doc = next(
+        iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values())
+    )
     assert [d.name for d in doc.datasets] == ["orders", "orders"]  # validator will flag
 
 

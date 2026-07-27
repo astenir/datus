@@ -2497,72 +2497,6 @@ class TestGenerateWithMcpStreamTextDeltas:
         assert "final_response" in persisted_types
 
     @pytest.mark.asyncio
-    async def test_streams_native_thinking_separately_from_normal_text(self):
-        """Claude thinking blocks use thinking actions while text stays markdown."""
-        from datus.schemas.action_history import ActionHistoryManager
-
-        cfg = _make_model_config(use_native_api=True)
-        model = _make_claude_model(cfg)
-
-        thinking_block_start = MagicMock()
-        thinking_block_start.type = "thinking"
-        thinking_delta = MagicMock()
-        thinking_delta.type = "thinking_delta"
-        thinking_delta.thinking = "Inspecting the request."
-        text_block_start = MagicMock()
-        text_block_start.type = "text"
-        text_delta = MagicMock()
-        text_delta.type = "text_delta"
-        text_delta.text = "Here is the answer."
-        events = [
-            _FakeStreamEvent("content_block_start", content_block=thinking_block_start),
-            _FakeStreamEvent("content_block_delta", delta=thinking_delta),
-            _FakeStreamEvent("content_block_stop"),
-            _FakeStreamEvent("content_block_start", content_block=text_block_start),
-            _FakeStreamEvent("content_block_delta", delta=text_delta),
-            _FakeStreamEvent("content_block_stop"),
-        ]
-        final_msg = _make_response([_make_text_block("Here is the answer.")])
-        stream_manager = _FakeAsyncStreamManager(events, final_msg)
-
-        async_client = MagicMock()
-        async_client.messages.stream = MagicMock(return_value=stream_manager)
-        model.async_anthropic_client = async_client
-
-        actions = []
-        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
-            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
-            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
-            async for action in model._generate_with_mcp_stream(
-                prompt="test",
-                mcp_servers={},
-                instruction="sys",
-                output_type={},
-                action_history_manager=ActionHistoryManager(),
-            ):
-                actions.append(action)
-
-        reasoning_deltas = [a for a in actions if a.action_type == "thinking_delta"]
-        reasoning_actions = [a for a in actions if a.action_type == "thinking"]
-        response_deltas = [a for a in actions if a.action_type == "response_delta"]
-        responses = [a for a in actions if a.action_type == "response"]
-
-        assert len(reasoning_deltas) == 1
-        assert reasoning_deltas[0].output["delta"] == "Inspecting the request."
-        assert len(reasoning_actions) == 1
-        assert reasoning_actions[0].action_id == reasoning_deltas[0].action_id
-        assert reasoning_actions[0].output == {
-            "thinking": "Inspecting the request.",
-            "content_type": "thinking",
-        }
-        assert len(response_deltas) == 1
-        assert response_deltas[0].output["delta"] == "Here is the answer."
-        assert len(responses) == 1
-        assert responses[0].action_id == response_deltas[0].action_id
-        assert responses[0].output["content_type"] == "markdown"
-        assert reasoning_actions[0].action_id != responses[0].action_id
-
-    @pytest.mark.asyncio
     async def test_stream_null_id_server_tool_pairs_with_generated_id(self):
         """Regression: malformed proxies (kimi) stream ``server_tool_use`` /
         ``web_search_tool_result`` blocks with a null id. The completion must
@@ -3117,6 +3051,32 @@ class TestSslVerify:
         assert async_tx.call_args.kwargs.get("verify") == "/etc/ssl/internal-ca.pem"
         # no proxy configured -> the transport carries no proxy.
         assert "proxy" not in sync_tx.call_args.kwargs
+
+    def test_pem_content_builds_in_memory_context_and_materializes_file(self):
+        import os
+        import ssl
+
+        from tests.unit_tests.utils.test_ssl_utils import _self_signed_ca_pem
+
+        cfg = _make_model_config(base_url="https://internal.example.com")
+        cfg.ssl_verify = _self_signed_ca_pem()
+        with (
+            patch("httpx.HTTPTransport") as sync_tx,
+            patch("httpx.AsyncHTTPTransport"),
+        ):
+            model = _make_claude_model(cfg)
+
+        # native path: inline PEM -> in-memory SSLContext (no file), passed to httpx.
+        assert isinstance(model.ssl_verify, ssl.SSLContext)
+        assert isinstance(sync_tx.call_args.kwargs.get("verify"), ssl.SSLContext)
+        # litellm path: PEM content spilled to a real CA bundle file on disk.
+        ca_path = os.environ["SSL_VERIFY"]
+        try:
+            assert os.path.exists(ca_path)
+            with open(ca_path, encoding="utf-8") as f:
+                assert f.read() == cfg.ssl_verify
+        finally:
+            os.remove(ca_path)
 
     def test_ssl_verify_false_materializes_false(self):
         import os

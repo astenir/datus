@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi } from "@/lib/api";
+import { useAdminPagination } from "@/composables/useAdminPagination";
 import {
   ROLE_PERMISSION_GROUPS,
   ROLE_PERMISSION_OPTIONS,
@@ -42,6 +43,7 @@ export function useRoleManager() {
   });
 
   const total = shallowRef(0);
+  const pagination = useAdminPagination();
   const roles = ref<Role[]>([]);
   const loading = shallowRef(false);
   const loadingRoleDetail = shallowRef(false);
@@ -50,6 +52,8 @@ export function useRoleManager() {
   const selectedRoleDetail = shallowRef<Role | null>(null);
   const roleDetailError = shallowRef<string | null>(null);
   let roleDetailRequestId = 0;
+  let roleListRequestId = 0;
+  let listFilters: { builtIn?: boolean; search?: string } | null = null;
 
   const showDialog = shallowRef(false);
   const dialogMode = shallowRef<"create" | "edit">("create");
@@ -99,18 +103,46 @@ export function useRoleManager() {
   });
 
   async function loadRoles() {
+    const requestId = roleListRequestId + 1;
+    roleListRequestId = requestId;
     loading.value = true;
     try {
-      const result = await adminRoleApi.listRoles();
-      roles.value = result?.data ?? [];
+      const result = await adminRoleApi.listRoles({
+        ...(listFilters ?? {}),
+        limit: pagination.pageSize.value,
+        offset: pagination.offset.value,
+      });
+      if (requestId !== roleListRequestId) return;
+      roles.value = pagination.applyResponse(result);
       total.value = roles.value.length;
     } catch (err) {
+      if (requestId !== roleListRequestId) return;
       console.error("加载角色列表失败:", err);
       roles.value = [];
       total.value = 0;
     } finally {
-      loading.value = false;
+      if (requestId === roleListRequestId) {
+        loading.value = false;
+      }
     }
+  }
+
+  function applyListFilters(filters: { builtIn?: boolean; search?: string }) {
+    listFilters = filters;
+    pagination.reset();
+    void loadRoles();
+  }
+
+  function loadNextPage() {
+    if (pagination.prepareNext()) void loadRoles();
+  }
+
+  function loadPreviousPage() {
+    if (pagination.preparePrevious()) void loadRoles();
+  }
+
+  function setPageSize(value: number) {
+    if (pagination.setPageSize(value)) void loadRoles();
   }
 
   function handleSearch() {
@@ -119,6 +151,8 @@ export function useRoleManager() {
 
   function handleReset() {
     searchForm.value = { keyword: "" };
+    listFilters = null;
+    pagination.reset();
   }
 
   async function openRoleDetail(roleId: string) {
@@ -279,6 +313,7 @@ export function useRoleManager() {
     permissionPresetGroups,
     searchForm,
     total,
+    pagination,
     roles,
     filteredRoles,
     loading,
@@ -305,6 +340,10 @@ export function useRoleManager() {
     selectedHighRiskCount,
     selectedPresetIds,
     loadRoles,
+    applyListFilters,
+    loadNextPage,
+    loadPreviousPage,
+    setPageSize,
     handleSearch,
     handleReset,
     openRoleDetail,

@@ -1,4 +1,4 @@
-"""Unit tests for datus.api.models.kb_models."""
+"""Unit tests for datus.api.models.kb_models — BootstrapDocInput."""
 
 import pytest
 from pydantic import ValidationError
@@ -7,18 +7,18 @@ from datus.api.models.kb_models import BootstrapDocInput, BootstrapKbInput
 
 
 class TestBootstrapKbInput:
-    def test_datasource_id_is_required(self):
-        with pytest.raises(ValidationError):
-            BootstrapKbInput(components=["metadata"])
+    """Tests for BootstrapKbInput validation."""
 
-    def test_datasource_id_is_trimmed(self):
-        request = BootstrapKbInput(datasource_id="  ccks_fund  ", components=["metadata"])
+    def test_refresh_profile_strategy_accepts_semantic_yaml(self):
+        inp = BootstrapKbInput(
+            components=["semantic_model"],
+            strategy="refresh-profile",
+            success_story="stories.csv",
+            semantic_yaml="semantic/orders.yml",
+        )
 
-        assert request.datasource_id == "ccks_fund"
-
-    def test_blank_datasource_id_is_rejected(self):
-        with pytest.raises(ValidationError):
-            BootstrapKbInput(datasource_id="   ", components=["metadata"])
+        assert inp.strategy == "refresh-profile"
+        assert inp.semantic_yaml == "semantic/orders.yml"
 
 
 class TestBootstrapDocInput:

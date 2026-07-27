@@ -101,7 +101,7 @@ The `agent.models` section is used for self-hosted or private-deployment LLM end
 - **`base_url`** — API endpoint URL
 - **`api_key`** — API key (supports `${ENV_VAR}` substitution)
 - **`model`** — Model name / SKU
-- **`ssl_verify`** *(optional)* — TLS verification for this endpoint: `true` (default), `false` to disable (discouraged), or a path to a CA-bundle PEM to trust a private/self-signed gateway CA. Takes priority over the `SSL_VERIFY` / `SSL_CERT_FILE` environment variables. See [Private or self-signed certificates](#private-or-self-signed-certificates).
+- **`ssl_verify`** *(optional)* — TLS verification for this endpoint: `true` (default), `false` to disable (discouraged), a path to a CA-bundle PEM, or the CA certificate content inline (a value starting with `-----BEGIN CERTIFICATE-----`) to trust a private/self-signed gateway CA. Takes priority over the `SSL_VERIFY` / `SSL_CERT_FILE` environment variables. See [Private or self-signed certificates](#private-or-self-signed-certificates).
 
 ```yaml
 agent:
@@ -149,6 +149,22 @@ agent:
       model: claude-3-7-sonnet
       ssl_verify: /etc/ssl/internal-ca.pem   # trust the private CA; verification stays ON
 ```
+
+`ssl_verify` also accepts the **CA certificate content inline** (any value
+starting with `-----BEGIN CERTIFICATE-----`), so a private CA can be supplied
+without a file on disk — useful when the config is generated (e.g. from a
+database) rather than deployed alongside a `.pem`:
+
+```yaml
+      ssl_verify: |
+        -----BEGIN CERTIFICATE-----
+        MIIB...snip...IDAQAB
+        -----END CERTIFICATE-----
+```
+
+The native client loads inline content into an in-memory trust store; the
+litellm code path spills it to a temp file in a private per-process directory
+(it only accepts a CA bundle by path).
 
 **Resolution precedence** (first match wins):
 
@@ -320,9 +336,10 @@ The runtime currently reads these commonly used fields from `agentic_nodes` entr
 - `workspace_root`
 - `scoped_context`
 - `subagents`
-- `semantic_adapter` for semantic-model and metrics agents
 - `bi_platform` for dashboard agents
 - `scheduler_service` for scheduler agents
+
+Semantic adapter selection is global under `agent.services.semantic_layer`. Legacy node-level `semantic_adapter` and `authoring_format` fields are ignored.
 
 `scoped_kb_path` is deprecated. New configs use shared global storage with query-time filters instead of per-subagent scoped KB directories.
 
@@ -386,7 +403,6 @@ agent:
     semantic_metrics:
       node_class: gen_metrics
       model: claude
-      semantic_adapter: metricflow
       max_turns: 30
 
     etl_scheduler:

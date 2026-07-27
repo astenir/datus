@@ -177,7 +177,13 @@ datasets:
 """
     )
 
-    doc = load_osi_path(str(tmp_path), normalize=True, allow_legacy_profile=True)
+    doc = next(
+        iter(
+            load_osi_path(
+                str(tmp_path), normalize=True, allow_legacy_profile=True
+            ).values()
+        )
+    )
 
     assert [d.name for d in doc.datasets] == ["orders"]
     assert doc.metrics[0].dataset == "orders"

@@ -23,6 +23,7 @@ from datus.configuration.agent_config_loader import load_agent_config
 from datus.schemas.node_models import SqlTask
 from datus.utils.exceptions import setup_exception_handler
 from datus.utils.loggings import configure_logging, get_logger
+from datus_enterprise import success_story_migration_cli
 
 logger = get_logger(__name__)
 
@@ -78,30 +79,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     check_db_parser.add_argument("--datasource", type=str, required=True, help="Datasource name to check")
 
-    migrate_success_story_parser = subparsers.add_parser(
-        "migrate-success-stories",
-        help="Copy a legacy success-story CSV into the datasource-isolated layout",
-        parents=[global_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    migrate_success_story_parser.add_argument(
-        "--source",
-        type=str,
-        required=True,
-        help="Path to the legacy success-story CSV",
-    )
-    migrate_success_story_parser.add_argument(
-        "--datasource",
-        type=str,
-        required=True,
-        help="Canonical datasource shared by every row in the legacy CSV",
-    )
-    migrate_success_story_parser.add_argument(
-        "--subagent",
-        type=str,
-        default="chat",
-        help="Subagent storage group for the migrated rows (default: chat)",
-    )
+    success_story_migration_cli.register_parser(subparsers, global_parser)
 
     # platform-doc command
     platform_doc_parser = subparsers.add_parser(
@@ -206,9 +184,12 @@ def create_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument(
         "--kb_update_strategy",
         type=str,
-        choices=["check", "overwrite", "incremental"],
+        choices=["check", "overwrite", "incremental", "refresh-profile"],
         default="check",
-        help="Knowledge base update strategy: check (verify paths and data), overwrite (careful!), or incremental",
+        help=(
+            "Knowledge base update strategy: check (verify paths and data), overwrite (careful!), "
+            "incremental, or refresh-profile (semantic_model only; update profile descriptions in an existing YAML)"
+        ),
     )
     bootstrap_parser.add_argument(
         "--components",
@@ -252,6 +233,13 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Number of threads to initialize bootstrap-kb, default is 4",
+    )
+    bootstrap_parser.add_argument(
+        "--kb_search_mode",
+        type=str,
+        choices=["vector", "fts"],
+        default="",
+        help="Knowledge-base search mode for metadata indexing and runtime retrieval (default: config or vector)",
     )
     bootstrap_parser.add_argument(
         "--success_story",
@@ -540,33 +528,7 @@ def main():
     # Load agent configuration
     agent_config = load_agent_config(**vars(args))
     if args.action == "migrate-success-stories":
-        from rich.console import Console
-
-        from datus.api.services.success_story_service import SuccessStoryService
-        from datus.cli.cli_styles import print_error, print_success
-
-        try:
-            migration = SuccessStoryService(
-                agent_config,
-                project_id=getattr(agent_config, "project_name", "default"),
-            ).migrate_legacy_file(
-                args.source,
-                datasource_id=args.datasource,
-                subagent_name=args.subagent,
-            )
-        except OSError as exc:
-            print_error(Console(), str(exc))
-            return 1
-
-        print_success(
-            Console(),
-            (
-                f"Migrated {migration.migrated_rows}/{migration.total_rows} rows to "
-                f"{migration.storage_key}; skipped {migration.skipped_rows} existing rows."
-            ),
-            symbol=True,
-        )
-        return 0
+        return success_story_migration_cli.run(args, agent_config)
     if args.action == "platform-doc":
         # platform-doc is datasource-independent; handled before Agent init
         from datus.agent.agent import bootstrap_platform_doc

@@ -13,15 +13,17 @@ tools, template rendering, and action history.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
+import weakref
 from contextlib import nullcontext
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
 
-from datus.api.models.cli_models import ChatSessionSubagentEvent
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.inherited_memory_overrides import inherited_memory
 from datus.configuration.node_type import NodeType
@@ -46,6 +48,8 @@ if TYPE_CHECKING:
     from datus.schemas.base import BaseInput
 
 logger = get_logger(__name__)
+
+_SEMANTIC_AUTHORING_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
@@ -139,18 +143,24 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "dashboard_slug, app_jsx_path, render_file_count, template_count, tokens_used}."
     ),
     "gen_semantic_model": (
-        "Generate MetricFlow semantic model YAML files from database table structures. "
+        "Generate semantic model YAML files from database table structures. "
         "Use when asked to create or update semantic models, define entities, relationships, or dimensions. "
+        "For OSI metric generation, run this task first when the target domain semantic model does not exist, "
+        "wait for it to finish, and only then run gen_metrics; never run both tasks concurrently. "
         "Prompt MUST contain table name(s), e.g. 'orders' or 'orders, customers, products'. "
         "Returns JSON with {response, semantic_models (list of file paths), tokens_used}."
     ),
     "gen_metrics": (
-        "Define and generate MetricFlow metric definitions. "
+        "Define and generate semantic metric definitions. "
         "Three input modes: "
         "(1) SQL-based: provide SQL queries for metric extraction. "
         "(2) Natural language: describe the business metric or calculation rules, "
         "the agent will guide through interactive Q&A to define the metric. "
         "(3) Batch: provide multiple SQL queries for AST-backed metric candidate extraction. "
+        "In OSI mode this task only creates or updates metrics in an existing domain semantic model. "
+        "If it returns code=semantic_model_required, run gen_semantic_model first and retry this task with "
+        "the original prompt. In MetricFlow mode it may create or extend semantic-model prerequisites itself. "
+        "Never run gen_metrics and gen_semantic_model concurrently. "
         "For batch input, if the user provides a CSV file path, YOU (the parent agent) must read the file content first "
         "and include the full content in the prompt — the metrics agent cannot access files outside its workspace. "
         "The metrics agent will preserve final business output expressions and treat base measures as dependencies. "
@@ -332,12 +342,79 @@ class SubAgentTaskTool:
             return FuncToolResult(success=0, error="Missing required parameter: prompt")
 
         try:
+            normalized_type = type.strip().strip("\"'") if isinstance(type, str) else type
+            semantic_types = {"gen_semantic_model", "gen_metrics"}
+            if normalized_type in semantic_types and normalized_type in self._get_available_types():
+                lock = self._semantic_authoring_lock()
+                async with lock:
+                    if normalized_type == "gen_metrics":
+                        precondition = self._osi_metric_precondition()
+                        if precondition is not None:
+                            return precondition
+                    return await self._execute_node(
+                        normalized_type,
+                        prompt,
+                        description=description,
+                        call_id=call_id,
+                        session_id=session_id,
+                    )
+
             return await self._execute_node(
                 type, prompt, description=description, call_id=call_id, session_id=session_id
             )
         except Exception as e:
             logger.error(f"Task tool execution error (type={type}): {e}")
             return FuncToolResult(success=0, error=f"Task execution failed: {str(e)}")
+
+    def _semantic_authoring_lock_key(self) -> str:
+        """Serialize semantic authoring tasks for one project datasource."""
+        path_manager = getattr(self.agent_config, "path_manager", None)
+        project_root = getattr(path_manager, "project_root", "")
+        datasource = str(getattr(self.agent_config, "current_datasource", "") or "default")
+        try:
+            project_key = str(Path(project_root).expanduser().resolve(strict=False))
+        except TypeError:
+            project_key = str(project_root)
+        return f"{project_key}:{datasource}"
+
+    def _semantic_authoring_lock(self) -> asyncio.Lock:
+        """Return the event-loop shared lock for one project datasource."""
+        loop = asyncio.get_running_loop()
+        loop_locks = _SEMANTIC_AUTHORING_LOCKS.setdefault(loop, {})
+        return loop_locks.setdefault(self._semantic_authoring_lock_key(), asyncio.Lock())
+
+    def _osi_metric_precondition(self) -> Optional[FuncToolResult]:
+        """Require the OSI domain model before starting the metric subagent."""
+        from datus.agent.node.semantic_authoring import (
+            default_osi_semantic_model_file,
+            is_osi_authoring,
+        )
+
+        if not is_osi_authoring(self.agent_config):
+            return None
+
+        path_manager = getattr(self.agent_config, "path_manager", None)
+        project_root = getattr(path_manager, "project_root", None)
+        if project_root is None:
+            return None
+
+        target = Path(project_root) / default_osi_semantic_model_file(self.agent_config)
+        if target.is_file():
+            return None
+
+        return FuncToolResult(
+            success=0,
+            error=(
+                "OSI semantic model is required before metric generation. "
+                "Run gen_semantic_model first, wait for it to finish, then retry gen_metrics."
+            ),
+            result={
+                "code": "semantic_model_required",
+                "required_subagent": "gen_semantic_model",
+                "semantic_model_file": str(target),
+                "retry_subagent": "gen_metrics",
+            },
+        )
 
     # ── node creation ─────────────────────────────────────────────────
 
@@ -379,47 +456,6 @@ class SubAgentTaskTool:
             if mode in ("interactive", "workflow"):
                 return mode
         return "interactive"
-
-    def _inherit_parent_permission_profile(self, node: "AgenticNode") -> None:
-        """Apply the request-scoped parent profile to a delegated node.
-
-        API chat switches the freshly-created parent node's PermissionManager
-        without mutating the shared AgentConfig.  A delegated node is created
-        later from that unchanged config, so it must inherit the effective
-        profile explicitly while retaining its own node overrides and tool
-        policy.
-        """
-        parent_manager = getattr(self._parent_node, "permission_manager", None)
-        target_profile = getattr(parent_manager, "active_profile", None)
-        if not isinstance(target_profile, str):
-            return
-
-        from datus.tools.permission.profiles import PROFILE_NAMES, build_user_overrides
-
-        if target_profile not in PROFILE_NAMES:
-            raise RuntimeError(f"Cannot delegate with unknown permission profile {target_profile!r}.")
-
-        child_manager = getattr(node, "permission_manager", None)
-        if child_manager is None or getattr(child_manager, "active_profile", None) == target_profile:
-            return
-
-        raw_permissions = getattr(self.agent_config, "_raw_permissions", {}) or {}
-        if not isinstance(raw_permissions, dict):
-            raise RuntimeError("Cannot inherit permission profile: agent permission configuration is malformed.")
-        raw_user = {key: value for key, value in raw_permissions.items() if key != "profile"}
-
-        try:
-            user_overrides = build_user_overrides(target_profile, raw_user)
-            child_manager.switch_profile(target_profile, user_overrides=user_overrides)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to inherit permission profile {target_profile!r} for delegated Agent.") from exc
-
-        logger.info(
-            "Inherited permission profile for delegated Agent",
-            profile=target_profile,
-            parent=getattr(self._parent_node, "node_name", None),
-            child=getattr(node, "node_name", None),
-        )
 
     def _create_builtin_node(self, subagent_type: str, session_id: Optional[str] = None):
         """Create a builtin system subagent node with its non-standard constructor."""
@@ -712,13 +748,18 @@ class SubAgentTaskTool:
         session_id: Optional[str] = None,
     ) -> FuncToolResult:
         """Execute a subagent by running an AgenticNode's execute_stream."""
+        from datus_enterprise.services.sub_agent_task_policy import (
+            apply_delegated_agent_policy,
+            enterprise_agent_acl_denial,
+        )
+
         # Validate subagent type against the allowlist to prevent privilege escalation.
         # Normalize the LLM-supplied value first — strip whitespace/newlines and the
         # surrounding quotes some models wrap around string arguments — before
         # comparing against the discoverable allowlist.
+        allowed_types = self._get_available_types()
         raw_subagent_type = subagent_type
         normalized = subagent_type.strip().strip("\"'") if isinstance(subagent_type, str) else subagent_type
-        allowed_types = self._get_available_types()
         if normalized in allowed_types:
             subagent_type = normalized
         else:
@@ -737,7 +778,7 @@ class SubAgentTaskTool:
                 ),
             )
 
-        permission_denial = self._enterprise_acl_denial(subagent_type)
+        permission_denial = enterprise_agent_acl_denial(self.agent_config, subagent_type)
         if permission_denial is not None:
             return permission_denial
 
@@ -778,13 +819,11 @@ class SubAgentTaskTool:
                     )
 
             node = self._create_node(subagent_type, session_id=session_id)
-            parent_scope = getattr(self._parent_node, "scope", None)
-            if isinstance(parent_scope, str) and parent_scope and not getattr(node, "scope", None):
-                node.scope = parent_scope
-            self._inherit_parent_permission_profile(node)
-            from datus.agent.tool_policy import apply_agent_runtime_policy
-
-            apply_agent_runtime_policy(node)
+            apply_delegated_agent_policy(
+                parent_node=self._parent_node,
+                agent_config=self.agent_config,
+                node=node,
+            )
 
             # Nest this subagent's session under the launching main session so the
             # parent LLM can later resume by passing back the returned session_id.
@@ -813,32 +852,18 @@ class SubAgentTaskTool:
                 )
 
             if isinstance(parent_sid, str) and parent_sid and call_id:
-                event_arguments = {
-                    "type": subagent_type,
-                    "prompt": prompt,
-                    "description": description,
-                }
-                if session_id is not None:
-                    event_arguments["session_id"] = session_id
-                delegation_event = ChatSessionSubagentEvent(
-                    event_id=f"subagent-{call_id}",
-                    parent_action_id=call_id,
+                from datus_enterprise.services.sub_agent_task_runtime import persist_subagent_delegation
+
+                await persist_subagent_delegation(
+                    parent_node=self._parent_node,
+                    parent_session_id=parent_sid,
+                    call_id=call_id,
                     child_session_id=node.session_id,
                     subagent_type=subagent_type,
-                    arguments=event_arguments,
+                    prompt=prompt,
+                    description=description,
+                    resumed_session_id=session_id,
                 )
-                try:
-                    await self._parent_node.session_manager.append_subagent_event_async(
-                        parent_sid,
-                        delegation_event,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to persist sub-agent delegation for parent %s task %s",
-                        parent_sid,
-                        call_id,
-                        exc_info=True,
-                    )
 
             # Set input on the node, then refresh DB-backed tools so connector
             # routing follows the inherited physical database as well.
@@ -946,25 +971,6 @@ class SubAgentTaskTool:
                     logger.debug("Failed to release sub-agent session handle", exc_info=True)
 
         return self._convert_to_func_result(final_output, session_id=node.session_id)
-
-    def _enterprise_acl_denial(self, subagent_type: str) -> Optional[FuncToolResult]:
-        """Re-apply the request's effective Agent ACL for task() delegation."""
-        if not bool(getattr(self.agent_config, "_enterprise_enabled", False)):
-            return None
-
-        allowed_agent_ids = set(getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set())
-        if subagent_type in allowed_agent_ids:
-            return None
-
-        logger.warning(
-            "Enterprise task dispatch denied by Agent ACL: subagent=%s user=%r",
-            subagent_type,
-            getattr(self.agent_config, "_request_user_id", None),
-        )
-        return FuncToolResult(
-            success=0,
-            error=f"AGENT_FORBIDDEN: task(type={subagent_type!r}) is not allowed by the Agent ACL.",
-        )
 
     def _resolve_inherited_memory_node(self, subagent_type: str) -> Optional[str]:
         """Pick the memory node a sub-agent should inherit (read-only inline).
@@ -1494,13 +1500,10 @@ class SubAgentTaskTool:
         not a delegatable subagent, so it is excluded here even though it lives
         in SYS_SUB_AGENTS (which only guards reserved system names).
         """
-        enterprise_enabled = bool(getattr(self.agent_config, "_enterprise_enabled", False))
-        allowed_agent_ids = set(getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set())
-        types = ["explore"] if not enterprise_enabled or "explore" in allowed_agent_ids else []
-        builtin_types = sorted(name for name in SYS_SUB_AGENTS if name != "feedback")
-        if enterprise_enabled:
-            builtin_types = [name for name in builtin_types if name in allowed_agent_ids]
-        types.extend(builtin_types)
+        from datus_enterprise.services.sub_agent_task_policy import enterprise_agent_acl_allows
+
+        discovered_types = ["explore", *sorted(name for name in SYS_SUB_AGENTS if name != "feedback")]
+        types = [name for name in discovered_types if enterprise_agent_acl_allows(self.agent_config, name)]
 
         if self.agent_config and hasattr(self.agent_config, "agentic_nodes"):
             current_datasource = self.agent_config.current_datasource
@@ -1508,10 +1511,9 @@ class SubAgentTaskTool:
             for name, config in self.agent_config.agentic_nodes.items():
                 if name in ("chat", "explore", "feedback") or name in SYS_SUB_AGENTS:
                     continue
-                if enterprise_enabled:
-                    entry_id = config.get("id") if isinstance(config, dict) else None
-                    if name not in allowed_agent_ids and entry_id not in allowed_agent_ids:
-                        continue
+                entry_id = config.get("id") if isinstance(config, dict) else None
+                if not enterprise_agent_acl_allows(self.agent_config, name, entry_id=entry_id):
+                    continue
 
                 # If scoped_context is configured, datasource must match current datasource
                 try:

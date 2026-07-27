@@ -10,13 +10,11 @@ the client can reconnect and resume from where it left off.
 import asyncio
 import copy
 import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
-    ChatSessionTerminalEvent,
     IMessageContent,
     SSEDataType,
     SSEEndData,
@@ -27,10 +25,8 @@ from datus.api.models.cli_models import (
     SSEPingData,
     SSESessionData,
     SSEUsageData,
-    StreamChatInput,
 )
-from datus.api.models.dashboard_models import DashboardEditSession
-from datus.api.models.report_models import ReportEditSession
+from datus.api.models.downstream import DashboardEditSession, ReportEditSession, StreamChatInput
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
 from datus.configuration.agent_config import AgentConfig
@@ -42,6 +38,22 @@ from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager, set_current_path_manager
 from datus.utils.time_utils import now_utc_iso
 from datus.utils.trace_context import build_chat_trace_context, reset_trace_context, set_trace_context
+from datus_enterprise.services.chat_task_runtime import (
+    ArtifactEditSession,
+    ChatBufferLimits,
+    EventBufferExpiredError,
+    EventBufferOverflowError,
+    WebFilesystemExecutor,
+    create_dashboard_edit_session,
+    create_report_edit_session,
+    get_artifact_edit_session,
+    initialize_chat_task_runtime,
+    persist_terminal_event,
+    prepare_chat_request_config,
+    task_snapshot,
+    terminal_outcome_from_action,
+    trim_event_buffer,
+)
 
 logger = get_logger(__name__)
 
@@ -50,50 +62,6 @@ if TYPE_CHECKING:
     from datus.api.services.chat_admission import ChatAdmissionController
 
 HEARTBEAT_INTERVAL = 10  # seconds
-REPORT_EDIT_SESSION_PREFIX = "report_edit__"
-DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__"
-ARTIFACT_EDIT_SESSION_TTL_SECONDS = 6 * 60 * 60
-ArtifactEditSession = ReportEditSession | DashboardEditSession
-
-
-@dataclass(frozen=True)
-class ChatBufferLimits:
-    """Per-task in-memory SSE retention limits."""
-
-    max_events: int = 5000
-    max_bytes: int = 16 * 1024 * 1024
-    completed_ttl_seconds: int = 300
-    cleanup_interval_seconds: int = 60
-    stop_grace_seconds: int = 5
-
-    @classmethod
-    def from_api_config(cls, api_config: dict[str, Any] | None) -> "ChatBufferLimits":
-        raw = (api_config or {}).get("chat") or {}
-        if not isinstance(raw, dict):
-            raw = {}
-        return cls(
-            max_events=_positive_int(raw.get("max_buffer_events"), cls.max_events),
-            max_bytes=_positive_int(raw.get("max_buffer_bytes"), cls.max_bytes),
-            completed_ttl_seconds=_positive_int(raw.get("completed_task_ttl_seconds"), cls.completed_ttl_seconds),
-            cleanup_interval_seconds=_positive_int(raw.get("cleanup_interval_seconds"), cls.cleanup_interval_seconds),
-            stop_grace_seconds=_positive_int(raw.get("stop_grace_seconds"), cls.stop_grace_seconds),
-        )
-
-
-class EventBufferExpiredError(RuntimeError):
-    """Raised when a resume cursor predates the bounded in-memory buffer."""
-
-
-class EventBufferOverflowError(RuntimeError):
-    """Raised when one SSE event exceeds the complete task buffer budget."""
-
-
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
 
 
 def is_thinking_only_content(content_items) -> bool:
@@ -330,24 +298,14 @@ class ChatTask:
     def __init__(self, session_id: str, asyncio_task: asyncio.Task, owner_user_id: Optional[str] = None):
         self.session_id = session_id
         self.asyncio_task = asyncio_task
-        self.owner_user_id = owner_user_id
         self.node: Optional[AgenticNode] = None
         self.events: list[SSEEvent] = []
-        self.event_sizes: list[int] = []
-        self.event_bytes: int = 0
-        self.base_offset: int = 0
         self.status: str = "running"  # running | completed | error | cancelled
         self.condition = asyncio.Condition()
         self.created_at = datetime.now()
-        self.completed_at: Optional[datetime] = None
         self.error: Optional[str] = None
         self.consumer_offset: int = 0
-        self.admission_token = None
-        self.run_id = uuid.uuid4().hex
-        self.session_established = False
-        self.terminal_event_persisted = False
-        self.terminal_event_type: Optional[str] = None
-        self.stop_requested = False
+        initialize_chat_task_runtime(self, owner_user_id)
 
 
 class ChatTaskManager:
@@ -368,7 +326,10 @@ class ChatTaskManager:
         enterprise_enabled: bool = False,
         chat_admission: Optional["ChatAdmissionController"] = None,
         buffer_limits: Optional[ChatBufferLimits] = None,
+        web_filesystem_executor: WebFilesystemExecutor = "client",
     ) -> None:
+        if web_filesystem_executor not in ("client", "server"):
+            raise ValueError("web_filesystem_executor must be 'client' or 'server'")
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
         self._discarded_task_ids: set[int] = set()
@@ -382,9 +343,9 @@ class ChatTaskManager:
         self._enterprise_enabled = enterprise_enabled
         self._chat_admission = chat_admission
         self._buffer_limits = buffer_limits or ChatBufferLimits()
+        self._web_filesystem_executor = web_filesystem_executor
         self._cleanup_handle: Optional[asyncio.TimerHandle] = None
         self._supports_artifact_edit_sessions = True
-        self._supports_report_edit_sessions = True
         self._artifact_edit_sessions: Dict[str, ArtifactEditSession] = {}
 
     # ------------------------------------------------------------------
@@ -399,70 +360,25 @@ class ChatTaskManager:
         instead of writing ephemeral agent definitions into shared config.
         """
 
-        self._purge_expired_artifact_edit_sessions()
-        edit_session_id = uuid.uuid4().hex
-        subagent_id = f"{REPORT_EDIT_SESSION_PREFIX}{edit_session_id}"
-        session = ReportEditSession(
-            edit_session_id=edit_session_id,
-            subagent_id=subagent_id,
-            artifact_type="report",
-            artifact_slug=report_slug,
-            owner_user_id=user_id,
-            created_at=now_utc_iso(),
+        return create_report_edit_session(
+            self._artifact_edit_sessions,
+            user_id=user_id,
+            report_slug=report_slug,
         )
-        self._artifact_edit_sessions[subagent_id] = session
-        return session
-
-    def get_report_edit_session(self, subagent_id: Optional[str]) -> Optional[ReportEditSession]:
-        """Return a live report edit session by its chat subagent id."""
-
-        session = self.get_artifact_edit_session(subagent_id)
-        if isinstance(session, ReportEditSession):
-            return session
-        return None
 
     def create_dashboard_edit_session(self, *, user_id: Optional[str], dashboard_slug: str) -> DashboardEditSession:
         """Register a process-local edit session locked to one dashboard slug."""
 
-        self._purge_expired_artifact_edit_sessions()
-        edit_session_id = uuid.uuid4().hex
-        subagent_id = f"{DASHBOARD_EDIT_SESSION_PREFIX}{edit_session_id}"
-        session = DashboardEditSession(
-            edit_session_id=edit_session_id,
-            subagent_id=subagent_id,
-            artifact_type="dashboard",
-            artifact_slug=dashboard_slug,
-            owner_user_id=user_id,
-            created_at=now_utc_iso(),
+        return create_dashboard_edit_session(
+            self._artifact_edit_sessions,
+            user_id=user_id,
+            dashboard_slug=dashboard_slug,
         )
-        self._artifact_edit_sessions[subagent_id] = session
-        return session
 
     def get_artifact_edit_session(self, subagent_id: Optional[str]) -> Optional[ArtifactEditSession]:
         """Return a live report/dashboard edit session by its chat subagent id."""
 
-        if not subagent_id:
-            return None
-        self._purge_expired_artifact_edit_sessions()
-        return self._artifact_edit_sessions.get(subagent_id)
-
-    def _purge_expired_artifact_edit_sessions(self) -> None:
-        if not self._artifact_edit_sessions:
-            return
-        now = datetime.now(timezone.utc)
-        expired: list[str] = []
-        for subagent_id, session in self._artifact_edit_sessions.items():
-            try:
-                created = datetime.fromisoformat(session.created_at.replace("Z", "+00:00"))
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-            except ValueError:
-                expired.append(subagent_id)
-                continue
-            if (now - created).total_seconds() > ARTIFACT_EDIT_SESSION_TTL_SECONDS:
-                expired.append(subagent_id)
-        for subagent_id in expired:
-            self._artifact_edit_sessions.pop(subagent_id, None)
+        return get_artifact_edit_session(self._artifact_edit_sessions, subagent_id)
 
     async def start_chat(
         self,
@@ -478,21 +394,15 @@ class ChatTaskManager:
         """
         # Clone config to avoid cross-request mutation of shared AgentConfig
         agent_config = copy.deepcopy(agent_config)
-        if self._session_body_store is not None:
-            agent_config._session_body_store = self._session_body_store
-            agent_config._session_project_id = self._project_id
-        agent_config.principal = dict(principal or {})
-        agent_config._request_user_id = user_id
-        agent_config._artifact_acl_store = self._artifact_acl_store
-        agent_config._enterprise_enabled = self._enterprise_enabled
-        agent_config._protect_artifact_filesystem = self._enterprise_enabled
-        if self._enterprise_enabled and not user_id:
-            raise ValueError("AUTH_REQUIRED")
-        if self._enterprise_enabled:
-            from datus_enterprise.workspace import prepare_user_workspace
-
-            workspace_root = await asyncio.to_thread(prepare_user_workspace, agent_config, user_id or "")
-            agent_config._request_workspace_root = str(workspace_root)
+        await prepare_chat_request_config(
+            agent_config,
+            project_id=self._project_id,
+            session_body_store=self._session_body_store,
+            artifact_acl_store=self._artifact_acl_store,
+            enterprise_enabled=self._enterprise_enabled,
+            user_id=user_id,
+            principal=principal,
+        )
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().
@@ -755,62 +665,19 @@ class ChatTaskManager:
         error: str,
         error_type: str,
     ) -> None:
-        """Best-effort persistence for established-session display outcomes."""
-        if not task.session_established or task.terminal_event_persisted:
-            return
-
-        terminal_event = ChatSessionTerminalEvent(
-            event_id=f"{task.run_id}-terminal",
+        await persist_terminal_event(
+            task=task,
+            agent_config=agent_config,
+            user_id=user_id,
             event_type=event_type,
             error=error,
             error_type=error_type,
-        )
-        base_dir = getattr(agent_config, "session_dir", None) or str(
-            get_path_manager(agent_config=agent_config).sessions_dir
-        )
-        session_manager = SessionManager(
-            session_dir=base_dir,
-            scope=session_scope_from_user_id(user_id),
-            agent_config=agent_config,
             project_id=self._project_id,
-            body_store=self._session_body_store,
+            session_body_store=self._session_body_store,
+            session_manager_type=SessionManager,
         )
-        try:
-            await session_manager.append_terminal_event_async(task.session_id, terminal_event)
-        except Exception:
-            logger.warning(
-                "Failed to persist terminal chat event for session %s",
-                task.session_id,
-                exc_info=True,
-            )
-            return
-        task.terminal_event_persisted = True
-        task.terminal_event_type = event_type
 
-    @staticmethod
-    def _terminal_outcome_from_action(
-        action: Any,
-    ) -> Optional[tuple[Literal["error", "cancelled", "timeout"], str, str]]:
-        if getattr(action, "role", None) != ActionRole.ASSISTANT or getattr(action, "depth", 0) != 0:
-            return None
-        if getattr(action, "action_type", None) == "interrupted":
-            detail = str(getattr(action, "messages", None) or "Execution interrupted by user")
-            return ("cancelled", detail, "CHAT_CANCELLED")
-        if getattr(action, "action_type", None) != "error" or getattr(action, "status", None) != ActionStatus.FAILED:
-            return None
-
-        output = action.output if isinstance(getattr(action, "output", None), dict) else {}
-        detail = str(
-            output.get("error")
-            or output.get("error_message")
-            or output.get("errorMessage")
-            or getattr(action, "messages", None)
-            or "Chat execution failed"
-        )
-        error_type = str(
-            output.get("error_type") or output.get("error_code") or output.get("errorCode") or "CHAT_EXECUTION_ERROR"
-        )
-        return ("error", detail, error_type)
+    _terminal_outcome_from_action = staticmethod(terminal_outcome_from_action)
 
     async def _run_loop(
         self,
@@ -955,9 +822,28 @@ class ChatTaskManager:
             # guard is needed here.
             effective_source = request.source or self._default_source
             if effective_source == "vscode":
+                # VSCode edits the user's *local* filesystem — the client is
+                # always the executor, whatever the permission profile.
                 apply_proxy_tools(node, ["filesystem_tools.*"])
             elif effective_source == "web":
-                apply_proxy_tools(node, ["write_file", "edit_file", "delete_file"])
+                # Keep the upstream v0.3.8 client-executor contract as the
+                # default. Downstream web deployments that do not implement a
+                # browser filesystem executor opt into server execution when
+                # DatusService constructs the manager.
+                active_profile = getattr(getattr(node, "permission_manager", None), "active_profile", None)
+                if self._web_filesystem_executor == "server" or active_profile in ("auto", "dangerous"):
+                    # Mutate in place like ``apply_proxy_tools`` does because
+                    # PermissionHooks may hold a shared reference to the set.
+                    existing_proxied = getattr(node, "proxied_tool_names", None)
+                    if isinstance(existing_proxied, set):
+                        existing_proxied.clear()
+                    else:
+                        node.proxied_tool_names = set()
+                    logger.info(
+                        "Filesystem tools run server-side for session=%s (profile=%s)", session_id, active_profile
+                    )
+                else:
+                    apply_proxy_tools(node, ["write_file", "edit_file", "delete_file"])
             elif effective_source:
                 logger.warning("Unsupported source '%s'; skipping proxy shortcut", effective_source)
 
@@ -1006,6 +892,7 @@ class ChatTaskManager:
                     is_first_delta=is_first_delta,
                     is_update=bool(is_update),
                     include_final_response=_should_include_final_response(action, assistant_response_sent),
+                    proxied_tool_names=getattr(node, "proxied_tool_names", None),
                 )
                 terminal_outcome = self._terminal_outcome_from_action(action)
                 if terminal_outcome is not None:
@@ -1158,38 +1045,7 @@ class ChatTaskManager:
             task.condition.notify_all()
 
     def _trim_event_buffer(self, task: ChatTask) -> None:
-        """Trim old events in batches while keeping absolute resume cursors stable."""
-
-        limits = self._buffer_limits
-        if len(task.events) <= limits.max_events and task.event_bytes <= limits.max_bytes:
-            return
-
-        target_events = max(1, int(limits.max_events * 0.8))
-        target_bytes = max(1, int(limits.max_bytes * 0.8))
-        remove_count = 0
-        removed_bytes = 0
-        remaining_bytes = task.event_bytes
-        while remove_count < len(task.events) - 1 and (
-            len(task.events) - remove_count > target_events or remaining_bytes > target_bytes
-        ):
-            size = task.event_sizes[remove_count]
-            removed_bytes += size
-            remaining_bytes -= size
-            remove_count += 1
-
-        if remove_count == 0:
-            return
-        del task.events[:remove_count]
-        del task.event_sizes[:remove_count]
-        task.event_bytes = max(0, task.event_bytes - removed_bytes)
-        task.base_offset += remove_count
-        logger.warning(
-            "Trimmed %s buffered chat events for session=%s; earliest_cursor=%s retained_bytes=%s",
-            remove_count,
-            task.session_id,
-            task.base_offset,
-            task.event_bytes,
-        )
+        trim_event_buffer(task, self._buffer_limits)
 
     def _schedule_completed_cleanup(self) -> None:
         if self._cleanup_handle is not None and not self._cleanup_handle.cancelled():
@@ -1238,19 +1094,7 @@ class ChatTaskManager:
             self._purge_expired_completed()
             self._schedule_completed_cleanup()
 
-    def _task_snapshot(self, task: ChatTask) -> dict[str, Any]:
-        return {
-            "session_id": task.session_id,
-            "owner_user_id": task.owner_user_id,
-            "status": task.status,
-            "is_running": task.status == "running",
-            "created_at": task.created_at.isoformat(),
-            "event_count": len(task.events),
-            "event_bytes": task.event_bytes,
-            "earliest_event_cursor": task.base_offset,
-            "consumer_offset": task.consumer_offset,
-            "error": task.error,
-        }
+    _task_snapshot = staticmethod(task_snapshot)
 
     # ------------------------------------------------------------------
     # Node factory

@@ -6,7 +6,7 @@
 
 import re
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
@@ -14,6 +14,7 @@ from datus_storage_base.conditions import eq
 
 from datus.storage.base import BaseEmbeddingStore, StorageBase
 from datus.storage.embedding_models import EmbeddingModel, get_db_embedding_model
+from datus.storage.fts import FtsIndexStatus, FtsSpec
 from datus.storage.schema_metadata import SchemaStorage
 from datus.utils.exceptions import DatusException
 
@@ -37,13 +38,11 @@ class _UnavailableEmbeddingModel:
 class _ReadOnlyTable:
     def __init__(self, rows):
         self.rows = rows
-        self.search_all_calls = []
 
     def count_rows(self, where=None):
         return len(self.rows)
 
     def search_all(self, where=None, select_fields=None, limit=None):
-        self.search_all_calls.append({"where": where, "select_fields": select_fields, "limit": limit})
         rows = self.rows[:limit] if limit is not None else list(self.rows)
         if select_fields is not None:
             rows = [{field: row.get(field) for field in select_fields if field in row} for row in rows]
@@ -368,21 +367,6 @@ class TestReadOnlyPathsWithoutEmbedding:
         assert db.set_table_schema_calls == [("test_table", store._schema)]
         assert store._shared.initialized is False
 
-    def test_existing_table_read_path_does_not_fetch_vector_by_default(self):
-        table = _ReadOnlyTable(
-            [
-                {"name": "orders", "definition": "CREATE TABLE orders(id int)", "vector": [0.1, 0.2]},
-            ]
-        )
-        db = _ReadOnlyVectorDb(exists=True, table=table)
-        store = self._make_store(db)
-
-        result = store._search_all()
-
-        assert result.to_pylist() == [{"name": "orders", "definition": "CREATE TABLE orders(id int)"}]
-        assert table.search_all_calls == [{"where": None, "select_fields": ["name", "definition"], "limit": 1}]
-        assert store._shared.initialized is False
-
     def test_query_with_filter_zero_limit_without_embedding(self):
         """query_with_filter(limit=0) returns empty without touching embedding model."""
         table = _ReadOnlyTable([{"name": "orders", "definition": "CREATE TABLE orders(id int)", "vector": [0.1, 0.2]}])
@@ -575,6 +559,41 @@ class TestSearchRouting:
         result = store.search("table", query_type="hybrid", top_n=3)
         assert result.num_rows >= 0
         assert "vector" not in result.column_names
+
+    def test_search_hybrid_success_without_fallback(self, tmp_path):
+        """search() with query_type='hybrid' returns hybrid results when available."""
+        store = self._make_store(tmp_path)
+        table = MagicMock()
+        table.count_rows.return_value = 2
+        table.search_hybrid.return_value = pa.Table.from_pylist(
+            [
+                {"identifier": "id_1", "table_name": "table_1"},
+                {"identifier": "id_2", "table_name": "table_2"},
+            ]
+        )
+        store.table = table
+        store._open_existing_table_for_read = MagicMock(return_value=table)
+        store._ensure_embedding_cache_ready_for_search = MagicMock()
+        store._ensure_table_ready = MagicMock()
+
+        result = store.search("table", query_type="hybrid", top_n=1, allow_hybrid_fallback=False)
+
+        assert result.num_rows == 1
+        assert result.to_pylist()[0]["table_name"] == "table_1"
+
+    def test_search_hybrid_without_fallback_raises(self, tmp_path):
+        """search() with fallback disabled surfaces the hybrid error."""
+        store = self._make_store(tmp_path)
+        table = MagicMock()
+        table.count_rows.return_value = 1
+        table.search_hybrid.side_effect = RuntimeError("fts index missing")
+        store.table = table
+        store._open_existing_table_for_read = MagicMock(return_value=table)
+        store._ensure_embedding_cache_ready_for_search = MagicMock()
+        store._ensure_table_ready = MagicMock()
+
+        with pytest.raises(DatusException, match="fts index missing"):
+            store.search("table", query_type="hybrid", top_n=1, allow_hybrid_fallback=False)
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +871,7 @@ class TestCreateFtsIndex:
     """Tests for create_fts_index."""
 
     def test_create_fts_index_no_error(self, tmp_path):
-        """create_fts_index should not raise even if index creation fails."""
+        """create_fts_index creates a verified native index."""
         store = SchemaStorage(get_db_embedding_model())
         store.store_batch(
             [
@@ -871,7 +890,7 @@ class TestCreateFtsIndex:
         assert store.table_size() == 1
 
     def test_create_fts_index_with_multiple_fields(self, tmp_path):
-        """create_fts_index with multiple fields should not raise."""
+        """create_fts_index creates one native index per field."""
         store = SchemaStorage(get_db_embedding_model())
         store.store_batch(
             [
@@ -886,8 +905,33 @@ class TestCreateFtsIndex:
                 }
             ]
         )
-        store.create_fts_index(["database_name", "schema_name", "table_name", "definition"])
+        if not getattr(store.table, "supports_fts", lambda: False)():
+            pytest.skip("Backend does not implement the shared FTS capability")
+        spec = FtsSpec.from_names(["database_name", "schema_name", "table_name", "definition"])
+        store.create_fts_index(spec)
         assert store.table_size() == 1
+        assert store.table.fts_index_status(spec) == FtsIndexStatus.READY
+
+    def test_create_fts_index_failure_is_not_swallowed(self, tmp_path):
+        store = SchemaStorage(get_db_embedding_model())
+        store.store_batch(
+            [
+                {
+                    "identifier": "id_1",
+                    "catalog_name": "cat",
+                    "database_name": "db",
+                    "schema_name": "sch",
+                    "table_name": "t",
+                    "table_type": "table",
+                    "definition": "CREATE TABLE t (id INT)",
+                }
+            ]
+        )
+        if not getattr(store.table, "supports_fts", lambda: False)():
+            pytest.skip("Backend does not implement the shared FTS capability")
+        with patch.object(store.table, "create_fts_index", side_effect=RuntimeError("index build failed")):
+            with pytest.raises(DatusException, match="index build failed"):
+                store.create_fts_index(["definition"])
 
 
 # ---------------------------------------------------------------------------

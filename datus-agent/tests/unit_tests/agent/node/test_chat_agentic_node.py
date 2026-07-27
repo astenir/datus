@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from datus.configuration.node_type import NodeType
-from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
 from tests.unit_tests.mock_llm_model import MockToolCall, build_simple_response, build_tool_then_response
 
@@ -240,31 +240,6 @@ class TestChatAgenticNodeToolSetup:
             if not prev_container:
                 real_agent_config.agentic_nodes = prev_container
 
-    def test_enterprise_request_workspace_overrides_node_workspace(self, real_agent_config, mock_llm_create, tmp_path):
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        request_workspace = tmp_path / "private" / "alice"
-        request_workspace.mkdir(parents=True)
-        previous_nodes = real_agent_config.agentic_nodes
-        previous_request_workspace = getattr(real_agent_config, "_request_workspace_root", None)
-        real_agent_config.agentic_nodes = {"chat": {"workspace_root": str(tmp_path / "shared")}}
-        real_agent_config._request_workspace_root = str(request_workspace)
-        try:
-            node = ChatAgenticNode(
-                node_id="test_request_workspace",
-                description="Test request workspace",
-                node_type=NodeType.TYPE_CHAT,
-                agent_config=real_agent_config,
-            )
-
-            assert node.filesystem_func_tool.root_path == str(request_workspace)
-        finally:
-            real_agent_config.agentic_nodes = previous_nodes
-            if previous_request_workspace is None:
-                del real_agent_config._request_workspace_root
-            else:
-                real_agent_config._request_workspace_root = previous_request_workspace
-
     def test_has_date_parsing_tools(self, real_agent_config, mock_llm_create):
         """Chat node has date parsing tools."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -295,13 +270,13 @@ class TestChatAgenticNodeToolSetup:
         assert isinstance(node.bash_tool, BashTool)
 
         # ``["*"]`` pattern: tool is exposed; per-call gating is handled by
-        # the PermissionManager ``bash_tools.execute_command`` ASK rule.
+        # the PermissionManager ``bash_tools.bash`` ASK rule.
         tool_names = [t.name for t in node.tools]
-        assert "execute_command" in tool_names
+        assert "bash" in tool_names
 
         # Permission category mapping is mandatory — without it, the ASK rule
         # added in ``profiles._NORMAL_RULES`` would never fire.
-        assert node.tool_registry.get("execute_command") == "bash_tools"
+        assert node.tool_registry.get("bash") == "bash_tools"
 
     def test_context_search_failure_does_not_remove_db_tools(self, real_agent_config, mock_llm_create):
         """Embedding/context setup failures should only remove context tools."""
@@ -698,7 +673,6 @@ class TestChatAgenticNodeMCPSetup:
 
         result = node._setup_mcp_server_from_config("non_existent_server_xyz")
         assert result is None
-        assert "missing from the runtime configuration" in node.degraded_capabilities["mcp.non_existent_server_xyz"]
 
 
 # ===========================================================================
@@ -723,31 +697,6 @@ class TestChatAgenticNodeSystemPrompt:
         prompt = node._get_system_prompt()
         assert isinstance(prompt, str)
         assert len(prompt) >= 100
-
-    def test_custom_agent_renders_request_scoped_prompt_content(self, real_agent_config, mock_llm_create, caplog):
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        real_agent_config.agentic_nodes["chat_custom"] = {
-            "node_class": "chat",
-            "system_prompt": "chat_custom",
-            "prompt_template": "Custom database prompt for {{ agent_description }}.",
-            "prompt_version": "1.0",
-            "agent_description": "investment research",
-            "tools": "",
-        }
-        node = ChatAgenticNode(
-            node_id="test_custom_prompt",
-            description="Test custom Agent prompt",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-            node_name="chat_custom",
-        )
-
-        with caplog.at_level("WARNING"):
-            prompt = node._get_system_prompt()
-
-        assert "Custom database prompt for investment research." in prompt
-        assert "Failed to render system prompt 'chat_custom'" not in caplog.text
 
     def test_get_system_prompt_excludes_permission_profile(self, real_agent_config, mock_llm_create):
         """The permission profile is enforced by hooks at tool-call time, never prompted.
@@ -805,39 +754,6 @@ class TestChatAgenticNodeSystemPrompt:
 
         assert "Ask user tool (`ask_user`)" in prompt
         assert "call `ask_user` FIRST" in prompt
-
-    def test_disabled_delegation_removes_task_and_prompt_guidance(self, real_agent_config, mock_llm_create):
-        """A persisted enterprise runtime policy must reach and constrain the real chat node."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.agent.tool_policy import apply_agent_runtime_policy
-        from datus.tools.permission.permission_config import PermissionLevel
-
-        chat_config = dict(real_agent_config.agentic_nodes.get("chat", {}))
-        chat_config.update(
-            {
-                "tool_policy": {"mode": "inherit", "allowed": [], "denied": []},
-                "runtime_policy": {
-                    "allow_subagent_delegation": False,
-                    "allowed_subagents": [],
-                },
-            }
-        )
-        real_agent_config.agentic_nodes["chat"] = chat_config
-        node = ChatAgenticNode(
-            node_id="test_disabled_delegation",
-            description="Test disabled delegation policy",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        apply_agent_runtime_policy(node)
-
-        assert node.node_config["runtime_policy"]["allow_subagent_delegation"] is False
-        assert "task" not in {tool.name for tool in node.tools}
-        assert node.sub_agent_task_tool._get_available_types() == []
-        assert node.permission_manager.check_permission("sub_agent_tools", "task", "chat") == PermissionLevel.DENY
-        prompt = node._get_system_prompt()
-        assert "Task delegation tool (`task`)" not in prompt
 
     def test_get_system_prompt_fallback_on_missing_template(self, real_agent_config, mock_llm_create):
         """_get_system_prompt falls back to chat_system when configured template is missing."""
@@ -1003,7 +919,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def raising_stream(*args, **kwargs):
             raise RuntimeError("Simulated LLM failure")
-            yield  # noqa: unreachable - makes this an async generator
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = raising_stream
 
@@ -1020,130 +936,6 @@ class TestChatAgenticNodeExecuteStreamErrors:
             final_action = actions[-1]
             assert final_action.status == ActionStatus.FAILED
             assert "Simulated LLM failure" in str(final_action.output.get("error", ""))
-        finally:
-            mock_llm_create.generate_with_tools_stream = original_method
-
-    @pytest.mark.asyncio
-    async def test_execute_stream_formats_permission_denial_as_user_message(self, real_agent_config, mock_llm_create):
-        """Permission denials are expected policy failures, not raw SDK tracebacks."""
-        from agents.exceptions import UserError
-
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.tools.permission.permission_hooks import PermissionDeniedException
-
-        node = ChatAgenticNode(
-            node_id="test_permission_denied",
-            description="Test permission denial handling",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        original_method = mock_llm_create.generate_with_tools_stream
-
-        async def raising_stream(*args, **kwargs):
-            denied = PermissionDeniedException(
-                "PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) is blocked by the "
-                "'normal' permission profile. STOP retrying this tool — different parameters "
-                "will not change the outcome.",
-                tool_category="filesystem_tools",
-                tool_name="write_file",
-            )
-            raise UserError(f"Error running tool write_file: {denied}") from denied
-            yield  # noqa: unreachable - makes this an async generator
-
-        mock_llm_create.generate_with_tools_stream = raising_stream
-
-        node.input = ChatNodeInput(user_message="Create a file", database="california_schools")
-        ahm = ActionHistoryManager()
-
-        try:
-            actions = []
-            async for action in node.execute_stream(ahm):
-                actions.append(action)
-
-            final_action = actions[-1]
-            assert final_action.status == ActionStatus.FAILED
-            assert final_action.output.get("error_type") == "PERMISSION_DENIED"
-            error_text = str(final_action.output.get("error", ""))
-            assert "权限受限" in error_text
-            assert "当前 Agent 或会话的工具策略不允许直接修改文件" in error_text
-            assert "核对该 Agent 的工具策略" in error_text
-            assert "最高权限模式" not in error_text
-            assert "授予“高危对话模式”权限" not in error_text
-            assert "STOP retrying" not in error_text
-            assert "permissions.rules" not in error_text
-        finally:
-            mock_llm_create.generate_with_tools_stream = original_method
-
-    @pytest.mark.asyncio
-    async def test_execute_stream_preserves_usage_after_permission_denial(self, real_agent_config, mock_llm_create):
-        """Tool-denial failures still report tokens already spent by the model."""
-        from agents.exceptions import UserError
-
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.tools.permission.permission_hooks import PermissionDeniedException
-
-        node = ChatAgenticNode(
-            node_id="test_permission_denied_usage",
-            description="Test permission denial token usage",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        original_method = mock_llm_create.generate_with_tools_stream
-
-        async def raising_stream(*args, **kwargs):
-            manager = kwargs["action_history_manager"]
-            manager.add_action(
-                ActionHistory(
-                    action_id="token_usage_before_denial",
-                    role=ActionRole.ASSISTANT,
-                    messages="Token usage update",
-                    action_type="token_usage",
-                    input={},
-                    output={
-                        "cumulative": {
-                            "requests": 1,
-                            "input_tokens": 1200,
-                            "output_tokens": 80,
-                            "total_tokens": 1280,
-                            "cached_tokens": 256,
-                        },
-                        "delta": {"requests": 1, "input_tokens": 1200, "output_tokens": 80, "total_tokens": 1280},
-                        "context_length": 128000,
-                        "last_call_input_tokens": 1200,
-                    },
-                    status=ActionStatus.SUCCESS,
-                )
-            )
-            denied = PermissionDeniedException(
-                "PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) is blocked by the "
-                "'normal' permission profile.",
-                tool_category="filesystem_tools",
-                tool_name="write_file",
-            )
-            raise UserError(f"Error running tool write_file: {denied}") from denied
-            yield  # noqa: unreachable - makes this an async generator
-
-        mock_llm_create.generate_with_tools_stream = raising_stream
-
-        node.input = ChatNodeInput(user_message="Create a file", database="california_schools")
-        ahm = ActionHistoryManager()
-
-        try:
-            actions = []
-            async for action in node.execute_stream(ahm):
-                actions.append(action)
-
-            final_action = actions[-1]
-            assert final_action.status == ActionStatus.FAILED
-            assert final_action.output.get("tokens_used") == 1280
-
-            turn_usage = await node.get_last_turn_usage()
-            assert turn_usage is not None
-            assert turn_usage.total_tokens == 1280
-            assert turn_usage.cached_tokens == 256
-            assert turn_usage.session_total_tokens == 1200
         finally:
             mock_llm_create.generate_with_tools_stream = original_method
 
@@ -1172,7 +964,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def cancel_stream(*args, **kwargs):
             raise ExecutionInterrupted("Ctrl+C")
-            yield  # noqa: unreachable
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = cancel_stream
 
@@ -1203,7 +995,7 @@ class TestChatAgenticNodeExecuteStreamErrors:
 
         async def interrupt_stream(*args, **kwargs):
             raise ExecutionInterrupted("Ctrl+C pressed")
-            yield  # noqa: unreachable
+            yield  # unreachable - makes this an async generator
 
         mock_llm_create.generate_with_tools_stream = interrupt_stream
 
@@ -1909,6 +1701,24 @@ class TestChatAgenticNodeRebuildTools:
         tool_names = [t.name for t in node.tools]
         assert "ask_user" in tool_names
 
+    def test_rebuild_tools_resets_transformer_flag(self, real_agent_config, mock_llm_create):
+        """Rebuilding replaces wrapped FunctionTools with fresh unwrapped ones,
+        so plugin tool transformers must re-apply on the next hook composition
+        (e.g. after a mid-session task-database switch)."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_rebuild_flag",
+            description="Test rebuild resets transformer flag",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node._tool_transformers_applied = True
+
+        node._rebuild_tools()
+
+        assert node._tool_transformers_applied is False
+
     def test_rebuild_tools_with_no_optional_components(self, real_agent_config, mock_llm_create):
         """_rebuild_tools works when optional tool components are None."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -2045,20 +1855,6 @@ class TestChatAgenticNodeExecutionMode:
 class TestChatAgenticNodeNoBITools:
     """Verify ChatAgenticNode no longer has BI tools (moved to GenDashboardAgenticNode)."""
 
-    def test_no_bi_func_tool_attribute(self, real_agent_config, mock_llm_create):
-        """Chat node should not have a bi_func_tool attribute."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.configuration.node_type import NodeType
-
-        node = ChatAgenticNode(
-            node_id="test_no_bi",
-            description="Test no BI tools",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "bi_func_tool")
-
     def test_no_bi_tool_names_in_tools_list(self, real_agent_config, mock_llm_create):
         """Chat node tools list should not contain any BI tool names."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -2091,20 +1887,6 @@ class TestChatAgenticNodeNoBITools:
         tool_names = {tool.name for tool in node.tools}
         assert tool_names.isdisjoint(bi_tool_names), f"Chat node still has BI tools: {tool_names & bi_tool_names}"
 
-    def test_no_setup_bi_tools_method(self, real_agent_config, mock_llm_create):
-        """Chat node should not have _setup_bi_tools method."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-        from datus.configuration.node_type import NodeType
-
-        node = ChatAgenticNode(
-            node_id="test_no_method",
-            description="Test no BI method",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "_setup_bi_tools")
-
 
 # ===========================================================================
 # Scheduler Tools Removed from Chat Node Tests
@@ -2113,19 +1895,6 @@ class TestChatAgenticNodeNoBITools:
 
 class TestChatAgenticNodeNoSchedulerTools:
     """Verify ChatAgenticNode no longer has scheduler tools (moved to SchedulerAgenticNode)."""
-
-    def test_no_scheduler_tools_attribute(self, real_agent_config, mock_llm_create):
-        """Chat node should not have a scheduler_tools attribute."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_no_scheduler",
-            description="Test no scheduler tools",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "scheduler_tools")
 
     def test_no_scheduler_tool_names_in_tools_list(self, real_agent_config, mock_llm_create):
         """Chat node tools list should not contain any scheduler tool names."""
@@ -2156,16 +1925,3 @@ class TestChatAgenticNodeNoSchedulerTools:
         assert tool_names.isdisjoint(scheduler_tool_names), (
             f"Chat node still has scheduler tools: {tool_names & scheduler_tool_names}"
         )
-
-    def test_no_setup_scheduler_tools_method(self, real_agent_config, mock_llm_create):
-        """Chat node should not have _setup_scheduler_tools method."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_no_scheduler_method",
-            description="Test no scheduler method",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        assert not hasattr(node, "_setup_scheduler_tools")

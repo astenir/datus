@@ -17,6 +17,11 @@ from datus_storage_base.conditions import And, eq
 
 from datus.cli.execution_state import InteractionBroker, InteractionCancelled
 from datus.configuration.agent_config import AgentConfig
+from datus.storage.artifact_replacement import (
+    delete_stale_artifact_rows,
+    restore_artifact_replacements,
+    snapshot_artifact_replacements,
+)
 from datus.storage.metric.store import MetricRAG, build_metric_id
 from datus.storage.reference_sql.store import ReferenceSqlRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
@@ -300,6 +305,9 @@ class GenerationHooks(AgentHooks):
             if not self._result_success(result):
                 logger.info(f"Skipping semantic model sync because generation tool failed: {result}")
                 return
+            if self.generation_evidence.semantic_kb_sync_passed:
+                logger.info("Skipping semantic model hook sync because generation tool already published it")
+                return
 
             file_paths = self._extract_filepaths_from_result(result)
 
@@ -328,6 +336,9 @@ class GenerationHooks(AgentHooks):
         try:
             if not self._result_success(result):
                 logger.info(f"Skipping metric sync because generation tool failed: {result}")
+                return
+            if self.generation_evidence.metric_kb_sync_passed:
+                logger.info("Skipping metric hook sync because generation tool already published it")
                 return
 
             metric_file, semantic_model_file, metric_sqls = self._extract_metric_generation_result(result)
@@ -645,6 +656,7 @@ class GenerationHooks(AgentHooks):
                         include_metrics=True,
                         metric_sqls=metric_sqls,
                         original_yaml_path=file_path,
+                        replace_metric_artifact=False,
                     ),
                 )
                 item_type = "metric"
@@ -728,6 +740,7 @@ class GenerationHooks(AgentHooks):
                         include_metrics=True,
                         metric_sqls=metric_sqls,
                         original_yaml_path=metric_file,  # Use original metric file path, not temp file
+                        replace_metric_artifact=False,
                     ),
                 )
 
@@ -913,12 +926,19 @@ class GenerationHooks(AgentHooks):
         }
 
     @staticmethod
-    def _sync_table_semantic_profiles(agent_config: AgentConfig, profiles: list[dict]) -> int:
+    def _sync_table_semantic_profiles(
+        agent_config: AgentConfig, profiles: list[dict], replace_yaml_path: Optional[str] = None
+    ) -> int:
         if not profiles:
             return 0
         if not isinstance(getattr(agent_config, "project_name", ""), str):
             return 0
         profile_rag = TableSemanticProfileRAG(agent_config)
+        if replace_yaml_path:
+            profile_rag.upsert_batch(profiles)
+            profile_rag.create_indices()
+            profile_rag.delete_artifact_rows_except(replace_yaml_path, [profile.get("id", "") for profile in profiles])
+            return len(profiles)
         profile_rag.upsert_batch(profiles)
         profile_rag.create_indices()
         return len(profiles)
@@ -934,6 +954,7 @@ class GenerationHooks(AgentHooks):
         include_metrics: bool = True,
         metric_sqls: dict = None,
         original_yaml_path: Optional[str] = None,
+        replace_metric_artifact: bool = True,
     ) -> dict:
         """
         Sync semantic objects and/or metrics from YAML file to Knowledge Base.
@@ -946,6 +967,9 @@ class GenerationHooks(AgentHooks):
             metric_sqls: Optional dict mapping metric names to generated SQL (from dry_run)
             original_yaml_path: Original YAML file path to store
                 (if different from file_path, e.g., when using temp files)
+            replace_metric_artifact: Whether metric sync should replace all
+                metric rows for original_yaml_path before upserting. Use False
+                for incremental sub-agent partial publishes.
 
         Now parses tables, columns, metrics, and entities as individual 'semantic_objects'.
         """
@@ -1065,7 +1089,7 @@ class GenerationHooks(AgentHooks):
             if data_source and include_semantic_objects:
                 # --- A. Table Object ---
                 table_obj = {
-                    "id": f"table:{table_name}",
+                    "id": f"table:{table_fq_name}",
                     "kind": "table",
                     "name": table_name,
                     "fq_name": table_fq_name,
@@ -1095,7 +1119,7 @@ class GenerationHooks(AgentHooks):
                     "entity": "",
                 }
                 semantic_objects.append(table_obj)
-                synced_items.append(f"table:{table_name}")
+                synced_items.append(f"table:{table_fq_name}")
 
                 # --- B. Column Objects (Measures & Dimensions & Identifiers) ---
 
@@ -1117,7 +1141,7 @@ class GenerationHooks(AgentHooks):
                         time_granularity = type_params.get("time_granularity", "")
 
                     col_obj = {
-                        "id": f"column:{table_name}.{col_name}",
+                        "id": f"column:{table_fq_name}.{col_name}",
                         "kind": "column",
                         "name": col_name,
                         "fq_name": f"{table_fq_name}.{col_name}",
@@ -1352,14 +1376,51 @@ class GenerationHooks(AgentHooks):
             # Store all objects using upsert (update if id exists, insert if not)
             all_objects = semantic_objects + metric_objects
             if all_objects:
+                profile_count = 0
+                profile_rag = (
+                    TableSemanticProfileRAG(agent_config)
+                    if table_profiles and isinstance(getattr(agent_config, "project_name", ""), str)
+                    else None
+                )
+                replacement_plans = []
+                restore_plans = []
                 if semantic_objects:
-                    semantic_rag.upsert_batch(semantic_objects)
-                    semantic_rag.create_indices()
-                profile_count = GenerationHooks._sync_table_semantic_profiles(agent_config, table_profiles)
-
+                    plan = (semantic_rag, yaml_path_to_store, semantic_objects)
+                    replacement_plans.append(plan)
+                    restore_plans.append(plan)
+                if profile_rag is not None:
+                    plan = (profile_rag, yaml_path_to_store, table_profiles)
+                    replacement_plans.append(plan)
+                    restore_plans.append(plan)
                 if metric_objects:
-                    metric_rag.upsert_batch(metric_objects)
-                    metric_rag.create_indices()
+                    plan = (metric_rag, yaml_path_to_store, metric_objects)
+                    restore_plans.append(plan)
+                    if replace_metric_artifact:
+                        replacement_plans.append(plan)
+                snapshots = snapshot_artifact_replacements(restore_plans)
+                try:
+                    if semantic_objects:
+                        semantic_rag.upsert_batch(semantic_objects)
+                        semantic_rag.create_indices()
+                    if profile_rag is not None:
+                        profile_rag.upsert_batch(table_profiles)
+                        profile_rag.create_indices()
+                        profile_count = len(table_profiles)
+                    if metric_objects:
+                        metric_rag.upsert_batch(metric_objects)
+                        metric_rag.create_indices()
+                    delete_stale_artifact_rows(replacement_plans)
+                except Exception as sync_exc:
+                    restore_failures = restore_artifact_replacements(snapshots)
+                    if restore_failures:
+                        raise RuntimeError(
+                            "Artifact replacement failed and rollback was incomplete for: "
+                            f"{', '.join(restore_failures)}"
+                        ) from sync_exc
+                    raise
+                # Post-commit, best-effort cleanup of shadowed stale rows; never raises.
+                if semantic_objects:
+                    semantic_rag.delete_shadowed_table_rows(semantic_objects)
                 result = {
                     "success": True,
                     "message": (

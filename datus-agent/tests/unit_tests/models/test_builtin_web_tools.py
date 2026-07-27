@@ -371,9 +371,9 @@ async def test_persist_failed_turn_uses_partial_content():
 
 
 @pytest.mark.asyncio
-async def test_persist_failed_turn_uses_thinking_accumulated_when_final_empty():
+async def test_persist_failed_turn_uses_response_accumulated_when_final_empty():
     """On a mid-stream failure ``final_content`` is empty but the visible text
-    lives in ``thinking_accumulated`` — prefer it over the placeholder."""
+    lives in ``response_accumulated`` — prefer it over the placeholder."""
     from unittest.mock import AsyncMock
 
     session = AsyncMock()
@@ -382,7 +382,7 @@ async def test_persist_failed_turn_uses_thinking_accumulated_when_final_empty():
         "turn_persisted": False,
         "user_turn_message": _user_msg(),
         "final_content": "",
-        "thinking_accumulated": "streamed-but-not-finalized",
+        "response_accumulated": "streamed-but-not-finalized",
     }
     await ClaudeModel._persist_failed_turn(Mock(), frame_locals, RuntimeError("boom"))
     items = session.add_items.await_args.args[0]

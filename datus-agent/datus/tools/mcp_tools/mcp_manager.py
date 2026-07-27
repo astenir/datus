@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from agents import Agent, RunContextWrapper, Usage
 from agents.mcp import MCPServerStdioParams
 from agents.mcp.server import MCPServerSse, MCPServerSseParams, MCPServerStreamableHttp, MCPServerStreamableHttpParams
-from agents.mcp.util import ToolFilterStatic
 
+from datus.tools.mcp_tools import mcp_manager_downstream as downstream
 from datus.tools.mcp_tools.mcp_config import (
     AnyMCPServerConfig,
     MCPConfig,
@@ -58,20 +58,6 @@ def create_static_tool_filter(
         blocked_tool_names=blocked_tool_names,
         enabled=enabled,
     )
-
-
-def _sdk_tool_filter(config: Optional[ToolFilterConfig]) -> Optional[ToolFilterStatic]:
-    """Translate persisted MCP filters into the Agents SDK runtime shape."""
-
-    if config is None or not config.enabled:
-        return None
-
-    tool_filter: ToolFilterStatic = {}
-    if config.allowed_tool_names is not None:
-        tool_filter["allowed_tool_names"] = list(config.allowed_tool_names)
-    if config.blocked_tool_names is not None:
-        tool_filter["blocked_tool_names"] = list(config.blocked_tool_names)
-    return tool_filter or None
 
 
 def _validate_server_exists(manager, server_name: str) -> Tuple[bool, str, Optional[AnyMCPServerConfig]]:
@@ -201,36 +187,8 @@ class MCPManager:
             return False, f"Error adding server: {e}"
 
     def update_server(self, name: str, config: AnyMCPServerConfig) -> Tuple[bool, str]:
-        """
-        Update an existing MCP server config.
-
-        Args:
-            name: Existing server name
-            config: Replacement server config
-
-        Returns:
-            Tuple of (success, message)
-        """
-        try:
-            with self._lock:
-                existing = self.config.get_server(name)
-                if not existing:
-                    return False, f"Server '{name}' not found"
-                if config.name != name:
-                    return False, "Server name cannot be changed"
-
-                if config.tool_filter is None:
-                    config.tool_filter = existing.tool_filter
-                self.config.add_server(config)
-
-                if self.save_config():
-                    logger.info(f"Updated MCP server: {name} ({config.type})")
-                    return True, f"Successfully updated server '{name}'"
-                return False, "Failed to save config"
-
-        except Exception as e:
-            logger.error(f"Error updating server {name}: {e}")
-            return False, f"Error updating server: {e}"
+        """Update an existing MCP server config."""
+        return downstream.update_server(self, name, config)
 
     def remove_server(self, name: str) -> Tuple[bool, str]:
         """
@@ -451,7 +409,7 @@ class MCPManager:
         server_instance = SilentMCPServerStdio(
             params=server_params,
             client_session_timeout_seconds=60,
-            tool_filter=_sdk_tool_filter(config.tool_filter),
+            tool_filter=downstream.sdk_tool_filter(config.tool_filter),
         )
         details = {
             "command": expanded_config.get("command"),
@@ -480,7 +438,7 @@ class MCPManager:
         server_instance = MCPServerSse(
             params=server_params,
             client_session_timeout_seconds=60,
-            tool_filter=_sdk_tool_filter(config.tool_filter if config else None),
+            tool_filter=downstream.sdk_tool_filter(config.tool_filter if config else None),
         )
         details = {"url": url, "headers_count": len(headers) if headers else 0, "timeout": timeout}
         return server_instance, details
@@ -512,7 +470,7 @@ class MCPManager:
         server_instance = MCPServerStreamableHttp(
             params=server_params,
             client_session_timeout_seconds=60,
-            tool_filter=_sdk_tool_filter(config.tool_filter if config else None),
+            tool_filter=downstream.sdk_tool_filter(config.tool_filter if config else None),
         )
         details = {"url": url, "headers_count": len(merged_headers), "timeout": timeout}
         return server_instance, details

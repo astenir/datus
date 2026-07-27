@@ -65,7 +65,7 @@ describe("useUserManager", () => {
 
     await manager.loadUsers();
 
-    expect(listUsers).toHaveBeenCalledWith({ enabled: true });
+    expect(listUsers).toHaveBeenCalledWith({ enabled: true, limit: 20, offset: 0 });
     expect(manager.users.value).toEqual([user]);
     expect(manager.total.value).toBe(1);
   });
@@ -78,7 +78,7 @@ describe("useUserManager", () => {
     manager.handleReset();
 
     expect(manager.searchForm.value).toEqual({ status: "all" });
-    expect(listUsers).toHaveBeenCalledWith({ enabled: undefined });
+    expect(listUsers).toHaveBeenCalledWith({ enabled: undefined, limit: 20, offset: 0 });
   });
 
   it("opens user detail with a normalized route user id", async () => {

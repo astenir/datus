@@ -18,12 +18,12 @@ from datus.cli.action_display.tool_content import (
     _build_analyze_relationships,
     _build_ask_user,
     _build_attribution_analyze,
+    _build_bash,
     _build_check_exists,
     _build_describe_table,
     _build_doc_search_result,
     _build_end_generation,
     _build_end_metric_generation,
-    _build_execute_command,
     _build_generate_sql_summary_id,
     _build_get_detail,
     _build_get_dimensions,
@@ -41,6 +41,7 @@ from datus.cli.action_display.tool_content import (
     _build_list_tables,
     _build_load_skill,
     _build_parse_dates,
+    _build_profile_semantic_model_evidence,
     _build_query_metrics,
     _build_read_file,
     _build_read_query,
@@ -72,6 +73,7 @@ from datus.cli.action_display.tool_content import (
     parse_output_data,
 )
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY
 
 
 def _make(
@@ -132,6 +134,22 @@ class TestSharedHelpers:
 
     def test_calc_duration_no_end(self):
         assert calc_duration(_make()) == ""
+
+    def test_format_running_duration_seconds(self):
+        from datus.cli.action_display.tool_content import format_running_duration
+
+        assert format_running_duration(datetime.now() - timedelta(seconds=3)) == "3s"
+
+    def test_format_running_duration_minutes(self):
+        from datus.cli.action_display.tool_content import format_running_duration
+
+        assert format_running_duration(datetime.now() - timedelta(seconds=61)) == "1m1s"
+
+    def test_format_running_duration_none_and_future(self):
+        from datus.cli.action_display.tool_content import format_running_duration
+
+        assert format_running_duration(None) == "0s"
+        assert format_running_duration(datetime.now() + timedelta(seconds=5)) == "0s"
 
     def test_extract_args_dict(self):
         a = _make(input_data={"function_name": "f", "arguments": {"a": 1, "b": "x"}})
@@ -363,30 +381,35 @@ class TestBuildSearchTable:
     def test_compact(self):
         a = _make(
             input_data={"function_name": "search_table"},
-            output_data={"metadata": [1, 2], "sample_data": [3]},
-        )
-        tc = _build_search_table(a, verbose=False)
-        assert "2 tables" in tc.compact_result
-        assert "1 sample row" in tc.compact_result
-
-    def test_compact_with_compressed_sample_data(self):
-        a = _make(
-            input_data={"function_name": "search_table"},
             output_data={
-                "metadata": [1, 2],
-                "sample_data": {
-                    "original_rows": 1,
-                    "original_columns": ["sample_rows"],
-                    "is_compressed": False,
-                    "compressed_data": "index,sample_rows\n0,[{'id': 1}]",
-                    "removed_columns": [],
-                    "compression_type": "none",
-                },
+                "metadata": [
+                    {"table_name": "orders", "sample_rows": [{"id": 1}]},
+                    {"table_name": "customers"},
+                ]
             },
         )
         tc = _build_search_table(a, verbose=False)
         assert "2 tables" in tc.compact_result
         assert "1 sample row" in tc.compact_result
+
+    def test_compact_with_func_tool_envelope_and_inline_sample_rows(self):
+        a = _make(
+            input_data={"function_name": "search_table"},
+            output_data={
+                "raw_output": {
+                    "success": 1,
+                    "error": None,
+                    "result": {
+                        "metadata": [
+                            {"table_name": "orders", "sample_rows": [{"id": 1}, {"id": 2}]},
+                            {"table_name": "customers", "sample_rows": [{"id": 3}]},
+                        ]
+                    },
+                }
+            },
+        )
+        tc = _build_search_table(a, verbose=False)
+        assert tc.compact_result == "2 tables and 3 sample rows"
 
     def test_compact_no_data(self):
         a = _make(input_data={"function_name": "search_table"})
@@ -1723,6 +1746,24 @@ class TestBuildAnalyzeColumns:
         assert "2 columns analyzed" in tc.compact_result
 
 
+class TestBuildProfileSemanticModelEvidence:
+    def test_compact(self):
+        payload = {
+            "success": 1,
+            "result": {
+                "data_profiled": True,
+                "tables": {"orders": {}, "customers": {}},
+                "summary": "ok",
+            },
+        }
+        a = _make(
+            input_data={"function_name": "profile_semantic_model_evidence"},
+            output_data={"raw_output": json.dumps(payload)},
+        )
+        tc = _build_profile_semantic_model_evidence(a, verbose=False)
+        assert tc.compact_result == TOOL_SUMMARY_REGISTRY.summarize_dict(payload, "profile_semantic_model_evidence")
+
+
 @pytest.mark.ci
 class TestBuildAnalyzeMetricCandidates:
     def test_compact(self):
@@ -1756,13 +1797,77 @@ class TestBuildAnalyzeMetricCandidates:
 
 @pytest.mark.ci
 class TestBuildExecuteCommand:
-    def test_compact(self):
+    def test_compact_success_shows_first_lines(self):
+        """Successful command surfaces the real output, first lines first (claude-style)."""
         a = _make(
-            input_data={"function_name": "execute_command"},
-            output_data={"raw_output": '{"success": 1, "result": "output text"}'},
+            input_data={"function_name": "bash"},
+            output_data={"raw_output": '{"success": 1, "result": "line one\\nline two"}'},
         )
-        tc = _build_execute_command(a, verbose=False)
-        assert "Command executed" in tc.compact_result
+        tc = _build_bash(a, verbose=False)
+        assert tc.compact_result_lines == ["line one", "line two"]
+        assert tc.compact_result_overflow == 0
+        assert tc.compact_result == "line one"  # single-line degrade
+        assert tc.status_mark == "✓"
+
+    def test_compact_folds_beyond_three_lines(self):
+        """More than COMPACT_MAX_LINES output lines fold into an overflow count."""
+        out = "\\n".join(f"line{i}" for i in range(10))
+        a = _make(
+            input_data={"function_name": "bash"},
+            output_data={"raw_output": f'{{"success": 1, "result": "{out}"}}'},
+        )
+        tc = _build_bash(a, verbose=False)
+        assert tc.compact_result_lines == ["line0", "line1", "line2"]
+        assert tc.compact_result_overflow == 7
+
+    def test_compact_archived_output_shows_preview_not_marker(self):
+        """Oversized (archived) output shows the marker preview, never the raw marker."""
+        from datus.utils.tool_archive import build_archived_marker
+
+        marker = build_archived_marker("/tmp/000001_bash_ab.txt", "hello world preview")
+        a = _make(
+            input_data={"function_name": "bash"},
+            output_data={"raw_output": json.dumps({"success": 1, "result": marker})},
+        )
+        tc = _build_bash(a, verbose=False)
+        assert any("hello world preview" in line for line in tc.compact_result_lines)
+        assert all("[DATUS_ARCHIVED]" not in line for line in tc.compact_result_lines)
+        assert any("read_file" in line for line in tc.compact_result_lines)
+
+    def test_compact_success_no_output_falls_back_to_label(self):
+        a = _make(
+            input_data={"function_name": "bash"},
+            output_data={"raw_output": '{"success": 1, "result": ""}'},
+        )
+        tc = _build_bash(a, verbose=False)
+        assert tc.compact_result == "Command executed"
+        assert tc.compact_result_lines == []
+
+    def test_compact_failure_shows_stderr_reason(self):
+        """Non-zero exit: the stderr reason is visible (no 'exited with code' prefix)."""
+        a = _make(
+            input_data={"function_name": "bash"},
+            output_data={
+                "raw_output": (
+                    '{"success": 0, "error": "Command exited with code 1", '
+                    '"result": "run\\n[stderr]\\nfoo: command not found"}'
+                )
+            },
+        )
+        tc = _build_bash(a, verbose=False)
+        assert tc.compact_result_lines == ["run", "foo: command not found"]
+        assert all("exited with code" not in line for line in tc.compact_result_lines)
+        assert tc.status_mark == "✗"
+
+    def test_compact_failure_strips_exception_prefix(self):
+        """Exception path with no captured output: strip 'Command execution failed: '."""
+        a = _make(
+            input_data={"function_name": "bash"},
+            output_data={"raw_output": '{"success": 0, "error": "Command execution failed: [Errno 2] boom"}'},
+        )
+        tc = _build_bash(a, verbose=False)
+        assert tc.compact_result == "[Errno 2] boom"
+        assert tc.status_mark == "✗"
 
 
 @pytest.mark.ci
@@ -1922,9 +2027,10 @@ class TestAllToolsRegistered:
         "analyze_table_relationships",
         "get_multiple_tables_ddl",
         "analyze_column_usage_patterns",
+        "profile_semantic_model_evidence",
         "analyze_metric_candidates_from_history",
         # Skill
-        "execute_command",
+        "bash",
         "load_skill",
         # Interaction
         "ask_user",
@@ -2169,6 +2275,14 @@ class TestToolArgsFormatters:
 
         fmt = _TOOL_ARGS_FORMATTERS["describe_table"]
         assert fmt(self._args(table_name="orders")) == '"orders"'
+
+    def test_bash_positional_no_key_prefix(self):
+        """bash shows the bare command value, not a ``command:`` prefix."""
+        from datus.cli.action_display.tool_content import _TOOL_ARGS_FORMATTERS
+
+        fmt = _TOOL_ARGS_FORMATTERS["bash"]
+        assert fmt(self._args(command="sleep 5")) == '"sleep 5"'
+        assert "command:" not in fmt(self._args(command="ls -la"))
 
     def test_grep_kw_args(self):
         from datus.cli.action_display.tool_content import _TOOL_ARGS_FORMATTERS

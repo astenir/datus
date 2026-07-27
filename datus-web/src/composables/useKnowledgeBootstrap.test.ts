@@ -98,6 +98,7 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "main",
       databaseName: "fund",
+      semanticYamlPath: "",
       subjectTreeText: "基金\n风控\n",
     }, "ccks_fund")).toEqual({
       datasource_id: "ccks_fund",
@@ -118,6 +119,7 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "",
       databaseName: "",
+      semanticYamlPath: "",
       subjectTreeText: "",
     }, "   ")).toThrow("请选择数据源");
   });
@@ -131,6 +133,7 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "ignored",
       databaseName: "ignored",
+      semanticYamlPath: "",
       subjectTreeText: "基金\n风控\n",
     }, "ccks_fund", {
       successStory: makeUploadRecord("success_story_csv", "upload-success", "file-success"),
@@ -154,6 +157,7 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "ignored",
       databaseName: "ignored",
+      semanticYamlPath: "",
       subjectTreeText: "基金\n",
     }, "ccks_fund", {
       successStory: null,
@@ -165,6 +169,55 @@ describe("knowledgeBootstrapInternals", () => {
       subject_tree: ["基金"],
       reference_sql_upload_id: "upload-sql",
     });
+  });
+
+  it("builds a semantic profile refresh request with its existing YAML path", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+
+    expect(knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "semantic_model",
+      strategy: "refresh-profile",
+      schemaLinkingType: "full",
+      catalog: "",
+      databaseName: "",
+      semanticYamlPath: " semantic_models/orders.yml ",
+      subjectTreeText: "",
+    }, "ccks_fund", {
+      successStory: makeUploadRecord("success_story_csv", "upload-success", "file-success"),
+      referenceSql: null,
+    })).toEqual({
+      datasource_id: "ccks_fund",
+      components: ["semantic_model"],
+      strategy: "refresh-profile",
+      success_story_upload_id: "upload-success",
+      success_story_file_id: "file-success",
+      semantic_yaml: "semantic_models/orders.yml",
+    });
+  });
+
+  it("rejects profile refresh for other components or without a YAML path", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+    const successStory = makeUploadRecord("success_story_csv", "upload-success", "file-success");
+
+    expect(() => knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "metrics",
+      strategy: "refresh-profile",
+      schemaLinkingType: "full",
+      catalog: "",
+      databaseName: "",
+      semanticYamlPath: "semantic_models/orders.yml",
+      subjectTreeText: "",
+    }, "ccks_fund", { successStory, referenceSql: null })).toThrow("刷新画像策略仅支持语义模型");
+
+    expect(() => knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "semantic_model",
+      strategy: "refresh-profile",
+      schemaLinkingType: "full",
+      catalog: "",
+      databaseName: "",
+      semanticYamlPath: "   ",
+      subjectTreeText: "",
+    }, "ccks_fund", { successStory, referenceSql: null })).toThrow("请填写语义模型 YAML 路径");
   });
 
   it("normalizes uploaded docs requests to local upload imports only", async () => {

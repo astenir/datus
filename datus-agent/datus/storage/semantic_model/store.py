@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pyarrow as pa
 import yaml
-from datus_storage_base.conditions import And, WhereExpr, eq, in_
+from datus_storage_base.conditions import And, WhereExpr, eq, in_, not_
 
 from datus.storage.base import BaseEmbeddingStore, EmbeddingModel
 from datus.storage.datasource_scope import add_datasource_scope_to_rows, datasource_condition, resolve_datasource_id
+from datus.storage.fts import FtsField, FtsSpec
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -57,6 +58,19 @@ def _identifier_variants(value: str) -> List[str]:
 def _normalized_identifier(value: str) -> str:
     parts = [_strip_identifier_quotes(part) for part in str(value or "").split(".") if part.strip()]
     return ".".join(parts).lower()
+
+
+def _hierarchy_compatible(want: str, have: str) -> bool:
+    """Whether a stored hierarchy field matches a wanted one.
+
+    Empty on either side is compatible (legacy rows / unqualified references);
+    two populated-but-different values are not.
+    """
+    want_norm = _strip_identifier_quotes(want).lower()
+    have_norm = _strip_identifier_quotes(have).lower()
+    if not want_norm or not have_norm:
+        return True
+    return want_norm == have_norm
 
 
 class SemanticModelStorage(BaseEmbeddingStore):
@@ -120,7 +134,9 @@ class SemanticModelStorage(BaseEmbeddingStore):
         self._create_scalar_index("table_name")
         self._create_scalar_index("id")
 
-        self.create_fts_index(["description", "name", "fq_name"])
+        self.create_fts_index(
+            FtsSpec((FtsField("name", boost=3.0), FtsField("fq_name", boost=3.0), FtsField("description")))
+        )
 
     def search_objects(
         self,
@@ -344,6 +360,128 @@ class SemanticModelRAG:
     def truncate(self) -> None:
         """Delete all semantic model data for this datasource."""
         self.storage.delete_datasource_rows(self.datasource_id)
+
+    def delete_artifact_rows(self, yaml_path: str) -> None:
+        """Delete semantic rows projected from a single YAML artifact."""
+        if not yaml_path:
+            return
+        self.storage._delete_rows(And([eq("yaml_path", yaml_path)] + self._sub_agent_conditions()))
+
+    def delete_artifact_rows_except(self, yaml_path: str, keep_ids: List[str]) -> None:
+        """Delete stale semantic rows for one YAML artifact after replacement succeeds."""
+        if not yaml_path:
+            return
+        normalized_keep_ids = [row_id for row_id in keep_ids if row_id]
+        if not normalized_keep_ids:
+            self.delete_artifact_rows(yaml_path)
+            return
+        self.storage._delete_rows(
+            And([eq("yaml_path", yaml_path), not_(in_("id", normalized_keep_ids))] + self._sub_agent_conditions())
+        )
+
+    def delete_shadowed_table_rows(self, objects: List[Dict[str, Any]]) -> None:
+        """Best-effort post-commit cleanup of stale rows shadowed by ``objects``.
+
+        For each table scope in ``objects``, delete table/column rows in the
+        exact same scope (empty hierarchy matches only empty — never a wildcard)
+        whose id was not just written, e.g. legacy simple-name ids or
+        cross-yaml_path duplicates. Never raises.
+        """
+        keep_ids = [obj.get("id", "") for obj in objects if obj.get("id")]
+        if not keep_ids:
+            # No ids to preserve — deleting anything could wipe the new rows too.
+            return
+        seen_scopes = set()
+        for obj in objects:
+            if obj.get("kind") != "table":
+                continue
+            scope = (
+                obj.get("table_name", ""),
+                obj.get("catalog_name", ""),
+                obj.get("database_name", ""),
+                obj.get("schema_name", ""),
+            )
+            if not scope[0] or scope in seen_scopes:
+                continue
+            seen_scopes.add(scope)
+            table_name, catalog_name, database_name, schema_name = scope
+            conditions = [
+                in_("kind", ["table", "column"]),
+                eq("table_name", table_name),
+                eq("catalog_name", catalog_name),
+                eq("database_name", database_name),
+                eq("schema_name", schema_name),
+                not_(in_("id", keep_ids)),
+            ]
+            try:
+                self.storage._delete_rows(And(conditions + self._sub_agent_conditions()))
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Best-effort cleanup of shadowed semantic rows failed for table "
+                    f"{table_name!r} (catalog={catalog_name!r}, database={database_name!r}, "
+                    f"schema={schema_name!r}): {cleanup_exc}"
+                )
+
+    def list_artifact_rows(self, yaml_path: str) -> List[Dict[str, Any]]:
+        """Return semantic rows projected from a single YAML artifact."""
+        if not yaml_path:
+            return []
+        return self.storage._search_all(
+            where=And([eq("yaml_path", yaml_path)] + self._sub_agent_conditions())
+        ).to_pylist()
+
+    def restore_artifact_rows(self, yaml_path: str, rows: List[Dict[str, Any]]) -> None:
+        """Restore one YAML artifact to a previously captured row snapshot."""
+        if not yaml_path:
+            return
+        self.delete_artifact_rows(yaml_path)
+        if rows:
+            self.upsert_batch(rows)
+        self.create_indices()
+
+    def table_exists(
+        self,
+        table_name: str,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> bool:
+        """Whether a table semantic model exists for the given hierarchy scope.
+
+        Table name matches case-insensitively; hierarchy fields must match when
+        populated on both sides, while an empty value on either side stays
+        compatible (keeps legacy rows and unqualified references working).
+        """
+        if not table_name:
+            return False
+        select_fields = ["table_name", "catalog_name", "database_name", "schema_name"]
+        want_name = _normalized_identifier(table_name)
+
+        def _matches(rows: List[Dict[str, Any]]) -> bool:
+            for row in rows:
+                if (
+                    _normalized_identifier(row.get("table_name", "")) == want_name
+                    and _hierarchy_compatible(catalog_name, row.get("catalog_name", ""))
+                    and _hierarchy_compatible(database_name, row.get("database_name", ""))
+                    and _hierarchy_compatible(schema_name, row.get("schema_name", ""))
+                ):
+                    return True
+            return False
+
+        # eq() is case-sensitive; query realistic case variants, compare client-side.
+        name_variants = list({table_name, table_name.lower(), table_name.upper()})
+        conditions = [eq("kind", "table"), in_("table_name", name_variants)] + self._sub_agent_conditions()
+        fast_candidates = self.storage._search_all(where=And(conditions), select_fields=select_fields).to_pylist()
+        if _matches(fast_candidates):
+            return True
+        # No full match yet: MixedCase/quoted stored names (e.g. "Orders") escape
+        # the variants filter, and same-named hits in other scopes must not mask
+        # them. Fall back to a narrow-field scan of all table rows.
+        broad_candidates = self.storage._search_all(
+            where=And([eq("kind", "table")] + self._sub_agent_conditions()),
+            select_fields=select_fields,
+        ).to_pylist()
+        return _matches(broad_candidates)
 
     def get_semantic_model(
         self,

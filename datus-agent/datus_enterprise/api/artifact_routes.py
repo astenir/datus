@@ -16,10 +16,21 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import get_artifact_acl_store, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
+from datus.api.models.downstream import ReportEditSession
 from datus.api.models.report_models import ReportDetail
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus.utils.loggings import get_logger
-from datus_enterprise.artifact_acl import filter_visible_artifacts, require_artifact_access
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
+from datus_enterprise.artifact_acl import (
+    filter_visible_artifacts,
+    require_artifact_access,
+    require_artifact_edit_access,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import ResourceRef, authorize, require_module
 
@@ -201,6 +212,46 @@ async def get_report_detail(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> R
 
 
 @router.get(
+    "/report/detail",
+    response_model=Result[ReportDetail],
+    summary="Get Report Artifact Detail",
+    dependencies=[Depends(_require_report_view)],
+)
+async def get_report_detail_legacy(
+    svc: ServiceDep,
+    ctx: ReportViewCtx,
+    slug: str = Query(..., description="Report slug, e.g. 'account_activity_q1'"),
+) -> Result[ReportDetail]:
+    """Keep the upstream detail path behind the downstream artifact ACL boundary."""
+    await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")
+    return await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
+
+
+@router.post(
+    "/reports/{slug}/edit-sessions",
+    response_model=Result[ReportEditSession],
+    summary="Create Report Edit Session",
+    dependencies=[Depends(require_platform_active(operation="report.edit_session.create", resource_type="report"))],
+)
+async def create_report_edit_session(
+    svc: ServiceDep,
+    ctx: ShareDirectoryCtx,
+    slug: str,
+) -> Result[ReportEditSession]:
+    await require_artifact_edit_access(ctx, artifact_type="report", slug=slug)
+    detail = await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
+    if not detail.success:
+        return Result(
+            success=False,
+            errorCode=detail.errorCode or "REPORT_NOT_FOUND",
+            errorMessage=detail.errorMessage or "Report not found.",
+        )
+
+    session = svc.task_manager.create_report_edit_session(user_id=ctx.user_id, report_slug=slug)
+    return Result(success=True, data=session)
+
+
+@router.get(
     "/reports/{slug}/acl",
     response_model=Result[ArtifactShare],
     summary="Get Report Sharing ACL",
@@ -355,28 +406,43 @@ async def list_artifact_share_roles(
 
 @router.get(
     "/admin/artifacts",
-    response_model=Result[List[AdminArtifactSummary]],
+    response_model=AdminListResult[AdminArtifactSummary],
     summary="List Admin Artifacts",
     dependencies=[Depends(_require_admin_artifacts)],
 )
-async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Result[List[AdminArtifactSummary]]:
+async def list_admin_artifacts(
+    svc: ServiceDep,
+    ctx: AdminArtifactsCtx,
+    artifact_type: Annotated[Literal["report", "dashboard"] | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search artifact manifest fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminArtifactSummary] | Result[Any]:
     """Return all report/dashboard manifests for admin inventory workflows."""
 
     root = _project_files_root(svc)
-    dashboards = await svc.dashboard.list_dashboards(project_files_root=root)
-    if not dashboards.success:
-        return Result(success=False, errorCode=dashboards.errorCode, errorMessage=dashboards.errorMessage)
-    reports = await svc.report.list_reports(project_files_root=root)
-    if not reports.success:
-        return Result(success=False, errorCode=reports.errorCode, errorMessage=reports.errorMessage)
+    dashboard_manifests: list[ArtifactManifest] = []
+    report_manifests: list[ArtifactManifest] = []
+    if artifact_type != "report":
+        dashboards = await svc.dashboard.list_dashboards(project_files_root=root)
+        if not dashboards.success:
+            return Result(success=False, errorCode=dashboards.errorCode, errorMessage=dashboards.errorMessage)
+        dashboard_manifests = dashboards.data or []
+    if artifact_type != "dashboard":
+        reports = await svc.report.list_reports(project_files_root=root)
+        if not reports.success:
+            return Result(success=False, errorCode=reports.errorCode, errorMessage=reports.errorMessage)
+        report_manifests = reports.data or []
 
     items = [
-        *(AdminArtifactSummary(artifact_type="dashboard", manifest=manifest) for manifest in dashboards.data or []),
-        *(AdminArtifactSummary(artifact_type="report", manifest=manifest) for manifest in reports.data or []),
+        *(AdminArtifactSummary(artifact_type="dashboard", manifest=manifest) for manifest in dashboard_manifests),
+        *(AdminArtifactSummary(artifact_type="report", manifest=manifest) for manifest in report_manifests),
     ]
     items.sort(
         key=lambda item: (item.manifest.updated_at or item.manifest.created_at or "", item.artifact_type), reverse=True
     )
+    items = [item for item in items if _admin_artifact_matches_search(item, search)]
+    page = paginate_admin_records(items, limit=limit, offset=offset)
     try:
         await audit_decision(
             ctx,
@@ -385,12 +451,33 @@ async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Resul
                 resource_type="artifact",
                 resource_id=None,
                 decision="allow",
-                metadata={"operation": "list_admin_artifacts", "count": len(items)},
+                metadata={
+                    "operation": "list_admin_artifacts",
+                    "count": len(page.data or []),
+                    "artifact_type": artifact_type,
+                    "offset": offset,
+                    "has_more": page.pagination.has_more,
+                },
             ),
         )
     except Exception as exc:
         logger.warning("Admin artifact list audit write failed: %s", exc)
-    return Result(success=True, data=items)
+    return page
+
+
+def _admin_artifact_matches_search(item: AdminArtifactSummary, search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    manifest = item.manifest
+    values = (
+        item.artifact_type,
+        manifest.slug,
+        manifest.name,
+        manifest.description,
+        *(manifest.datasources or []),
+    )
+    return any(query in str(value or "").casefold() for value in values)
 
 
 @router.get(

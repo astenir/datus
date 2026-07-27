@@ -27,7 +27,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_RESULT_TIMEOUT = 120.0
+DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS = DEFAULT_RESULT_TIMEOUT
 
 # Node types whose GenerationHooks depend on local filesystem tools (write_file, etc.)
 # Their filesystem_tools must NOT be proxied; other tools are still proxied.
@@ -47,9 +48,12 @@ _FS_DEPENDENT_NODES: Set[str] = {
 def create_proxy_tool(
     original: FunctionTool,
     channel: ToolResultChannel,
-    timeout_seconds: float = DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS,
+    timeout_seconds: float | None = None,
 ) -> FunctionTool:
     """Wrap a FunctionTool so it awaits results from the channel instead of executing."""
+
+    if timeout_seconds is None:
+        timeout_seconds = DEFAULT_RESULT_TIMEOUT
 
     async def proxy_invoke(tool_ctx: ToolContext, args_str: str) -> dict:
         call_id = tool_ctx.tool_call_id
@@ -154,12 +158,15 @@ def apply_proxy_tools(
 # ── Internal helpers ─────────────────────────────────────────────────
 
 
-def _parse_patterns(patterns: List[str]) -> List[Tuple[Optional[str], str]]:
+def parse_tool_patterns(patterns: List[str]) -> List[Tuple[Optional[str], str]]:
     """Parse ``"category.method_glob"`` patterns into ``(category, method_glob)`` tuples.
 
     - ``"filesystem_tools.*"``  → ``("filesystem_tools", "*")``
     - ``"read_file"``           → ``(None, "read_file")``
     - ``"*"``                   → ``(None, "*")``
+
+    Public API shared with the tool middleware so both the proxy and the
+    transformer layers speak one pattern syntax.
     """
     result: List[Tuple[Optional[str], str]] = []
     for p in patterns:
@@ -171,8 +178,11 @@ def _parse_patterns(patterns: List[str]) -> List[Tuple[Optional[str], str]]:
     return result
 
 
-def _matches(tool_name: str, registry: Dict[str, str], patterns: List[Tuple[Optional[str], str]]) -> bool:
-    """Check if a tool name matches any of the parsed patterns."""
+def tool_name_matches(tool_name: str, registry: Dict[str, str], patterns: List[Tuple[Optional[str], str]]) -> bool:
+    """Check if a tool name matches any of the parsed patterns.
+
+    Public API shared with the tool middleware (see :func:`parse_tool_patterns`).
+    """
     category = registry.get(tool_name)
 
     for pat_cat, pat_method in patterns:
@@ -186,3 +196,10 @@ def _matches(tool_name: str, registry: Dict[str, str], patterns: List[Tuple[Opti
                 return True
 
     return False
+
+
+# Backward-compatible private aliases: existing in-module call sites and the
+# proxy unit tests reference these names. New callers should use the public
+# ``parse_tool_patterns`` / ``tool_name_matches`` above.
+_parse_patterns = parse_tool_patterns
+_matches = tool_name_matches

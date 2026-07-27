@@ -27,9 +27,8 @@ from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_ex
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteSQLData
 from datus.api.models.database_models import DatabaseInfo, ListDatabasesData
-from datus.api.routes import cli_routes, database_routes
 from datus.utils.time_utils import now_utc_iso
-from datus_enterprise.api import admin_datasource_routes, me_routes
+from datus_enterprise.api import admin_datasource_routes, cli_routes, database_routes, me_routes
 from datus_enterprise.projection import DatasourceGrantProjector
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -287,6 +286,10 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
         enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
         assert enterprise[key]["kwargs"]["min_size"] == 1
         assert enterprise[key]["kwargs"]["max_size"] == 2
+
+    for key in ("user_model_credential_store", "user_datasource_store"):
+        enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
+        enterprise[key]["kwargs"]["encryption_secret"] = "test-only-enterprise-credential-secret"
 
     extensions = load_enterprise_extensions(enterprise)
 

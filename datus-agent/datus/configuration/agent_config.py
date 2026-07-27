@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Union
 
 from datus.configuration.node_type import NodeType
 from datus.observability.config import ObservabilityConfig
@@ -19,6 +19,10 @@ from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_utils import get_files_from_glob_pattern
+
+if TYPE_CHECKING:
+    from datus.prompts.prompt_manager import PromptManager
+    from datus.utils.path_manager import DatusPathManager
 
 # Regex for validating platform/identifier names (no special chars that break paths)
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
@@ -224,6 +228,29 @@ class CompactConfig:
         _coerce_numeric_fields(major_kwargs, fields(MajorCompactConfig))
         _coerce_numeric_fields(minor_kwargs, fields(MinorCompactConfig))
         return cls(major=MajorCompactConfig(**major_kwargs), minor=MinorCompactConfig(**minor_kwargs))
+
+
+@dataclass
+class KbSearchConfig:
+    """Knowledge-base retrieval mode shared by bootstrap and runtime search."""
+
+    mode: str = "vector"
+
+    @classmethod
+    def from_dict(cls, raw: Optional[Dict[str, Any]]) -> "KbSearchConfig":
+        if not isinstance(raw, dict):
+            raw = {}
+        mode = str(raw.get("mode") or "vector").strip().lower()
+        if mode not in {"vector", "fts"}:
+            raise DatusException(
+                code=ErrorCode.COMMON_FIELD_INVALID,
+                message_args={
+                    "field_name": "kb.search.mode",
+                    "except_values": {"vector", "fts"},
+                    "your_value": mode,
+                },
+            )
+        return cls(mode=mode)
 
 
 @dataclass
@@ -887,6 +914,11 @@ class AgentConfig:
             self._project_name = _normalize_project_name(str(resolved_project_root))
         self._project_root = resolved_project_root
         self._set_path_manager(self.home)
+
+        # Optional runtime override for prompt-template resolution. Keep this
+        # outside the dataclass fields so service fingerprints remain stable.
+        self.prompt_manager: Optional["PromptManager"] = None
+
         model_settings_file = kwargs.get("models_file") or os.getenv("DATUS_MODELS_FILE", "")
         model_settings = _load_model_settings_file(model_settings_file) if model_settings_file else {}
         models_raw = dict(kwargs.get("models", {}) or {})
@@ -937,6 +969,13 @@ class AgentConfig:
         self._active_dashboard: Optional[str] = kwargs.get("active_dashboard") or None
         self._active_scheduler: Optional[str] = kwargs.get("active_scheduler") or None
         self._active_semantic: Optional[str] = kwargs.get("active_semantic") or None
+        # Project-level active plugin profile pins forwarded by
+        # ``_apply_project_override`` from ``./.datus/config.yml`` ``plugins:``.
+        # Maps a plugin name to the profile ``datus <plugin>`` should use when
+        # ``--profile`` is omitted. Empty means "no project pin" — profile
+        # resolution then falls back to the ``default: true`` flag / sole entry.
+        _active_plugins_raw = kwargs.get("active_plugins")
+        self._active_plugins: Dict[str, str] = _active_plugins_raw if isinstance(_active_plugins_raw, dict) else {}
         self._runtime_db_context: Dict[str, str] = {}
         # Shared lazily-loaded ``conf/providers.yml`` catalog (metadata only:
         # default_model, base_url, api_key_env, type, model_overrides). Kept
@@ -948,6 +987,14 @@ class AgentConfig:
         self.knowledge_base: Dict[str, Any] = (
             _resolve_nested_value(knowledge_base_raw) if isinstance(knowledge_base_raw, dict) else {}
         )
+        kb_raw = kwargs.get("kb", {}) or {}
+        if not isinstance(kb_raw, dict):
+            kb_raw = {}
+        kb_search_raw = kb_raw.get("search")
+        if not isinstance(kb_search_raw, dict) and isinstance(self.knowledge_base.get("search"), dict):
+            kb_search_raw = self.knowledge_base.get("search")
+        self.kb_search = KbSearchConfig.from_dict(_resolve_nested_value(kb_search_raw))
+        self.kb_search_mode = self.kb_search.mode
         # ``filesystem_strict`` is a process-wide safety switch that makes
         # ``FilesystemFuncTool`` fail-closed for EXTERNAL paths (outside the
         # project root) instead of prompting the broker. Set via
@@ -957,7 +1004,7 @@ class AgentConfig:
         self._filesystem_strict = bool(filesystem_raw.get("strict", False))
         # ``bash.enabled`` toggles whether agentic nodes instantiate the
         # general-purpose ``BashTool``. Default ``True`` preserves the
-        # current behaviour where every node exposes ``execute_command``
+        # current behaviour where every node exposes ``bash``
         # (gated by the ``bash_tools`` ASK rule in the permission profile).
         # Set to ``False`` for hardened environments where shell execution
         # must be unavailable regardless of profile.
@@ -988,6 +1035,26 @@ class AgentConfig:
         self.scheduler_services = {}
         self.scheduler_config: Dict[str, Any] = {}
         self.semantic_layer_configs = {}
+        # ``plugins_enabled`` is the master switch for the datus-plugin
+        # system. When ``False`` no plugin functionality is active: ``datus
+        # <plugin>`` dispatch is refused, plugin-bundled skills are not
+        # discovered, and no plugin context is injected into system prompts.
+        # Intended for API/web deployments where the agent must not be guided
+        # to edit configuration files.
+        self.plugins_enabled = _coerce_bool(kwargs.get("plugins_enabled"), True)
+        # Plugin config: plugin name -> profile name -> profile config dict.
+        # Populated from ``agent.plugins`` by ``init_plugin_services``.
+        self.plugin_services: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        # Raw project-scope bash grants (``.datus/config.yml`` bash_allow),
+        # forwarded by ``_apply_project_override``. Passed to
+        # PermissionManager as an exact-match grant set so a project grant
+        # can bypass an ask-rule hit (merged allow entries cannot).
+        raw_project_bash_allow = kwargs.get("project_bash_allow")
+        self.project_bash_allow: List[str] = (
+            [p for p in raw_project_bash_allow if isinstance(p, str)]
+            if isinstance(raw_project_bash_allow, list)
+            else []
+        )
 
         for name, raw_config in self.agentic_nodes.items():
             if not _SAFE_NAME_RE.match(name):
@@ -1043,6 +1110,7 @@ class AgentConfig:
         self.init_semantic_layer(self.services.semantic_layer)
         self.init_dashboard(self.services.bi_platforms)
         self.init_scheduler_services(self.services.schedulers)
+        self.init_plugin_services(kwargs.get("plugins", {}))
 
         # SaaS mode: skip _init_dirs() because callers want only derived paths here,
         # not full local directory / backend initialization.
@@ -1111,6 +1179,13 @@ class AgentConfig:
         # init raises.
         self.active_profile_name: str = "normal"
         self._raw_permissions: Dict[str, Any] = {}
+        # Profile that ``execution_mode="workflow"`` nodes should run under.
+        # ``None`` (default) keeps the historical forced-``dangerous`` posture
+        # for unattended flows (bootstrap, scheduler subagents, benchmarks).
+        # Print mode sets this so ``datus -p`` respects the configured /
+        # ``--permission-mode`` profile instead — see
+        # ``AgenticNode._setup_permission_manager``.
+        self.workflow_permission_profile: Optional[str] = None
         # Initialize unified permission system
         self.permissions_config = self._init_permissions_config(kwargs.get("permissions", {}))
 
@@ -1196,10 +1271,10 @@ class AgentConfig:
         """Whether agentic nodes should instantiate the general-purpose ``BashTool``.
 
         ``True`` (default): every :class:`AgenticNode` exposes
-        ``execute_command``; per-call gating is handled by the
+        ``bash``; per-call gating is handled by the
         ``bash_tools`` ASK rule in the permission profile.
 
-        ``False``: ``BashTool`` is not created and ``execute_command`` is
+        ``False``: ``BashTool`` is not created and ``bash`` is
         not advertised to the model. Use this for hardened deployments
         where shell execution must be unavailable regardless of profile.
         """
@@ -1364,10 +1439,28 @@ class AgentConfig:
             logger.warning(f"Invalid profile {requested_profile!r} in agent.yml: {e}. Falling back to 'normal'.")
             self.active_profile_name = "normal"
 
+        # Bash rules declared by installed plugins for their own CLI
+        # namespaces (``datus <plugin> ...``), keyed by profile name. Stored
+        # so PermissionManager can re-apply them across runtime profile
+        # switches. Additive convenience only — collection failure just means
+        # extra ASK prompts, so it must never block config load.
+        self.plugin_bash_rules = {}
+        if getattr(self, "plugins_enabled", True):
+            try:
+                from datus.plugins.registry import collect_plugin_cli_permissions
+
+                self.plugin_bash_rules = collect_plugin_cli_permissions()
+            except Exception as e:
+                logger.warning(f"Plugin CLI permission collection failed: {e}; continuing without plugin rules")
+
         # Remove the ``profile`` key so the helper only sees user overrides.
         user_raw = {k: v for k, v in permissions_raw.items() if k != "profile"}
         try:
-            return build_effective_config(self.active_profile_name, user_raw)
+            return build_effective_config(
+                self.active_profile_name,
+                user_raw,
+                plugin_bash_rules=self.plugin_bash_rules.get(self.active_profile_name),
+            )
         except Exception as e:
             # Fail closed: malformed ``permissions.rules`` almost always means the
             # user was trying to *tighten* an otherwise permissive profile. If
@@ -1551,6 +1644,64 @@ class AgentConfig:
             ),
         )
 
+    def get_plugin_profile(self, plugin: str, profile: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve the active profile config dict for ``plugin``.
+
+        Resolution order when ``profile`` is not given explicitly:
+        ``--profile`` argument → project pin (``./.datus/config.yml``
+        ``plugins.<plugin>``) → the profile flagged ``default: true`` (more
+        than one is an error) → the sole profile. When the plugin has no
+        ``agent.plugins.<plugin>`` section at all, an empty dict is returned so
+        config-free plugins still run. A plugin with multiple profiles and no
+        way to disambiguate raises, asking the user to pass ``--profile``.
+        """
+        profiles = self.plugin_services.get(plugin) or {}
+
+        if profile:
+            if profile not in profiles:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR,
+                    message=(f"No profile named `{profile}` for plugin `{plugin}`. Configured: {sorted(profiles)}"),
+                )
+            return profiles[profile]
+
+        if not profiles:
+            return {}
+
+        pinned = self._active_plugins.get(plugin)
+        if pinned:
+            if pinned in profiles:
+                return profiles[pinned]
+            logger.warning(
+                "Project pin plugins.%s=`%s` is not configured under `agent.plugins.%s`; "
+                "falling back to the default profile.",
+                plugin,
+                pinned,
+                plugin,
+            )
+
+        defaults = [name for name, cfg in profiles.items() if isinstance(cfg, dict) and cfg.get("default")]
+        if len(defaults) > 1:
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=(
+                    f"Multiple profiles for plugin `{plugin}` are marked `default: true` in "
+                    f"`agent.plugins.{plugin}`. Keep at most one default profile."
+                ),
+            )
+        if defaults:
+            return profiles[defaults[0]]
+        if len(profiles) == 1:
+            return next(iter(profiles.values()))
+
+        raise DatusException(
+            ErrorCode.COMMON_CONFIG_ERROR,
+            message=(
+                f"Multiple profiles configured for plugin `{plugin}` and none marked "
+                f"`default: true`; pass --profile <name>. Configured: {sorted(profiles)}"
+            ),
+        )
+
     def default_dashboard_service(self) -> Optional[str]:
         """Return the dashboard service marked as the global default, or ``None``.
 
@@ -1685,7 +1836,7 @@ class AgentConfig:
 
         Order: explicit ``adapter_type`` argument -> project-level pin
         (``./.datus/config.yml`` ``semantic:``) -> global ``default: true``
-        flag / single-entry shortcut -> built-in ``metricflow`` fallback when
+        flag / single-entry shortcut -> built-in default fallback when
         no semantic layer is configured. Raises when multiple semantic layers
         are configured without a clear default.
         """
@@ -1721,7 +1872,7 @@ class AgentConfig:
             ErrorCode.COMMON_CONFIG_ERROR,
             message=(
                 "Multiple semantic layers are configured in `agent.services.semantic_layer`, "
-                "set `semantic_adapter` on the semantic node or mark one entry with `default: true`."
+                "mark exactly one entry with `default: true`."
             ),
         )
 
@@ -1743,6 +1894,8 @@ class AgentConfig:
 
         config = self.get_semantic_layer_config(resolved_adapter)
         config.setdefault("type", resolved_adapter)
+        if resolved_adapter == "osi":
+            config.setdefault("execution_backend", "metricflow")
         effective_runtime_db_context = (
             runtime_db_context if runtime_db_context is not None else self.runtime_db_context()
         )
@@ -1894,6 +2047,9 @@ class AgentConfig:
             self.schema_linking_rate = kwargs["schema_linking_rate"]
         if kwargs.get("search_metrics_rate", ""):
             self.search_metrics_rate = kwargs["search_metrics_rate"]
+        if kwargs.get("kb_search_mode", ""):
+            self.kb_search = KbSearchConfig.from_dict({"mode": kwargs["kb_search_mode"]})
+            self.kb_search_mode = self.kb_search.mode
         if kwargs.get("plan", ""):
             self.workflow_plan = kwargs["plan"]
         if kwargs.get("action", "") not in ["probe-llm", "generate-dataset", "service", "platform-doc"]:
@@ -1967,7 +2123,9 @@ class AgentConfig:
     def _set_path_manager(self, home: str) -> None:
         from datus.utils.path_manager import DatusPathManager, set_current_path_manager
 
-        self.path_manager = DatusPathManager(
+        # Like ``prompt_manager``, an instance attribute rather than a dataclass
+        # field, so it stays out of ``dataclasses.asdict()`` / the fingerprint.
+        self.path_manager: "DatusPathManager" = DatusPathManager(
             home,
             project_name=self._project_name,
             project_root=self._project_root,
@@ -1985,8 +2143,12 @@ class AgentConfig:
 
     def current_db_name_type(self, db_name: str) -> tuple[str, str]:
         datasources = self.services.datasources
-        if db_name and db_name in datasources:
-            return db_name, datasources[db_name].type
+        if db_name:
+            if self._current_datasource and self._current_datasource in datasources:
+                return db_name, datasources[self._current_datasource].type
+            if len(datasources) == 1:
+                cfg = list(datasources.values())[0]
+                return db_name, cfg.type
         if self._current_datasource and self._current_datasource in datasources:
             return self._current_datasource, datasources[self._current_datasource].type
         if len(datasources) == 1:
@@ -2499,9 +2661,44 @@ class AgentConfig:
         default_service = self.default_scheduler_service()
         self.scheduler_config = self.scheduler_services.get(default_service, {}) if default_service else {}
 
+    def init_plugin_services(self, param: Dict[str, Any]):
+        """Parse ``agent.plugins`` into ``self.plugin_services``.
+
+        Shape: ``plugins.<plugin_name>.<profile_name>`` → a config dict. Each
+        profile is ``${VAR}``-expanded up front (mirroring how semantic
+        services are resolved) so a plugin receives fully-resolved
+        values. Malformed entries (non-mapping plugin or profile) are skipped
+        rather than raising — a plugin needs no config at all, and datus must
+        stay startable even when a plugin section is half-written.
+
+        When ``plugins_enabled`` is ``False`` the section is ignored entirely,
+        leaving ``plugin_services`` empty.
+        """
+        self.plugin_services = {}
+        if not self.plugins_enabled or not isinstance(param, dict):
+            return
+        for plugin_name, profiles in param.items():
+            if not isinstance(profiles, dict):
+                continue
+            resolved_profiles: Dict[str, Dict[str, Any]] = {}
+            for profile_name, raw_config in profiles.items():
+                if not isinstance(raw_config, dict):
+                    continue
+                resolved = _resolve_nested_value(raw_config)
+                resolved.setdefault("name", profile_name)
+                resolved_profiles[profile_name] = resolved
+            self.plugin_services[plugin_name] = resolved_profiles
+
     def init_semantic_layer(self, param: Dict[str, Any]):
         if not isinstance(param, dict):
-            return
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=(
+                    "`agent.services.semantic_layer` must be a mapping such as "
+                    "`semantic_layer: {metricflow: {}}` or `semantic_layer: {osi: {}}`; "
+                    "scalar values like `semantic_layer: osi` are not supported."
+                ),
+            )
 
         self.semantic_layer_configs = {}
         for service_name, raw_config in param.items():

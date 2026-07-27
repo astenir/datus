@@ -46,7 +46,7 @@ The `metricflow` extra installs dependencies required by the MetricFlow executio
 
 ## Configuration
 
-Configure the semantic layer as `osi` in `agent.yml`, and point semantic nodes to `semantic_adapter: osi`.
+Configure the semantic layer as `osi` in `agent.yml`. The selected semantic layer is global for semantic-model, metric, and metric-query workflows.
 
 ```yaml
 agent:
@@ -63,27 +63,17 @@ agent:
 
     semantic_layer:
       osi:
-        execution_backend: metricflow
         default: true
-
-  agentic_nodes:
-    gen_semantic_model:
-      semantic_adapter: osi
-      # authoring_format is optional; semantic_adapter=osi enables OSI authoring.
-      # authoring_format: osi
-
-    gen_metrics:
-      semantic_adapter: osi
-
-    ask_metrics:
-      semantic_adapter: osi
 ```
 
-`datus-agent` resolves the authoring format in this order:
+`execution_backend` defaults to `metricflow`; set it only when you need a different OSI execution backend.
 
-1. Use `authoring_format: osi` when explicitly configured on the node.
-2. Use OSI authoring when the resolved `semantic_adapter` is `osi`.
-3. Otherwise, keep the default MetricFlow authoring path.
+`datus-agent` resolves the authoring format from the active global semantic adapter:
+
+1. Use OSI authoring when `agent.services.semantic_layer.osi` is the active adapter.
+2. Otherwise, keep the MetricFlow authoring path.
+
+Legacy node-level `semantic_adapter` and `authoring_format` fields are ignored.
 
 ## Semantic Model Generation
 
@@ -113,12 +103,8 @@ semantic_model:
               dialects:
                 - dialect: ANSI_SQL
                   expression: channel
-            dimension:
-              is_time: false
+            dimension: {}
             description: "Order channel"
-            custom_extensions:
-              - vendor_name: DATUS
-                data: '{"type":"categorical"}'
 ```
 
 Key rules:
@@ -126,9 +112,15 @@ Key rules:
 - Use one canonical dataset per physical table. Do not declare separate datasets for different queries or different metrics over the same table.
 - Use OSI core `fields`, not MetricFlow `dimensions`.
 - Dataset `source` is a table-name string, not `{table: ...}`.
-- Declare primary keys in `primary_key`.
-- Mark time fields with `dimension.is_time: true`; put Datus time-granularity hints in `custom_extensions`.
+- **Field roles are structural.** A field with a `dimension:` block is a grouping/filtering dimension; a field without one is a plain row-level expression that documents the column and backs metric expressions. Columns that are only aggregated by metrics (balances, amounts, precomputed rates) are declared as plain fields without the block, and `get_dimensions` does not list them. Field-level `type` hints are not part of the authoring contract.
+- **Keys are transcribed, never inferred.** `primary_key` / `unique_keys` are written only when the source database declares them; warehouse tables without declared constraints get no `primary_key`, and the row grain is documented in `ai_context` instead.
+- A composite primary key that contains the dataset's time dimension (monthly snapshot tables) is valid: the compiler keeps the time dimension and resolves the identifier conflict during lowering.
+- Mark time fields with `dimension.is_time: true`; put the Datus `time_granularity` hint in `custom_extensions`.
 - Declare relationships under the semantic model object, not inside datasets.
+
+### Refreshing a table's model
+
+To regenerate a table's semantic model, re-run `gen_semantic_model` for it, then rebuild the vector KB with `/build-kb` so catalog facts such as `is_dimension` reflect the current model.
 
 ## Metric Generation
 
@@ -288,5 +280,5 @@ These patterns may be modeled later with derived datasets, materialized views, o
 - The OSI adapter currently defaults to the MetricFlow execution backend.
 - The current relationship execution profile supports single-column joins. Composite joins require future extension.
 - SQL window functions cannot be written directly in OSI metric expressions. Use `offset_window` for period comparisons; ranking and TopN detail queries need a query layer or precomputed dataset.
-- When a semantic model has multiple datasets, each metric must declare its owning `dataset` in the DATUS custom extension.
+- When a semantic model has multiple datasets, each metric resolves its owning dataset from qualified column names in its expression (`SUM(orders.amount)`); a DATUS `dataset` hint is required only when the expression contains no qualified columns.
 - Datus execution information outside OSI core must be encoded in `custom_extensions[{vendor_name: DATUS}]`, not as top-level OSI fields.

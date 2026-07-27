@@ -6,7 +6,7 @@ chat-history retrieval can share the same conversion logic.
 """
 
 import json
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Set
 
 from datus.agent.node.compact_archive import parse_archived_marker
 from datus.api.models.cli_models import (
@@ -22,6 +22,8 @@ from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHi
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso, to_utc_iso
+
+from .action_sse_payload_downstream import error_payload, normalize_response_parts
 
 logger = get_logger(__name__)
 
@@ -52,14 +54,26 @@ def _extract_function(action: ActionHistory) -> tuple[str, dict]:
     return function_name, arguments
 
 
-def _build_tool_call_content(action: ActionHistory) -> List[IMessageContent]:
-    """Build content for tool call started event."""
+def _build_tool_call_content(
+    action: ActionHistory, proxied_tool_names: Optional[Set[str]] = None
+) -> List[IMessageContent]:
+    """Build content for tool call started event.
+
+    ``proxied_tool_names`` — names of tools the client must execute and
+    report back (see ``apply_proxy_tools``). When provided, the payload
+    carries ``proxied`` so the web client knows whether to run the tool
+    (True) or the server already ran it (False). Omitted for converters
+    without a live node (history retrieval): absent means the client
+    falls back to its legacy heuristic.
+    """
     function_name, arguments = _extract_function(action)
     payload_data = {
         "callToolId": action.action_id,
         "toolName": function_name,
         "toolParams": arguments,
     }
+    if proxied_tool_names is not None:
+        payload_data["proxied"] = function_name in proxied_tool_names
     return [IMessageContent(type="call-tool", payload=payload_data)]
 
 
@@ -160,15 +174,6 @@ def _parse_json_object(value: Any) -> Any:
     return parsed if isinstance(parsed, dict) else value
 
 
-def _parse_json_value(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except (TypeError, ValueError):
-        return value
-
-
 def _is_tool_result_envelope(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
@@ -184,113 +189,6 @@ def _extract_error(value: Any) -> Optional[str]:
     return error.strip() if isinstance(error, str) and error.strip() else None
 
 
-def _extract_interaction_questions(action: ActionHistory) -> List[dict[str, Any]]:
-    """Extract ask_user questions from a persisted tool-call action."""
-    _, arguments = _extract_function(action)
-    questions = arguments.get("questions", [])
-    questions = _parse_json_value(questions)
-    if not isinstance(questions, list):
-        return []
-
-    requests: List[dict[str, Any]] = []
-    for index, question in enumerate(questions):
-        if not isinstance(question, dict):
-            continue
-
-        content = question.get("question") or question.get("content") or ""
-        content = str(content).strip()
-        if not content:
-            continue
-
-        options_payload = None
-        raw_options = question.get("options")
-        raw_choices = question.get("choices")
-        if isinstance(raw_options, list) and raw_options:
-            options_payload = [{"key": str(i), "title": str(option)} for i, option in enumerate(raw_options, 1)]
-        elif isinstance(raw_choices, dict) and raw_choices:
-            options_payload = [{"key": str(key), "title": str(title)} for key, title in raw_choices.items()]
-
-        payload: dict[str, Any] = {
-            "title": str(question.get("title") or f"Question {index + 1}"),
-            "content": content,
-            "contentType": str(question.get("content_type") or question.get("contentType") or "markdown"),
-            "allowFreeText": bool(question.get("allow_free_text", question.get("allowFreeText", True))),
-            "multiSelect": bool(question.get("multi_select", question.get("multiSelect", False))),
-        }
-        default_choice = question.get("default_choice", question.get("defaultChoice"))
-        if default_choice is not None:
-            payload["defaultChoice"] = str(default_choice)
-        if options_payload:
-            payload["options"] = options_payload
-        requests.append(payload)
-
-    return requests
-
-
-def _coerce_tool_success(value: Any) -> Optional[bool]:
-    if value in (1, True, "1", "true", "True", "success", "SUCCESS"):
-        return True
-    if value in (0, False, "0", "false", "False", "failed", "FAILED"):
-        return False
-    return None
-
-
-def _extract_interaction_result(action: ActionHistory) -> tuple[str, list[dict[str, Any]], Optional[str]]:
-    """Extract answer summary from ask_user's FuncToolResult-style output."""
-    raw_output = action.output.get("raw_output", action.output) if isinstance(action.output, dict) else action.output
-    raw_output = _parse_json_value(raw_output)
-
-    success = action.status != ActionStatus.FAILED
-    error = _extract_error(raw_output)
-    result_value = raw_output
-
-    if _is_tool_result_envelope(raw_output):
-        coerced_success = _coerce_tool_success(raw_output.get("success"))
-        if coerced_success is not None:
-            success = coerced_success
-        if "result" in raw_output:
-            result_value = raw_output.get("result")
-        error = error or _extract_error(raw_output)
-
-    if action.status == ActionStatus.FAILED:
-        success = False
-        error = error or action.messages or "Unknown error"
-
-    result_value = _parse_json_value(result_value)
-    answers: list[dict[str, Any]] = []
-    if isinstance(result_value, list):
-        for item in result_value:
-            if not isinstance(item, dict):
-                continue
-            answer = item.get("answer")
-            payload: dict[str, Any] = {"answer": answer}
-            if item.get("question"):
-                payload["question"] = str(item.get("question"))
-            answers.append(payload)
-    elif result_value not in (None, "") and success:
-        answers.append({"answer": result_value})
-
-    status = "answered" if success else "failed"
-    if error and "cancel" in error.lower():
-        status = "cancelled"
-    return status, answers, error
-
-
-def _build_interaction_summary_content(action: ActionHistory) -> List[IMessageContent]:
-    """Build a read-only history block for completed ask_user interactions."""
-    status, answers, error = _extract_interaction_result(action)
-    payload: dict[str, Any] = {
-        "status": status,
-        "actionType": action.action_type,
-        "requests": _extract_interaction_questions(action),
-    }
-    if answers:
-        payload["answers"] = answers
-    if error:
-        payload["error"] = error
-    return [IMessageContent(type="interaction-summary", payload=payload)]
-
-
 def _build_user_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for user message event."""
     input_data = action.input
@@ -303,12 +201,12 @@ def _build_response_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for final response event."""
     contents = []
     action_output = action.output if isinstance(action.output, dict) else {}
-    if "sql" in action_output and action_output["sql"]:
-        sql = action_output.get("sql")
+    sql, response = normalize_response_parts(action_output)
+
+    if sql:
         sql_payload = {"codeType": "sql", "content": sql}
         contents.append(IMessageContent(type="code", payload=sql_payload))
 
-    response = action_output.get("response") or action_output.get("content") or action_output.get("raw_output") or ""
     if response:
         resp_payload = {"content": str(response)}
         contents.append(IMessageContent(type="markdown", payload=resp_payload))
@@ -374,11 +272,7 @@ def _build_error_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for failed action event, extracting error from BaseResult format."""
     output = action.output if isinstance(action.output, dict) else {}
     error_message = output.get("error") or action.messages or "Unknown error"
-    payload = {"content": error_message}
-    error_type = output.get("error_type")
-    if error_type:
-        payload["error_type"] = str(error_type)
-    return [IMessageContent(type="error", payload=payload)]
+    return [IMessageContent(type="error", payload=error_payload(output, error_message))]
 
 
 def _build_interaction_content(action: ActionHistory) -> List[IMessageContent]:
@@ -562,6 +456,7 @@ def action_to_sse_event(
     is_first_delta: bool = True,
     is_update: bool = False,
     include_final_response: bool = False,
+    proxied_tool_names: Optional[Set[str]] = None,
 ) -> Optional[SSEEvent]:
     """Convert an ActionHistory object to an SSEEvent.
 
@@ -589,6 +484,10 @@ def action_to_sse_event(
         If True, convert node wrapper actions such as chat_response to markdown.
         Streaming callers should only set this when no plain assistant response
         has already been emitted for the turn.
+    proxied_tool_names : Optional[Set[str]]
+        Tool names proxied to the client for execution; stamps ``proxied``
+        on call-tool payloads (see ``_build_tool_call_content``). Pass None
+        when no live node is available (history retrieval).
     """
     try:
         role = action.role
@@ -654,7 +553,7 @@ def action_to_sse_event(
         elif action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
             contents = _build_subagent_complete_content(action)
         elif role == ActionRole.TOOL and status == ActionStatus.PROCESSING:
-            contents = _build_tool_call_content(action)
+            contents = _build_tool_call_content(action, proxied_tool_names)
         elif role == ActionRole.TOOL:
             contents = _build_tool_result_content(action)
         elif role == ActionRole.INTERACTION and status == ActionStatus.PROCESSING:
@@ -732,46 +631,6 @@ def action_to_sse_event(
         return None
 
 
-def action_to_history_sse_event(
-    action: ActionHistory,
-    event_id: int,
-    message_id: str,
-    include_user_message: bool = False,
-    include_final_response: bool = False,
-) -> Optional[SSEEvent]:
-    """Convert an action for persisted chat history.
-
-    History must not replay live ``user-interaction`` controls because their
-    ``interactionKey`` only works while the in-memory broker is active. Persisted
-    ``ask_user`` tool results are rendered as a read-only summary block instead.
-    """
-    if action.role == ActionRole.TOOL and action.action_type == "ask_user":
-        if action.status == ActionStatus.PROCESSING:
-            return None
-        contents = _build_interaction_summary_content(action)
-        return SSEEvent(
-            id=event_id,
-            event="message",
-            data=SSEMessageData(
-                type=SSEDataType.CREATE_MESSAGE,
-                payload=SSEMessagePayload(
-                    message_id=message_id,
-                    role="assistant",
-                    content=contents,
-                    depth=action.depth,
-                    parent_action_id=action.parent_action_id,
-                ),
-            ),
-            timestamp=to_utc_iso(getattr(action, "start_time", None)) or now_utc_iso(),
-        )
-
-    if action.role == ActionRole.INTERACTION:
-        return None
-
-    return action_to_sse_event(
-        action,
-        event_id,
-        message_id,
-        include_user_message=include_user_message,
-        include_final_response=include_final_response,
-    )
+from datus.api.services.action_history_sse_converter import (  # noqa: E402
+    action_to_history_sse_event as action_to_history_sse_event,
+)

@@ -1,11 +1,3 @@
-# 上游默认完整配置示例。
-#
-# 文件名带 .example，不会自动加载。普通本地开发可复制为 conf/agent.yml；
-# 该目标文件已被 Git 忽略，也可以复制到其他未跟踪路径后通过 --config 加载。
-# 本文件主要保持接近上游默认配置；下游中文起步模板和企业片段见
-# agent.downstream.zh-CN.yml.example 与 agent.enterprise.*.yml.example。
-# 请使用 ${ENV_NAME} 引用密码、token 和 API key，不要提交真实凭据。
-
 agent:
   home: ~/.datus
   # Storage layout (refactored):
@@ -104,6 +96,36 @@ agent:
   #   #   - tool: db_tools
   #   #     pattern: execute_ddl
   #   #     permission: deny
+  #   #
+  #   # Command-level bash rules (optional; profile whitelist applies when
+  #   # omitted). Pattern syntax — no colon = exact command; "prefix:*" =
+  #   # prefix match; "prefix:glob" = prefix + first-argument glob. Decision
+  #   # order: deny (also matches wrapped commands like ``xargs rm``) →
+  #   # safety ceiling (bash -c / sudo / && / $() / redirection always ask) →
+  #   # ask → allow → default (ask). A PURE pipeline (``a | b | c``) is judged
+  #   # per segment: it auto-runs only if every segment is allowed, and any
+  #   # denied segment blocks the whole pipeline. The confirmation prompt
+  #   # offers once / session / project scopes; "project" appends the prefix
+  #   # to ``.datus/config.yml``'s ``bash_allow`` list.
+  #   # bash_commands:
+  #   #   allow:
+  #   #     - "git status"            # exact: not "git status --short"
+  #   #     - "git log:*"             # prefix: any arguments
+  #   #     - "python:scripts/*.py"   # first arg must match the glob
+  #   #   deny:
+  #   #     - "rm:*"                  # also catches "xargs rm", "find -exec rm"
+  #   #     - "git push:*"            # deny always beats allow
+  #   #   ask:
+  #   #     - "docker:*"              # confirm every call (session approval per bucket)
+  #   #   classifier:                 # reserved: LLM classifier (not implemented)
+  #   #     enabled: false
+  #   #
+  #   # Installed plugins may declare bash rules for their own ``datus <plugin>``
+  #   # namespace (normal/auto only), layered between the profile base and the
+  #   # rules above — a user ``deny`` always beats a plugin ``allow``. A
+  #   # plugin ``ask`` rule can be relaxed per project via the prompt's
+  #   # "allow (project)" choice (or a matching ``bash_allow`` entry in
+  #   # ``.datus/config.yml``): an exact-match grant auto-runs that pattern.
 
 
   nodes:
@@ -187,18 +209,6 @@ agent:
         username: ${STARROCKS_USER}
         password: ${STARROCKS_PASSWORD}
         database: ${STARROCKS_DATABASE}
-      # oceanbase_oracle:
-      #   type: oceanbase-oracle
-      #   host: ${OCEANBASE_ORACLE_HOST}
-      #   port: ${OCEANBASE_ORACLE_PORT}
-      #   username: ${OCEANBASE_ORACLE_USERNAME}  # quote real values containing '#'
-      #   password: ${OCEANBASE_ORACLE_PASSWORD}
-      #   database: ${OCEANBASE_ORACLE_DATABASE}  # Oracle-mode tenant
-      #   schema: ${OCEANBASE_ORACLE_SCHEMA}      # Oracle owner/schema
-      #   jar_path: ${OCEANBASE_ORACLE_JAR_PATH}  # path inside the runtime/container
-      #   connection_mode: odp
-      #   connect_timeout_seconds: 30
-      #   query_timeout_seconds: 60
     # Default selection across BI / Scheduler / Semantic follows one rule:
     # explicit call-site arg → ``./.datus/config.yml`` project pin → YAML
     # ``default: true`` flag → single-entry shortcut → raise on ambiguity.
@@ -258,9 +268,6 @@ agent:
       model_name: text-embedding-v3-small
       dim_size: 1024
       batch_size: 10 # Aliyun only supports no more than 10
-      sample_cell_max_chars: 1000 # Replace oversized sample cells before embedding
-      sample_max_chars: 8000 # Bound the complete serialized table sample
-      # single_input_only: true # Enable when the OpenAI-compatible gateway rejects array input
       target_model: openai # target model in agent.models, if not set, the agent's target configuration will be used
     document:
       model_name: all-MiniLM-L6-v2 #~100MB The lightest model

@@ -5,24 +5,22 @@ import os
 import types
 from typing import AsyncGenerator, Optional
 
-from datus.api.models.kb_models import (
-    BootstrapDocInput,
-    BootstrapKbEvent,
-    BootstrapKbInput,
-    KbComponent,
-)
+from datus.api.models.kb_downstream import BootstrapDocInput, BootstrapKbInput
+from datus.api.models.kb_models import BootstrapKbEvent, KbComponent
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.batch_events import BatchEvent, BatchStage
 from datus.storage.metric.metric_init import init_success_story_metrics
 from datus.storage.metric.store import MetricRAG
 from datus.storage.reference_sql import ReferenceSqlRAG
 from datus.storage.reference_sql.reference_sql_init import init_reference_sql
-from datus.storage.schema_metadata import SchemaWithValueRAG
+from datus.storage.schema_metadata import create_metadata_rag
 from datus.storage.schema_metadata.local_init import init_local_schema
 from datus.storage.semantic_model.semantic_model_init import (
     init_success_story_semantic_model,
+    refresh_success_story_semantic_model_profile,
 )
 from datus.storage.semantic_model.store import SemanticModelRAG
+from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso, to_utc_iso
@@ -203,6 +201,12 @@ class KbService:
         subject_tree = request.subject_tree
 
         try:
+            if strategy == "refresh-profile" and component != KbComponent.SEMANTIC_MODEL:
+                return {
+                    "status": "failed",
+                    "message": "strategy=refresh-profile is only supported with semantic_model",
+                }
+
             if component == KbComponent.METADATA:
                 return self._init_metadata(config, strategy, pool_size, dir_path, args, emit)
 
@@ -235,7 +239,7 @@ class KbService:
         emit=None,
     ) -> dict:
         if strategy == "check":
-            store = SchemaWithValueRAG(config)
+            store = create_metadata_rag(config)
             return {
                 "status": "success",
                 "message": f"metadata already built, schema_size={store.get_schema_size()}, "
@@ -243,11 +247,11 @@ class KbService:
             }
 
         if strategy == "overwrite":
-            store = SchemaWithValueRAG(config)
+            store = create_metadata_rag(config)
             store.truncate()
             logger.info("Truncated schema metadata tables for overwrite")
 
-        store = SchemaWithValueRAG(config)
+        store = create_metadata_rag(config)
         db_manager = DBManager(config.datasource_configs)
         init_local_schema(
             store,
@@ -274,9 +278,41 @@ class KbService:
         args: types.SimpleNamespace,
         emit,
     ) -> dict:
-        successful, error_message = init_success_story_semantic_model(config, args.success_story, emit=emit)
+        rag = SemanticModelRAG(config)
+        if strategy == "check":
+            profile_rag = TableSemanticProfileRAG(config)
+            return {
+                "status": "success",
+                "message": (
+                    "semantic_model check completed, "
+                    f"semantic_object_count={rag.get_size()}, "
+                    f"table_semantic_profile_count={profile_rag.get_size()}"
+                ),
+            }
+        if strategy == "refresh-profile":
+            profile_rag = TableSemanticProfileRAG(config)
+            successful, error_message, changed = refresh_success_story_semantic_model_profile(
+                config,
+                args.semantic_yaml,
+                args.success_story,
+                emit=emit,
+            )
+            if successful:
+                return {
+                    "status": "success",
+                    "message": (
+                        "semantic_model profile refresh completed, "
+                        f"changed_description_count={changed}, "
+                        f"semantic_object_count={rag.get_size()}, "
+                        f"table_semantic_profile_count={profile_rag.get_size()}"
+                    ),
+                    "error": error_message,
+                }
+            return {"status": "failed", "message": error_message}
+        successful, error_message = init_success_story_semantic_model(
+            config, args.success_story, emit=emit, build_mode=strategy
+        )
         if successful:
-            rag = SemanticModelRAG(config)
             return {
                 "status": "success",
                 "message": f"semantic_model bootstrap completed, semantic_object_count={rag.get_size()}",
@@ -293,9 +329,16 @@ class KbService:
         subject_tree: Optional[list],
         emit,
     ) -> dict:
-        successful, error_message, _ = init_success_story_metrics(config, args.success_story, subject_tree, emit=emit)
+        rag = MetricRAG(config)
+        if strategy == "check":
+            return {
+                "status": "success",
+                "message": f"metrics check completed, metrics_count={rag.get_metrics_size()}",
+            }
+        successful, error_message, _ = init_success_story_metrics(
+            config, args.success_story, subject_tree, emit=emit, build_mode=strategy
+        )
         if successful:
-            rag = MetricRAG(config)
             return {
                 "status": "success",
                 "message": f"metrics bootstrap completed, metrics_count={rag.get_metrics_size()}",
@@ -486,10 +529,12 @@ class KbService:
         """Create a SimpleNamespace mimicking argparse.Namespace for the bootstrap-kb helpers."""
         # Resolve relative paths against the project root
         success_story = os.path.join(project_root, request.success_story) if request.success_story else None
+        semantic_yaml = os.path.join(project_root, request.semantic_yaml) if request.semantic_yaml else None
         sql_dir = os.path.join(project_root, request.sql_dir) if request.sql_dir else None
 
         return types.SimpleNamespace(
             success_story=success_story,
+            semantic_yaml=semantic_yaml,
             sql_dir=sql_dir,
             schema_linking_type=request.schema_linking_type,
             catalog=request.catalog or "",

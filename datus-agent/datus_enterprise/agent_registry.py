@@ -157,6 +157,58 @@ def agent_record_to_runtime_entry(record: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
+def materialize_enterprise_agent(agent_config: Any, record: dict[str, Any]) -> None:
+    """Install one enterprise agent into a request-scoped AgentConfig clone."""
+
+    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
+    agentic_nodes[str(record["agent_id"])] = agent_record_to_runtime_entry(record)
+    agent_config.agentic_nodes = agentic_nodes
+
+
+def materialize_artifact_edit_agent(agent_config: Any, session: Any) -> None:
+    """Install one ACL-authorized Artifact edit session as a locked runtime node."""
+
+    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
+    if session.artifact_type == "dashboard":
+        node_type = "gen_visual_dashboard"
+        root_dir = "dashboards"
+        bind_call = f"bind_existing_dashboard('{session.artifact_slug}')"
+        start_call = "start_new_dashboard"
+    else:
+        node_type = "gen_visual_report"
+        root_dir = "reports"
+        bind_call = f"bind_existing_report('{session.artifact_slug}')"
+        start_call = "start_new_report"
+    agentic_nodes[session.subagent_id] = {
+        "id": session.subagent_id,
+        "type": node_type,
+        "node_class": node_type,
+        "artifact_slug": session.artifact_slug,
+        "edit_locked": True,
+        # This internal capability marker is added only after the route's
+        # authoritative Artifact edit ACL check has succeeded.
+        "_acl_authorized_artifact_edit": True,
+        "agent_description": (
+            f"This is a private edit session locked to {root_dir}/{session.artifact_slug}. "
+            f"Call {bind_call} first; do not create a new {session.artifact_type}."
+        ),
+        "rules": [
+            f"You are editing exactly {root_dir}/{session.artifact_slug}/.",
+            f"Your first artifact tool call must be {bind_call}.",
+            f"Do not call read_file, glob, list_tables, describe_table, execute_sql, or any other tool before {bind_call}.",
+            (
+                f"If {root_dir}/{session.artifact_slug}/ is empty, missing manifest.json, or missing render/app.jsx, "
+                f"still call {bind_call}; the bind tool bootstraps incomplete locked edit artifacts."
+            ),
+            "After bind returns bootstrap_warning, inspect the restored tree, write or repair render/app.jsx, "
+            "save required queries, and call validate_render.",
+            f"Do not call {start_call} in this edit session.",
+            f"Do not inspect, write, edit, or delete any other {session.artifact_type} artifact.",
+        ],
+    }
+    agent_config.agentic_nodes = agentic_nodes
+
+
 def is_enterprise_builtin_agent_id(agent_id: str) -> bool:
     return agent_id in ENTERPRISE_BUILTIN_AGENT_IDS
 
@@ -306,12 +358,6 @@ def builtin_agent_prompt_template(agent_id: str) -> dict[str, str | None]:
         "prompt_template": content,
         "prompt_template_content": content,
     }
-
-
-def can_view_agent(ctx: AppContext, record: dict[str, Any]) -> bool:
-    """Return whether ``ctx`` may see an enterprise agent record."""
-
-    return _can_access_agent(ctx, record, require_use=False)
 
 
 def can_use_agent(ctx: AppContext, record: dict[str, Any]) -> bool:

@@ -1367,40 +1367,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/report/detail": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-
-        get: operations["get_report_detail_api_v1_report_detail_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/reports/{slug}/edit-sessions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-
-        post: operations["create_report_edit_session_api_v1_reports__slug__edit_sessions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -1777,6 +1743,40 @@ export interface paths {
         get: operations["get_report_detail_api_v1_reports__slug__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/report/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_report_detail_legacy_api_v1_report_detail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/{slug}/edit-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["create_report_edit_session_api_v1_reports__slug__edit_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2676,6 +2676,8 @@ export interface components {
 
         AddServerInput: {
 
+            name: string;
+
             type: string;
 
             command?: string | null;
@@ -2695,8 +2697,6 @@ export interface components {
             } | null;
 
             cwd?: string | null;
-
-            name: string;
         };
 
         AdminArtifactSummary: {
@@ -2733,6 +2733,111 @@ export interface components {
             type?: string | null;
 
             is_default: boolean;
+        };
+
+        AdminListResult_AdminArtifactSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminArtifactSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminDatasourceGrantSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminDatasourceGrantSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminQuotaSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminQuotaSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminRoleSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminRoleSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminSecretSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminSecretSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminSessionSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminSessionSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminUsageSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminUsageSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminUserSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminUserSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminPagination: {
+
+            limit: number;
+
+            offset: number;
+
+            has_more: boolean;
         };
 
         AdminQuotaSummary: {
@@ -3283,7 +3388,7 @@ export interface components {
 
             components: components["schemas"]["KbComponent"][];
 
-            strategy: "overwrite" | "check" | "incremental";
+            strategy: "overwrite" | "check" | "incremental" | "refresh-profile";
 
             schema_linking_type: string;
 
@@ -3298,6 +3403,8 @@ export interface components {
             success_story_upload_id?: string | null;
 
             success_story_file_id?: string | null;
+
+            semantic_yaml?: string | null;
 
             subject_tree?: string[] | null;
 
@@ -3821,8 +3928,6 @@ export interface components {
 
         ExecuteSQLInput: {
 
-            datasource?: string | null;
-
             database_name?: string | null;
 
             sql_query: string;
@@ -3832,6 +3937,8 @@ export interface components {
             system: boolean;
 
             execute_task_id?: string | null;
+
+            datasource?: string | null;
         };
 
         FeedbackChatInput: {
@@ -3841,8 +3948,6 @@ export interface components {
             session_id?: string | null;
 
             model?: string | null;
-
-            model_credential_id?: string | null;
 
             plan_mode: boolean;
 
@@ -3881,6 +3986,8 @@ export interface components {
             reference_msg: string;
 
             reaction_msg?: string | null;
+
+            model_credential_id?: string | null;
         };
 
         FeedbackRequest: {
@@ -4867,17 +4974,6 @@ export interface components {
             errorMessage?: string | null;
         };
 
-        Result_List_AdminArtifactSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminArtifactSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
         Result_List_ArtifactListItem__: {
 
             success: boolean;
@@ -5192,88 +5288,11 @@ export interface components {
             errorMessage?: string | null;
         };
 
-        Result_list_AdminDatasourceGrantSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminDatasourceGrantSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
         Result_list_AdminDatasourceSummary__: {
 
             success: boolean;
 
             data?: components["schemas"]["AdminDatasourceSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminQuotaSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminQuotaSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminRoleSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminRoleSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminSecretSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminSecretSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminSessionSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminSessionSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminUsageSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminUsageSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AdminUserSummary__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AdminUserSummary"][] | null;
 
             errorCode?: string | null;
 
@@ -5430,8 +5449,6 @@ export interface components {
 
         SemanticModelInput: {
 
-            datasource_id?: string | null;
-
             table: string;
 
             yaml: string;
@@ -5441,6 +5458,8 @@ export interface components {
             database?: string | null;
 
             db_schema?: string | null;
+
+            datasource_id?: string | null;
         };
 
         SetAgentStatusRequest: {
@@ -5505,8 +5524,6 @@ export interface components {
 
             model?: string | null;
 
-            model_credential_id?: string | null;
-
             plan_mode: boolean;
 
             source?: string | null;
@@ -5548,6 +5565,8 @@ export interface components {
             source_session_id?: string | null;
 
             permission_mode?: ("normal" | "auto" | "dangerous") | null;
+
+            model_credential_id?: string | null;
         };
 
         SubjectListData: {
@@ -8761,69 +8780,6 @@ export interface operations {
             };
         };
     };
-    get_report_detail_api_v1_report_detail_get: {
-        parameters: {
-            query: {
-
-                slug: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Result_ReportDetail_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_report_edit_session_api_v1_reports__slug__edit_sessions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Result_ReportEditSession_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_me_api_v1_me_get: {
         parameters: {
             query?: never;
@@ -9621,6 +9577,69 @@ export interface operations {
             };
         };
     };
+    get_report_detail_legacy_api_v1_report_detail_get: {
+        parameters: {
+            query: {
+
+                slug: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ReportDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_report_edit_session_api_v1_reports__slug__edit_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ReportEditSession_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_report_share_acl_api_v1_reports__slug__acl_get: {
         parameters: {
             query?: never;
@@ -9792,7 +9811,13 @@ export interface operations {
     };
     list_admin_artifacts_api_v1_admin_artifacts_get: {
         parameters: {
-            query?: never;
+            query?: {
+                artifact_type?: ("report" | "dashboard") | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9805,7 +9830,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_List_AdminArtifactSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminArtifactSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -10635,6 +10669,11 @@ export interface operations {
                 subject_id?: string | null;
 
                 datasource_key?: string | null;
+                effect?: string | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -10648,7 +10687,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminDatasourceGrantSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminDatasourceGrantSummary_"];
                 };
             };
 
@@ -10883,6 +10922,11 @@ export interface operations {
             query?: {
 
                 user_id?: string | null;
+                state?: string | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -10896,7 +10940,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminSessionSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminSessionSummary_"];
                 };
             };
 
@@ -11008,6 +11052,10 @@ export interface operations {
             query?: {
 
                 enabled?: boolean | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -11021,7 +11069,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminUserSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminUserSummary_"];
                 };
             };
 
@@ -11165,7 +11213,14 @@ export interface operations {
     };
     list_admin_roles_api_v1_admin_roles_get: {
         parameters: {
-            query?: never;
+            query?: {
+
+                built_in?: boolean | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -11178,7 +11233,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminRoleSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminRoleSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -11390,6 +11454,12 @@ export interface operations {
                 subject_id?: string | null;
 
                 resource?: string | null;
+
+                enabled?: boolean | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -11403,7 +11473,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminQuotaSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminQuotaSummary_"];
                 };
             };
 
@@ -11495,6 +11565,10 @@ export interface operations {
                 subject_id?: string | null;
 
                 resource?: string | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -11508,7 +11582,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminUsageSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminUsageSummary_"];
                 };
             };
 
@@ -11527,6 +11601,12 @@ export interface operations {
             query?: {
 
                 prefix?: string | null;
+
+                enabled?: boolean | null;
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -11540,7 +11620,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AdminSecretSummary__"];
+                    "application/json": components["schemas"]["AdminListResult_AdminSecretSummary_"];
                 };
             };
 

@@ -10,6 +10,12 @@ agent:
   # Datus 的工作目录。会话、向量索引、日志、运行时文件等默认都放在这里。
   home: ~/.datus
 
+  api:
+    chat:
+      # 当前 Vue 客户端不执行浏览器侧文件工具；由后端工作区执行。
+      # 若接入实现了文件工具代理的上游兼容客户端，可改为 client。
+      web_filesystem_executor: server
+
   # 可选：固定当前项目名。默认会根据启动命令所在目录自动生成。
   # 当你从软链接、monorepo 子目录或 CI 沙箱启动，但希望复用同一份会话/索引时再配置它。
   # project_name: my_project
@@ -102,6 +108,18 @@ agent:
     #   # Optional: when true, catalog/list enumerates all reachable databases
     #   # on the same server instead of only this configured database.
     #   enumerate_databases: false
+    # oceanbase_oracle:
+    #   type: oceanbase-oracle
+    #   host: ${OCEANBASE_ORACLE_HOST}
+    #   port: ${OCEANBASE_ORACLE_PORT}
+    #   username: ${OCEANBASE_ORACLE_USERNAME}
+    #   password: ${OCEANBASE_ORACLE_PASSWORD}
+    #   database: ${OCEANBASE_ORACLE_DATABASE}  # Oracle 模式 tenant
+    #   schema: ${OCEANBASE_ORACLE_SCHEMA}      # Oracle owner/schema
+    #   jar_path: ${OCEANBASE_ORACLE_JAR_PATH}
+    #   connection_mode: odp
+    #   connect_timeout_seconds: 30
+    #   query_timeout_seconds: 60
 
     # 新版语义层要求显式写出条目；空对象表示启用默认 MetricFlow 配置。
     semantic_layer:
@@ -131,6 +149,10 @@ agent:
     #   registry_name: sentence-transformers
     #   model_name: all-MiniLM-L6-v2
     #   dim_size: 384
+    #   sample_cell_max_chars: 1000
+    #   sample_max_chars: 8000
+    #   # OpenAI-compatible 网关不接受数组输入时再打开。
+    #   single_input_only: true
     # document:
     #   model_name: all-MiniLM-L6-v2
     #   dim_size: 384

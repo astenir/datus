@@ -1,3 +1,4 @@
+import argparse
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -5,8 +6,23 @@ import pytest
 
 from datus.api.auth.context import AppContext
 from datus.api.models.base_models import Result
-from datus.api.models.cli_models import ExecuteSQLData, ExecuteSQLInput
-from datus.api.routes import cli_routes
+from datus.api.models.cli_models import ExecuteSQLData
+from datus.api.models.downstream import ExecuteSQLInput
+from datus.api.service import create_app
+from datus_enterprise.api import cli_routes
+
+
+def test_create_app_registers_authoritative_cli_routes_once():
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    routes = [
+        route
+        for route in app.routes
+        if getattr(route, "path", None) == "/api/v1/sql/execute" and "POST" in getattr(route, "methods", set())
+    ]
+
+    assert len(routes) == 1
+    assert routes[0].endpoint.__module__ == "datus_enterprise.api.cli_routes"
 
 
 @pytest.mark.asyncio

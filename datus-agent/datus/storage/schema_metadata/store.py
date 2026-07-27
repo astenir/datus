@@ -2,9 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import csv
 import os
-from io import StringIO
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pyarrow as pa
@@ -16,49 +14,15 @@ from datus.schemas.node_models import TableSchema, TableValue
 from datus.storage.base import BaseEmbeddingStore, WhereExpr
 from datus.storage.datasource_scope import add_datasource_scope_to_rows, datasource_condition, resolve_datasource_id
 from datus.storage.embedding_models import EmbeddingModel
+from datus.storage.fts import FtsField, FtsSpec
+from datus.storage.schema_metadata.sample_rows_downstream import normalize_sample_rows_for_embedding
 from datus.tools.db_tools import connector_registry
 from datus.utils.constants import DBType
-from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 logger = get_logger(__name__)
-
-
-def _sanitize_sample_rows(sample_rows: str, *, max_cell_chars: int, max_chars: int) -> str:
-    """Bound metadata samples and remove oversized cell contents before embedding."""
-    text = str(sample_rows)
-    try:
-        rows = list(csv.reader(StringIO(text)))
-    except csv.Error:
-        if len(text) > max_cell_chars:
-            return f"<DATUS_SAMPLE_ROWS_UNPARSEABLE original_chars={len(text)}>"[:max_chars]
-        rows = []
-
-    if not rows:
-        sanitized = text
-    else:
-        changed = False
-        for row in rows:
-            for index, cell in enumerate(row):
-                if len(cell) > max_cell_chars:
-                    row[index] = f"<DATUS_SAMPLE_CELL_TRUNCATED chars={len(cell)}>"
-                    changed = True
-        if changed:
-            output = StringIO()
-            csv.writer(output, lineterminator="\n").writerows(rows)
-            sanitized = output.getvalue()
-        else:
-            sanitized = text
-
-    if len(sanitized) <= max_chars:
-        return sanitized
-
-    marker = f"\n<DATUS_SAMPLE_ROWS_TRUNCATED original_chars={len(text)}>"
-    if len(marker) >= max_chars:
-        return marker[:max_chars]
-    return sanitized[: max_chars - len(marker)] + marker
 
 
 class BaseMetadataStorage(BaseEmbeddingStore):
@@ -140,7 +104,7 @@ class BaseMetadataStorage(BaseEmbeddingStore):
             query_type=query_type,
         )
 
-    def create_indices(self):
+    def create_indices(self, *, include_fts: bool = True):
         self._ensure_table_ready()
 
         self._create_scalar_index("database_name")
@@ -149,7 +113,17 @@ class BaseMetadataStorage(BaseEmbeddingStore):
         self._create_scalar_index("table_name")
         self._create_scalar_index("table_type")
 
-        self.create_fts_index(["database_name", "schema_name", "table_name", self.vector_source_name])
+        if include_fts:
+            self.create_fts_index(
+                FtsSpec(
+                    (
+                        FtsField("table_name", boost=3.0),
+                        FtsField("schema_name", boost=2.0),
+                        FtsField("database_name", boost=2.0),
+                        FtsField(self.vector_source_name),
+                    )
+                )
+            )
 
     def search_all(
         self,
@@ -332,31 +306,21 @@ class SchemaWithValueRAG:
         for item in values:
             if "sample_rows" not in item or not item["sample_rows"]:
                 continue
-            sample_rows = item["sample_rows"]
-            if isinstance(sample_rows, list):
-                sample_rows = json2csv(sample_rows)
-            sanitized = _sanitize_sample_rows(
-                sample_rows,
+            item["sample_rows"] = normalize_sample_rows_for_embedding(
+                item["sample_rows"],
+                table_name=item.get("table_name", ""),
                 max_cell_chars=self._sample_cell_max_chars,
                 max_chars=self._sample_max_chars,
             )
-            if sanitized != sample_rows:
-                logger.info(
-                    "Sanitized metadata sample rows before embedding: table=%s, original_chars=%d, sanitized_chars=%d",
-                    item.get("table_name", ""),
-                    len(sample_rows),
-                    len(sanitized),
-                )
-            item["sample_rows"] = sanitized
             final_values.append(item)
         self.value_store.store_batch(add_datasource_scope_to_rows(final_values, self.datasource_id, id_field=""))
 
         logger.debug(f"Batch stored {len(schemas)} schemas, {len(final_values)} values")
 
-    def after_init(self):
-        """After init the schema and value, create the indices for the tables."""
-        self.schema_store.create_indices()
-        self.value_store.create_indices()
+    def after_init(self, build_mode: str = "overwrite"):
+        """Create only the indices required by the legacy vector mode."""
+        self.schema_store.create_indices(include_fts=False)
+        self.value_store.create_indices(include_fts=False)
 
     def get_schema_size(self):
         return self.schema_store._count_rows(where=self._add_sub_agent_filter(None))

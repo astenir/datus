@@ -72,25 +72,6 @@ DashboardQueryConfigProjector = Callable[[str | None], Awaitable[AgentConfig]]
 DashboardQueryBeforeExecute = Callable[[], Awaitable[Result | None]]
 
 
-def _configured_dashboard_dist(agent_config: Optional[AgentConfig]) -> Optional[Path]:
-    if agent_config is None:
-        return None
-
-    agentic_nodes = getattr(agent_config, "agentic_nodes", None)
-    if isinstance(agentic_nodes, dict):
-        node_config = agentic_nodes.get("gen_visual_dashboard")
-        if isinstance(node_config, dict):
-            dashboard_dist = node_config.get("dashboard_dist")
-            if dashboard_dist:
-                return Path(str(dashboard_dist)).expanduser()
-
-    cli_override = getattr(agent_config, "report_dist_cli_override", None)
-    if cli_override:
-        return Path(str(cli_override)).expanduser()
-
-    return None
-
-
 def _resolve_dashboard_dir(project_files_root: Path, dashboard_slug: str) -> Optional[Path]:
     """Resolve ``<project_files_root>/dashboards/<slug>`` safely.
 
@@ -278,120 +259,6 @@ class DashboardService:
 
     def __init__(self, agent_config: AgentConfig):
         self.agent_config = agent_config
-
-    # -- list ----------------------------------------------------------------
-
-    async def list_dashboards(
-        self,
-        *,
-        project_files_root: Path,
-    ) -> Result[List[ArtifactManifest]]:
-        """Enumerate all dashboards under ``<project_files_root>/dashboards/``.
-
-        Reads each subdirectory's ``manifest.json`` and returns a list of
-        :class:`ArtifactManifest` sorted by recency (``updated_at`` falling
-        back to ``created_at``, descending).  Corrupt or missing manifests
-        are silently skipped so one broken dashboard doesn't take down the
-        whole list.
-        """
-        dashboards_root = project_files_root / "dashboards"
-        if not await asyncio.to_thread(dashboards_root.is_dir):
-            return Result(success=True, data=[])
-
-        def _scan() -> List[Path]:
-            return sorted(
-                (p for p in dashboards_root.iterdir() if p.is_dir()),
-                key=lambda p: p.name,
-            )
-
-        subdirs = await asyncio.to_thread(_scan)
-
-        manifests: List[ArtifactManifest] = []
-        for subdir in subdirs:
-            manifest_path = subdir / "manifest.json"
-            if not await asyncio.to_thread(manifest_path.is_file):
-                continue
-            try:
-                text = await asyncio.to_thread(manifest_path.read_text, "utf-8")
-                manifest = ArtifactManifest.model_validate(json.loads(text))
-                manifests.append(manifest)
-            except Exception as exc:
-                logger.warning("Skipping dashboard %s: corrupt manifest.json (%s)", subdir.name, exc)
-                continue
-
-        # Sort by recency: updated_at ?? created_at, descending
-        def _sort_key(m: ArtifactManifest) -> str:
-            return m.updated_at or m.created_at or ""
-
-        manifests.sort(key=_sort_key, reverse=True)
-
-        return Result(success=True, data=manifests)
-
-    # -- html ----------------------------------------------------------------
-
-    async def render_html(
-        self,
-        *,
-        project_files_root: Path,
-        dashboard_slug: str,
-        query_endpoint: str,
-    ) -> Result[str]:
-        """Compile the dashboard HTML string for iframe rendering.
-
-        Uses the same pipeline as the CLI's ``render_dashboard_html`` but
-        returns the HTML string directly (no disk write).  The caller
-        (API route) serves it as ``text/html``.
-
-        Args:
-            project_files_root: project root directory.
-            dashboard_slug: target dashboard slug.
-            query_endpoint: absolute URL the dashboard will POST queries
-                to (e.g. ``http://localhost:8501/api/v1/dashboard/query``).
-
-        Returns:
-            ``Result[str]`` with the HTML string on success.
-        """
-        from datus.agent.node.visual_artifact.dashboard_html_renderer import (
-            render_dashboard_html_str,
-        )
-
-        dashboard_dir = _resolve_dashboard_dir(project_files_root, dashboard_slug)
-        if dashboard_dir is None:
-            return Result(
-                success=False,
-                errorCode="INVALID_DASHBOARD_SLUG",
-                errorMessage=f"dashboard_slug must match {DASHBOARD_SLUG_RE.pattern}",
-            )
-
-        try:
-            html_str = await asyncio.to_thread(
-                render_dashboard_html_str,
-                project_root=project_files_root,
-                dashboard_slug=dashboard_slug,
-                query_endpoint=query_endpoint,
-                dashboard_dist=_configured_dashboard_dist(self.agent_config),
-            )
-        except FileNotFoundError:
-            return Result(
-                success=False,
-                errorCode="DASHBOARD_NOT_FOUND",
-                errorMessage=f"dashboard {dashboard_slug!r} not found or missing render/app.jsx",
-            )
-        except ValueError as exc:
-            return Result(
-                success=False,
-                errorCode="INVALID_DASHBOARD_SLUG",
-                errorMessage=str(exc),
-            )
-        except Exception as exc:
-            logger.exception("Failed to render HTML for %s: %s", dashboard_slug, exc)
-            return Result(
-                success=False,
-                errorCode="DASHBOARD_NOT_FOUND",
-                errorMessage=str(exc),
-            )
-
-        return Result(success=True, data=html_str)
 
     # -- detail --------------------------------------------------------------
 
@@ -655,23 +522,17 @@ class DashboardService:
                 errorMessage=f"failed to resolve datasource {meta.datasource!r}: {exc}",
             )
 
-        from datus.api.services.cli_service import CLIService
+        from datus_enterprise.services.cli_sql_policy import authorize_dashboard_read_sql
 
-        try:
-            authorized_sql = CLIService._authorize_read_sql(rendered_sql, connector, execution_config)
-        except Exception as exc:
-            logger.exception("Dashboard SQL authorization failed for %s/%s: %s", dashboard_slug, query_slug, exc)
-            return Result(
-                success=False,
-                errorCode="QUERY_EXECUTION_FAILED",
-                errorMessage="SQL authorization failed",
-            )
+        authorized_sql = authorize_dashboard_read_sql(
+            rendered_sql,
+            connector,
+            execution_config,
+            dashboard_slug=dashboard_slug,
+            query_slug=query_slug,
+        )
         if not isinstance(authorized_sql, str):
-            return Result(
-                success=False,
-                errorCode="QUERY_EXECUTION_FAILED",
-                errorMessage=authorized_sql.errorMessage,
-            )
+            return authorized_sql
         rendered_sql = authorized_sql
 
         try:

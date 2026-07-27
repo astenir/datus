@@ -122,6 +122,51 @@ class ObEnterpriseUserStore(_ObStoreBase):
             )
         return [_user_record(row) for row in rows]
 
+    async def list_users_page(
+        self,
+        *,
+        enabled: bool | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        filters: list[str] = []
+        params: list[Any] = []
+        if enabled is not None:
+            filters.append("u.enabled = %s")
+            params.append(bool(enabled))
+        if search and search.strip():
+            pattern = _like_contains_pattern(search.strip())
+            filters.append(
+                """(
+                    u.user_id LIKE %s ESCAPE '\\\\'
+                    OR COALESCE(u.display_name, '') LIKE %s ESCAPE '\\\\'
+                    OR COALESCE(u.email, '') LIKE %s ESCAPE '\\\\'
+                    OR COALESCE(u.external_user_id, '') LIKE %s ESCAPE '\\\\'
+                    OR COALESCE(u.department, '') LIKE %s ESCAPE '\\\\'
+                    OR COALESCE(u.title, '') LIKE %s ESCAPE '\\\\'
+                    OR EXISTS (
+                        SELECT 1 FROM enterprise_user_roles ur
+                        WHERE ur.user_id = u.user_id AND ur.role_id LIKE %s ESCAPE '\\\\'
+                    )
+                )"""
+            )
+            params.extend([pattern] * 7)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetchall(
+            f"""
+            SELECT u.user_id, u.display_name, u.email, u.enabled, u.external_user_id, u.department, u.title,
+                   u.last_seen_at, u.created_at, u.updated_at
+            FROM enterprise_users u
+            {where_sql}
+            ORDER BY u.user_id ASC
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params),
+        )
+        return [_user_record(row) for row in rows]
+
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         row = await self._fetchone(
             """
@@ -411,6 +456,77 @@ class ObEnterpriseDatasourceGrantStore(_ObStoreBase):
         )
         return [_datasource_grant_record(row) for row in rows]
 
+    async def list_grants_page(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+        effect: str | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        filters: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("subject_type", subject_type),
+            ("subject_id", subject_id),
+            ("datasource_key", datasource_key),
+            ("effect", effect),
+        ):
+            if value is not None:
+                filters.append(f"{column} = %s")
+                params.append(value)
+        if search and search.strip():
+            pattern = _like_contains_pattern(search.strip().casefold())
+            filters.append(
+                """(
+                    lower(subject_type) LIKE %s ESCAPE '\\\\'
+                    OR lower(subject_id) LIKE %s ESCAPE '\\\\'
+                    OR lower(datasource_key) LIKE %s ESCAPE '\\\\'
+                    OR lower(effect) LIKE %s ESCAPE '\\\\'
+                    OR lower(scope_json) LIKE %s ESCAPE '\\\\'
+                )"""
+            )
+            params.extend([pattern] * 5)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetchall(
+            f"""
+            SELECT subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+            FROM enterprise_datasource_grants
+            {where_sql}
+            ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params),
+        )
+        return [_datasource_grant_record(row) for row in rows]
+
+    async def count_grants_by_subjects(
+        self,
+        *,
+        subject_type: str,
+        subject_ids: list[str],
+    ) -> dict[str, int]:
+        counts = {subject_id: 0 for subject_id in subject_ids}
+        if not subject_ids:
+            return counts
+        placeholders = ", ".join("%s" for _ in subject_ids)
+        rows = await self._fetchall(
+            f"""
+            SELECT subject_id, COUNT(*) AS grant_count
+            FROM enterprise_datasource_grants
+            WHERE subject_type = %s AND subject_id IN ({placeholders})
+            GROUP BY subject_id
+            """,
+            (subject_type, *subject_ids),
+        )
+        for row in rows:
+            counts[str(row["subject_id"])] = int(row["grant_count"])
+        return counts
+
     async def get_grant(
         self,
         *,
@@ -618,6 +734,20 @@ class ObSessionOwnerStore(_ObStoreBase):
         )
         return _session_owner_record(row) if row else None
 
+    async def get_sessions(self, project_id: str, session_ids: list[str]) -> list[dict[str, Any]]:
+        if not session_ids:
+            return []
+        placeholders = ", ".join("%s" for _ in session_ids)
+        rows = await self._fetchall(
+            f"""
+            SELECT project_id, session_id, user_id, created_at, updated_at
+            FROM session_owners
+            WHERE project_id = %s AND session_id IN ({placeholders})
+            """,
+            (project_id, *session_ids),
+        )
+        return [_session_owner_record(row) for row in rows]
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         await self._execute(
             "DELETE FROM session_owners WHERE project_id = %s AND session_id = %s",
@@ -657,6 +787,32 @@ class ObSessionOwnerStore(_ObStoreBase):
                 """,
                 (project_id, user_id),
             )
+        return [_session_owner_record(row) for row in rows]
+
+    async def list_sessions_page(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [project_id]
+        where = "project_id = %s"
+        if user_id is not None:
+            where += " AND user_id = %s"
+            params.append(user_id)
+        params.extend((int(limit), int(offset)))
+        rows = await self._fetchall(
+            f"""
+            SELECT project_id, session_id, user_id, created_at, updated_at
+            FROM session_owners
+            WHERE {where}
+            ORDER BY updated_at DESC, session_id ASC
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params),
+        )
         return [_session_owner_record(row) for row in rows]
 
 
@@ -1608,6 +1764,11 @@ def _load_json_list(value: Any) -> list[str]:
 def _like_prefix_pattern(prefix: str) -> str:
     escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"{escaped}%"
+
+
+def _like_contains_pattern(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _normalized_quota_subjects(subjects: list[dict[str, str]]) -> list[dict[str, str]]:

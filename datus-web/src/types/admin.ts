@@ -7,6 +7,16 @@ export interface ApiResponse<T> {
   errorMessage?: string;
 }
 
+export interface AdminPagination {
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export interface PaginatedApiResponse<T> extends ApiResponse<T> {
+  pagination?: AdminPagination | null;
+}
+
 export type AdminUser = components["schemas"]["AdminUserSummary"];
 export type Role = components["schemas"]["AdminRoleSummary"];
 export type AdminSession = components["schemas"]["AdminSessionSummary"];
@@ -172,28 +182,68 @@ export interface AuditLogListParams {
 
 export interface AdminUserListParams {
   enabled?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface RoleListParams {
+  builtIn?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminSessionListParams {
+  userId?: string;
+  state?: "running" | "stopped";
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface DatasourceGrantListParams {
   subjectType?: string;
   subjectId?: string;
   datasourceKey?: string;
+  effect?: "allow" | "deny";
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface QuotaListParams {
   subjectType?: string;
   subjectId?: string;
   resource?: string;
+  enabled?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface UsageListParams {
   subjectType?: string;
   subjectId?: string;
   resource?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface SecretListParams {
   prefix?: string;
+  enabled?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ArtifactListParams {
+  artifactType?: AdminArtifact["artifact_type"];
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface UpsertUserInput {
