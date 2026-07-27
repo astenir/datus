@@ -148,14 +148,9 @@ def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Option
 
 def _resolve_artifact_edit_session(svc, subagent_id: Optional[str]) -> Optional[ArtifactEditSession]:
     task_manager = getattr(svc, "task_manager", None)
-    if getattr(task_manager, "_supports_artifact_edit_sessions", False) is True:
-        getter = getattr(task_manager, "get_artifact_edit_session", None)
-        if getter is None:
-            return None
-        return getter(subagent_id)
-    if getattr(task_manager, "_supports_report_edit_sessions", False) is not True:
+    if getattr(task_manager, "_supports_artifact_edit_sessions", False) is not True:
         return None
-    getter = getattr(task_manager, "get_report_edit_session", None)
+    getter = getattr(task_manager, "get_artifact_edit_session", None)
     if getter is None:
         return None
     return getter(subagent_id)

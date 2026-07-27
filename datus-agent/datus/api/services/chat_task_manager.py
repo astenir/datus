@@ -50,7 +50,6 @@ from datus_enterprise.services.chat_task_runtime import (
     initialize_chat_task_runtime,
     persist_terminal_event,
     prepare_chat_request_config,
-    purge_expired_artifact_edit_sessions,
     task_snapshot,
     terminal_outcome_from_action,
     trim_event_buffer,
@@ -347,7 +346,6 @@ class ChatTaskManager:
         self._web_filesystem_executor = web_filesystem_executor
         self._cleanup_handle: Optional[asyncio.TimerHandle] = None
         self._supports_artifact_edit_sessions = True
-        self._supports_report_edit_sessions = True
         self._artifact_edit_sessions: Dict[str, ArtifactEditSession] = {}
 
     # ------------------------------------------------------------------
@@ -368,14 +366,6 @@ class ChatTaskManager:
             report_slug=report_slug,
         )
 
-    def get_report_edit_session(self, subagent_id: Optional[str]) -> Optional[ReportEditSession]:
-        """Return a live report edit session by its chat subagent id."""
-
-        session = get_artifact_edit_session(self._artifact_edit_sessions, subagent_id)
-        if isinstance(session, ReportEditSession):
-            return session
-        return None
-
     def create_dashboard_edit_session(self, *, user_id: Optional[str], dashboard_slug: str) -> DashboardEditSession:
         """Register a process-local edit session locked to one dashboard slug."""
 
@@ -389,9 +379,6 @@ class ChatTaskManager:
         """Return a live report/dashboard edit session by its chat subagent id."""
 
         return get_artifact_edit_session(self._artifact_edit_sessions, subagent_id)
-
-    def _purge_expired_artifact_edit_sessions(self) -> None:
-        purge_expired_artifact_edit_sessions(self._artifact_edit_sessions)
 
     async def start_chat(
         self,

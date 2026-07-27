@@ -360,12 +360,6 @@ def builtin_agent_prompt_template(agent_id: str) -> dict[str, str | None]:
     }
 
 
-def can_view_agent(ctx: AppContext, record: dict[str, Any]) -> bool:
-    """Return whether ``ctx`` may see an enterprise agent record."""
-
-    return _can_access_agent(ctx, record, require_use=False)
-
-
 def can_use_agent(ctx: AppContext, record: dict[str, Any]) -> bool:
     """Return whether ``ctx`` may dispatch an enterprise agent record."""
 

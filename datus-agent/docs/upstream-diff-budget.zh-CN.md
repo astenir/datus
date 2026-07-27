@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-27
 
-说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复、第九轮测试迁移、第八轮模型契约归位、差异护栏、MCP/Report/Success Story service 归位、Dashboard service list/render 与 query SQL authorization adapter 归位、CLI connector/task owner、Chat task runtime、Chat request config/terminal sidecar runtime、应用 route projection/legacy gate、SubAgent 委派企业策略与 sidecar runtime、SessionManager scope/sidecar/async store/shared message parser、TokenUsage running snapshot persistence adapter、enterprise request-context policy、Enterprise auth loader policy、Visual Artifact access/locked-edit policy 与 locked-edit auto-validation adapter、DBFuncTool datasource-grant scope 与 SQL source 判定、AgenticNode permission/session/MCP runtime helper、Interactive node downstream adapter、Runtime prompt template resolver、Datasource-file project override adapter、Artifact filesystem ACL scope、Filesystem enterprise scope policy、Semantic query-time normalizer、Schema metadata sample-row normalizer、Embedding-store read selection adapter、Embedding-store storage-key adapter、Embedding-store backend repair adapter、OpenAI-compatible embedding request adapter、SSE response/error payload normalizer、Artifact HTML bundle helper、MCPManager config/runtime adapter、Model MCP connection options、Artifact creation ACL、Success Story migration CLI、CLIService/ChatService/deps/ChatTaskManager/Chat routes/feedback/Artifact tools/Database service/OpenAI/Claude stream/Dashboard renderer/Storage read path/KB cancellation 下游测试拆分、ChatService history/session、history-only SSE converter、stream cancellation 安全 wrapper 与 Success Story route 测试归位，以及 KB/Config/Report/Dashboard/Success Story/Models/Legacy Agent/Database/MCP/Table/CLI route 归位后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
+说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复、第九轮测试迁移、第八轮模型契约归位、差异护栏、MCP/Report/Success Story service 归位、Dashboard service list/render 与 query SQL authorization adapter 归位、CLI connector/task owner、Chat task runtime、Chat request config/terminal sidecar runtime、应用 route projection/legacy gate、Artifact edit-session 过渡兼容清理、SubAgent 委派企业策略与 sidecar runtime、SessionManager scope/sidecar/async store/shared message parser、TokenUsage running snapshot persistence adapter、enterprise request-context policy、Enterprise auth loader policy、Visual Artifact access/locked-edit policy 与 locked-edit auto-validation adapter、DBFuncTool datasource-grant scope 与 SQL source 判定、AgenticNode permission/session/MCP runtime helper、Interactive node downstream adapter、Runtime prompt template resolver、Datasource-file project override adapter、Artifact filesystem ACL scope、Filesystem enterprise scope policy、Semantic query-time normalizer、Schema metadata sample-row normalizer、Embedding-store read selection adapter、Embedding-store storage-key adapter、Embedding-store backend repair adapter、OpenAI-compatible embedding request adapter、SSE response/error payload normalizer、Artifact HTML bundle helper、MCPManager config/runtime adapter、Model MCP connection options、Artifact creation ACL、Success Story migration CLI、CLIService/ChatService/deps/ChatTaskManager/Chat routes/feedback/Artifact tools/Database service/OpenAI/Claude stream/Dashboard renderer/Storage read path/KB cancellation 下游测试拆分、ChatService history/session、history-only SSE converter、stream cancellation 安全 wrapper 与 Success Story route 测试归位，以及 KB/Config/Report/Dashboard/Success Story/Models/Legacy Agent/Database/MCP/Table/CLI route 归位后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
 
 对比口径：
 
@@ -19,7 +19,7 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-360 files changed, 79418 insertions(+), 3593 deletions(-)
+360 files changed, 79404 insertions(+), 3593 deletions(-)
 260 added
 96 modified
 4 deleted
@@ -39,6 +39,16 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-27：Artifact edit-session 过渡兼容清理
+
+分类：阶段 2 的 Chat/Artifact `core-hook` 死代码清理。处理方式：在 Report/Dashboard 已统一使用 `ArtifactEditSession` 后，删除 `ChatTaskManager` 未调用的 purge wrapper、旧 report-only capability marker/getter，以及 Chat route 对该旧接口的 fallback；同时删除 added Agent registry 中全仓无调用的 `can_view_agent()`，保留唯一实际使用的 `can_use_agent()` 授权入口。
+
+不变边界：Report/Dashboard edit session 仍由 added runtime helper 在 create/get 时统一清理过期记录，route 仍通过 capability marker 避免动态 mock 假阳性；Artifact owner/ACL、locked slug、request-scoped config 和 dispatch 顺序均未改变。没有新增、删除或改变 FastAPI route，因此 route security matrix 无需变化。上游 `v0.3.8` 自带且标为 legacy API 的 Visual Artifact helper 即使当前无静态调用也全部保留，避免制造新的上游删除冲突。
+
+上游 `datus/api/routes/chat_routes.py` 相对 `v0.3.8` 从 `+583/-54` 收敛为 `+578/-54`，冲突行由 637 降至 632，减少 5；`datus/api/services/chat_task_manager.py` 从 `+402/-77` 收敛为 `+389/-77`，冲突行由 479 降至 466，减少 13。modified 仍为 96（production/package 68、tests 24、config/meta 4），added 260、deleted 4、总差异文件 360 均不变；计入本记录前总差异为 `+79394/-3593`。
+
+验证：修改前后同一组 ChatTaskManager、Chat route、feedback、downstream policy、Agent route 回归均为 `241 passed`；聚焦 Ruff、全仓静态引用复核与 `git diff --check` 通过。
 
 ### 2026-07-27：应用 route projection 与 legacy gate 归位
 
