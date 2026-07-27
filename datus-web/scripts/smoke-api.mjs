@@ -1,6 +1,4 @@
 const DEFAULT_API_TARGET = "http://localhost:8000";
-const SENSITIVE_KEY = /password|passwd|pwd|secret|token|key|credential/i;
-
 function trimTrailingSlash(value) {
   return value.trim().replace(/\/+$/, "");
 }
@@ -54,42 +52,6 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function shouldIncludeDatasourceField(key, value) {
-  if (value == null) return false;
-  if (typeof value !== "string") return true;
-  return value.trim() !== "" || key === "password";
-}
-
-function datasourceProbe(datasource) {
-  if (!isRecord(datasource) || typeof datasource.type !== "string" || !datasource.type.trim()) {
-    throw new Error("Current datasource is missing a testable string type");
-  }
-
-  const probe = { type: datasource.type };
-  for (const [key, value] of Object.entries(datasource)) {
-    if (key === "type" || key === "extra" || !shouldIncludeDatasourceField(key, value)) continue;
-    probe[key] = value;
-  }
-
-  if (isRecord(datasource.extra)) {
-    for (const [key, value] of Object.entries(datasource.extra)) {
-      if (key in probe || !shouldIncludeDatasourceField(key, value)) continue;
-      probe[key] = value;
-    }
-  }
-
-  return probe;
-}
-
-function summarizePayload(value) {
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
-    if (SENSITIVE_KEY.test(key)) return [key, "<redacted>"];
-    if (Array.isArray(item)) return [key, `array(${item.length})`];
-    if (item === null) return [key, "null"];
-    return [key, typeof item];
-  }));
-}
-
 const baseUrl = apiTarget();
 const configPayload = await requestJson(baseUrl, "/api/v1/config/agent");
 const config = unwrapResult(configPayload);
@@ -103,23 +65,27 @@ if (!datasourceName) {
   throw new Error("Config does not include current_datasource");
 }
 
-const datasource = isRecord(config.datasources) ? config.datasources[datasourceName] : null;
-const probe = datasourceProbe(datasource);
-const testPayload = await requestJson(baseUrl, "/api/v1/config/datasources/test", {
+const testPayload = await requestJson(baseUrl, "/api/v1/config/datasources/test-saved", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(probe),
+  body: JSON.stringify({ name: datasourceName }),
 });
 const testResult = unwrapResult(testPayload);
 
 if (!isRecord(testResult) || typeof testResult.ok !== "boolean") {
-  throw new Error("/api/v1/config/datasources/test did not return data.ok boolean");
+  throw new Error("/api/v1/config/datasources/test-saved did not return data.ok boolean");
+}
+if (!testResult.ok) {
+  throw new Error(
+    typeof testResult.message === "string" && testResult.message
+      ? testResult.message
+      : `Saved datasource ${datasourceName} failed its connection test`,
+  );
 }
 
 console.log(JSON.stringify({
   baseUrl,
   currentDatasource: datasourceName,
-  datasourceTest: testResult.ok ? "ok" : "failed",
+  datasourceTest: "ok",
   message: typeof testResult.message === "string" ? testResult.message : "",
-  probeShape: summarizePayload(probe),
 }, null, 2));

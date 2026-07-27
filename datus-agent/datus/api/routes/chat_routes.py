@@ -395,15 +395,16 @@ async def stream_chat(
         for record in available_records:
             materialize_enterprise_agent(projection.config, record)
 
+    requested_credential_id = getattr(request, "model_credential_id", None)
     try:
         applied_credential = await apply_user_model_credential(
             store=getattr(enterprise_extensions, "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=request.model,
-            requested_credential_id=request.model_credential_id,
+            requested_credential_id=requested_credential_id,
         )
-        if applied_credential is not None and (request.model_credential_id or not request.model):
+        if applied_credential is not None and (requested_credential_id or not request.model):
             request.model = f"{applied_credential['provider']}/{applied_credential['model']}"
     except Exception as exc:
         logger.info("User model credential resolution failed: %s", exc)

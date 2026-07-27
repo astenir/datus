@@ -19,8 +19,8 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-360 files changed, 79404 insertions(+), 3593 deletions(-)
-260 added
+361 files changed, 81102 insertions(+), 3593 deletions(-)
+261 added
 96 modified
 4 deleted
 ```
@@ -34,11 +34,21 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 4 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 108 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。本轮按这套目录规则重新核对全量清单，并修正了根级 `CLAUDE.md` 及新增文件的历史分类误差。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 109 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。本轮按这套目录规则重新核对全量清单，并修正了根级 `CLAUDE.md` 及新增文件的历史分类误差。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-07-27：管理分页、Chat 输入兼容与合并前真实验收
+
+分类：新增 enterprise production/package 文件及上游 Chat `core-hook` 兼容修复。处理方式：新增共享 `datus_enterprise/api/admin_pagination.py`，让管理用户、角色、授权、会话、额度、密钥、产物和审计接口统一使用有界分页；Chat route 通过 `getattr()` 安全读取下游可选的 `model_credential_id`，保持上游基础 `StreamChatInput` 兼容；`datus-web` API smoke 改为按数据源名称调用保存配置测试接口，避免把 `/config/agent` 返回的脱敏密码重新提交为真实凭据。
+
+不变边界：管理分页不改变 RBAC、资源所有权或审计授权；Chat 凭据仍按认证用户所有权解析，缺少扩展字段时仅回到上游输入契约，不放宽模型策略、SQL policy、datasource grant、Artifact ACL 或 quota。保存数据源 smoke 只让后端使用服务端保存的配置，浏览器和脚本均不接触明文密码。没有新增、删除或改变 FastAPI path/method，route security matrix 无需变化。
+
+数字变化：新增 `datus_enterprise/api/admin_pagination.py` 使 added 从 260 增至 261、总差异文件从 360 增至 361；新增文件分类中的 production/package 从 108 增至 109。modified 保持 96（production/package 68、tests 24、config/meta 4），deleted 保持 4，因此既有上游文件冲突面没有扩大。
+
+验证：全仓 Python 验证为 `17312 passed, 21 skipped, 1 xfailed`；Admin 真实浏览器视觉 smoke 覆盖用户、角色、授权、会话、产物、额度、密钥、审计 8 个标签的桌面与移动视口，共 `16/16 passed`，无页面级横向溢出、console error 或 Admin API 4xx/5xx，并验证会话和审计翻页往返。真实企业链路验证覆盖缺失/非法/禁用 token，Alice 管理员与 Bob 受限角色上下文，Bob Admin 403 与 deny audit，Alice 用户/会话/审计分页，Alice/Bob datasource grant 与请求级配置投影、目录读取和 URI 脱敏；保存数据源连接 smoke 返回 `ok`。前端 ESLint、`71` 个 Vitest 文件的 `595` 项测试、生产构建和 `7` 项 Chromium 黑盒测试通过。
 
 ### 2026-07-27：Artifact edit-session 过渡兼容清理
 
