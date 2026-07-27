@@ -112,9 +112,7 @@ def test_load_and_check_allowlist(tmp_path: Path):
         deletions=0,
     )
 
-    errors = report_upstream_diff.check_allowlist(
-        report_upstream_diff.load_allowlist(allowlist_path), downstream, "v1"
-    )
+    errors = report_upstream_diff.check_allowlist(report_upstream_diff.load_allowlist(allowlist_path), downstream, "v1")
 
     assert errors == [
         "unregistered modified files:\n  unexpected.py",

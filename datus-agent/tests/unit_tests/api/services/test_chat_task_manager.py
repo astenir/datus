@@ -208,7 +208,6 @@ class TestApplyPermissionModeOverride:
         manager._apply_permission_mode_override(node, self._make_agent_config(), "auto")
         node.permission_manager.switch_profile.assert_called_once_with("auto", user_overrides=None)
 
-
     def test_switches_profile_with_user_overrides(self):
         """Non-empty _raw_permissions yields a built user_overrides config."""
         from datus.tools.permission.permission_config import PermissionConfig
@@ -431,7 +430,6 @@ class TestChatTaskManagerBehavior:
         assert isinstance(called_node, FakeNode)
         assert called_patterns == ["write_file", "edit_file", "delete_file"]
         assert task.status == "completed"
-
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("profile", ["auto", "dangerous"])
@@ -759,7 +757,6 @@ class TestChatTaskManagerBehavior:
 class TestStartChat:
     """Tests for start_chat — background task creation."""
 
-
     async def test_start_chat_creates_task(self, real_agent_config, mock_llm_create):
         """start_chat creates a ChatTask and returns it."""
         from datus.api.models.cli_models import StreamChatInput
@@ -861,7 +858,6 @@ class TestStartChat:
         assert result is True
         mock_node.interrupt_controller.interrupt.assert_called_once()
         await manager.shutdown()
-
 
     async def test_wait_all_tasks_with_running(self, real_agent_config, mock_llm_create):
         """wait_all_tasks waits for running tasks without cancelling."""

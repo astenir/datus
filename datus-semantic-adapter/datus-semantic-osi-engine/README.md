@@ -97,6 +97,6 @@ drives `list_metrics` / `query_metrics` through this adapter.
 ## Tests
 
 Unit tests run against a fake binding (no wheel needed):
-`ci/run-unit-tests.sh datus-semantic-osi-engine`. Integration tests
+`../.venv/bin/python -m pytest -q tests/unit --asyncio-mode=auto`. Integration tests
 (`-m integration`) need the real `datus-osi-engine` wheel and the `duckdb` CLI,
 and use the vendored `tests/fixtures/orders/` copy.

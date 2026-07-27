@@ -360,7 +360,6 @@ class TestStartNewDashboard:
         assert manifest["kind"] == "dashboard"
         assert manifest["created_at"].endswith("Z")
 
-
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: DashboardArtifactTools, project_root: Path):
         result = _start_new_dashboard(
             unbound_tools,

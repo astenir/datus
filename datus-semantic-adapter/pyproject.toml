@@ -5,3 +5,12 @@ members = ["datus-semantic-core", "datus-semantic-metricflow", "datus-semantic-o
 
 [tool.uv.sources]
 datus-metricflow = { path = "../metricflow", editable = true }
+
+[tool.pytest.ini_options]
+# The OSI Engine adapter is outside this lockable workspace and has its own
+# isolated unit-test invocation in CI.
+testpaths = [
+    "datus-semantic-core/tests",
+    "datus-semantic-metricflow/datus_semantic_metricflow/tests",
+    "datus-semantic-osi/tests",
+]

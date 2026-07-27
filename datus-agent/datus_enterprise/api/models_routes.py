@@ -60,9 +60,7 @@ async def list_models(svc: ServiceDep, request: Request) -> Result[ModelsData]:
     models = [
         ModelInfo(
             **model.model_dump(),
-            capabilities=(
-                ["embedding"] if model.provider == "custom" and model.id in embedding_targets else ["chat"]
-            ),
+            capabilities=(["embedding"] if model.provider == "custom" and model.id in embedding_targets else ["chat"]),
         )
         for model in upstream_result.data.models
     ]

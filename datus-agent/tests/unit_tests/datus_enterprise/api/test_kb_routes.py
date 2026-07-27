@@ -52,6 +52,7 @@ def test_create_app_registers_authoritative_kb_routes_once():
         assert len(routes) == 1
         assert routes[0].endpoint.__module__ == "datus_enterprise.api.kb_routes"
 
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

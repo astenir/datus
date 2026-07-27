@@ -174,7 +174,6 @@ class TestStartNewReport:
         assert manifest["kind"] == "report"
         assert manifest["created_at"].endswith("Z")
 
-
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: ReportArtifactTools, project_root: Path):
         # The slug is always pure ASCII; the manifest's display name preserves
         # the original (potentially Chinese) text verbatim.

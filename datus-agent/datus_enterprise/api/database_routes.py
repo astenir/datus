@@ -52,9 +52,7 @@ async def list_catalogs(
     except DatusException as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    selected_datasource = (
-        datasource_id or projection.config.current_datasource or svc.datasource.current_datasource
-    )
+    selected_datasource = datasource_id or projection.config.current_datasource or svc.datasource.current_datasource
     result = await upstream_database_routes.list_catalogs(
         svc,
         datasource_id=selected_datasource,

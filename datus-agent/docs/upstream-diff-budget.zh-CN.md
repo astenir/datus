@@ -19,7 +19,7 @@ git diff --name-status -M v0.3.8 HEAD:datus-agent
 当前结果：
 
 ```text
-361 files changed, 81102 insertions(+), 3593 deletions(-)
+361 files changed, 81086 insertions(+), 3593 deletions(-)
 261 added
 96 modified
 4 deleted

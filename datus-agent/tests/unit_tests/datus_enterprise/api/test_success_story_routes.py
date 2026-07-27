@@ -58,8 +58,7 @@ def test_create_app_registers_authoritative_success_story_route_once():
     routes = [
         route
         for route in app.routes
-        if getattr(route, "path", None) == "/api/v1/success-stories"
-        and "POST" in getattr(route, "methods", set())
+        if getattr(route, "path", None) == "/api/v1/success-stories" and "POST" in getattr(route, "methods", set())
     ]
 
     assert len(routes) == 1

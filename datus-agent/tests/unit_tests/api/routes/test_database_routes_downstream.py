@@ -52,8 +52,7 @@ def test_create_app_registers_authoritative_database_routes_once():
     list_routes = [
         route
         for route in app.routes
-        if getattr(route, "path", None) == "/api/v1/catalog/list"
-        and "GET" in getattr(route, "methods", set())
+        if getattr(route, "path", None) == "/api/v1/catalog/list" and "GET" in getattr(route, "methods", set())
     ]
 
     assert len(list_routes) == 1
