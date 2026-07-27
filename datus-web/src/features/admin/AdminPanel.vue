@@ -249,6 +249,14 @@ function requestAuditNextPage() {
   })
 }
 
+function requestAuditPageSizeChange(value: number) {
+  if (!audits.setPageSize(value)) return
+  emit("update:activeAudit", {
+    ...auditRouteFromForm(),
+    beforeId: null,
+  })
+}
+
 function requestAuditPreviousPage() {
   const previousBeforeId = audits.preparePreviousPage()
   emit("update:activeAudit", {
@@ -474,6 +482,7 @@ watch(
         :request-artifact-acl="requestArtifactAcl"
         :request-audit-reset="requestAuditReset"
         :request-audit-next-page="requestAuditNextPage"
+        :request-audit-page-size-change="requestAuditPageSizeChange"
         :request-audit-previous-page="requestAuditPreviousPage"
         :request-audit-search="requestAuditSearch"
         :request-grant-detail="requestGrantDetail"

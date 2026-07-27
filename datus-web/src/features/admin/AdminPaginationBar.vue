@@ -12,14 +12,17 @@ import {
 } from "@/components/ui/select"
 import { adminPageSizeOptions } from "@/composables/useAdminPagination"
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   page: number
   pageSize: number
+  pageSizeOptions?: readonly number[]
   hasPrevious: boolean
   hasMore: boolean
   itemCount: number
   loading: boolean
-}>()
+}>(), {
+  pageSizeOptions: () => adminPageSizeOptions,
+})
 
 const emit = defineEmits<{
   previous: []
@@ -29,7 +32,7 @@ const emit = defineEmits<{
 
 function updatePageSize(value: unknown): void {
   const pageSize = Number(value)
-  if (adminPageSizeOptions.includes(pageSize as (typeof adminPageSizeOptions)[number])) {
+  if (props.pageSizeOptions.includes(pageSize)) {
     emit("update:pageSize", pageSize)
   }
 }
@@ -57,7 +60,7 @@ function updatePageSize(value: unknown): void {
         <SelectContent>
           <SelectGroup>
             <SelectItem
-              v-for="option in adminPageSizeOptions"
+              v-for="option in props.pageSizeOptions"
               :key="option"
               :value="String(option)"
             >

@@ -4,8 +4,6 @@ import { watchDebounced } from "@vueuse/core"
 import { toast } from "vue-sonner"
 import {
   CalendarIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   DownloadIcon,
   EyeIcon,
   KeyRoundIcon,
@@ -1686,7 +1684,15 @@ function setPermittedActiveTab(value: unknown): void {
     >
       <Card class="flex min-h-0 min-w-0 flex-1 flex-col">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <CardTitle class="text-lg">审计</CardTitle>
+          <div class="flex items-center gap-2">
+            <CardTitle class="text-lg">审计</CardTitle>
+            <Badge
+              v-if="audits.hasActiveFilters.value"
+              variant="secondary"
+            >
+              {{ audits.activeFilterCount.value }} 个筛选条件
+            </Badge>
+          </div>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
             <Select v-model="audits.decisionFilterValue.value">
               <SelectTrigger
@@ -1701,26 +1707,6 @@ function setPermittedActiveTab(value: unknown): void {
                   <SelectItem value="__all__">全部决策</SelectItem>
                   <SelectItem value="allow">allow</SelectItem>
                   <SelectItem value="deny">deny</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Select v-model="audits.limitValue.value">
-              <SelectTrigger
-                class="w-full sm:w-28"
-                size="sm"
-                aria-label="审计每页数量"
-              >
-                <SelectValue placeholder="每页" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem
-                    v-for="limitOption in auditLogLimitOptions"
-                    :key="limitOption"
-                    :value="String(limitOption)"
-                  >
-                    {{ limitOption }} 条
-                  </SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -1914,45 +1900,21 @@ function setPermittedActiveTab(value: unknown): void {
               </TableBody>
             </Table>
           </div>
-
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span>第 {{ audits.currentPage.value }} 页，本页 {{ audits.total.value }} 条</span>
-              <Badge
-                v-if="audits.hasMore.value"
-                variant="outline"
-              >
-                还有更多
-              </Badge>
-              <Badge
-                v-if="audits.hasActiveFilters.value"
-                variant="secondary"
-              >
-                {{ audits.activeFilterCount.value }} 个筛选条件
-              </Badge>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.loading.value || !audits.hasPreviousPage.value"
-                @click="requestAuditPreviousPage"
-              >
-                <ChevronLeftIcon data-icon="inline-start" />
-                上一页
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.loading.value || !audits.hasNextPage.value"
-                @click="requestAuditNextPage"
-              >
-                下一页
-                <ChevronRightIcon data-icon="inline-end" />
-              </Button>
-            </div>
-          </div>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="audits.currentPage.value"
+            :page-size="audits.limit.value"
+            :page-size-options="auditLogLimitOptions"
+            :has-previous="audits.hasPreviousPage.value"
+            :has-more="audits.hasNextPage.value"
+            :item-count="audits.total.value"
+            :loading="audits.loading.value"
+            @previous="requestAuditPreviousPage"
+            @next="requestAuditNextPage"
+            @update:page-size="requestAuditPageSizeChange"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
   </Tabs>
