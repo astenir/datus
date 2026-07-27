@@ -13,6 +13,12 @@ from datus.api.constants import USER_ID_PATTERN
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -64,13 +70,17 @@ class AdminUsageSummary(BaseModel):
     updated_at: str | None = None
 
 
-@router.get("/admin/quotas", response_model=Result[list[AdminQuotaSummary]], summary="List Admin Quotas")
+@router.get("/admin/quotas", response_model=AdminListResult[AdminQuotaSummary], summary="List Admin Quotas")
 async def list_admin_quotas(
     ctx: AdminQuotasCtx,
     subject_type: Annotated[str | None, Query(description="Filter by subject type: global, user, or role.")] = None,
     subject_id: Annotated[str | None, Query(description="Filter by subject id.")] = None,
     resource: Annotated[str | None, Query(description="Filter by quota resource key.")] = None,
-) -> Result[list[AdminQuotaSummary]]:
+    enabled: Annotated[bool | None, Query(description="Filter by enabled state.")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search quota fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminQuotaSummary] | Result[Any]:
     """Return configured enterprise quota metadata."""
 
     invalid = _validate_optional_filters(subject_type=subject_type, subject_id=subject_id, resource=resource)
@@ -95,14 +105,28 @@ async def list_admin_quotas(
         await _audit_quota(ctx, operation="list_admin_quotas", decision="deny", reason="quota list failed")
         return _quota_error("QUOTA_LIST_FAILED", "Quota list failed.")
 
-    quotas = [_quota_summary_from_record(record) for record in records]
+    quotas = [
+        _quota_summary_from_record(record)
+        for record in records
+        if (enabled is None or bool(record.get("enabled", True)) is enabled)
+        and _quota_record_matches_search(record, search)
+    ]
+    page = paginate_admin_records(quotas, limit=limit, offset=offset)
     await _audit_quota(
         ctx,
         operation="list_admin_quotas",
         decision="allow",
-        metadata={"count": len(quotas), "subject_type": subject_type, "subject_id": subject_id, "resource": resource},
+        metadata={
+            "count": len(page.data or []),
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "resource": resource,
+            "enabled": enabled,
+            "offset": offset,
+            "has_more": page.pagination.has_more,
+        },
     )
-    return Result(success=True, data=quotas)
+    return page
 
 
 @router.put(
@@ -227,13 +251,16 @@ async def delete_admin_quota(
     return Result(success=True, data={"deleted": True})
 
 
-@router.get("/admin/usage", response_model=Result[list[AdminUsageSummary]], summary="List Admin Usage")
+@router.get("/admin/usage", response_model=AdminListResult[AdminUsageSummary], summary="List Admin Usage")
 async def list_admin_usage(
     ctx: AdminQuotasCtx,
     subject_type: Annotated[str | None, Query(description="Filter by subject type: global, user, or role.")] = None,
     subject_id: Annotated[str | None, Query(description="Filter by subject id.")] = None,
     resource: Annotated[str | None, Query(description="Filter by quota resource key.")] = None,
-) -> Result[list[AdminUsageSummary]]:
+    search: Annotated[str | None, Query(max_length=200, description="Search usage fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminUsageSummary] | Result[Any]:
     """Return enterprise usage summaries for quota administration."""
 
     invalid = _validate_optional_filters(subject_type=subject_type, subject_id=subject_id, resource=resource)
@@ -258,14 +285,32 @@ async def list_admin_usage(
         await _audit_quota(ctx, operation="list_admin_usage", decision="deny", reason="usage list failed")
         return _quota_error("USAGE_LIST_FAILED", "Usage list failed.")
 
-    usage = [_usage_summary_from_record(record) for record in records]
+    usage = [_usage_summary_from_record(record) for record in records if _quota_record_matches_search(record, search)]
+    page = paginate_admin_records(usage, limit=limit, offset=offset)
     await _audit_quota(
         ctx,
         operation="list_admin_usage",
         decision="allow",
-        metadata={"count": len(usage), "subject_type": subject_type, "subject_id": subject_id, "resource": resource},
+        metadata={
+            "count": len(page.data or []),
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "resource": resource,
+            "offset": offset,
+            "has_more": page.pagination.has_more,
+        },
     )
-    return Result(success=True, data=usage)
+    return page
+
+
+def _quota_record_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    return any(
+        query in str(record.get(field) or "").casefold()
+        for field in ("subject_type", "subject_id", "resource", "limit", "limit_value", "window_seconds", "used")
+    )
 
 
 def _normalize_quota_request(body: UpsertQuotaRequest) -> dict[str, Any] | str:

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue"
+import { watchDebounced } from "@vueuse/core"
 import { toast } from "vue-sonner"
 import {
   CalendarIcon,
@@ -23,7 +24,7 @@ import { parseDate } from "@internationalized/date"
 import type { DateValue } from "@internationalized/date"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Popover,
@@ -51,6 +52,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { usePermission } from "@/composables/usePermission"
 import AdminMobileRecord from "@/features/admin/AdminMobileRecord.vue"
+import AdminPaginationBar from "@/features/admin/AdminPaginationBar.vue"
 import type { AdminManagementTabProps } from "@/features/admin/types"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
@@ -97,6 +99,100 @@ const secretSearchKeyword = shallowRef("")
 const artifactTypeFilter = shallowRef<ArtifactTypeFilter>("all")
 const artifactSearchKeyword = shallowRef("")
 const auditDateRangeOpen = shallowRef(false)
+
+function enabledFilterValue(filter: EnabledStatusFilter): boolean | undefined {
+  if (filter === "enabled") return true
+  if (filter === "disabled") return false
+  return undefined
+}
+
+function normalizedSearch(value: string): string | undefined {
+  return value.trim() || undefined
+}
+
+watchDebounced(
+  [userStatusFilter, userSearchKeyword],
+  () => {
+    if (props.activeTab !== "users") return
+    props.users.applyListFilters({
+      enabled: enabledFilterValue(userStatusFilter.value),
+      search: normalizedSearch(userSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [roleTypeFilter, roleSearchKeyword],
+  () => {
+    if (props.activeTab !== "roles") return
+    props.roles.applyListFilters({
+      builtIn: roleTypeFilter.value === "all" ? undefined : roleTypeFilter.value === "built_in",
+      search: normalizedSearch(roleSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [grantEffectFilter, grantSearchKeyword],
+  () => {
+    if (props.activeTab !== "grants") return
+    props.overview.applyGrantListFilters({
+      effect: grantEffectFilter.value === "all" ? undefined : grantEffectFilter.value,
+      search: normalizedSearch(grantSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [sessionStateFilter, sessionSearchKeyword],
+  () => {
+    if (props.activeTab !== "sessions") return
+    props.overview.applySessionListFilters({
+      state: sessionStateFilter.value === "all" ? undefined : sessionStateFilter.value,
+      search: normalizedSearch(sessionSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [quotaStatusFilter, quotaSearchKeyword],
+  () => {
+    if (props.activeTab !== "quotas") return
+    props.overview.applyQuotaListFilters({
+      enabled: enabledFilterValue(quotaStatusFilter.value),
+      search: normalizedSearch(quotaSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [secretStatusFilter, secretSearchKeyword],
+  () => {
+    if (props.activeTab !== "secrets") return
+    props.overview.applySecretListFilters({
+      enabled: enabledFilterValue(secretStatusFilter.value),
+      search: normalizedSearch(secretSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
+
+watchDebounced(
+  [artifactTypeFilter, artifactSearchKeyword],
+  () => {
+    if (props.activeTab !== "artifacts") return
+    props.overview.applyArtifactListFilters({
+      artifactType: artifactTypeFilter.value === "all" ? undefined : artifactTypeFilter.value,
+      search: normalizedSearch(artifactSearchKeyword.value),
+    })
+  },
+  { debounce: 300 },
+)
 
 function parseAuditCalendarDate(value: string): DateValue | undefined {
   const datePart = value.trim().slice(0, 10)
@@ -589,6 +685,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="users.pagination.currentPage.value"
+            :page-size="users.pagination.pageSize.value"
+            :has-previous="users.pagination.hasPrevious.value"
+            :has-more="users.pagination.hasMore.value"
+            :item-count="users.users.value.length"
+            :loading="users.loading.value"
+            @previous="users.loadPreviousPage"
+            @next="users.loadNextPage"
+            @update:page-size="users.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -771,6 +880,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="roles.pagination.currentPage.value"
+            :page-size="roles.pagination.pageSize.value"
+            :has-previous="roles.pagination.hasPrevious.value"
+            :has-more="roles.pagination.hasMore.value"
+            :item-count="roles.roles.value.length"
+            :loading="roles.loading.value"
+            @previous="roles.loadPreviousPage"
+            @next="roles.loadNextPage"
+            @update:page-size="roles.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -918,6 +1040,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.grantPagination.currentPage.value"
+            :page-size="overview.grantPagination.pageSize.value"
+            :has-previous="overview.grantPagination.hasPrevious.value"
+            :has-more="overview.grantPagination.hasMore.value"
+            :item-count="overview.data.value.datasourceGrants.length"
+            :loading="overview.loading.value"
+            @previous="overview.grantPageActions.previous"
+            @next="overview.grantPageActions.next"
+            @update:page-size="overview.grantPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1075,6 +1210,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.sessionPagination.currentPage.value"
+            :page-size="overview.sessionPagination.pageSize.value"
+            :has-previous="overview.sessionPagination.hasPrevious.value"
+            :has-more="overview.sessionPagination.hasMore.value"
+            :item-count="overview.data.value.sessions.length"
+            :loading="overview.loading.value"
+            @previous="overview.sessionPageActions.previous"
+            @next="overview.sessionPageActions.next"
+            @update:page-size="overview.sessionPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1227,6 +1375,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.quotaPagination.currentPage.value"
+            :page-size="overview.quotaPagination.pageSize.value"
+            :has-previous="overview.quotaPagination.hasPrevious.value"
+            :has-more="overview.quotaPagination.hasMore.value"
+            :item-count="overview.data.value.quotas.length"
+            :loading="overview.loading.value"
+            @previous="overview.quotaPageActions.previous"
+            @next="overview.quotaPageActions.next"
+            @update:page-size="overview.quotaPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1374,6 +1535,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.secretPagination.currentPage.value"
+            :page-size="overview.secretPagination.pageSize.value"
+            :has-previous="overview.secretPagination.hasPrevious.value"
+            :has-more="overview.secretPagination.hasMore.value"
+            :item-count="overview.data.value.secrets.length"
+            :loading="overview.loading.value"
+            @previous="overview.secretPageActions.previous"
+            @next="overview.secretPageActions.next"
+            @update:page-size="overview.secretPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 
@@ -1489,6 +1663,19 @@ function setPermittedActiveTab(value: unknown): void {
             </TableBody>
           </Table>
         </CardContent>
+        <CardFooter>
+          <AdminPaginationBar
+            :page="overview.artifactPagination.currentPage.value"
+            :page-size="overview.artifactPagination.pageSize.value"
+            :has-previous="overview.artifactPagination.hasPrevious.value"
+            :has-more="overview.artifactPagination.hasMore.value"
+            :item-count="overview.data.value.artifacts.length"
+            :loading="overview.loading.value"
+            @previous="overview.artifactPageActions.previous"
+            @next="overview.artifactPageActions.next"
+            @update:page-size="overview.artifactPageActions.setPageSize"
+          />
+        </CardFooter>
       </Card>
     </TabsContent>
 

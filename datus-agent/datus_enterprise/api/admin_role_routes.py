@@ -6,7 +6,7 @@ import re
 from fnmatch import fnmatchcase
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from datus.api import deps
@@ -16,6 +16,12 @@ from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -68,8 +74,14 @@ class AdminUserRolesSummary(BaseModel):
     role_ids: list[str] = Field(default_factory=list)
 
 
-@router.get("/admin/roles", response_model=Result[list[AdminRoleSummary]], summary="List Admin Roles")
-async def list_admin_roles(ctx: AdminRolesCtx) -> Result[list[AdminRoleSummary]]:
+@router.get("/admin/roles", response_model=AdminListResult[AdminRoleSummary], summary="List Admin Roles")
+async def list_admin_roles(
+    ctx: AdminRolesCtx,
+    built_in: Annotated[bool | None, Query(description="Filter by built-in state.")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search role fields and permissions.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminRoleSummary] | Result[Any]:
     """Return sanitized enterprise role metadata for admin workflows."""
 
     try:
@@ -84,15 +96,34 @@ async def list_admin_roles(ctx: AdminRolesCtx) -> Result[list[AdminRoleSummary]]
         )
         return _role_error("ROLE_LIST_FAILED", "Role list failed.")
 
-    roles = [_summary_from_record(record) for record in records]
+    roles = [
+        _summary_from_record(record)
+        for record in records
+        if (built_in is None or bool(record.get("built_in", False)) is built_in)
+        and _role_matches_search(record, search)
+    ]
+    page = paginate_admin_records(roles, limit=limit, offset=offset)
     await _audit_role_mutation(
         ctx,
         role_id=None,
         operation="list_admin_roles",
         decision="allow",
-        metadata={"count": len(roles)},
+        metadata={
+            "count": len(page.data or []),
+            "built_in": built_in,
+            "offset": offset,
+            "has_more": page.pagination.has_more,
+        },
     )
-    return Result(success=True, data=roles)
+    return page
+
+
+def _role_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    values = [record.get("role_id"), record.get("name"), record.get("description"), *(record.get("permissions") or [])]
+    return any(query in str(value or "").casefold() for value in values)
 
 
 @router.get("/admin/roles/{role_id}", response_model=Result[AdminRoleSummary], summary="Get Admin Role")

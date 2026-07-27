@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -672,6 +673,21 @@ async def test_pg_user_store_upsert_list_get_and_disable(fake_pg):
 
 
 @pytest.mark.asyncio
+async def test_pg_user_store_pushes_search_and_pagination_into_query(fake_pg):
+    store = PgEnterpriseUserStore(dsn="postgresql://metadata")
+
+    await store.list_users_page(enabled=False, search="fin%_", limit=5, offset=10)
+
+    operation, query, args = fake_pg.queries[-1]
+    normalized = " ".join(query.split())
+    assert operation == "fetch"
+    assert "FROM enterprise_users u" in normalized
+    assert "EXISTS ( SELECT 1 FROM enterprise_user_roles ur" in normalized
+    assert "LIMIT $3 OFFSET $4" in normalized
+    assert args == (False, "%fin\\%\\_%", 5, 10)
+
+
+@pytest.mark.asyncio
 async def test_pg_role_store_permissions_bindings_and_delete_semantics(fake_pg):
     store = PgEnterpriseRoleStore(dsn="postgresql://metadata")
 
@@ -716,6 +732,46 @@ async def test_pg_datasource_grant_store_round_trips_scope_and_filters(fake_pg):
 
 
 @pytest.mark.asyncio
+async def test_pg_datasource_grant_store_pushes_search_and_pagination_into_query(fake_pg):
+    store = PgEnterpriseDatasourceGrantStore(dsn="postgresql://metadata")
+
+    await store.list_grants_page(
+        subject_type="role",
+        effect="allow",
+        search="fin%_",
+        limit=6,
+        offset=12,
+    )
+
+    operation, query, args = fake_pg.queries[-1]
+    normalized = " ".join(query.split())
+    assert operation == "fetch"
+    assert "subject_type = $1" in normalized
+    assert "effect = $2" in normalized
+    assert "scope_json::text ILIKE $3" in normalized
+    assert "ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC" in normalized
+    assert "LIMIT $4 OFFSET $5" in normalized
+    assert args == ("role", "allow", "%fin\\%\\_%", 6, 12)
+
+
+@pytest.mark.asyncio
+async def test_pg_datasource_grant_store_counts_only_requested_subjects():
+    store = PgEnterpriseDatasourceGrantStore.__new__(PgEnterpriseDatasourceGrantStore)
+    store._fetch = AsyncMock(return_value=[{"subject_id": "alice", "grant_count": 2}])
+
+    counts = await store.count_grants_by_subjects(
+        subject_type="user",
+        subject_ids=["alice", "bob"],
+    )
+
+    query, subject_type, subject_ids = store._fetch.await_args.args
+    assert "subject_id = ANY($2::text[])" in " ".join(query.split())
+    assert subject_type == "user"
+    assert subject_ids == ["alice", "bob"]
+    assert counts == {"alice": 2, "bob": 0}
+
+
+@pytest.mark.asyncio
 async def test_pg_session_owner_store_set_get_list_and_delete(fake_pg):
     store = PgSessionOwnerStore(dsn="postgresql://metadata")
 
@@ -726,12 +782,43 @@ async def test_pg_session_owner_store_set_get_list_and_delete(fake_pg):
     session = await store.get_session("enterprise", "s1")
     assert session is not None
     assert session["user_id"] == "alice"
+    assert {record["session_id"] for record in await store.get_sessions("enterprise", ["s2", "s1"])} == {
+        "s1",
+        "s2",
+    }
     assert await store.get_session("enterprise", "missing") is None
     assert await store.list_session_ids("enterprise", "alice") == ["s1", "s2"]
     assert [record["session_id"] for record in await store.list_sessions("enterprise", "alice")] == ["s1", "s2"]
 
     await store.delete_owner("enterprise", "s1")
     assert await store.get_owner("enterprise", "s1") is None
+
+
+@pytest.mark.asyncio
+async def test_pg_session_owner_store_pushes_user_filter_and_pagination_into_query(fake_pg):
+    store = PgSessionOwnerStore(dsn="postgresql://metadata")
+
+    await store.list_sessions_page("enterprise", "alice", limit=21, offset=42)
+
+    operation, query, args = fake_pg.queries[-1]
+    normalized = " ".join(query.split())
+    assert operation == "fetch"
+    assert "WHERE project_id = $1 AND user_id = $2" in normalized
+    assert "ORDER BY updated_at DESC, session_id ASC" in normalized
+    assert "LIMIT $3 OFFSET $4" in normalized
+    assert args == ("enterprise", "alice", 21, 42)
+
+
+@pytest.mark.asyncio
+async def test_pg_session_owner_store_batch_get_uses_one_parameterized_query(fake_pg):
+    store = PgSessionOwnerStore(dsn="postgresql://metadata")
+
+    await store.get_sessions("enterprise", ["s1", "s2"])
+
+    operation, query, args = fake_pg.queries[-1]
+    assert operation == "fetch"
+    assert "session_id = ANY($2::text[])" in " ".join(query.split())
+    assert args == ("enterprise", ["s1", "s2"])
 
 
 @pytest.mark.asyncio

@@ -478,7 +478,50 @@ def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: P
     assert event.resource_type == "artifact"
     assert event.resource_id is None
     assert event.decision == "allow"
-    assert event.metadata == {"operation": "list_admin_artifacts", "count": 3}
+    assert event.metadata == {
+        "operation": "list_admin_artifacts",
+        "count": 3,
+        "artifact_type": None,
+        "offset": 0,
+        "has_more": False,
+    }
+
+
+def test_admin_artifacts_type_filter_skips_unrequested_directory_scan(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    svc = _svc(tmp_path)
+
+    async def reject_dashboard_scan(**kwargs):
+        raise AssertionError(f"dashboard directory was scanned: {kwargs}")
+
+    svc.dashboard.list_dashboards = reject_dashboard_scan
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+
+    result = asyncio.run(
+        artifact_routes.list_admin_artifacts(
+            svc,
+            ctx,
+            artifact_type="report",
+            search=None,
+            limit=20,
+            offset=0,
+        )
+    )
+
+    assert result.success is True
+    assert [(item.artifact_type, item.manifest.slug) for item in result.data] == [("report", "sales")]
 
 
 def test_admin_artifacts_list_survives_audit_failure(monkeypatch, tmp_path: Path):

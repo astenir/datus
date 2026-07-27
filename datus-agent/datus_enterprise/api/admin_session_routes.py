@@ -14,6 +14,12 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -48,7 +54,7 @@ class AdminSessionDetail(AdminSessionSummary):
 
 @router.get(
     "/admin/sessions",
-    response_model=Result[list[AdminSessionSummary]],
+    response_model=AdminListResult[AdminSessionSummary],
     summary="List Admin Sessions",
     description="Admin-only session owner and runtime status list.",
     dependencies=[Depends(_require_admin_sessions)],
@@ -57,14 +63,51 @@ async def list_admin_sessions(
     svc: ServiceDep,
     ctx: AdminSessionsCtx,
     user_id: Annotated[str | None, Query(description="Optional owner user id filter")] = None,
-) -> Result[list[AdminSessionSummary]]:
+    state: Annotated[str | None, Query(pattern="^(running|stopped)$")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search session fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminSessionSummary] | Result[Any]:
     """List sessions from the owner index and merge in active in-process tasks."""
 
-    records, error = await _list_owner_records(svc, ctx, user_id=user_id)
+    task_snapshots = list(svc.task_manager.list_task_snapshots())
+    use_native_page = await _can_use_native_owner_page(
+        svc,
+        user_id=user_id,
+        state=state,
+        search=search,
+        task_snapshots=task_snapshots,
+    )
+    records, error = await _list_owner_records(
+        svc,
+        ctx,
+        user_id=user_id,
+        limit=limit + 1 if use_native_page else None,
+        offset=offset if use_native_page else None,
+    )
     if error is not None:
         return error
 
-    summaries = await _merge_owner_records_and_tasks(svc, records, user_id=user_id)
+    summaries = await _merge_owner_records_and_tasks(
+        svc,
+        records,
+        user_id=user_id,
+        task_snapshots=task_snapshots,
+        include_runtime_only=not use_native_page,
+    )
+    summaries = [
+        summary
+        for summary in summaries
+        if (state != "running" or summary.is_running)
+        and (state != "stopped" or not summary.is_running)
+        and _session_matches_search(summary, search)
+    ]
+    page = paginate_admin_records(
+        summaries,
+        limit=limit,
+        offset=offset,
+        records_are_offset=use_native_page,
+    )
     await audit_decision(
         ctx,
         AuditEvent(
@@ -72,10 +115,16 @@ async def list_admin_sessions(
             resource_type="session",
             resource_id=None,
             decision="allow",
-            metadata={"operation": "list_admin_sessions", "count": len(summaries), "user_id": user_id},
+            metadata={
+                "operation": "list_admin_sessions",
+                "count": len(page.data or []),
+                "user_id": user_id,
+                "offset": offset,
+                "has_more": page.pagination.has_more,
+            },
         ),
     )
-    return Result(success=True, data=summaries)
+    return page
 
 
 @router.get(
@@ -273,8 +322,29 @@ async def _list_owner_records(
     ctx: AppContext,
     *,
     user_id: str | None,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> tuple[list[dict[str, Any]], Result[Any] | None]:
     store = deps.get_enterprise_extensions().session_owner_store
+    list_sessions_page = getattr(store, "list_sessions_page", None)
+    if limit is not None and offset is not None and callable(list_sessions_page):
+        try:
+            return await list_sessions_page(
+                svc.project_id,
+                user_id,
+                limit=limit,
+                offset=offset,
+            ), None
+        except Exception:
+            await _audit_session_mutation(
+                ctx,
+                session_id=None,
+                operation="list_admin_sessions",
+                decision="deny",
+                reason="session list failed",
+            )
+            return [], _session_error("SESSION_LIST_FAILED", "Session list failed.")
+
     list_sessions = getattr(store, "list_sessions", None)
     if callable(list_sessions):
         try:
@@ -325,24 +395,84 @@ async def _list_owner_records(
     )
 
 
+async def _can_use_native_owner_page(
+    svc: ServiceDep,
+    *,
+    user_id: str | None,
+    state: str | None,
+    search: str | None,
+    task_snapshots: list[dict[str, Any]],
+) -> bool:
+    """Use a DB page only when runtime task merging cannot add extra rows."""
+
+    store = deps.get_enterprise_extensions().session_owner_store
+    if state is not None or (search or "").strip() or not callable(getattr(store, "list_sessions_page", None)):
+        return False
+    get_sessions = getattr(store, "get_sessions", None)
+    if task_snapshots and not callable(get_sessions):
+        return False
+
+    try:
+        session_ids = [str(task.get("session_id") or "") for task in task_snapshots]
+        if any(not session_id for session_id in session_ids):
+            return False
+        owner_records = (
+            {str(record.get("session_id") or ""): record for record in await get_sessions(svc.project_id, session_ids)}
+            if task_snapshots
+            else {}
+        )
+        for task in task_snapshots:
+            session_id = str(task.get("session_id") or "")
+            record = owner_records.get(session_id)
+            if record is None:
+                return False
+            if not record.get("updated_at"):
+                # A runtime task's created_at becomes the summary sort key when
+                # legacy/local owner metadata has no persisted timestamp.
+                return False
+            owner_user_id = _optional_str(record.get("user_id") or record.get("owner_user_id"))
+            if user_id is not None and owner_user_id != user_id:
+                task_owner = _optional_str(task.get("owner_user_id"))
+                if task_owner == user_id:
+                    return False
+    except Exception:
+        return False
+    return True
+
+
 async def _merge_owner_records_and_tasks(
     svc: ServiceDep,
     records: list[dict[str, Any]],
     *,
     user_id: str | None,
+    task_snapshots: list[dict[str, Any]] | None = None,
+    include_runtime_only: bool = True,
 ) -> list[AdminSessionSummary]:
     by_session_id: dict[str, AdminSessionSummary] = {}
-    task_snapshots = {str(item["session_id"]): item for item in svc.task_manager.list_task_snapshots()}
+    snapshots_by_session_id = (
+        {str(item["session_id"]): item for item in task_snapshots if item.get("session_id")}
+        if task_snapshots is not None
+        else {str(item["session_id"]): item for item in svc.task_manager.list_task_snapshots()}
+    )
 
     for record in records:
         session_id = str(record.get("session_id") or "")
         if not session_id:
             continue
         owner_user_id = _optional_str(record.get("user_id") or record.get("owner_user_id"))
-        task = task_snapshots.pop(session_id, None)
-        by_session_id[session_id] = await _summary_from_record_and_task(svc, record, task, owner_user_id)
+        task = snapshots_by_session_id.pop(session_id, None)
+        by_session_id[session_id] = await _summary_from_record_and_task(
+            svc,
+            record,
+            task,
+            owner_user_id,
+            check_disk=False,
+        )
 
-    for session_id, task in task_snapshots.items():
+    if not include_runtime_only:
+        return sorted(by_session_id.values(), key=lambda item: item.updated_at or item.created_at or "", reverse=True)
+
+    for session_id, task in snapshots_by_session_id.items():
         owner_user_id = _optional_str(task.get("owner_user_id"))
         if user_id is not None and owner_user_id != user_id:
             continue
@@ -351,6 +481,7 @@ async def _merge_owner_records_and_tasks(
             {"session_id": session_id, "user_id": owner_user_id},
             task,
             owner_user_id,
+            check_disk=False,
         )
 
     return sorted(by_session_id.values(), key=lambda item: item.updated_at or item.created_at or "", reverse=True)
@@ -417,10 +548,12 @@ async def _summary_from_record_and_task(
     record: dict[str, Any],
     task: dict[str, Any] | None,
     owner_user_id: str | None,
+    *,
+    check_disk: bool = True,
 ) -> AdminSessionSummary:
     session_id = str(record["session_id"])
     exists_on_disk = None
-    if owner_user_id is not None:
+    if check_disk and owner_user_id is not None:
         exists_on_disk = await _safe_session_exists(svc, session_id, owner_user_id)
 
     return AdminSessionSummary(
@@ -440,6 +573,19 @@ async def _safe_session_exists(svc: ServiceDep, session_id: str, owner_user_id: 
         return bool(await asyncio.to_thread(svc.chat.session_exists, session_id, user_id=owner_user_id))
     except Exception:
         return None
+
+
+def _session_matches_search(summary: AdminSessionSummary, search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    values = (
+        summary.session_id,
+        summary.owner_user_id,
+        summary.status,
+        summary.event_count,
+    )
+    return any(query in str(value or "").casefold() for value in values)
 
 
 async def _audit_session_mutation(

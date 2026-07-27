@@ -106,6 +106,27 @@ class InMemoryEnterpriseUserStore:
         ]
         return sorted(users, key=lambda record: str(record["user_id"]))
 
+    async def list_users_page(
+        self,
+        *,
+        enabled: bool | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        users = await self.list_users(enabled=enabled)
+        query = (search or "").strip().casefold()
+        if query:
+            users = [
+                record
+                for record in users
+                if any(
+                    query in str(record.get(field) or "").casefold()
+                    for field in ("user_id", "display_name", "email", "external_user_id", "department", "title")
+                )
+            ]
+        return users[offset : offset + limit]
+
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         record = self._users.get(user_id)
         return _copy_user_record(record) if record is not None else None
@@ -217,6 +238,52 @@ class SqliteEnterpriseUserStore:
 
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
+        return [_user_record_from_row(row) for row in rows]
+
+    async def list_users_page(
+        self,
+        *,
+        enabled: bool | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        filters: list[str] = []
+        params: list[Any] = []
+        if enabled is not None:
+            filters.append("u.enabled = ?")
+            params.append(1 if enabled else 0)
+        if search and search.strip():
+            pattern = f"%{search.strip().casefold()}%"
+            filters.append(
+                """(
+                    lower(u.user_id) LIKE ?
+                    OR lower(COALESCE(u.display_name, '')) LIKE ?
+                    OR lower(COALESCE(u.email, '')) LIKE ?
+                    OR lower(COALESCE(u.external_user_id, '')) LIKE ?
+                    OR lower(COALESCE(u.department, '')) LIKE ?
+                    OR lower(COALESCE(u.title, '')) LIKE ?
+                    OR EXISTS (
+                        SELECT 1 FROM enterprise_user_roles ur
+                        WHERE ur.user_id = u.user_id AND lower(ur.role_id) LIKE ?
+                    )
+                )"""
+            )
+            params.extend([pattern] * 7)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend((int(limit), int(offset)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT u.user_id, u.display_name, u.email, u.enabled, u.external_user_id, u.department, u.title,
+                       u.last_seen_at, u.created_at, u.updated_at
+                FROM enterprise_users u
+                {where_sql}
+                ORDER BY u.user_id ASC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params),
+            ).fetchall()
         return [_user_record_from_row(row) for row in rows]
 
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
@@ -691,6 +758,54 @@ class InMemoryEnterpriseDatasourceGrantStore:
                 str(record["datasource_key"]),
             ),
         )
+
+    async def list_grants_page(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+        effect: str | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        """Return a stable, filtered slice without copying every grant."""
+
+        records = sorted(
+            (
+                record
+                for record in self._grants.values()
+                if _grant_matches_filters(
+                    record,
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                    datasource_key=datasource_key,
+                )
+                and (effect is None or str(record.get("effect") or "allow") == effect)
+                and _grant_matches_search(record, search)
+            ),
+            key=lambda record: (
+                str(record["subject_type"]),
+                str(record["subject_id"]),
+                str(record["datasource_key"]),
+            ),
+        )
+        return [_copy_datasource_grant_record(record) for record in records[offset : offset + limit]]
+
+    async def count_grants_by_subjects(
+        self,
+        *,
+        subject_type: str,
+        subject_ids: list[str],
+    ) -> dict[str, int]:
+        subject_id_set = set(subject_ids)
+        counts = {subject_id: 0 for subject_id in subject_ids}
+        for record in self._grants.values():
+            subject_id = str(record.get("subject_id") or "")
+            if record.get("subject_type") == subject_type and subject_id in subject_id_set:
+                counts[subject_id] += 1
+        return counts
 
     async def get_grant(
         self,
@@ -1636,6 +1751,83 @@ class SqliteEnterpriseDatasourceGrantStore:
             rows = conn.execute(query, tuple(params)).fetchall()
         return [_datasource_grant_record_from_row(row) for row in rows]
 
+    async def list_grants_page(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+        effect: str | None = None,
+        search: str | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        params: list[Any] = []
+        for column, value in (
+            ("subject_type", subject_type),
+            ("subject_id", subject_id),
+            ("datasource_key", datasource_key),
+            ("effect", effect),
+        ):
+            if value is not None:
+                where.append(f"{column} = ?")
+                params.append(value)
+        if search and search.strip():
+            pattern = _sqlite_like_contains_pattern(search.strip())
+            where.append(
+                """(
+                    lower(subject_type) LIKE ? ESCAPE '\\'
+                    OR lower(subject_id) LIKE ? ESCAPE '\\'
+                    OR lower(datasource_key) LIKE ? ESCAPE '\\'
+                    OR lower(effect) LIKE ? ESCAPE '\\'
+                    OR lower(scope_json) LIKE ? ESCAPE '\\'
+                    OR lower(COALESCE(json_extract(scope_json, '$.catalogs'), '')) LIKE ? ESCAPE '\\'
+                    OR lower(COALESCE(json_extract(scope_json, '$.databases'), '')) LIKE ? ESCAPE '\\'
+                    OR lower(COALESCE(json_extract(scope_json, '$.schemas'), '')) LIKE ? ESCAPE '\\'
+                    OR lower(COALESCE(json_extract(scope_json, '$.tables'), '')) LIKE ? ESCAPE '\\'
+                )"""
+            )
+            params.extend([pattern] * 9)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        params.extend((int(limit), int(offset)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+                FROM enterprise_datasource_grants
+                {where_sql}
+                ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_datasource_grant_record_from_row(row) for row in rows]
+
+    async def count_grants_by_subjects(
+        self,
+        *,
+        subject_type: str,
+        subject_ids: list[str],
+    ) -> dict[str, int]:
+        counts = {subject_id: 0 for subject_id in subject_ids}
+        if not subject_ids:
+            return counts
+        placeholders = ", ".join("?" for _ in subject_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT subject_id, COUNT(*)
+                FROM enterprise_datasource_grants
+                WHERE subject_type = ? AND subject_id IN ({placeholders})
+                GROUP BY subject_id
+                """,
+                (subject_type, *subject_ids),
+            ).fetchall()
+        for row in rows:
+            counts[str(row[0])] = int(row[1])
+        return counts
+
     async def get_grant(
         self,
         *,
@@ -1762,6 +1954,10 @@ class InMemorySessionOwnerStore:
             "updated_at": None,
         }
 
+    async def get_sessions(self, project_id: str, session_ids: list[str]) -> list[dict[str, Any]]:
+        records = [await self.get_session(project_id, session_id) for session_id in session_ids]
+        return [record for record in records if record is not None]
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         self._owners.pop((project_id, session_id), None)
 
@@ -1787,6 +1983,17 @@ class InMemorySessionOwnerStore:
             if stored_project == project_id and (user_id is None or owner == user_id)
         ]
         return sorted(records, key=lambda record: (str(record["user_id"]), str(record["session_id"])))
+
+    async def list_sessions_page(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        records = await self.list_sessions(project_id, user_id)
+        return records[offset : offset + limit]
 
 
 @_offload_sqlite_async_methods
@@ -1849,6 +2056,30 @@ class SqliteSessionOwnerStore:
             "updated_at": row[4],
         }
 
+    async def get_sessions(self, project_id: str, session_ids: list[str]) -> list[dict[str, Any]]:
+        if not session_ids:
+            return []
+        placeholders = ", ".join("?" for _ in session_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT project_id, session_id, user_id, created_at, updated_at
+                FROM session_owners
+                WHERE project_id = ? AND session_id IN ({placeholders})
+                """,
+                (project_id, *session_ids),
+            ).fetchall()
+        return [
+            {
+                "project_id": str(row[0]),
+                "session_id": str(row[1]),
+                "user_id": str(row[2]),
+                "created_at": row[3],
+                "updated_at": row[4],
+            }
+            for row in rows
+        ]
+
     async def delete_owner(self, project_id: str, session_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1893,6 +2124,42 @@ class SqliteSessionOwnerStore:
 
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "project_id": str(row[0]),
+                "session_id": str(row[1]),
+                "user_id": str(row[2]),
+                "created_at": row[3],
+                "updated_at": row[4],
+            }
+            for row in rows
+        ]
+
+    async def list_sessions_page(
+        self,
+        project_id: str,
+        user_id: str | None = None,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [project_id]
+        where = "project_id = ?"
+        if user_id is not None:
+            where += " AND user_id = ?"
+            params.append(user_id)
+        params.extend((int(limit), int(offset)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT project_id, session_id, user_id, created_at, updated_at
+                FROM session_owners
+                WHERE {where}
+                ORDER BY updated_at DESC, session_id ASC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params),
+            ).fetchall()
         return [
             {
                 "project_id": str(row[0]),
@@ -2443,6 +2710,25 @@ def _grant_matches_filters(
         and (subject_id is None or record["subject_id"] == subject_id)
         and (datasource_key is None or record["datasource_key"] == datasource_key)
     )
+
+
+def _grant_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    values = (
+        record.get("subject_type"),
+        record.get("subject_id"),
+        record.get("datasource_key"),
+        record.get("effect"),
+        json.dumps(record.get("scope") or {}, ensure_ascii=False, sort_keys=True),
+    )
+    return any(query in str(value or "").casefold() for value in values)
+
+
+def _sqlite_like_contains_pattern(value: str) -> str:
+    escaped = value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _normalized_grant_effect(effect: Any) -> str:

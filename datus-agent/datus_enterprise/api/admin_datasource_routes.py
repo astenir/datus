@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from inspect import isawaitable
 from typing import Annotated, Any
 
@@ -18,6 +19,12 @@ from datus.api.models.base_models import Result
 from datus.api.models.database_models import DatabasesData, ListDatabasesData, ListDatabasesInput
 from datus.configuration.project_config import ProjectOverride, load_project_override, save_project_override
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -198,7 +205,7 @@ async def list_admin_datasource_catalog(
 
 @router.get(
     "/admin/datasource-grants",
-    response_model=Result[list[AdminDatasourceGrantSummary]],
+    response_model=AdminListResult[AdminDatasourceGrantSummary],
     summary="List Datasource Grants",
 )
 async def list_admin_datasource_grants(
@@ -206,7 +213,11 @@ async def list_admin_datasource_grants(
     subject_type: Annotated[str | None, Query(description="Filter by subject type: user or role.")] = None,
     subject_id: Annotated[str | None, Query(description="Filter by subject id.")] = None,
     datasource_key: Annotated[str | None, Query(description="Filter by datasource key.")] = None,
-) -> Result[list[AdminDatasourceGrantSummary]]:
+    effect: Annotated[str | None, Query(pattern="^(allow|deny)$")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search grant fields and scope.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminDatasourceGrantSummary] | Result[Any]:
     """Return role/user datasource grants for admin workflows."""
 
     invalid = _validate_optional_grant_filters(
@@ -225,11 +236,25 @@ async def list_admin_datasource_grants(
         return _datasource_error("DATASOURCE_GRANT_FILTER_INVALID", invalid)
 
     try:
-        records = await deps.get_enterprise_extensions().datasource_grant_store.list_grants(
-            subject_type=subject_type,
-            subject_id=subject_id,
-            datasource_key=datasource_key,
-        )
+        store = deps.get_enterprise_extensions().datasource_grant_store
+        list_page = getattr(store, "list_grants_page", None)
+        records_are_offset = callable(list_page)
+        if records_are_offset:
+            records = await list_page(
+                subject_type=subject_type,
+                subject_id=subject_id,
+                datasource_key=datasource_key,
+                effect=effect,
+                search=search,
+                limit=limit + 1,
+                offset=offset,
+            )
+        else:
+            records = await store.list_grants(
+                subject_type=subject_type,
+                subject_id=subject_id,
+                datasource_key=datasource_key,
+            )
     except Exception:
         await _audit_datasource_grant(
             ctx,
@@ -239,19 +264,49 @@ async def list_admin_datasource_grants(
         )
         return _datasource_error("DATASOURCE_GRANT_LIST_FAILED", "Datasource grant list failed.")
 
-    grants = [_grant_summary_from_record(record) for record in records]
+    grants = [
+        _grant_summary_from_record(record)
+        for record in records
+        if records_are_offset
+        or (
+            (effect is None or str(record.get("effect") or "allow") == effect) and _grant_matches_search(record, search)
+        )
+    ]
+    page = paginate_admin_records(
+        grants,
+        limit=limit,
+        offset=offset,
+        records_are_offset=records_are_offset,
+    )
     await _audit_datasource_grant(
         ctx,
         operation="list_admin_datasource_grants",
         decision="allow",
         metadata={
-            "count": len(grants),
+            "count": len(page.data or []),
             "subject_type": subject_type,
             "subject_id": subject_id,
             "datasource_key": datasource_key,
+            "effect": effect,
+            "offset": offset,
+            "has_more": page.pagination.has_more,
         },
     )
-    return Result(success=True, data=grants)
+    return page
+
+
+def _grant_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    values = (
+        record.get("subject_type"),
+        record.get("subject_id"),
+        record.get("datasource_key"),
+        record.get("effect"),
+        json.dumps(record.get("scope") or {}, ensure_ascii=False, sort_keys=True),
+    )
+    return any(query in str(value or "").casefold() for value in values)
 
 
 @router.get(

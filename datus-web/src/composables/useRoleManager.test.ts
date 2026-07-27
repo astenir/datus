@@ -46,7 +46,7 @@ describe("useRoleManager", () => {
 
     await manager.loadRoles();
 
-    expect(listRoles).toHaveBeenCalledWith();
+    expect(listRoles).toHaveBeenCalledWith({ limit: 20, offset: 0 });
     expect(manager.roles.value).toEqual([role]);
     expect(manager.total.value).toBe(1);
   });

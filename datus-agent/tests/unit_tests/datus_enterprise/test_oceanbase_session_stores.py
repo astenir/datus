@@ -171,6 +171,56 @@ async def test_ob_user_store_persists_chat_preference(monkeypatch):
     assert execute.await_args.args[1] == ("alice", "sales_sql")
 
 
+@pytest.mark.asyncio
+async def test_ob_datasource_grant_store_pushes_search_and_pagination_into_query():
+    store = ObEnterpriseDatasourceGrantStore.__new__(ObEnterpriseDatasourceGrantStore)
+    store._fetchall = AsyncMock(return_value=[])
+
+    await store.list_grants_page(
+        datasource_key="finance",
+        effect="deny",
+        search="ops%_",
+        limit=11,
+        offset=22,
+    )
+
+    query, params = store._fetchall.await_args.args
+    normalized = " ".join(query.split())
+    assert "datasource_key = %s" in normalized
+    assert "effect = %s" in normalized
+    assert "lower(scope_json) LIKE %s" in normalized
+    assert "ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC" in normalized
+    assert "LIMIT %s OFFSET %s" in normalized
+    assert params == (
+        "finance",
+        "deny",
+        "%ops\\%\\_%",
+        "%ops\\%\\_%",
+        "%ops\\%\\_%",
+        "%ops\\%\\_%",
+        "%ops\\%\\_%",
+        11,
+        22,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ob_datasource_grant_store_counts_only_requested_subjects():
+    store = ObEnterpriseDatasourceGrantStore.__new__(ObEnterpriseDatasourceGrantStore)
+    store._fetchall = AsyncMock(return_value=[{"subject_id": "alice", "grant_count": 2}])
+
+    counts = await store.count_grants_by_subjects(
+        subject_type="user",
+        subject_ids=["alice", "bob"],
+    )
+
+    query, params = store._fetchall.await_args.args
+    normalized = " ".join(query.split())
+    assert "subject_id IN (%s, %s)" in normalized
+    assert params == ("user", "alice", "bob")
+    assert counts == {"alice": 2, "bob": 0}
+
+
 def test_ob_user_model_credential_store_adds_base_url_column_for_existing_table():
     cursor = FakeObCursor(existing_base_url=False)
     store = ObUserModelCredentialStore.__new__(ObUserModelCredentialStore)
@@ -221,6 +271,33 @@ async def test_ob_session_owner_store_returns_full_record():
     assert session["user_id"] == "alice"
     assert session["created_at"] == "2026-07-01T08:00:00Z"
     assert store._fetchone.await_args.args[1] == ("enterprise", "s1")
+
+
+@pytest.mark.asyncio
+async def test_ob_session_owner_store_pushes_user_filter_and_pagination_into_query():
+    store = ObSessionOwnerStore.__new__(ObSessionOwnerStore)
+    store._fetchall = AsyncMock(return_value=[])
+
+    await store.list_sessions_page("enterprise", "alice", limit=21, offset=42)
+
+    query, params = store._fetchall.await_args.args
+    normalized = " ".join(query.split())
+    assert "WHERE project_id = %s AND user_id = %s" in normalized
+    assert "ORDER BY updated_at DESC, session_id ASC" in normalized
+    assert "LIMIT %s OFFSET %s" in normalized
+    assert params == ("enterprise", "alice", 21, 42)
+
+
+@pytest.mark.asyncio
+async def test_ob_session_owner_store_batch_get_uses_parameterized_in_query():
+    store = ObSessionOwnerStore.__new__(ObSessionOwnerStore)
+    store._fetchall = AsyncMock(return_value=[])
+
+    await store.get_sessions("enterprise", ["s1", "s2"])
+
+    query, params = store._fetchall.await_args.args
+    assert "session_id IN (%s, %s)" in " ".join(query.split())
+    assert params == ("enterprise", "s1", "s2")
 
 
 def test_oceanbase_pool_close_closes_idle_and_borrowed_connections():

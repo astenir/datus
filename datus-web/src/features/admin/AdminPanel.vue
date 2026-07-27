@@ -74,6 +74,7 @@ const usageByKey = computed(() => {
   }
   return map
 })
+const loadedTabs = new Set<AdminViewTab>()
 
 async function ensurePermissionsLoaded() {
   if (!permission.isLoaded.value) {
@@ -100,50 +101,51 @@ function redirectUnauthorizedActiveTab() {
   }
 }
 
-async function loadAll() {
-  await ensurePermissionsLoaded()
-  redirectUnauthorizedActiveTab()
-  if (canViewUsers.value) void users.loadUsers()
-  if (canViewRoles.value) void roles.loadRoles()
-  if (canViewAudit.value) audits.loadActionTypes()
-  void overview.loadOverview()
-}
+function loadActiveTab(force = false) {
+  const tab = props.activeTab
+  if (!canViewAdminTab(tab) || (!force && loadedTabs.has(tab))) return
+  loadedTabs.add(tab)
 
-function refreshActiveTab() {
-  switch (props.activeTab) {
+  switch (tab) {
     case "users":
-      if (!canViewUsers.value) return
       void users.loadUsers()
       return
     case "roles":
-      if (!canViewRoles.value) return
       void roles.loadRoles()
       return
     case "grants":
-      if (!canViewDatasourceGrants.value) return
       void overview.loadDatasourceGrants()
       return
     case "sessions":
-      if (!canViewSessions.value) return
       void overview.loadSessions()
       return
     case "quotas":
-      if (!canViewQuotas.value) return
       void overview.loadQuotasAndUsage()
       return
     case "secrets":
-      if (!canViewSecrets.value) return
       void overview.loadSecrets()
       return
     case "artifacts":
-      if (!canViewArtifacts.value) return
       void overview.loadArtifacts()
       return
     case "audit":
-      if (!canViewAudit.value) return
       audits.loadActionTypes()
-      void audits.loadLogs()
   }
+}
+
+async function initializeActiveTab() {
+  await ensurePermissionsLoaded()
+  redirectUnauthorizedActiveTab()
+  loadActiveTab()
+}
+
+function refreshActiveTab() {
+  if (props.activeTab === "audit" && canViewAudit.value) {
+    audits.loadActionTypes()
+    void audits.loadLogs()
+    return
+  }
+  loadActiveTab(true)
 }
 
 function grantKey(subjectType: string, subjectId: string, datasourceKey: string) {
@@ -313,7 +315,7 @@ async function saveArtifactAclAndCloseRoute() {
 }
 
 onMounted(() => {
-  void loadAll()
+  void initializeActiveTab()
 })
 
 watch(
@@ -331,6 +333,7 @@ watch(
   () => {
     if (!permission.isLoaded.value) return
     redirectUnauthorizedActiveTab()
+    loadActiveTab()
   },
 )
 
@@ -433,9 +436,9 @@ watch(
 )
 
 watch(
-  () => [props.activeTab, props.activeAudit] as const,
-  ([tab, audit]) => {
-    if (tab !== "audit" || !canViewAudit.value) return
+  () => [props.activeTab, props.activeAudit, permission.isLoaded.value, canViewAudit.value] as const,
+  ([tab, audit, permissionsLoaded, canViewAuditTab]) => {
+    if (tab !== "audit" || !permissionsLoaded || !canViewAuditTab) return
 
     const changed = audits.applyRouteFilters(audit ?? {
       userId: null,

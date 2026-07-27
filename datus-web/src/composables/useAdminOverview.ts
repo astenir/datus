@@ -9,6 +9,7 @@ import {
   adminSessionApi,
 } from "@/lib/api";
 import { usePermission } from "@/composables/usePermission";
+import { useAdminPagination } from "@/composables/useAdminPagination";
 import { quotaResourceOptionFor } from "@/lib/quota-options";
 import {
   buildDatasourceTreeOptions,
@@ -184,6 +185,22 @@ export function useAdminOverview() {
   let secretDetailRequestId = 0;
   let artifactAclRequestId = 0;
   let sessionDetailRequestId = 0;
+  let grantListRequestId = 0;
+  let quotaListRequestId = 0;
+  let sessionListRequestId = 0;
+  let secretListRequestId = 0;
+  let artifactListRequestId = 0;
+
+  const grantPagination = useAdminPagination();
+  const quotaPagination = useAdminPagination();
+  const sessionPagination = useAdminPagination();
+  const secretPagination = useAdminPagination();
+  const artifactPagination = useAdminPagination();
+  let grantListFilters: { effect?: "allow" | "deny"; search?: string } = {};
+  let quotaListFilters: { enabled?: boolean; search?: string } = {};
+  let sessionListFilters: { state?: "running" | "stopped"; search?: string } = {};
+  let secretListFilters: { enabled?: boolean; search?: string } = {};
+  let artifactListFilters: { artifactType?: AdminArtifact["artifact_type"]; search?: string } = {};
 
   const data = ref<AdminOverviewData>(cloneEmptyOverview());
 
@@ -300,22 +317,22 @@ export function useAdminOverview() {
         artifactResult,
       ] = await Promise.all([
         canManageDatasources.value ? adminDatasourceApi.listDatasources() : Promise.resolve(null),
-        canManageDatasources.value ? adminDatasourceApi.listGrants() : Promise.resolve(null),
-        canManageQuotas.value ? adminQuotaApi.listQuotas() : Promise.resolve(null),
-        canManageQuotas.value ? adminQuotaApi.listUsage() : Promise.resolve(null),
-        canManageSecrets.value ? adminSecretApi.listSecrets() : Promise.resolve(null),
-        canManageSessions.value ? adminSessionApi.listSessions() : Promise.resolve(null),
-        canManageArtifacts.value ? adminArtifactApi.listArtifacts() : Promise.resolve(null),
+        canManageDatasources.value ? adminDatasourceApi.listGrants({ limit: grantPagination.pageSize.value, offset: 0 }) : Promise.resolve(null),
+        canManageQuotas.value ? adminQuotaApi.listQuotas({ limit: quotaPagination.pageSize.value, offset: 0 }) : Promise.resolve(null),
+        canManageQuotas.value ? adminQuotaApi.listUsage({ limit: 100, offset: 0 }) : Promise.resolve(null),
+        canManageSecrets.value ? adminSecretApi.listSecrets({ limit: secretPagination.pageSize.value, offset: 0 }) : Promise.resolve(null),
+        canManageSessions.value ? adminSessionApi.listSessions({ limit: sessionPagination.pageSize.value, offset: 0 }) : Promise.resolve(null),
+        canManageArtifacts.value ? adminArtifactApi.listArtifacts({ limit: artifactPagination.pageSize.value, offset: 0 }) : Promise.resolve(null),
       ]);
 
       data.value = {
         datasources: datasourceResult?.data ?? [],
-        datasourceGrants: grantResult?.data ?? [],
-        quotas: quotaResult?.data ?? [],
+        datasourceGrants: grantPagination.applyResponse(grantResult),
+        quotas: quotaPagination.applyResponse(quotaResult),
         usage: usageResult?.data ?? [],
-        secrets: secretResult?.data ?? [],
-        sessions: sessionResult?.data ?? [],
-        artifacts: artifactResult?.data ?? [],
+        secrets: secretPagination.applyResponse(secretResult),
+        sessions: sessionPagination.applyResponse(sessionResult),
+        artifacts: artifactPagination.applyResponse(artifactResult),
       };
     } catch (err) {
       console.error("加载管理概览失败:", err);
@@ -327,6 +344,8 @@ export function useAdminOverview() {
   }
 
   async function loadDatasourceGrants() {
+    const requestId = grantListRequestId + 1;
+    grantListRequestId = requestId;
     loading.value = true;
     try {
       await fetchPermissionsIfNeeded();
@@ -340,22 +359,30 @@ export function useAdminOverview() {
       }
       const [datasourceResult, grantResult] = await Promise.all([
         adminDatasourceApi.listDatasources(),
-        adminDatasourceApi.listGrants(),
+        adminDatasourceApi.listGrants({
+          ...grantListFilters,
+          limit: grantPagination.pageSize.value,
+          offset: grantPagination.offset.value,
+        }),
       ]);
+      if (requestId !== grantListRequestId) return;
       data.value = {
         ...data.value,
         datasources: datasourceResult.data ?? [],
-        datasourceGrants: grantResult.data ?? [],
+        datasourceGrants: grantPagination.applyResponse(grantResult),
       };
     } catch (err) {
+      if (requestId !== grantListRequestId) return;
       console.error("加载数据授权失败:", err);
       toast.error("加载数据授权失败");
     } finally {
-      loading.value = false;
+      if (requestId === grantListRequestId) loading.value = false;
     }
   }
 
   async function loadQuotasAndUsage() {
+    const requestId = quotaListRequestId + 1;
+    quotaListRequestId = requestId;
     loading.value = true;
     try {
       await fetchPermissionsIfNeeded();
@@ -368,23 +395,31 @@ export function useAdminOverview() {
         return;
       }
       const [quotaResult, usageResult] = await Promise.all([
-        adminQuotaApi.listQuotas(),
-        adminQuotaApi.listUsage(),
+        adminQuotaApi.listQuotas({
+          ...quotaListFilters,
+          limit: quotaPagination.pageSize.value,
+          offset: quotaPagination.offset.value,
+        }),
+        adminQuotaApi.listUsage({ search: quotaListFilters.search, limit: 100, offset: 0 }),
       ]);
+      if (requestId !== quotaListRequestId) return;
       data.value = {
         ...data.value,
-        quotas: quotaResult.data ?? [],
+        quotas: quotaPagination.applyResponse(quotaResult),
         usage: usageResult.data ?? [],
       };
     } catch (err) {
+      if (requestId !== quotaListRequestId) return;
       console.error("加载额度与用量失败:", err);
       toast.error("加载额度与用量失败");
     } finally {
-      loading.value = false;
+      if (requestId === quotaListRequestId) loading.value = false;
     }
   }
 
   async function loadSessions() {
+    const requestId = sessionListRequestId + 1;
+    sessionListRequestId = requestId;
     loading.value = true;
     try {
       await fetchPermissionsIfNeeded();
@@ -395,20 +430,28 @@ export function useAdminOverview() {
         };
         return;
       }
-      const result = await adminSessionApi.listSessions();
+      const result = await adminSessionApi.listSessions({
+        ...sessionListFilters,
+        limit: sessionPagination.pageSize.value,
+        offset: sessionPagination.offset.value,
+      });
+      if (requestId !== sessionListRequestId) return;
       data.value = {
         ...data.value,
-        sessions: result.data ?? [],
+        sessions: sessionPagination.applyResponse(result),
       };
     } catch (err) {
+      if (requestId !== sessionListRequestId) return;
       console.error("加载会话失败:", err);
       toast.error("加载会话失败");
     } finally {
-      loading.value = false;
+      if (requestId === sessionListRequestId) loading.value = false;
     }
   }
 
   async function loadSecrets() {
+    const requestId = secretListRequestId + 1;
+    secretListRequestId = requestId;
     loading.value = true;
     try {
       await fetchPermissionsIfNeeded();
@@ -419,20 +462,28 @@ export function useAdminOverview() {
         };
         return;
       }
-      const result = await adminSecretApi.listSecrets();
+      const result = await adminSecretApi.listSecrets({
+        ...secretListFilters,
+        limit: secretPagination.pageSize.value,
+        offset: secretPagination.offset.value,
+      });
+      if (requestId !== secretListRequestId) return;
       data.value = {
         ...data.value,
-        secrets: result.data ?? [],
+        secrets: secretPagination.applyResponse(result),
       };
     } catch (err) {
+      if (requestId !== secretListRequestId) return;
       console.error("加载密钥引用失败:", err);
       toast.error("加载密钥引用失败");
     } finally {
-      loading.value = false;
+      if (requestId === secretListRequestId) loading.value = false;
     }
   }
 
   async function loadArtifacts() {
+    const requestId = artifactListRequestId + 1;
+    artifactListRequestId = requestId;
     loading.value = true;
     try {
       await fetchPermissionsIfNeeded();
@@ -443,17 +494,73 @@ export function useAdminOverview() {
         };
         return;
       }
-      const result = await adminArtifactApi.listArtifacts();
+      const result = await adminArtifactApi.listArtifacts({
+        ...artifactListFilters,
+        limit: artifactPagination.pageSize.value,
+        offset: artifactPagination.offset.value,
+      });
+      if (requestId !== artifactListRequestId) return;
       data.value = {
         ...data.value,
-        artifacts: result.data ?? [],
+        artifacts: artifactPagination.applyResponse(result),
       };
     } catch (err) {
+      if (requestId !== artifactListRequestId) return;
       console.error("加载产物 ACL 失败:", err);
       toast.error("加载产物 ACL 失败");
     } finally {
-      loading.value = false;
+      if (requestId === artifactListRequestId) loading.value = false;
     }
+  }
+
+  function pageActions(pagination: ReturnType<typeof useAdminPagination>, load: () => Promise<void>) {
+    return {
+      next: () => {
+        if (pagination.prepareNext()) void load();
+      },
+      previous: () => {
+        if (pagination.preparePrevious()) void load();
+      },
+      setPageSize: (value: number) => {
+        if (pagination.setPageSize(value)) void load();
+      },
+    };
+  }
+
+  const grantPageActions = pageActions(grantPagination, loadDatasourceGrants);
+  const quotaPageActions = pageActions(quotaPagination, loadQuotasAndUsage);
+  const sessionPageActions = pageActions(sessionPagination, loadSessions);
+  const secretPageActions = pageActions(secretPagination, loadSecrets);
+  const artifactPageActions = pageActions(artifactPagination, loadArtifacts);
+
+  function applyGrantListFilters(filters: { effect?: "allow" | "deny"; search?: string }) {
+    grantListFilters = filters;
+    grantPagination.reset();
+    void loadDatasourceGrants();
+  }
+
+  function applyQuotaListFilters(filters: { enabled?: boolean; search?: string }) {
+    quotaListFilters = filters;
+    quotaPagination.reset();
+    void loadQuotasAndUsage();
+  }
+
+  function applySessionListFilters(filters: { state?: "running" | "stopped"; search?: string }) {
+    sessionListFilters = filters;
+    sessionPagination.reset();
+    void loadSessions();
+  }
+
+  function applySecretListFilters(filters: { enabled?: boolean; search?: string }) {
+    secretListFilters = filters;
+    secretPagination.reset();
+    void loadSecrets();
+  }
+
+  function applyArtifactListFilters(filters: { artifactType?: AdminArtifact["artifact_type"]; search?: string }) {
+    artifactListFilters = filters;
+    artifactPagination.reset();
+    void loadArtifacts();
   }
 
   async function loadGrantCatalog(datasourceKey = grantForm.value.datasource_key) {
@@ -713,7 +820,7 @@ export function useAdminOverview() {
         scope,
       });
       closeGrantDialog();
-      await loadOverview();
+      await loadDatasourceGrants();
     } catch (err) {
       console.error("保存数据授权失败:", err);
       toast.error("保存数据授权失败");
@@ -731,7 +838,7 @@ export function useAdminOverview() {
     deletingGrantKey.value = key;
     try {
       await adminDatasourceApi.deleteGrant(grant.subject_type, grant.subject_id, grant.datasource_key);
-      await loadOverview();
+      await loadDatasourceGrants();
     } catch (err) {
       console.error("删除数据授权失败:", err);
       toast.error("删除数据授权失败");
@@ -824,7 +931,7 @@ export function useAdminOverview() {
         enabled: quotaForm.value.enabled,
       });
       showQuotaDialog.value = false;
-      await loadOverview();
+      await loadQuotasAndUsage();
     } catch (err) {
       console.error("保存额度失败:", err);
       toast.error("保存额度失败");
@@ -846,7 +953,7 @@ export function useAdminOverview() {
         subject_id: quota.subject_type === "global" ? "*" : quota.subject_id,
         resource: quota.resource,
       });
-      await loadOverview();
+      await loadQuotasAndUsage();
     } catch (err) {
       console.error("删除额度失败:", err);
       toast.error("删除额度失败");
@@ -957,7 +1064,7 @@ export function useAdminOverview() {
         enabled: secretForm.value.enabled,
       });
       closeSecretDialog();
-      await loadOverview();
+      await loadSecrets();
     } catch (err) {
       console.error("保存密钥引用失败:", err);
       toast.error("保存密钥引用失败");
@@ -974,7 +1081,7 @@ export function useAdminOverview() {
     deletingSecretName.value = secret.name;
     try {
       await adminSecretApi.deleteSecret(secret.name);
-      await loadOverview();
+      await loadSecrets();
     } catch (err) {
       console.error("删除密钥引用失败:", err);
       toast.error("删除密钥引用失败");
@@ -1096,7 +1203,7 @@ export function useAdminOverview() {
         datasources: artifactAclForm.value.datasources,
       });
       closeArtifactAclDialog();
-      await loadOverview();
+      await loadArtifacts();
     } catch (err) {
       console.error("保存产物 ACL 失败:", err);
       toast.error("保存产物 ACL 失败");
@@ -1157,7 +1264,7 @@ export function useAdminOverview() {
     actingSessionId.value = session.session_id;
     try {
       await adminSessionApi.stopSession(session.session_id);
-      await loadOverview();
+      await loadSessions();
     } catch (err) {
       console.error("停止会话失败:", err);
       toast.error("停止会话失败");
@@ -1174,7 +1281,7 @@ export function useAdminOverview() {
     actingSessionId.value = session.session_id;
     try {
       await adminSessionApi.deleteSession(session.session_id);
-      await loadOverview();
+      await loadSessions();
     } catch (err) {
       console.error("删除会话失败:", err);
       toast.error("删除会话失败");
@@ -1233,12 +1340,27 @@ export function useAdminOverview() {
     grantCount,
     quotaCount,
     secretCount,
+    grantPagination,
+    quotaPagination,
+    sessionPagination,
+    secretPagination,
+    artifactPagination,
+    grantPageActions,
+    quotaPageActions,
+    sessionPageActions,
+    secretPageActions,
+    artifactPageActions,
     loadOverview,
     loadDatasourceGrants,
     loadQuotasAndUsage,
     loadSessions,
     loadSecrets,
     loadArtifacts,
+    applyGrantListFilters,
+    applyQuotaListFilters,
+    applySessionListFilters,
+    applySecretListFilters,
+    applyArtifactListFilters,
     loadGrantCatalog,
     openCreateGrantDialog,
     openEditGrantDialog,

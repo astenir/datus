@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi, adminUserApi } from "@/lib/api";
+import { useAdminPagination } from "@/composables/useAdminPagination";
 import type {
   AdminUser,
   AdminUserDetail,
@@ -73,6 +74,7 @@ export function useUserManager() {
   });
 
   const total = shallowRef(0);
+  const pagination = useAdminPagination();
   const users = ref<AdminUser[]>([]);
   const loading = shallowRef(false);
   const loadingUserDetail = shallowRef(false);
@@ -81,6 +83,8 @@ export function useUserManager() {
   const selectedUserDetail = shallowRef<AdminUserDetail | null>(null);
   const userDetailError = shallowRef<string | null>(null);
   let userDetailRequestId = 0;
+  let userListRequestId = 0;
+  let listFilters: { enabled?: boolean; search?: string } | null = null;
 
   const allRoles = ref<AssignableRole[]>([]);
   const selectedRoleIds = ref<string[]>([]);
@@ -109,18 +113,47 @@ export function useUserManager() {
   const selectedRoleCount = computed(() => selectedRoleIds.value.length);
 
   async function loadUsers() {
+    const requestId = userListRequestId + 1;
+    userListRequestId = requestId;
     loading.value = true;
     try {
-      const result = await adminUserApi.listUsers({ enabled: statusToEnabled(searchForm.value.status) });
-      users.value = result?.data ?? [];
+      const filters = listFilters ?? { enabled: statusToEnabled(searchForm.value.status) };
+      const result = await adminUserApi.listUsers({
+        ...filters,
+        limit: pagination.pageSize.value,
+        offset: pagination.offset.value,
+      });
+      if (requestId !== userListRequestId) return;
+      users.value = pagination.applyResponse(result);
       total.value = users.value.length;
     } catch (err) {
+      if (requestId !== userListRequestId) return;
       console.error("加载用户列表失败:", err);
       users.value = [];
       total.value = 0;
     } finally {
-      loading.value = false;
+      if (requestId === userListRequestId) {
+        loading.value = false;
+      }
     }
+  }
+
+  function applyListFilters(filters: { enabled?: boolean; search?: string }) {
+    listFilters = filters;
+    pagination.reset();
+    void loadUsers();
+  }
+
+  function loadNextPage() {
+    if (pagination.prepareNext()) void loadUsers();
+  }
+
+  function loadPreviousPage() {
+    if (pagination.preparePrevious()) void loadUsers();
+  }
+
+  function setPageSize(value: number) {
+    if (pagination.setPageSize(value)) void loadUsers();
   }
 
   function handleSearch() {
@@ -129,6 +162,8 @@ export function useUserManager() {
 
   function handleReset() {
     searchForm.value = { status: "all" };
+    listFilters = null;
+    pagination.reset();
     void loadUsers();
   }
 
@@ -143,7 +178,7 @@ export function useUserManager() {
     try {
       const [userRoleResult, roleResult] = await Promise.all([
         adminUserApi.getUserRoles(user.user_id),
-        adminRoleApi.listRoles(),
+        adminRoleApi.listRoles({ limit: 100, offset: 0 }),
       ]);
       if (requestId !== roleAssignmentRequestId) return;
       selectedRoleIds.value = userRoleResult?.data?.role_ids ?? [];
@@ -322,6 +357,7 @@ export function useUserManager() {
     statusOptions: userStatusOptions,
     searchForm,
     total,
+    pagination,
     users,
     loading,
     loadingUserDetail,
@@ -347,6 +383,10 @@ export function useUserManager() {
     roleOptions,
     selectedRoleCount,
     loadUsers,
+    applyListFilters,
+    loadNextPage,
+    loadPreviousPage,
+    setPageSize,
     handleSearch,
     handleReset,
     openUserDetail,

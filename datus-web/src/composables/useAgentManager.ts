@@ -774,7 +774,9 @@ export function useAgentManager() {
     try {
       const [datasourceResult, artifactResult] = await Promise.all([
         canListAdminDatasources.value ? adminDatasourceApi.listDatasources() : Promise.resolve(null),
-        canListAdminArtifacts.value ? adminArtifactApi.listArtifacts() : Promise.resolve(null),
+        canListAdminArtifacts.value
+          ? adminArtifactApi.listArtifacts({ limit: 100, offset: 0 })
+          : Promise.resolve(null),
       ]);
       datasources.value = [...(datasourceResult?.data ?? [])].sort((left, right) => left.name.localeCompare(right.name));
       artifacts.value = [...(artifactResult?.data ?? [])].sort((left, right) =>

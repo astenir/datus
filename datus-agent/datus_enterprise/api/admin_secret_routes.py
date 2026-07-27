@@ -13,6 +13,12 @@ from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.loggings import get_logger
+from datus_enterprise.api.admin_pagination import (
+    ADMIN_LIST_DEFAULT_LIMIT,
+    ADMIN_LIST_MAX_LIMIT,
+    AdminListResult,
+    paginate_admin_records,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -51,11 +57,15 @@ class AdminSecretSummary(BaseModel):
     updated_at: str | None = None
 
 
-@router.get("/admin/secrets", response_model=Result[list[AdminSecretSummary]], summary="List Admin Secrets")
+@router.get("/admin/secrets", response_model=AdminListResult[AdminSecretSummary], summary="List Admin Secrets")
 async def list_admin_secrets(
     ctx: AdminSecretsCtx,
     prefix: Annotated[str | None, Query(description="Filter by secret name prefix.")] = None,
-) -> Result[list[AdminSecretSummary]]:
+    enabled: Annotated[bool | None, Query(description="Filter by enabled state.")] = None,
+    search: Annotated[str | None, Query(max_length=200, description="Search secret reference fields.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminSecretSummary] | Result[Any]:
     """Return redaction-safe enterprise secret reference metadata."""
 
     invalid = _validate_optional_prefix(prefix)
@@ -75,13 +85,35 @@ async def list_admin_secrets(
         return _secret_error("SECRET_LIST_FAILED", "Secret list failed.")
 
     secrets = [_secret_summary_from_record(record) for record in records]
+    secrets = [
+        secret
+        for secret in secrets
+        if (enabled is None or secret.enabled is enabled) and _secret_matches_search(secret, search)
+    ]
+    page = paginate_admin_records(secrets, limit=limit, offset=offset)
     await _audit_secret(
         ctx,
         operation="list_admin_secrets",
         decision="allow",
-        metadata={"count": len(secrets), "prefix": prefix},
+        metadata={
+            "count": len(page.data or []),
+            "prefix": prefix,
+            "enabled": enabled,
+            "offset": offset,
+            "has_more": page.pagination.has_more,
+        },
     )
-    return Result(success=True, data=secrets)
+    return page
+
+
+def _secret_matches_search(secret: AdminSecretSummary, search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    return any(
+        query in str(value or "").casefold()
+        for value in (secret.name, secret.provider, secret.ref_hint, secret.description)
+    )
 
 
 @router.get("/admin/secrets/{name:path}", response_model=Result[AdminSecretSummary], summary="Get Admin Secret")

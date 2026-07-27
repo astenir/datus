@@ -167,6 +167,30 @@ def test_admin_role_upsert_get_and_list_audit_sanitized(monkeypatch):
     }
 
 
+def test_admin_roles_filter_and_search_before_pagination(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    _install_extensions(monkeypatch, role_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Finance Analyst", permissions=["module.chat"]))
+    asyncio.run(role_store.upsert_role(role_id="auditor", name="Finance Auditor", permissions=["module.audit"]))
+    asyncio.run(role_store.upsert_role(role_id="viewer", name="Viewer", permissions=["module.report.view"]))
+
+    with _client(ctx) as client:
+        first_page = client.get(
+            "/api/v1/admin/roles",
+            params={"built_in": False, "search": "finance", "limit": 1, "offset": 0},
+        )
+        second_page = client.get(
+            "/api/v1/admin/roles",
+            params={"built_in": False, "search": "finance", "limit": 1, "offset": 1},
+        )
+
+    assert [item["role_id"] for item in first_page.json()["data"]] == ["analyst"]
+    assert first_page.json()["pagination"] == {"limit": 1, "offset": 0, "has_more": True}
+    assert [item["role_id"] for item in second_page.json()["data"]] == ["auditor"]
+    assert second_page.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": False}
+
+
 def test_admin_role_permissions_and_delete(monkeypatch):
     role_store = InMemoryEnterpriseRoleStore()
     audit_sink = CollectingAuditSink()

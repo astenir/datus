@@ -702,7 +702,8 @@ describe("useAdminOverview", () => {
       subject_id: "*",
       resource: "chat.stream",
     });
-    expect(listDatasources).toHaveBeenCalled();
+    expect(listQuotas).toHaveBeenCalledWith({ limit: 20, offset: 0 });
+    expect(listUsage).toHaveBeenCalledWith({ search: undefined, limit: 100, offset: 0 });
   });
 
   it("loads and saves secret reference details without exposing plaintext values", async () => {

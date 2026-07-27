@@ -5,11 +5,13 @@ import type {
   AdminDatasourceGrant,
   AdminSession,
   AdminSessionDetail,
+  AdminSessionListParams,
   AdminUsage,
   AdminUser,
   AdminUserDetail,
   AdminUserListParams,
   AdminUserRolesData,
+  ArtifactListParams,
   ApiResponse,
   ArtifactAcl,
   AuditLogExportFile,
@@ -19,6 +21,7 @@ import type {
   DeleteQuotaInput,
   QuotaListParams,
   Role,
+  RoleListParams,
   SecretListParams,
   UpsertDatasourceGrantInput,
   UpsertQuotaInput,
@@ -26,6 +29,7 @@ import type {
   UpsertSecretInput,
   UpsertUserInput,
   UsageListParams,
+  PaginatedApiResponse,
   AdminQuota,
   AdminSecret,
 } from "@/types/admin";
@@ -69,8 +73,14 @@ function filenameFromContentDisposition(value: string | null): string {
 }
 
 export const adminRoleApi = {
-  listRoles(): Promise<ApiResponse<Role[]>> {
-    return get<ApiResponse<Role[]>>("/api/v1/admin/roles");
+  listRoles(params?: RoleListParams): Promise<PaginatedApiResponse<Role[]>> {
+    const query = queryString([
+      ["built_in", params?.builtIn],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
+    ]);
+    return get<PaginatedApiResponse<Role[]>>(`/api/v1/admin/roles${query}`);
   },
 
   getRole(roleId: string): Promise<ApiResponse<Role>> {
@@ -91,9 +101,14 @@ export const adminRoleApi = {
 };
 
 export const adminUserApi = {
-  listUsers(params?: AdminUserListParams): Promise<ApiResponse<AdminUser[]>> {
-    const query = queryString([["enabled", params?.enabled]]);
-    return get<ApiResponse<AdminUser[]>>(`/api/v1/admin/users${query}`);
+  listUsers(params?: AdminUserListParams): Promise<PaginatedApiResponse<AdminUser[]>> {
+    const query = queryString([
+      ["enabled", params?.enabled],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
+    ]);
+    return get<PaginatedApiResponse<AdminUser[]>>(`/api/v1/admin/users${query}`);
   },
 
   getUser(userId: string): Promise<ApiResponse<AdminUserDetail>> {
@@ -145,9 +160,15 @@ export const adminAuditApi = {
 };
 
 export const adminSessionApi = {
-  listSessions(userId?: string): Promise<ApiResponse<AdminSession[]>> {
-    const query = queryString([["user_id", userId]]);
-    return get<ApiResponse<AdminSession[]>>(`/api/v1/admin/sessions${query}`);
+  listSessions(params?: AdminSessionListParams): Promise<PaginatedApiResponse<AdminSession[]>> {
+    const query = queryString([
+      ["user_id", params?.userId],
+      ["state", params?.state],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
+    ]);
+    return get<PaginatedApiResponse<AdminSession[]>>(`/api/v1/admin/sessions${query}`);
   },
 
   getSession(sessionId: string): Promise<ApiResponse<AdminSessionDetail>> {
@@ -183,13 +204,17 @@ export const adminDatasourceApi = {
     );
   },
 
-  listGrants(params?: DatasourceGrantListParams): Promise<ApiResponse<AdminDatasourceGrant[]>> {
+  listGrants(params?: DatasourceGrantListParams): Promise<PaginatedApiResponse<AdminDatasourceGrant[]>> {
     const query = queryString([
       ["subject_type", params?.subjectType],
       ["subject_id", params?.subjectId],
       ["datasource_key", params?.datasourceKey],
+      ["effect", params?.effect],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
     ]);
-    return get<ApiResponse<AdminDatasourceGrant[]>>(`/api/v1/admin/datasource-grants${query}`);
+    return get<PaginatedApiResponse<AdminDatasourceGrant[]>>(`/api/v1/admin/datasource-grants${query}`);
   },
 
   getGrant(
@@ -222,13 +247,17 @@ export const adminDatasourceApi = {
 };
 
 export const adminQuotaApi = {
-  listQuotas(params?: QuotaListParams): Promise<ApiResponse<AdminQuota[]>> {
+  listQuotas(params?: QuotaListParams): Promise<PaginatedApiResponse<AdminQuota[]>> {
     const query = queryString([
       ["subject_type", params?.subjectType],
       ["subject_id", params?.subjectId],
       ["resource", params?.resource],
+      ["enabled", params?.enabled],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
     ]);
-    return get<ApiResponse<AdminQuota[]>>(`/api/v1/admin/quotas${query}`);
+    return get<PaginatedApiResponse<AdminQuota[]>>(`/api/v1/admin/quotas${query}`);
   },
 
   upsertQuota(input: UpsertQuotaInput): Promise<ApiResponse<AdminQuota>> {
@@ -241,20 +270,29 @@ export const adminQuotaApi = {
     );
   },
 
-  listUsage(params?: UsageListParams): Promise<ApiResponse<AdminUsage[]>> {
+  listUsage(params?: UsageListParams): Promise<PaginatedApiResponse<AdminUsage[]>> {
     const query = queryString([
       ["subject_type", params?.subjectType],
       ["subject_id", params?.subjectId],
       ["resource", params?.resource],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
     ]);
-    return get<ApiResponse<AdminUsage[]>>(`/api/v1/admin/usage${query}`);
+    return get<PaginatedApiResponse<AdminUsage[]>>(`/api/v1/admin/usage${query}`);
   },
 };
 
 export const adminSecretApi = {
-  listSecrets(params?: SecretListParams): Promise<ApiResponse<AdminSecret[]>> {
-    const query = queryString([["prefix", params?.prefix]]);
-    return get<ApiResponse<AdminSecret[]>>(`/api/v1/admin/secrets${query}`);
+  listSecrets(params?: SecretListParams): Promise<PaginatedApiResponse<AdminSecret[]>> {
+    const query = queryString([
+      ["prefix", params?.prefix],
+      ["enabled", params?.enabled],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
+    ]);
+    return get<PaginatedApiResponse<AdminSecret[]>>(`/api/v1/admin/secrets${query}`);
   },
 
   getSecret(name: string): Promise<ApiResponse<AdminSecret>> {
@@ -271,8 +309,14 @@ export const adminSecretApi = {
 };
 
 export const adminArtifactApi = {
-  listArtifacts(): Promise<ApiResponse<AdminArtifact[]>> {
-    return get<ApiResponse<AdminArtifact[]>>("/api/v1/admin/artifacts");
+  listArtifacts(params?: ArtifactListParams): Promise<PaginatedApiResponse<AdminArtifact[]>> {
+    const query = queryString([
+      ["artifact_type", params?.artifactType],
+      ["search", params?.search],
+      ["limit", params?.limit],
+      ["offset", params?.offset],
+    ]);
+    return get<PaginatedApiResponse<AdminArtifact[]>>(`/api/v1/admin/artifacts${query}`);
   },
 
   getAcl(artifactType: "report" | "dashboard", slug: string): Promise<ApiResponse<ArtifactAcl>> {
