@@ -14,6 +14,7 @@ import type {
   AdminGrantListItem,
   AdminPanelProps,
 } from "@/features/admin/types"
+import { formatAdminDateTime } from "@/lib/admin-date"
 import type { AdminArtifactRouteState, AdminAuditRouteState, AdminGrantRouteState } from "@/features/workspace/route-state"
 import type { AdminViewTab } from "@/features/workspace/types"
 import { isAdminViewTab } from "@/features/workspace/types"
@@ -23,6 +24,7 @@ const roles = useRoleManager()
 const audits = useAuditLogs()
 const overview = useAdminOverview()
 const permission = usePermission()
+const formatOptionalDate = formatAdminDateTime
 
 const props = withDefaults(defineProps<AdminPanelProps>(), {
   activeTab: "users",
@@ -142,18 +144,6 @@ function refreshActiveTab() {
       audits.loadActionTypes()
       void audits.loadLogs()
   }
-}
-
-function formatOptionalDate(value: string | null | undefined) {
-  if (!value) return "-"
-  const dateValue = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`
-  return new Date(dateValue).toLocaleString("zh-CN", {
-    hour12: false,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  })
 }
 
 function grantKey(subjectType: string, subjectId: string, datasourceKey: string) {
