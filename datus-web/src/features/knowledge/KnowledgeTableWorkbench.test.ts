@@ -13,8 +13,20 @@ const tableDetail: TableDetail = {
   description: "基金净值明细",
   rows: 1284320,
   columns: [
-    { name: "fund_code", type: "VARCHAR(20)", nullable: false, pk: true },
-    { name: "nav", type: "DECIMAL(18, 4)", nullable: true, default_value: "0", pk: false },
+    {
+      name: "fund_code",
+      type: "VARCHAR(20)",
+      nullable: false,
+      pk: true,
+      comment: "基金代码",
+    },
+    {
+      name: "nav",
+      type: "DECIMAL(18, 4)",
+      nullable: true,
+      default_value: "0",
+      pk: false,
+    },
   ],
   indexes: [
     { name: "fund_nav_pkey", type: "PRIMARY", columns: ["fund_code"] },
@@ -48,7 +60,9 @@ describe("knowledge table workbench", () => {
       mode: "columns",
     })
 
-    expect(html).toContain("搜索字段名、类型或默认值")
+    expect(html).toContain("搜索字段名、类型、默认值或注释")
+    expect(html).toContain("数据库注释")
+    expect(html).toContain("基金代码")
     expect(html).toContain("fund_code")
     expect(html).toContain("VARCHAR(20)")
     expect(html).toContain("主键")

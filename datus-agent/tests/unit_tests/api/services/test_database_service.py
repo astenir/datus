@@ -448,7 +448,17 @@ class TestGetConnectionInfoScoping:
 
 
 class TestGetTableSchema:
-    """Tests for get_table_schema with real SQLite connection."""
+    """Tests for get_table_schema across supported connector metadata formats."""
+
+    @staticmethod
+    def _service_with_schema(schema_info: list[dict[str, object]]) -> DatasourceService:
+        svc = DatasourceService.__new__(DatasourceService)
+        svc.current_db_connector = MagicMock()
+        svc.current_db_connector.get_type.return_value = "sqlite"
+        svc.current_db_connector.get_schema.return_value = schema_info
+        svc.current_db_name = "sales"
+        svc._ensure_current_connection = MagicMock()
+        return svc
 
     def test_get_table_schema_returns_columns(self, real_agent_config):
         """get_table_schema returns column info for existing table."""
@@ -471,3 +481,50 @@ class TestGetTableSchema:
         svc = DatasourceService(agent_config=real_agent_config)
         result = svc.get_table_schema("totally_fake_table_xyz")
         assert result.success is False
+
+    def test_get_table_schema_maps_standard_adapter_metadata(self):
+        """Standard adapter keys preserve nullability, default, and database comment."""
+        svc = self._service_with_schema(
+            [
+                {
+                    "name": "amount",
+                    "type": "numeric",
+                    "nullable": False,
+                    "default_value": "0",
+                    "pk": False,
+                    "comment": "Order amount",
+                }
+            ]
+        )
+
+        result = svc.get_table_schema("orders")
+
+        assert result.success is True
+        column = result.data.table.columns[0]
+        assert column.nullable is False
+        assert column.default_value == "0"
+        assert column.pk is False
+        assert column.comment == "Order amount"
+
+    def test_get_table_schema_keeps_legacy_sqlite_metadata_compatible(self):
+        """Legacy SQLite keys remain supported when standard adapter keys are absent."""
+        svc = self._service_with_schema(
+            [
+                {
+                    "name": "id",
+                    "type": "INTEGER",
+                    "notnull": 1,
+                    "dflt_value": None,
+                    "pk": 1,
+                }
+            ]
+        )
+
+        result = svc.get_table_schema("orders")
+
+        assert result.success is True
+        column = result.data.table.columns[0]
+        assert column.nullable is False
+        assert column.default_value is None
+        assert column.pk is True
+        assert column.comment is None

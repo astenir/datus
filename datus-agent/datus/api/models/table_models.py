@@ -15,6 +15,7 @@ class ColumnInfo(BaseModel):
     nullable: bool = Field(..., description="Whether column is nullable")
     default_value: Optional[str] = Field(None, description="Default value")
     pk: bool = Field(default=False, description="Whether column is primary key")
+    comment: Optional[str] = Field(None, description="Database column comment")
 
 
 class IndexInfo(BaseModel):

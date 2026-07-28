@@ -3495,6 +3495,8 @@ export interface components {
             default_value?: string | null;
 
             pk: boolean;
+
+            comment?: string | null;
         };
 
         CompactSessionData: {

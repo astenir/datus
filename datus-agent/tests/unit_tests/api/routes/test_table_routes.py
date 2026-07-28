@@ -99,7 +99,15 @@ def _svc():
         data=GetTableDetailData(
             table=TableDetailData(
                 name="accounts",
-                columns=[ColumnInfo(name="id", type="INTEGER", nullable=False, pk=True)],
+                columns=[
+                    ColumnInfo(
+                        name="id",
+                        type="INTEGER",
+                        nullable=False,
+                        pk=True,
+                        comment="Account ID",
+                    )
+                ],
                 indexes=[],
             )
         ),
@@ -386,6 +394,7 @@ def test_table_detail_allows_authorized_table(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["success"] is True
+    assert response.json()["data"]["table"]["columns"][0]["comment"] == "Account ID"
     svc.datasource.get_table_schema.assert_called_once_with("public.accounts")
 
 
