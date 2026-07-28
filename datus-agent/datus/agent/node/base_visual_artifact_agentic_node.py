@@ -264,6 +264,12 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
                     self._setup_context_search_tools()
                 elif base == "filesystem_tools":
                     self._setup_filesystem_tools()
+                elif base == "tools":
+                    # Interaction tools are mounted after configured groups.
+                    pass
+                elif base == "artifact_tools":
+                    # Artifact tools are mounted from the per-run input.
+                    pass
                 else:
                     logger.warning("Unknown tool type: %s", base)
                 return
@@ -276,6 +282,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
                 self._setup_context_search_tools()
             elif pattern == "filesystem_tools":
                 self._setup_filesystem_tools()
+            elif pattern == "tools":
+                pass
+            elif pattern.startswith("tools."):
+                pass
+            elif pattern == "artifact_tools":
+                pass
+            elif pattern.startswith("artifact_tools."):
+                pass
             elif "." in pattern:
                 tool_type, method_name = pattern.split(".", 1)
                 self._setup_specific_tool_method(tool_type, method_name)
@@ -384,13 +398,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         self,
         prompt_version: Optional[str] = None,
     ) -> str:
+        exposed = self._exposed_tool_names()
         context: Dict[str, Any] = {
             "artifact_access_mode": self._artifact_access_mode(),
-            "has_semantic_tools": bool(self.semantic_tools),
-            "has_db_tools": bool(self.db_func_tool),
-            "has_context_search_tools": bool(self.context_search_tools),
-            "has_ask_user_tool": self.ask_user_tool is not None,
-            "has_task_tool": bool(self.sub_agent_task_tool),
+            "has_semantic_tools": self._tool_group_exposed(self.semantic_tools, exposed),
+            "has_db_tools": self._tool_group_exposed(self.db_func_tool, exposed),
+            "has_context_search_tools": self._tool_group_exposed(self.context_search_tools, exposed),
+            "has_ask_user_tool": "ask_user" in exposed,
+            "has_task_tool": "task" in exposed,
             "agent_config": self.agent_config,
             self._artifact_slug_prompt_key(): self._active_artifact_slug,
             "rules": self.node_config.get("rules", []),

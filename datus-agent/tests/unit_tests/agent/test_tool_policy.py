@@ -75,6 +75,73 @@ def test_runtime_policy_can_limit_delegation_to_explicit_agents():
     assert node.sub_agent_task_tool._allowed_subagents == ["safe_sql"]
 
 
+def test_allowlist_keeps_task_when_runtime_delegation_is_enabled():
+    node = _node(
+        tool_policy={"mode": "allowlist", "allowed": ["filesystem_tools.read_file"]},
+        runtime_policy={"allow_subagent_delegation": True},
+    )
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == ["read_file", "task"]
+
+
+def test_explicit_task_deny_wins_over_runtime_delegation():
+    node = _node(
+        tool_policy={
+            "mode": "allowlist",
+            "allowed": ["filesystem_tools.read_file"],
+            "denied": ["sub_agent_tools.task"],
+        },
+        runtime_policy={"allow_subagent_delegation": True},
+    )
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == ["read_file"]
+
+
+def test_disabled_runtime_delegation_wins_over_task_allow_rule():
+    node = _node(
+        tool_policy={
+            "mode": "allowlist",
+            "allowed": ["filesystem_tools.read_file", "sub_agent_tools.*"],
+        },
+        runtime_policy={"allow_subagent_delegation": False},
+    )
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == ["read_file"]
+
+
+def test_allowlist_keeps_registered_interaction_tools_by_default_wildcard():
+    node = _node(
+        tool_policy={"mode": "allowlist", "allowed": ["tools.*"], "denied": []},
+        runtime_policy={"allow_subagent_delegation": False},
+    )
+    interaction_names = ["ask_user", "confirm_plan", "todo_list", "todo_read", "todo_write", "todo_update"]
+    node.tools.extend(SimpleNamespace(name=name) for name in interaction_names)
+    node.tool_registry.register_tools("tools", interaction_names)
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == interaction_names
+
+
+def test_interaction_wildcard_still_honors_exact_deny():
+    node = _node(
+        tool_policy={"mode": "allowlist", "allowed": ["tools.*"], "denied": ["tools.ask_user"]},
+        runtime_policy={"allow_subagent_delegation": False},
+    )
+    node.tools.extend([SimpleNamespace(name="ask_user"), SimpleNamespace(name="todo_list")])
+    node.tool_registry.register_tools("tools", ["ask_user", "todo_list"])
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == ["todo_list"]
+
+
 def test_bound_mcp_servers_are_added_to_allowlist_and_denies_still_win():
     policy = include_bound_mcp_servers(
         {"mode": "allowlist", "allowed": ["db_tools.*"], "denied": ["mcp.blocked.*"]},

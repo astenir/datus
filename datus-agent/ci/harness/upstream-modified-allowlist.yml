@@ -40,10 +40,19 @@ categories:
     - datus/tools/permission/permission_hooks.py
   move-to-enterprise: []
   upstreamable-fix:
+    - datus/agent/node/base_artifact_ask_agentic_node.py
     - datus/agent/node/base_visual_artifact_agentic_node.py
     - datus/agent/node/chat_agentic_node.py
+    - datus/agent/node/deliverable_node.py
+    - datus/agent/node/explore_agentic_node.py
+    - datus/agent/node/gen_dashboard_agentic_node.py
+    - datus/agent/node/gen_report_agentic_node.py
+    - datus/agent/node/gen_semantic_model_agentic_node.py
+    - datus/agent/node/gen_skill_agentic_node.py
     - datus/agent/node/gen_visual_dashboard_agentic_node.py
     - datus/agent/node/gen_visual_report_agentic_node.py
+    - datus/agent/node/scheduler_agentic_node.py
+    - datus/agent/node/sql_summary_agentic_node.py
     - datus/agent/node/visual_artifact/_artifact_html_renderer.py
     - datus/agent/node/visual_artifact/dashboard_html_renderer.py
     - datus/agent/node/visual_artifact/report_html_renderer.py
@@ -70,10 +79,14 @@ categories:
     - datus/storage/subject_tree/store.py
     - datus/tools/func_tool/dashboard_artifact_tools.py
     - datus/tools/func_tool/database.py
+    - datus/tools/func_tool/orchestrator_tools.py
     - datus/tools/func_tool/report_artifact_tools.py
     - datus/tools/func_tool/semantic_tools.py
+    - datus/tools/func_tool/session_search_tool.py
+    - datus/tools/func_tool/skill_validate_tool.py
     - datus/tools/mcp_tools/mcp_config.py
     - datus/tools/mcp_tools/mcp_manager.py
+    - datus/tools/permission/profiles.py
     - datus/tools/proxy/proxy_tool.py
     - datus/tools/proxy/tool_result_channel.py
     - datus/utils/csv_utils.py
@@ -88,11 +101,16 @@ categories:
   test-only:
     - tests/integration/conftest.py
     - tests/integration/tools/test_func_tools_db.py
+    - tests/unit_tests/agent/node/test_agentic_node_sysprompt_cache.py
+    - tests/unit_tests/agent/node/test_ask_artifact_agentic_node.py
     - tests/unit_tests/agent/node/test_dashboard_html_renderer.py
+    - tests/unit_tests/agent/node/test_explore_agentic_node.py
     - tests/unit_tests/agent/node/test_report_html_renderer.py
+    - tests/unit_tests/agent/node/test_tool_category_maps.py
     - tests/unit_tests/api/hooks/test_chat_hooks.py
     - tests/unit_tests/api/routes/test_chat_routes.py
     - tests/unit_tests/api/routes/test_chat_routes_feedback.py
+    - tests/unit_tests/api/services/test_agent_service.py
     - tests/unit_tests/api/services/test_chat_service.py
     - tests/unit_tests/api/services/test_chat_task_manager.py
     - tests/unit_tests/api/services/test_cli_service.py
@@ -109,4 +127,5 @@ categories:
     - tests/unit_tests/storage/test_base.py
     - tests/unit_tests/tools/func_tool/test_dashboard_artifact_tools.py
     - tests/unit_tests/tools/func_tool/test_report_artifact_tools.py
+    - tests/unit_tests/tools/permission/test_profiles.py
     - tests/unit_tests/utils/test_compress_utils.py

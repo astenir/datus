@@ -23,7 +23,7 @@ from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 class OrchestratorIssueTools:
     """Issue lifecycle tools owned by an external orchestrator runtime."""
 
-    permission_category: str = "tools"
+    permission_category: str = "orchestrator_tools"
 
     def available_tools(self) -> List[FunctionTool]:
         return [

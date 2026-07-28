@@ -214,14 +214,16 @@ class GenDashboardAgenticNode(DeliverableAgenticNode):
 
     def _prepare_template_context(self, user_input: Any = None) -> dict:
         """Render BI capability flags into the system-prompt template."""
+        exposed = self._exposed_tool_names()
+        has_bi_tools = self._tool_group_exposed(self.bi_func_tool, exposed)
         context: dict = {
             "native_tools": ", ".join([tool.name for tool in self.tools]) if self.tools else "None",
-            "has_ask_user_tool": self.ask_user_tool is not None,
-            "has_bi_tools": self.bi_func_tool is not None,
+            "has_ask_user_tool": "ask_user" in exposed,
+            "has_bi_tools": has_bi_tools,
             "bi_setup_error": self._bi_setup_error,
         }
-        if self.bi_func_tool:
-            tool_names = {tool.name for tool in self.bi_func_tool.available_tools()}
+        if has_bi_tools:
+            tool_names = exposed & {tool.name for tool in self.bi_func_tool.available_tools()}
             context["has_dashboard_write"] = "create_dashboard" in tool_names
             context["has_chart_write"] = "create_chart" in tool_names
             context["has_dataset_write"] = "create_dataset" in tool_names

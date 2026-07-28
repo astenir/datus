@@ -359,9 +359,10 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         """Map each selectable tool *name* -> its whitelist group label.
 
         Built from every group in ``_WHITELIST_GROUP_ATTRS`` (filesystem
-        included). Tools whose name is absent from this map are not expressible
-        in the ``tools`` field (e.g. ``ask_user`` / ``task`` / plan-mode) and
-        are therefore never exposed on an ask_* agent.
+        included), plus the session-local interaction and planning groups.
+        Tools whose name is absent from this map are not expressible in the
+        ``tools`` field (for example ``task``) and are never exposed on an
+        ask_* agent.
         """
         name_to_group: Dict[str, str] = {}
         for group, attr in self._WHITELIST_GROUP_ATTRS.items():
@@ -373,16 +374,25 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
                     name_to_group[tool.name] = group
             except Exception as exc:
                 logger.warning("%s: cannot enumerate %s tools for whitelist: %s", self.get_node_name(), group, exc)
+        for attr in ("ask_user_tool", "plan_tool", "confirm_plan_tool"):
+            inst = getattr(self, attr, None)
+            if not inst:
+                continue
+            try:
+                for tool in inst.available_tools():
+                    name_to_group[tool.name] = "tools"
+            except Exception as exc:
+                logger.warning("%s: cannot enumerate tools from %s: %s", self.get_node_name(), attr, exc)
         return name_to_group
 
     def _restrict_tools_to_whitelist(self, patterns: List[str]) -> None:
         """Keep only tools a whitelist pattern grants; drop everything else.
 
         A tool survives only when it maps to a selectable group AND a pattern
-        grants it. Tools outside the selectable groups (``ask_user`` / ``task``
-        / plan-mode) and every tool when ``patterns`` is empty are dropped, so
-        the surface equals exactly what ``tools`` requested. Idempotent — safe
-        to call on every rebuild.
+        grants it. Tools outside the selectable groups (for example ``task``)
+        and every tool when ``patterns`` is empty are dropped, so the surface
+        equals exactly what ``tools`` requested. Idempotent — safe to call on
+        every rebuild.
         """
         name_to_group = self._whitelist_tool_groups()
         kept: List[Any] = []

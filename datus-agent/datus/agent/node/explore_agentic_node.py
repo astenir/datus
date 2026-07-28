@@ -189,16 +189,19 @@ class ExploreAgenticNode(AgenticNode):
 
         from datus.utils.node_utils import build_datasource_prompt_context
 
+        exposed = self._exposed_tool_names()
         context_search_tool_names = []
         if self.context_search_tools:
-            context_search_tool_names = [tool.name for tool in self.context_search_tools.available_tools()]
+            context_search_tool_names = [
+                tool.name for tool in self.context_search_tools.available_tools() if tool.name in exposed
+            ]
 
         context = {
-            "has_db_tools": bool(self.db_func_tool),
+            "has_db_tools": self._tool_group_exposed(self.db_func_tool, exposed),
             "has_context_search_tools": bool(context_search_tool_names),
             "available_context_search_tools": context_search_tool_names,
-            "has_filesystem_tools": bool(self.filesystem_func_tool),
-            "has_date_parsing_tools": bool(self.date_parsing_tools),
+            "has_filesystem_tools": self._tool_group_exposed(self.filesystem_func_tool, exposed),
+            "has_date_parsing_tools": self._tool_group_exposed(self.date_parsing_tools, exposed),
             **build_datasource_prompt_context(self.agent_config),
             "workspace_root": self._resolve_workspace_root(),
             "scoped_tables": (

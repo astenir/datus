@@ -407,25 +407,6 @@ class ChatAgenticNode(AgenticNode):
 
     # ── System Prompt ───────────────────────────────────────────────────
 
-    def _exposed_tool_names(self) -> set:
-        """Names of the tools currently exposed to the LLM (``self.tools``)."""
-        return {tool.name for tool in (self.tools or [])}
-
-    @staticmethod
-    def _tool_group_exposed(tool_instance, exposed_names: set) -> bool:
-        """True if ``tool_instance`` exists and at least one of its tools is exposed.
-
-        Used to derive the prompt's ``has_*`` flags from the live tool surface
-        so a pruned-but-still-instantiated group (see ``_get_system_prompt``)
-        is not advertised to the model.
-        """
-        if not tool_instance:
-            return False
-        try:
-            return any(tool.name in exposed_names for tool in tool_instance.available_tools())
-        except Exception:
-            return False
-
     def _get_system_prompt(
         self,
         prompt_version: Optional[str] = None,

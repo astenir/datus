@@ -250,7 +250,7 @@ class SqlSummaryAgenticNode(AgenticNode):
         # Filesystem tool is rooted at project_root; full path required.
         context["kind_subdir"] = "subject/sql_summaries"
         context["current_datasource"] = self.agent_config.current_datasource
-        context["has_ask_user_tool"] = self.ask_user_tool is not None
+        context["has_ask_user_tool"] = "ask_user" in self._exposed_tool_names()
         context.update(build_datasource_prompt_context(self.agent_config))
 
         # Handle subject_tree context based on whether predefined or query from storage
