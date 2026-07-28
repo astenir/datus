@@ -434,7 +434,7 @@ def test_get_distribution_policy_escapes_input():
         assert "tab''le" in sql_arg
 
 
-# ==================== _get_ddl Override Tests ====================
+# ==================== Table DDL Suffix Tests ====================
 
 
 @pytest.mark.acceptance
@@ -444,17 +444,52 @@ def test_get_ddl_appends_distribution_for_table():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        # Mock parent _get_ddl to return basic DDL
-        with patch(
-            "datus_postgresql.PostgreSQLConnector._get_ddl",
-            return_value='CREATE TABLE "public"."t" (\n    "id" integer\n);',
-        ):
-            connector._get_distribution_policy = MagicMock(return_value='DISTRIBUTED BY ("id")')
+        connector.get_schema = MagicMock(
+            return_value=[
+                {
+                    "name": "id",
+                    "type": "integer",
+                    "nullable": True,
+                    "default_value": None,
+                    "pk": False,
+                    "comment": None,
+                }
+            ]
+        )
+        connector._get_distribution_policy = MagicMock(return_value='DISTRIBUTED BY ("id")')
 
-            ddl = connector._get_ddl("public", "t", "TABLE")
+        ddl = connector._get_ddl("public", "t", "TABLE")
 
-            assert ddl.endswith('DISTRIBUTED BY ("id");')
-            assert "CREATE TABLE" in ddl
+        assert ddl.endswith('DISTRIBUTED BY ("id");')
+        assert "CREATE TABLE" in ddl
+
+
+@pytest.mark.acceptance
+def test_get_ddl_places_distribution_before_column_comments():
+    """Greenplum distribution remains part of CREATE TABLE before PostgreSQL comments."""
+    config = GreenplumConfig(username="gpadmin")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = GreenplumConnector(config)
+        connector.get_schema = MagicMock(
+            return_value=[
+                {
+                    "name": "id",
+                    "type": "integer",
+                    "nullable": False,
+                    "default_value": None,
+                    "pk": True,
+                    "comment": "Primary identifier",
+                }
+            ]
+        )
+        connector._get_distribution_policy = MagicMock(return_value='DISTRIBUTED BY ("id")')
+
+        ddl = connector._get_ddl("public", "t", "TABLE")
+        full_name = connector.full_name(schema_name="public", table_name="t")
+
+        assert ddl.index('DISTRIBUTED BY ("id");') < ddl.index("COMMENT ON COLUMN")
+        assert f'COMMENT ON COLUMN {full_name}."id" IS \'Primary identifier\';' in ddl
 
 
 def test_get_ddl_no_distribution_for_view():
@@ -463,15 +498,13 @@ def test_get_ddl_no_distribution_for_view():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        with patch(
-            "datus_postgresql.PostgreSQLConnector._get_ddl", return_value='CREATE VIEW "public"."v" AS\nSELECT 1'
-        ):
-            connector._get_distribution_policy = MagicMock()
+        connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"definition": ["SELECT 1"]}))
+        connector._get_distribution_policy = MagicMock()
 
-            ddl = connector._get_ddl("public", "v", "VIEW")
+        ddl = connector._get_ddl("public", "v", "VIEW")
 
-            connector._get_distribution_policy.assert_not_called()
-            assert "DISTRIBUTED" not in ddl
+        connector._get_distribution_policy.assert_not_called()
+        assert "DISTRIBUTED" not in ddl
 
 
 @pytest.mark.acceptance
@@ -481,16 +514,24 @@ def test_get_ddl_skips_distribution_on_error():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        with patch(
-            "datus_postgresql.PostgreSQLConnector._get_ddl",
-            return_value='CREATE TABLE "public"."t" (\n    "id" integer\n);',
-        ):
-            connector._get_distribution_policy = MagicMock(return_value=None)
+        connector.get_schema = MagicMock(
+            return_value=[
+                {
+                    "name": "id",
+                    "type": "integer",
+                    "nullable": True,
+                    "default_value": None,
+                    "pk": False,
+                    "comment": None,
+                }
+            ]
+        )
+        connector._get_distribution_policy = MagicMock(return_value=None)
 
-            ddl = connector._get_ddl("public", "t", "TABLE")
+        ddl = connector._get_ddl("public", "t", "TABLE")
 
-            assert "DISTRIBUTED" not in ddl
-            assert ddl.endswith(";")
+        assert "DISTRIBUTED" not in ddl
+        assert ddl.endswith(";")
 
 
 # ==================== get_storage_info Tests ====================

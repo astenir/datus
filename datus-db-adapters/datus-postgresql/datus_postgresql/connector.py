@@ -227,6 +227,10 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
             )
         return result
 
+    def _get_table_ddl_suffix(self, schema_name: str, table_name: str) -> str:
+        """Return an optional dialect-specific clause before the table DDL semicolon."""
+        return ""
+
     def _get_ddl(self, schema_name: str, table_name: str, object_type: str = "TABLE") -> str:
         """
         Get DDL for a table/view using pg_get_tabledef or reconstructing from metadata.
@@ -274,6 +278,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
 
             col_defs = []
             pk_cols = []
+            comment_statements = []
             for col in columns:
                 col_def = f"    {self.quote_identifier(col['name'])} {col['type']}"
                 if not col.get("nullable", True):
@@ -283,13 +288,26 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 col_defs.append(col_def)
                 if col.get("pk"):
                     pk_cols.append(col["name"])
+                raw_comment = col.get("comment")
+                if raw_comment is not None and str(raw_comment).strip():
+                    escaped_comment = str(raw_comment).replace("'", "''")
+                    comment_statements.append(
+                        f"COMMENT ON COLUMN {full_name}.{self.quote_identifier(col['name'])} "
+                        f"IS '{escaped_comment}';"
+                    )
 
             ddl = f"CREATE TABLE {full_name} (\n"
             ddl += ",\n".join(col_defs)
             if pk_cols:
                 pk_names = ", ".join(self.quote_identifier(c) for c in pk_cols)
                 ddl += f",\n    PRIMARY KEY ({pk_names})"
-            ddl += "\n);"
+            ddl += "\n)"
+            table_suffix = self._get_table_ddl_suffix(schema_name, table_name)
+            if table_suffix:
+                ddl += f"\n{table_suffix}"
+            ddl += ";"
+            if comment_statements:
+                ddl += "\n\n" + "\n".join(comment_statements)
             return ddl
 
     def _get_objects_with_ddl(

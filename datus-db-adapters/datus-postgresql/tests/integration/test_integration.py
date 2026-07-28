@@ -111,6 +111,7 @@ def test_get_tables_with_ddl(connector: PostgreSQLConnector, config: PostgreSQLC
         )
     """
     )
+    connector.execute_ddl(f"COMMENT ON COLUMN {table_name}.name IS 'Customer''s display name'")
 
     try:
         tables = connector.get_tables_with_ddl(schema_name=config.schema_name, tables=[table_name])
@@ -122,6 +123,8 @@ def test_get_tables_with_ddl(connector: PostgreSQLConnector, config: PostgreSQLC
             assert table["table_type"] == "table"
             assert "schema_name" in table
             assert "identifier" in table
+            assert "COMMENT ON COLUMN" in table["definition"]
+            assert "Customer''s display name" in table["definition"]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
