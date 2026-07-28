@@ -39,7 +39,7 @@ from datus.models.session_manager import (
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import looks_like_sql_file_ref, read_workspace_sql_file
-from datus.utils.time_utils import now_utc_iso
+from datus.utils.time_utils import now_utc_iso, to_utc_iso
 
 logger = get_logger(__name__)
 
@@ -562,29 +562,11 @@ class EnterpriseChatServiceMixin:
             return Result[ChatHistoryData](success=True, data=ChatHistoryData())
 
         logger.info(f"Retrieved {len(raw_messages)} messages for session {session_id}")
+        display_messages = self._with_terminal_event_markers(raw_messages, terminal_events or [])
         sse_messages, _ = self._history_payloads_from_raw_messages(
-            raw_messages,
+            display_messages,
             subagent_messages=subagent_messages,
         )
-
-        for terminal_event in terminal_events or []:
-            sse_messages.append(
-                SSEMessagePayload(
-                    message_id=terminal_event.event_id,
-                    role="system",
-                    content=[
-                        IMessageContent(
-                            type="error",
-                            payload={
-                                "error": terminal_event.error,
-                                "error_type": terminal_event.error_type,
-                                "event_type": terminal_event.event_type,
-                                "created_at": terminal_event.created_at,
-                            },
-                        )
-                    ],
-                )
-            )
         logger.info(f"Retrieved {len(sse_messages)} messages for session {session_id}")
         return Result[ChatHistoryData](success=True, data=ChatHistoryData(messages=sse_messages))
 
@@ -608,6 +590,30 @@ class EnterpriseChatServiceMixin:
         }
 
         for msg in raw_messages:
+            terminal_event = msg.get("_terminal_event")
+            if isinstance(terminal_event, ChatSessionTerminalEvent):
+                sse_messages.append(
+                    SSEMessagePayload(
+                        message_id=terminal_event.event_id,
+                        role="system",
+                        content=[
+                            IMessageContent(
+                                type="error",
+                                payload={
+                                    "error": terminal_event.error,
+                                    "error_type": terminal_event.error_type,
+                                    "event_type": terminal_event.event_type,
+                                    "created_at": terminal_event.created_at,
+                                },
+                            )
+                        ],
+                        depth=depth,
+                        parent_action_id=parent_action_id,
+                    )
+                )
+                event_id += 1
+                continue
+
             role = msg.get("role", "")
             if role == "user":
                 content = msg.get("content", "")
@@ -732,6 +738,41 @@ class EnterpriseChatServiceMixin:
             depth=1,
             parent_action_id=task_action.action_id,
         )
+
+    @staticmethod
+    def _with_terminal_event_markers(
+        raw_messages: List[Dict[str, Any]],
+        terminal_events: List[ChatSessionTerminalEvent],
+    ) -> List[Dict[str, Any]]:
+        """Place display-only terminal outcomes before later conversation turns."""
+        if not terminal_events:
+            return raw_messages
+
+        messages = list(raw_messages)
+        ordered_events = sorted(
+            terminal_events,
+            key=lambda event: (to_utc_iso(event.created_at) or event.created_at, event.event_id),
+        )
+        for event in ordered_events:
+            event_time = to_utc_iso(event.created_at)
+            insertion_index = len(messages)
+            if event_time:
+                for index, message in enumerate(messages):
+                    message_time = to_utc_iso(message.get("created_at") or message.get("timestamp"))
+                    if message_time and message_time > event_time:
+                        insertion_index = index
+                        break
+            messages.insert(
+                insertion_index,
+                {
+                    "role": "system",
+                    "timestamp": event.created_at,
+                    "created_at": event.created_at,
+                    "_terminal_event": event,
+                },
+            )
+
+        return messages
 
     @staticmethod
     def _with_subagent_anchors(

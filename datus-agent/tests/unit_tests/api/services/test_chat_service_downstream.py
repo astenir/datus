@@ -216,6 +216,64 @@ class TestChatServiceGetHistory:
         assert terminal_messages[0].content[0].payload["error_type"] == "PROVIDER_FAILED"
         assert asyncio.run(session.get_items()) == []
 
+    def test_terminal_events_stay_with_their_turn_in_multi_turn_history(self, chat_svc):
+        """Terminal outcomes render before later turns instead of collecting at the end."""
+        session_id = "multi-turn-terminal-event-history"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            ({"role": "user", "content": "first request"}, "2026-07-21T00:00:01"),
+            ({"role": "user", "content": "second request"}, "2026-07-21T00:00:03"),
+            (
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "second answer"}],
+                },
+                "2026-07-21T00:00:04",
+            ),
+            ({"role": "user", "content": "third request"}, "2026-07-21T00:00:05"),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, json.dumps(message), created_at) for message, created_at in rows],
+            )
+
+        first_error = ChatSessionTerminalEvent(
+            event_id="run-1-terminal",
+            event_type="error",
+            error="first run failed",
+            error_type="PROVIDER_FAILED",
+            created_at="2026-07-21T00:00:02Z",
+        )
+        third_error = ChatSessionTerminalEvent(
+            event_id="run-3-terminal",
+            event_type="timeout",
+            error="third run timed out",
+            error_type="TIMEOUT",
+            created_at="2026-07-21T00:00:06Z",
+        )
+        sm.append_terminal_event(session_id, first_error)
+        sm.append_terminal_event(session_id, third_error)
+
+        result = chat_svc.get_history(session_id)
+
+        assert result.success is True
+        terminal_ids = {first_error.event_id, third_error.event_id}
+        markers = [
+            message.message_id if message.message_id in terminal_ids else message.content[0].payload.get("content")
+            for message in result.data.messages
+        ]
+        assert markers == [
+            "first request",
+            first_error.event_id,
+            "second request",
+            "second answer",
+            "third request",
+            third_error.event_id,
+        ]
+
     def test_get_history_renders_ask_user_as_read_only_summary(self, chat_svc):
         """Persisted ask_user tool calls render as history summaries, not live controls."""
         import json
@@ -424,8 +482,17 @@ class TestChatServiceGetHistory:
         parent_call_id = "task-call-cancelled"
 
         parent_manager = SessionManager(session_dir=chat_svc._session_dir)
-        parent_session = parent_manager.create_session(parent_session_id)
-        asyncio.run(parent_session.add_items([{"role": "user", "content": "调用ask_metric问下基金"}]))
+        parent_manager.create_session(parent_session_id)
+        parent_db_path = os.path.join(chat_svc._session_dir, f"{parent_session_id}.db")
+        with sqlite3.connect(parent_db_path) as conn:
+            conn.execute(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                (
+                    parent_session_id,
+                    json.dumps({"role": "user", "content": "调用ask_metric问下基金"}),
+                    "2026-07-22T14:46:13",
+                ),
+            )
         parent_manager.append_terminal_event(
             parent_session_id,
             ChatSessionTerminalEvent(
