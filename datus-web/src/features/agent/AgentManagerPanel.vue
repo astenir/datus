@@ -143,9 +143,9 @@ function agentStatusLabel(status: string | null | undefined) {
   return agentStatusOptions.find(option => option.value === normalizedStatus)?.label ?? normalizedStatus
 }
 
-async function selectAgent(agent: AgentRow) {
-  await manager.selectAgent(agent.agent_id)
+function selectAgent(agent: AgentRow) {
   formDialogOpen.value = true
+  void manager.selectAgent(agent.agent_id)
 }
 
 function startCreate() {
