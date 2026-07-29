@@ -24,11 +24,26 @@ const icon = computed(() => {
 <template>
   <Alert
     :variant="block.tone === 'error' || !block.tone ? 'destructive' : 'default'"
-    class="rounded-lg"
+    class="gap-x-2 rounded-lg px-3 py-2.5 text-sm"
+    data-testid="chat-error"
   >
-    <component :is="icon" />
-    <AlertTitle>{{ block.title }}</AlertTitle>
-    <AlertDescription class="flex flex-col gap-2 text-sm leading-6">
+    <component
+      :is="icon"
+      class="size-4 translate-y-0!"
+      :class="block.tone === 'info' ? 'text-muted-foreground' : ''"
+      data-testid="chat-error-leading-icon"
+      aria-hidden="true"
+    />
+    <AlertTitle
+      class="text-sm leading-5"
+      data-testid="chat-error-title"
+    >
+      {{ block.title }}
+    </AlertTitle>
+    <AlertDescription
+      class="flex flex-col gap-2 text-xs leading-5"
+      data-testid="chat-error-description"
+    >
       <span>{{ block.message }}</span>
       <span
         v-if="block.code"

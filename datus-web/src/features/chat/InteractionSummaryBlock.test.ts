@@ -31,6 +31,9 @@ describe("InteractionSummaryBlock", () => {
     expect(html).toContain("已回答")
     expect(html).toContain("请选择需要分析的基金范围")
     expect(html).toContain("回答：</span>在管基金")
+    expect(html).toContain('data-testid="interaction-summary-leading-icon"')
+    expect(html).toContain('data-testid="interaction-summary-title"')
+    expect(html).not.toContain("size-8")
     expect(html).not.toContain("ask_user")
   })
 

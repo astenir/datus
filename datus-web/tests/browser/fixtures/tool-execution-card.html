@@ -102,6 +102,12 @@
           answers: [{ question: "请选择需要分析的基金范围", answer: ["active"] }],
         },
         {
+          type: "error",
+          title: "已停止生成",
+          message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+          tone: "info",
+        },
+        {
           type: "artifact",
           kind: "report",
           slug: "fund-position-report",

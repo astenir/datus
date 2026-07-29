@@ -85,6 +85,47 @@ test("uses the same status vocabulary for interaction history and artifacts", as
   await expect(page.getByText("报表 · 新建", { exact: true })).toBeVisible()
 })
 
+test("aligns interaction and terminal notice density with tool cards", async ({ page }) => {
+  const metrics = await page.evaluate(() => {
+    const element = (selector: string) => {
+      const match = document.querySelector<HTMLElement>(selector)
+      if (!match) throw new Error(`Missing fixture element: ${selector}`)
+      return match
+    }
+    const fontSize = (selector: string) => getComputedStyle(element(selector)).fontSize
+    const iconSize = (selector: string) => element(selector).getBoundingClientRect().width
+    const paddingLeft = (selector: string) => getComputedStyle(element(selector)).paddingLeft
+
+    return {
+      titleFontSizes: [
+        fontSize('[data-testid="tool-card-title"]'),
+        fontSize('[data-testid="interaction-summary-title"]'),
+        fontSize('[data-testid="chat-error-title"]'),
+      ],
+      secondaryFontSizes: [
+        fontSize('[data-testid="tool-card-secondary-row"]'),
+        fontSize('[data-testid="interaction-summary-description"]'),
+        fontSize('[data-testid="chat-error-description"]'),
+      ],
+      iconSizes: [
+        iconSize('[data-testid="tool-card-leading-icon"]'),
+        iconSize('[data-testid="interaction-summary-leading-icon"]'),
+        iconSize('[data-testid="chat-error-leading-icon"]'),
+      ],
+      horizontalPadding: [
+        paddingLeft('[data-testid="tool-card-trigger"]'),
+        paddingLeft('[data-testid="interaction-summary-trigger"]'),
+        paddingLeft('[data-testid="chat-error"]'),
+      ],
+    }
+  })
+
+  expect(metrics.titleFontSizes).toEqual(["14px", "14px", "14px"])
+  expect(metrics.secondaryFontSizes).toEqual(["12px", "12px", "12px"])
+  expect(metrics.iconSizes).toEqual([16, 16, 16])
+  expect(metrics.horizontalPadding).toEqual(["12px", "12px", "12px"])
+})
+
 test("does not overflow a narrow conversation viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.reload()

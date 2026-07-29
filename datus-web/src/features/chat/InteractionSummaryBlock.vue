@@ -9,7 +9,6 @@ import {
 } from "@lucide/vue"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
@@ -142,58 +141,55 @@ function answerLabel(answer: InteractionSummaryAnswer | undefined, request?: Use
 
 <template>
   <Collapsible
-    v-slot="{ open }"
-    class="overflow-hidden rounded-lg border bg-muted/20"
+    class="group overflow-hidden rounded-lg border"
     data-testid="interaction-summary"
   >
-    <div class="flex min-w-0 flex-col gap-3 p-3">
-      <div class="flex min-w-0 items-start gap-3">
-        <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+    <CollapsibleTrigger
+      class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-3 py-2.5 text-left"
+      data-testid="interaction-summary-trigger"
+    >
+      <div
+        class="col-start-1 row-start-1 flex min-w-0 items-center gap-2"
+        data-testid="interaction-summary-primary-row"
+      >
+        <MessageSquareTextIcon
+          class="size-4 shrink-0 text-muted-foreground"
+          data-testid="interaction-summary-leading-icon"
+          aria-hidden="true"
+        />
+        <span
+          class="min-w-0 truncate text-sm font-medium text-foreground"
+          data-testid="interaction-summary-title"
+        >
+          补充信息
+        </span>
+        <Badge :variant="statusMeta.variant">
           <component
             :is="statusMeta.icon"
-            class="size-4"
             aria-hidden="true"
           />
-        </div>
-
-        <div class="min-w-0 flex-1">
-          <div class="flex min-w-0 flex-wrap items-center gap-2">
-            <span class="text-sm font-medium text-foreground">
-              补充信息
-            </span>
-            <Badge :variant="statusMeta.variant">
-              {{ statusMeta.label }}
-            </Badge>
-          </div>
-          <p class="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-            {{ summaryPrompt }}
-          </p>
-          <p
-            v-if="summaryAnswer"
-            class="mt-1 truncate text-xs text-foreground"
-          >
-            <span class="text-muted-foreground">回答：</span>{{ summaryAnswer }}
-          </p>
-        </div>
-
-        <CollapsibleTrigger as-child>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            class="shrink-0"
-            :aria-label="open ? '收起补充信息详情' : '查看补充信息详情'"
-          >
-            {{ open ? "收起" : "详情" }}
-            <ChevronDownIcon
-              class="size-4 transition-transform motion-reduce:transition-none"
-              :class="open ? 'rotate-180' : ''"
-              aria-hidden="true"
-            />
-          </Button>
-        </CollapsibleTrigger>
+          {{ statusMeta.label }}
+        </Badge>
       </div>
-    </div>
+
+      <ChevronDownIcon
+        class="col-start-2 row-start-1 size-4 self-center text-muted-foreground transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+        aria-hidden="true"
+      />
+
+      <p
+        class="col-start-1 row-start-2 line-clamp-2 pl-6 text-xs leading-5 text-muted-foreground"
+        data-testid="interaction-summary-description"
+      >
+        {{ summaryPrompt }}
+      </p>
+      <p
+        v-if="summaryAnswer"
+        class="col-start-1 row-start-3 truncate pl-6 text-xs text-foreground"
+      >
+        <span class="text-muted-foreground">回答：</span>{{ summaryAnswer }}
+      </p>
+    </CollapsibleTrigger>
 
     <CollapsibleContent>
       <Separator />
