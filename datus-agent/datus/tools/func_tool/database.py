@@ -144,14 +144,11 @@ class DBFuncTool:
             principal: Request-scoped SQL policy attributes. When omitted,
                        falls back to ``agent_config.principal`` if present.
             connector_cache_size: Max connectors to cache (LRU eviction), default 8
-            read_only: When True, ``execute_sql`` hard-rejects any non-read
-                       statement (INSERT/UPDATE/DELETE/DDL/MERGE/...) at the tool
-                       layer, independent of ``PermissionHooks``. Use for agents
-                       whose contract is read-only (Explore, ask_report/dashboard,
-                       LLM validators) so the unified write-capable entry point
-                       cannot mutate the datasource even when hooks are bypassed
-                       (e.g. validators run with ``hooks=None``) or under a
-                       permissive profile.
+            read_only: When True, every DBFuncTool mutation entry point rejects
+                       writes at the tool layer, independent of ``PermissionHooks``.
+                       Enterprise Chat requests also force this effective value to
+                       True so selected and delegated agents cannot weaken the
+                       request-scoped business-datasource boundary.
         """
         if connector_or_manager is None:
             if not agent_config:
@@ -180,7 +177,8 @@ class DBFuncTool:
         principal_source = principal if principal is not None else getattr(agent_config, "principal", {})
         self.principal: Dict[str, Any] = dict(principal_source) if isinstance(principal_source, dict) else {}
         self.sub_agent_name = sub_agent_name
-        self.read_only = read_only
+        enterprise_read_only = getattr(agent_config, "_enterprise_enabled", False) is True
+        self.read_only = bool(read_only or enterprise_read_only)
         if agent_config and metadata_fts_enabled(agent_config):
             self.schema_rag = create_metadata_rag(agent_config, sub_agent_name)
         else:
@@ -205,6 +203,17 @@ class DBFuncTool:
         except Exception:
             self._table_semantic_profiles = None
             self.has_table_semantic_profiles = False
+
+    def _reject_read_only_mutation(self, operation: str) -> Optional[FuncToolResult]:
+        if not self.read_only:
+            return None
+        return FuncToolResult(
+            success=0,
+            error=(
+                "This agent is read-only: business datasource mutations are disabled. "
+                f"Operation '{operation}' was not executed."
+            ),
+        )
 
     def _has_schema_storage(self) -> bool:
         if not self.schema_rag:
@@ -1528,17 +1537,9 @@ class DBFuncTool:
 
             if sql_type in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN):
                 return self.read_query(sql, datasource=datasource, database=database)
-            if self.read_only:
-                # Defense-in-depth for read-only agents: reject any non-read
-                # statement at the tool layer, independent of PermissionHooks
-                # (which may be bypassed, e.g. validators run with hooks=None).
-                return FuncToolResult(
-                    success=0,
-                    error=(
-                        "This agent is read-only: only SELECT/SHOW/DESCRIBE/EXPLAIN "
-                        "statements are allowed through execute_sql."
-                    ),
-                )
+            read_only_denial = self._reject_read_only_mutation("execute_sql")
+            if read_only_denial is not None:
+                return read_only_denial
             if sql_type in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE):
                 return self.execute_write(
                     sql,
@@ -1776,6 +1777,10 @@ class DBFuncTool:
         Returns:
             Execution result with success status
         """
+        read_only_denial = self._reject_read_only_mutation("execute_ddl")
+        if read_only_denial is not None:
+            return read_only_denial
+
         from datus.utils.sql_utils import _first_statement, parse_sql_type, strip_sql_comments
 
         # Validate: strip comments, reject multi-statement SQL
@@ -1893,6 +1898,10 @@ class DBFuncTool:
         Returns:
             FuncToolResult with execution metadata when successful.
         """
+        read_only_denial = self._reject_read_only_mutation("execute_write")
+        if read_only_denial is not None:
+            return read_only_denial
+
         from datus.utils.sql_utils import (
             _first_statement,
             looks_like_sql_file_ref,
@@ -2180,6 +2189,10 @@ class DBFuncTool:
         Returns:
             FuncToolResult with transfer metadata on success.
         """
+        read_only_denial = self._reject_read_only_mutation("transfer_query_result")
+        if read_only_denial is not None:
+            return read_only_denial
+
         # Validate batch_size
         if batch_size <= 0:
             return FuncToolResult(success=0, error="batch_size must be a positive integer.")
@@ -2613,12 +2626,14 @@ class DBFuncTool:
         """
         Statically validate a CREATE TABLE DDL against the target dialect's rules.
         Optionally runs ``dry_run_ddl`` (actual CREATE + DROP to a temp table)
-        when ``target_table`` is provided and the adapter supports it.
+        when ``target_table`` is provided, the adapter supports it, and this
+        tool is not read-only. Read-only tools perform static validation only.
 
         Args:
             datasource: Target datasource name. Uses the default datasource if empty.
             ddl: The CREATE TABLE DDL to validate.
-            target_table: If provided, attempt dry-run using this table name.
+            target_table: If provided on a write-capable tool, attempt dry-run
+                          using this table name. Ignored for read-only tools.
 
         Returns:
             result = {"errors": [...], "validated": true|false}. Empty errors
@@ -2647,7 +2662,7 @@ class DBFuncTool:
             errors.append(f"Static check raised unexpectedly: {e}")
 
         # If static errors were found, skip dry_run — DDL is already invalid.
-        if target_table and not errors and hasattr(connector, "dry_run_ddl"):
+        if target_table and not self.read_only and not errors and hasattr(connector, "dry_run_ddl"):
             try:
                 dry_errors = connector.dry_run_ddl(ddl, target_table)
                 if dry_errors:
