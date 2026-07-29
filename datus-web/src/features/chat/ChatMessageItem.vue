@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
+import { Badge } from "@/components/ui/badge"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
 import type { ChatDisplayMessage, SelectOption, SuccessStorySource } from "@/types"
 
@@ -69,9 +70,11 @@ function saveSuccessStory(source: SuccessStorySource) {
     <MessageContent :class="contentClass">
       <div
         v-if="message.depth && !isUserMessage && !isSystemMessage"
-        class="mb-3 text-sm text-muted-foreground"
+        class="mb-3"
       >
-        depth {{ message.depth }}
+        <Badge variant="outline">
+          子 Agent 执行
+        </Badge>
       </div>
 
       <div class="flex flex-col gap-3">

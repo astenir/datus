@@ -18,35 +18,31 @@ import {
   CodeBlockTitle,
 } from "@/components/ai-elements/code-block"
 import {
-  Node,
-  NodeContent,
-  NodeDescription,
-  NodeHeader,
-  NodeTitle,
-} from "@/components/ai-elements/node"
-import {
   Reasoning,
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning"
-import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-} from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
 import PlanConfirmationBlock from "@/features/chat/PlanConfirmationBlock.vue"
 import PlanPreviewBlock from "@/features/chat/PlanPreviewBlock.vue"
+import SubagentSummaryBlock from "@/features/chat/SubagentSummaryBlock.vue"
 import TodoQueueBlock from "@/features/chat/TodoQueueBlock.vue"
 import TodoExecutionSummaryBlock from "@/features/chat/TodoExecutionSummaryBlock.vue"
+import ToolExecutionCard from "@/features/chat/ToolExecutionCard.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
 import { todoQueueFromToolResult } from "@/lib/todo-queue"
+import {
+  isToolDisplayBlock,
+  toolPresentation,
+  visibleToolChildMessages,
+} from "@/lib/tool-presentation"
 import { isSuccessStoryEligibleToolExecution } from "@/lib/tool-display"
 import type { MessageDisplayBlock, SelectOption, SuccessStorySource, ToolChildMessage } from "@/types"
 
@@ -106,18 +102,33 @@ function successStorySaved(source?: SuccessStorySource) {
   return source ? props.isSuccessStorySaved?.(source) === true : false
 }
 
-function toolOutputState(errorText?: string) {
-  return errorText ? "output-error" : "output-available"
-}
-
-function isSubAgentTaskTool(toolName: string) {
-  return toolName.toLowerCase() === "task"
-}
+const toolBlock = computed(() => isToolDisplayBlock(props.block) ? props.block : null)
+const currentToolPresentation = computed(() => toolBlock.value ? toolPresentation(toolBlock.value) : null)
+const toolChildMessages = computed(() => {
+  const current = toolBlock.value
+  return visibleToolChildMessages(current && "childMessages" in current ? current.childMessages : undefined)
+})
+const hasToolInput = computed(() => toolBlock.value?.type === "tool-call" || toolBlock.value?.type === "tool-execution")
+const hasToolOutput = computed(() => toolBlock.value?.type === "tool-result" || toolBlock.value?.type === "tool-execution")
+const toolInputValue = computed(() => {
+  const current = toolBlock.value
+  return current && current.type !== "tool-result" ? current.params : undefined
+})
+const toolOutputValue = computed(() => {
+  const current = toolBlock.value
+  return current && current.type !== "tool-call" ? current.result : undefined
+})
+const toolErrorText = computed(() => {
+  const current = toolBlock.value
+  return current && current.type !== "tool-call" ? current.errorText : undefined
+})
+const currentSuccessStorySource = computed(() => successStorySource(props.block))
 
 const todoQueue = computed(() => {
-  if (props.block.type !== "tool-result" && props.block.type !== "tool-execution") return null
-  if (props.block.errorText || props.block.resultStatus === "error") return null
-  return todoQueueFromToolResult(props.block.toolName, props.block.result)
+  const current = toolBlock.value
+  if (!current || current.type === "tool-call") return null
+  if (current.errorText || current.resultStatus === "error") return null
+  return todoQueueFromToolResult(current.toolName, current.result)
 })
 
 function codeLanguage(language: string) {
@@ -128,17 +139,16 @@ function artifactKindLabel(kind: string) {
   return kind === "report" ? "报表" : "仪表盘"
 }
 
-function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-complete" }>) {
-  const parts = []
-  if (block.toolCount != null) parts.push(`${block.toolCount} 次工具调用`)
-  if (block.duration != null) parts.push(`${block.duration.toFixed(2)}s`)
-  return parts.join(" · ") || "已完成"
+function artifactModeLabel(mode: string | undefined) {
+  if (mode === "new") return "新建"
+  if (mode === "edit") return "编辑"
+  return mode ?? ""
 }
 
 function childMessageLabel(message: ToolChildMessage) {
   if (message.role === "system") return "系统事件"
   if (message.role === "user") return "用户输入"
-  return message.depth && message.depth > 0 ? "子 Agent" : "关联消息"
+  return message.depth && message.depth > 0 ? "子 Agent 进展" : "关联消息"
 }
 
 function isDockedInteraction(block: MessageDisplayBlock) {
@@ -182,7 +192,8 @@ function readOnlyInteractionDescription() {
   <PlanConfirmationBlock
     v-else-if="block.type === 'plan-confirmation'"
     :block="block"
-    :disabled="interactionDisabled || block.interaction.interactionKey !== activeInteractionKey"
+    :active="Boolean(block.interaction && block.interaction.interactionKey === activeInteractionKey)"
+    :pending="Boolean(interactionDisabled && block.interaction?.interactionKey === activeInteractionKey)"
     @submit="submitInteraction"
   />
 
@@ -223,37 +234,45 @@ function readOnlyInteractionDescription() {
     :block="block"
   />
 
-  <Tool
-    v-else-if="block.type === 'tool-call'"
-    :default-open="isSubAgentTaskTool(block.toolName)"
+  <ToolExecutionCard
+    v-else-if="toolBlock && currentToolPresentation"
+    :presentation="currentToolPresentation"
   >
-    <ToolHeader
-      :type="`tool-${block.toolName}` as never"
-      state="input-available"
-      :title="block.toolName"
+    <ToolPayloadView
+      v-if="hasToolInput"
+      mode="input"
+      :tool-name="toolBlock.toolName"
+      :value="toolInputValue"
+      :datasource-name="datasourceName"
+      :datasource-options="datasourceOptions"
+      :database-name="databaseName"
+      :success-story-source="currentSuccessStorySource"
+      :success-story-saving="successStorySaving(currentSuccessStorySource)"
+      :success-story-saved="successStorySaved(currentSuccessStorySource)"
+      @save-success-story="saveSuccessStory"
     />
-    <ToolContent>
-      <ToolPayloadView
-        mode="input"
-        :tool-name="block.toolName"
-        :value="block.params"
-        :datasource-name="datasourceName"
-        :datasource-options="datasourceOptions"
-        :database-name="databaseName"
-      />
-      <div
-        v-if="block.childMessages?.length"
-        class="flex flex-col gap-3 border-t border-border/70 p-4"
-      >
+
+    <template v-if="toolChildMessages.length">
+      <Separator />
+      <div class="flex flex-col gap-3 p-4">
+        <div class="flex min-w-0 items-center justify-between gap-3">
+          <h4 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            子 Agent 执行过程
+          </h4>
+          <Badge variant="outline">
+            {{ toolChildMessages.length }} 条进展
+          </Badge>
+        </div>
+
         <div
-          v-for="child in block.childMessages"
+          v-for="child in toolChildMessages"
           :key="child.id"
-          class="flex flex-col gap-2 rounded-md bg-muted/40 p-3"
+          class="flex min-w-0 flex-col gap-2 border-l border-border pl-3"
         >
           <div class="text-xs font-medium text-muted-foreground">
             {{ childMessageLabel(child) }}
           </div>
-          <div class="flex flex-col gap-2 text-sm leading-6">
+          <div class="flex min-w-0 flex-col gap-2 text-sm leading-6">
             <template v-if="child.blocks?.length">
               <ChatBlockRenderer
                 v-for="(childBlock, index) in child.blocks"
@@ -285,142 +304,43 @@ function readOnlyInteractionDescription() {
           </div>
         </div>
       </div>
-    </ToolContent>
-  </Tool>
+    </template>
 
-  <Tool
-    v-else-if="block.type === 'tool-result'"
-    :default-open="isSubAgentTaskTool(block.toolName)"
-  >
-    <ToolHeader
-      :type="`tool-${block.toolName}` as never"
-      :state="toolOutputState(block.errorText)"
-      :title="block.toolName"
-    />
-    <ToolContent>
+    <template v-if="hasToolOutput">
+      <Separator />
       <ToolPayloadView
         mode="output"
-        :tool-name="block.toolName"
-        :value="block.result"
-        :error-text="block.errorText"
+        :tool-name="toolBlock.toolName"
+        :value="toolOutputValue"
+        :error-text="toolErrorText"
         :datasource-name="datasourceName"
         :datasource-options="datasourceOptions"
         :database-name="databaseName"
       />
-    </ToolContent>
-  </Tool>
+    </template>
+  </ToolExecutionCard>
 
-  <Tool
-    v-else-if="block.type === 'tool-execution'"
-    :default-open="isSubAgentTaskTool(block.toolName)"
-  >
-    <ToolHeader
-      :type="`tool-${block.toolName}` as never"
-      :state="toolOutputState(block.errorText)"
-      :title="block.toolName"
-    />
-    <ToolContent>
-      <ToolPayloadView
-        mode="input"
-        :tool-name="block.toolName"
-        :value="block.params"
-        :datasource-name="datasourceName"
-        :datasource-options="datasourceOptions"
-        :database-name="databaseName"
-        :success-story-source="successStorySource(block)"
-        :success-story-saving="successStorySaving(successStorySource(block))"
-        :success-story-saved="successStorySaved(successStorySource(block))"
-        @save-success-story="saveSuccessStory"
-      />
-      <div
-        v-if="block.childMessages?.length"
-        class="flex flex-col gap-3 border-t border-border/70 p-4"
-      >
-        <div
-          v-for="child in block.childMessages"
-          :key="child.id"
-          class="flex flex-col gap-2 rounded-md bg-muted/40 p-3"
-        >
-          <div class="text-xs font-medium text-muted-foreground">
-            {{ childMessageLabel(child) }}
-          </div>
-          <div class="flex flex-col gap-2 text-sm leading-6">
-            <template v-if="child.blocks?.length">
-              <ChatBlockRenderer
-                v-for="(childBlock, index) in child.blocks"
-                :key="`${child.id}-${index}`"
-                :block="childBlock"
-                :streaming="streaming"
-                :interaction-disabled="interactionDisabled"
-                :active-interaction-key="activeInteractionKey"
-                :docked-interaction-key="dockedInteractionKey"
-                :datasource-name="datasourceName"
-                :datasource-options="datasourceOptions"
-                :database-name="databaseName"
-                :success-story-session-id="successStorySessionId"
-                :success-story-session-link="successStorySessionLink"
-                :can-save-success-story="canSaveSuccessStory"
-                :success-story-version="successStoryVersion"
-                :is-success-story-saving="isSuccessStorySaving"
-                :is-success-story-saved="isSuccessStorySaved"
-                @submit-interaction="submitInteraction"
-                @open-artifact="openArtifact"
-                @save-success-story="saveSuccessStory"
-              />
-            </template>
-            <MessageResponse
-              v-else
-              :content="child.content"
-              :streaming="streaming"
-            />
-          </div>
-        </div>
-      </div>
-      <ToolPayloadView
-        mode="output"
-        :tool-name="block.toolName"
-        :value="block.result"
-        :error-text="block.errorText"
-        :datasource-name="datasourceName"
-        :datasource-options="datasourceOptions"
-        :database-name="databaseName"
-      />
-    </ToolContent>
-  </Tool>
-
-  <Node
+  <SubagentSummaryBlock
     v-else-if="block.type === 'subagent-complete'"
-    class="w-full"
-  >
-    <NodeHeader>
-      <NodeTitle>{{ block.subagent }}</NodeTitle>
-      <NodeDescription>
-        {{ block.errorText ? "子 Agent 执行失败" : "子 Agent 已完成" }}
-      </NodeDescription>
-    </NodeHeader>
-    <NodeContent class="flex flex-col gap-2 text-sm">
-      <p class="text-muted-foreground">
-        {{ subagentSummary(block) }}
-      </p>
-      <p
-        v-if="block.errorText"
-        class="text-destructive"
-      >
-        {{ block.errorText }}
-      </p>
-    </NodeContent>
-  </Node>
+    :block="block"
+  />
 
   <Artifact
     v-else-if="block.type === 'artifact'"
   >
     <ArtifactHeader>
       <div class="min-w-0">
-        <ArtifactTitle class="truncate">
-          {{ block.name }}
-        </ArtifactTitle>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <ArtifactTitle class="truncate">
+            {{ block.name }}
+          </ArtifactTitle>
+          <Badge variant="secondary">
+            <CheckCircle2Icon data-icon="inline-start" />
+            已生成
+          </Badge>
+        </div>
         <ArtifactDescription>
-          {{ artifactKindLabel(block.kind) }}{{ block.mode ? ` · ${block.mode}` : "" }}
+          {{ artifactKindLabel(block.kind) }}{{ block.mode ? ` · ${artifactModeLabel(block.mode)}` : "" }}
         </ArtifactDescription>
       </div>
       <ArtifactActions>

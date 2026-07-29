@@ -92,8 +92,9 @@ describe("ChatBlockRenderer todo queue routing", () => {
       render: () => h(ChatBlockRenderer, { block }),
     }))
 
-    expect(html).toContain("todo_write")
-    expect(html).toContain("Error")
+    expect(html).toContain("创建执行队列")
+    expect(html).toContain("执行失败")
+    expect(html).toContain("Invalid JSON format for todos")
     expect(html).not.toContain("执行队列已更新")
   })
 })

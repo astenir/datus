@@ -100,7 +100,14 @@ export type MessageBlock =
 export type PlanConfirmationDisplayBlock = {
   type: "plan-confirmation";
   content: string;
-  interaction: Extract<MessageBlock, { type: "user-interaction" }>;
+  interaction?: Extract<MessageBlock, { type: "user-interaction" }>;
+  outcome?: PlanConfirmationOutcome;
+};
+
+export type PlanConfirmationOutcome = {
+  status: "confirmed" | "cancelled" | "feedback" | "error";
+  feedback?: string;
+  error?: string;
 };
 
 export type TodoExecutionItem = {
