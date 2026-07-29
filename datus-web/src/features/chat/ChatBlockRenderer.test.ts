@@ -130,4 +130,29 @@ describe("ChatBlockRenderer execution lifecycle", () => {
     expect(html).not.toContain("执行中")
     expect(html).not.toContain("animate-spin")
   })
+
+  it("keeps task failures in the card summary without exposing the raw result", async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, {
+        block: {
+          type: "tool-execution",
+          callToolId: "task-call-error",
+          toolName: "task",
+          params: {
+            type: "explore",
+            prompt: "探索基金持仓相关表",
+          },
+          resultStatus: "error",
+          errorText: "子 Agent 执行失败，请检查任务配置",
+          result: {
+            session_id: "internal-task-session",
+          },
+        },
+      }),
+    }))
+
+    expect(html).toContain("执行失败")
+    expect(html).toContain("子 Agent 执行失败，请检查任务配置")
+    expect(html).not.toContain("internal-task-session")
+  })
 })

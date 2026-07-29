@@ -113,6 +113,7 @@ const toolChildMessages = computed(() => {
 })
 const hasToolInput = computed(() => toolBlock.value?.type === "tool-call" || toolBlock.value?.type === "tool-execution")
 const hasToolOutput = computed(() => toolBlock.value?.type === "tool-result" || toolBlock.value?.type === "tool-execution")
+const showToolOutput = computed(() => hasToolOutput.value && currentToolPresentation.value?.isSubagent !== true)
 const toolInputValue = computed(() => {
   const current = toolBlock.value
   return current && current.type !== "tool-result" ? current.params : undefined
@@ -148,10 +149,10 @@ function artifactModeLabel(mode: string | undefined) {
   return mode ?? ""
 }
 
-function childMessageLabel(message: ToolChildMessage) {
+function childMessageSourceLabel(message: ToolChildMessage) {
   if (message.role === "system") return "系统事件"
   if (message.role === "user") return "用户输入"
-  return message.depth && message.depth > 0 ? "子 Agent 进展" : "关联消息"
+  return undefined
 }
 
 function isDockedInteraction(block: MessageDisplayBlock) {
@@ -260,10 +261,10 @@ function readOnlyInteractionDescription() {
       <div class="flex flex-col gap-3 p-4">
         <div class="flex min-w-0 items-center justify-between gap-3">
           <h4 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            子 Agent 执行过程
+            执行过程
           </h4>
           <Badge variant="outline">
-            {{ toolChildMessages.length }} 条进展
+            {{ toolChildMessages.length }} 项
           </Badge>
         </div>
 
@@ -272,8 +273,11 @@ function readOnlyInteractionDescription() {
           :key="child.id"
           class="flex min-w-0 flex-col gap-2 border-l border-border pl-3"
         >
-          <div class="text-xs font-medium text-muted-foreground">
-            {{ childMessageLabel(child) }}
+          <div
+            v-if="childMessageSourceLabel(child)"
+            class="text-xs font-medium text-muted-foreground"
+          >
+            {{ childMessageSourceLabel(child) }}
           </div>
           <div class="flex min-w-0 flex-col gap-2 text-sm leading-6">
             <template v-if="child.blocks?.length">
@@ -310,7 +314,7 @@ function readOnlyInteractionDescription() {
       </div>
     </template>
 
-    <template v-if="hasToolOutput">
+    <template v-if="showToolOutput">
       <Separator />
       <ToolPayloadView
         mode="output"

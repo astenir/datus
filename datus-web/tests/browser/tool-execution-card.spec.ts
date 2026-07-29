@@ -55,14 +55,18 @@ test("uses a compact two-row header without a vertically floating leading icon",
   expect(alignment?.centerDelta).toBeLessThanOrEqual(1)
 })
 
-test("shows sub-agent progress inside the parent task without duplicating completion events", async ({ page }) => {
+test("keeps task execution concise without repeated progress labels or wrapper results", async ({ page }) => {
   const taskCard = page.getByTestId("tool-execution-card").nth(1)
   await expect(taskCard.getByText("4 次工具调用 · 3.20 秒", { exact: true })).toBeVisible()
 
   await taskCard.getByRole("button").first().click()
-  await expect(taskCard.getByText("子 Agent 执行过程", { exact: true })).toBeVisible()
+  await expect(taskCard.getByText("执行过程", { exact: true })).toBeVisible()
+  await expect(taskCard.getByText("1 项", { exact: true })).toBeVisible()
+  await expect(taskCard.getByText("子 Agent 进展", { exact: true })).toHaveCount(0)
   await expect(taskCard.getByText("列出数据表", { exact: true })).toBeVisible()
   await expect(page.getByText("仅用于完成事件", { exact: true })).toHaveCount(0)
+  await expect(taskCard.getByText("结果", { exact: true })).toHaveCount(0)
+  await expect(taskCard).not.toContainText("explore-browser-1")
 
   const childCard = taskCard.getByTestId("tool-execution-card")
   await expect(childCard.getByTestId("tool-card-inline-metadata")).toHaveText("0.80 秒 · 3 行")
