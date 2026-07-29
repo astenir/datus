@@ -297,7 +297,6 @@ export function useChatWorkspace() {
   function startNewSession() {
     artifactEditSession.value = null;
     selectedAgent.value = "";
-    clearMessages();
     selectSession(null);
   }
 

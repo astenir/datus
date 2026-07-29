@@ -121,7 +121,11 @@ class EnterpriseChatServiceMixin:
                 except Exception as e:
                     logger.warning(f"Failed to read session {sid}: {e}")
 
-            sessions.sort(key=lambda x: x.last_updated or x.created_at, reverse=True)
+            sessions = self._merge_runtime_sessions(
+                sessions,
+                user_id=user_id,
+                subagent_id=subagent_id,
+            )
             return Result[ChatSessionData](
                 success=True,
                 data=ChatSessionData(

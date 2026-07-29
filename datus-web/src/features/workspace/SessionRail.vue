@@ -635,7 +635,12 @@ async function deleteSession(sessionId: string) {
                   :tooltip="titleFromQuery(session.user_query)"
                   @click="openSession(session.session_id)"
                 >
-                  <MessageCircleIcon />
+                  <LoaderCircleIcon
+                    v-if="session.is_active"
+                    aria-label="对话正在运行"
+                    class="animate-spin"
+                  />
+                  <MessageCircleIcon v-else />
                   <span>{{ titleFromQuery(session.user_query) }}</span>
                 </SidebarMenuButton>
                 <DropdownMenu>

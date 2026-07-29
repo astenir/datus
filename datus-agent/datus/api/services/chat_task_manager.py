@@ -459,6 +459,7 @@ class ChatTaskManager:
 
         # Placeholder — asyncio_task set immediately after
         task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=user_id)  # type: ignore[arg-type]
+        task.user_query = request.message
         task.admission_token = admission_token
         self._tasks[session_id] = task
         try:

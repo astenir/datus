@@ -60,6 +60,18 @@ class TestChatServiceListSessions:
             project_id="project-1",
             session_body_store=BodyStore(),
         )
+        svc._task_manager.list_task_snapshots = MagicMock(
+            return_value=[
+                {
+                    "session_id": "s1",
+                    "owner_user_id": "alice",
+                    "status": "running",
+                    "is_running": True,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "user_query": "older",
+                }
+            ]
+        )
 
         with patch("datus.api.services.chat_service.SessionManager", side_effect=AssertionError("sync bridge used")):
             result = await svc.list_sessions_async(user_id="alice")
@@ -67,6 +79,8 @@ class TestChatServiceListSessions:
         assert result.success is True
         assert [item.session_id for item in result.data.sessions] == ["s2", "s1"]
         assert result.data.total_count == 2
+        assert result.data.sessions[0].is_active is False
+        assert result.data.sessions[1].is_active is True
 
     @pytest.mark.asyncio
     async def test_delete_session_async_uses_body_store_directly(self, real_agent_config):
