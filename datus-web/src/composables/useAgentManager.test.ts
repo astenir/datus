@@ -26,6 +26,20 @@ const toastError = vi.fn();
 const toastSuccess = vi.fn();
 const grantedPermissions = new Set<string>();
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function flushPendingPromises() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function permissionMatches(required: string, granted: string) {
   if (granted === "*" || granted === required) return true;
   if (!granted.endsWith("*")) return false;
@@ -290,6 +304,56 @@ describe("useAgentManager", () => {
       allowedUserIds: ["alice"],
     });
     expect(manager.selectedUseToolCount.value).toBe(2);
+  });
+
+  it("loads edit dependencies in parallel while keeping detail loading active", async () => {
+    const defaultUsersRequest = deferred<string[]>();
+    const useToolsRequest = deferred<{
+      default_tools: string[];
+      tool_types: Record<string, { tools: string[] }>;
+    }>();
+    agentDefaultUsers.mockReturnValueOnce(defaultUsersRequest.promise);
+    agentUseTools.mockReturnValueOnce(useToolsRequest.promise);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    const selection = manager.selectAgent("analyst");
+
+    expect(manager.detailLoading.value).toBe(true);
+    await flushPendingPromises();
+    expect(agentDefaultUsers).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(agentUseTools).toHaveBeenCalledWith("http://api.test", "gen_sql");
+    expect(manager.detailLoading.value).toBe(true);
+
+    defaultUsersRequest.resolve(["alice"]);
+    useToolsRequest.resolve({
+      default_tools: ["read_query"],
+      tool_types: { analytics: { tools: ["explain_query"] } },
+    });
+    await selection;
+
+    expect(manager.detailLoading.value).toBe(false);
+    expect(manager.form.value.defaultUserIds).toEqual(["alice"]);
+  });
+
+  it("does not let a stale edit request overwrite a newly started form", async () => {
+    const detailRequest = deferred<null>();
+    getAgent.mockReturnValueOnce(detailRequest.promise);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    const selection = manager.selectAgent("analyst");
+    expect(manager.detailLoading.value).toBe(true);
+
+    manager.startCreate();
+    detailRequest.resolve(null);
+    await selection;
+
+    expect(manager.detailLoading.value).toBe(false);
+    expect(manager.detailError.value).toBeNull();
+    expect(manager.formMode.value).toBe("create");
+    expect(manager.selectedAgent.value).toBeNull();
+    expect(manager.form.value.name).toBe("");
   });
 
   it("keeps existing agents private when the detail payload has no ACL", async () => {

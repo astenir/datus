@@ -142,30 +142,17 @@ class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
             return None
 
     @override
-    def _get_ddl(self, schema_name: str, table_name: str, object_type: str = "TABLE") -> str:
-        """Get DDL for a table/view, including Greenplum distribution policy for tables.
+    def _get_table_ddl_suffix(self, schema_name: str, table_name: str) -> str:
+        """Return the Greenplum distribution clause for reconstructed table DDL.
 
         Args:
             schema_name: Schema name
             table_name: Table name
-            object_type: Object type (TABLE, VIEW, MATERIALIZED VIEW)
 
         Returns:
-            DDL statement as string
+            Distribution clause, or an empty string when it cannot be resolved.
         """
-        ddl = super()._get_ddl(schema_name, table_name, object_type)
-
-        # Append distribution policy for tables
-        if object_type == "TABLE" and ddl.startswith("CREATE TABLE"):
-            dist_policy = self._get_distribution_policy(schema_name, table_name)
-            if dist_policy is not None:
-                # Insert distribution policy before the trailing semicolon
-                if ddl.endswith(";"):
-                    ddl = ddl[:-1] + f"\n{dist_policy};"
-                else:
-                    ddl += f"\n{dist_policy}"
-
-        return ddl
+        return self._get_distribution_policy(schema_name, table_name) or ""
 
     # ==================== Storage Info ====================
 

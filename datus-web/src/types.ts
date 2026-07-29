@@ -369,6 +369,7 @@ export type ColumnInfo = {
   nullable: boolean;
   default_value?: string;
   pk: boolean;
+  comment?: string | null;
 };
 
 export type IndexInfo = {

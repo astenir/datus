@@ -58,6 +58,53 @@ _REPORT_TOOL_CATEGORIES: tuple[str, ...] = (
     "reference_template_tools",
 )
 
+_INTERACTION_TOOL_CATEGORIES: tuple[str, ...] = ("tools",)
+
+REPORT_ARTIFACT_TOOL_METHODS: tuple[str, ...] = (
+    "start_new_report",
+    "bind_existing_report",
+    "save_query",
+    "validate_render",
+)
+
+DASHBOARD_ARTIFACT_TOOL_METHODS: tuple[str, ...] = (
+    "start_new_dashboard",
+    "bind_existing_dashboard",
+    "save_query_template",
+    "validate_render",
+)
+
+ARTIFACT_TOOL_METHODS: tuple[str, ...] = tuple(
+    sorted(set(REPORT_ARTIFACT_TOOL_METHODS + DASHBOARD_ARTIFACT_TOOL_METHODS))
+)
+
+_STANDARD_FILESYSTEM_METHODS: tuple[str, ...] = (
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "glob",
+    "grep",
+)
+
+_VISUAL_REPORT_DEFAULT_TOOLS: tuple[str, ...] = (
+    "semantic_tools.*",
+    "db_tools.*",
+    "context_search_tools.*",
+    *tuple(f"filesystem_tools.{method}" for method in _STANDARD_FILESYSTEM_METHODS),
+    *tuple(f"artifact_tools.{method}" for method in REPORT_ARTIFACT_TOOL_METHODS),
+    "tools.*",
+)
+
+_VISUAL_DASHBOARD_DEFAULT_TOOLS: tuple[str, ...] = (
+    "semantic_tools.*",
+    "db_tools.*",
+    "context_search_tools.*",
+    *tuple(f"filesystem_tools.{method}" for method in _STANDARD_FILESYSTEM_METHODS),
+    *tuple(f"artifact_tools.{method}" for method in DASHBOARD_ARTIFACT_TOOL_METHODS),
+    "tools.*",
+)
+
 _ARTIFACT_ASK_TOOL_CATEGORIES: tuple[str, ...] = (
     "db_tools",
     "semantic_tools",
@@ -83,6 +130,7 @@ _ARTIFACT_ASK_DEFAULT_TOOLS: tuple[str, ...] = (
     "filesystem_tools.read_file",
     "filesystem_tools.glob",
     "filesystem_tools.grep",
+    "tools.*",
 )
 
 
@@ -103,8 +151,11 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
             "filesystem_tools.*",
             "memory_tools.*",
             "platform_doc_tools.*",
+            "tools.*",
         ),
-        tool_categories=_USER_FACING_TOOL_CATEGORIES + ("memory_tools",),
+        tool_categories=(
+            _USER_FACING_TOOL_CATEGORIES + ("memory_tools", "platform_doc_tools") + _INTERACTION_TOOL_CATEGORIES
+        ),
     ),
     AgentNodeCapability(
         node_class="gen_sql",
@@ -117,8 +168,8 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         prompt_template="gen_sql_system",
         module_permission="module.sql_executor",
         supports_mcp=True,
-        default_tools=("db_tools.*", "semantic_tools.*", "context_search_tools.*"),
-        tool_categories=_ANALYSIS_TOOL_CATEGORIES,
+        default_tools=("db_tools.*", "semantic_tools.*", "context_search_tools.*", "tools.*"),
+        tool_categories=_ANALYSIS_TOOL_CATEGORIES + _INTERACTION_TOOL_CATEGORIES,
     ),
     AgentNodeCapability(
         node_class="gen_report",
@@ -130,8 +181,14 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_report - Report/analysis generation",
         prompt_template="gen_report_system",
         module_permission="module.report.query",
-        default_tools=("semantic_tools.*", "context_search_tools.list_subject_tree"),
-        tool_categories=_REPORT_TOOL_CATEGORIES,
+        default_tools=(
+            "semantic_tools.*",
+            "context_search_tools.list_subject_tree",
+            *tuple(f"filesystem_tools.{method}" for method in _STANDARD_FILESYSTEM_METHODS),
+            "tools.*",
+        ),
+        tool_categories=_REPORT_TOOL_CATEGORIES + ("filesystem_tools",) + _INTERACTION_TOOL_CATEGORIES,
+        tool_method_allowlists=(("filesystem_tools", _STANDARD_FILESYSTEM_METHODS),),
     ),
     AgentNodeCapability(
         node_class="gen_visual_report",
@@ -143,8 +200,14 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_visual_report - Structured report artifact (manifest + queries)",
         prompt_template="gen_visual_report_system",
         module_permission="module.report.query",
-        default_tools=("semantic_tools.*", "db_tools.*", "context_search_tools.*"),
-        tool_categories=_ANALYSIS_TOOL_CATEGORIES,
+        default_tools=_VISUAL_REPORT_DEFAULT_TOOLS,
+        tool_categories=_ANALYSIS_TOOL_CATEGORIES
+        + ("filesystem_tools", "artifact_tools")
+        + _INTERACTION_TOOL_CATEGORIES,
+        tool_method_allowlists=(
+            ("filesystem_tools", _STANDARD_FILESYSTEM_METHODS),
+            ("artifact_tools", REPORT_ARTIFACT_TOOL_METHODS),
+        ),
     ),
     AgentNodeCapability(
         node_class="gen_visual_dashboard",
@@ -156,8 +219,14 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_visual_dashboard - Parameterized dashboard artifact (Jinja2 SQL templates)",
         prompt_template="gen_visual_dashboard_system",
         module_permission="module.dashboard.query",
-        default_tools=("semantic_tools.*", "db_tools.*", "context_search_tools.*"),
-        tool_categories=_ANALYSIS_TOOL_CATEGORIES,
+        default_tools=_VISUAL_DASHBOARD_DEFAULT_TOOLS,
+        tool_categories=_ANALYSIS_TOOL_CATEGORIES
+        + ("filesystem_tools", "artifact_tools")
+        + _INTERACTION_TOOL_CATEGORIES,
+        tool_method_allowlists=(
+            ("filesystem_tools", _STANDARD_FILESYSTEM_METHODS),
+            ("artifact_tools", DASHBOARD_ARTIFACT_TOOL_METHODS),
+        ),
     ),
     AgentNodeCapability(
         node_class="ask_metrics",
@@ -186,7 +255,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         prompt_template="ask_report_system",
         module_permission="module.report.query",
         default_tools=_ARTIFACT_ASK_DEFAULT_TOOLS,
-        tool_categories=_ARTIFACT_ASK_TOOL_CATEGORIES,
+        tool_categories=_ARTIFACT_ASK_TOOL_CATEGORIES + _INTERACTION_TOOL_CATEGORIES,
         tool_method_allowlists=(("filesystem_tools", _ASK_AGENT_FILESYSTEM_READ_ONLY),),
     ),
     AgentNodeCapability(
@@ -198,7 +267,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         prompt_template="ask_dashboard_system",
         module_permission="module.dashboard.query",
         default_tools=_ARTIFACT_ASK_DEFAULT_TOOLS,
-        tool_categories=_ARTIFACT_ASK_TOOL_CATEGORIES,
+        tool_categories=_ARTIFACT_ASK_TOOL_CATEGORIES + _INTERACTION_TOOL_CATEGORIES,
         tool_method_allowlists=(("filesystem_tools", _ASK_AGENT_FILESYSTEM_READ_ONLY),),
     ),
     AgentNodeCapability(

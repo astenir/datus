@@ -1047,8 +1047,9 @@ class AgenticNode(Node):
 
         The snapshot is replayed verbatim while these stay equal. They cover
         the inputs that change the prompt's identity within a session: the
-        node template, its version, and the active model (a model switch also
-        resets the provider-side prefix cache, so rebuilding is free). The
+        node template, its version, the active model, the execution mode, and
+        the LLM-visible native/MCP tool names (a model switch also resets the
+        provider-side prefix cache, so rebuilding is free). The
         live per-turn datasource/dialect is injected in the user message
         instead, so it deliberately does **not** appear here; date, language,
         memory, and skills are frozen until the snapshot is rebuilt.
@@ -1072,11 +1073,58 @@ class AgenticNode(Node):
                     model_id = f"{getattr(mc, 'type', '') or ''}:{getattr(mc, 'model', '') or ''}"
             except Exception:
                 model_id = ""
+        # Hosted web tools are deliberately omitted because their schemas carry
+        # their usage contract and the system prompts do not advertise them.
+        tool_names = ",".join(
+            sorted(
+                {
+                    str(getattr(tool, "name", "")).strip()
+                    for tool in (getattr(self, "tools", None) or [])
+                    if str(getattr(tool, "name", "")).strip() not in {"", "web_search", "web_fetch"}
+                }
+            )
+        )
+        mcp_server_names = ",".join(
+            sorted(str(name).strip() for name in (getattr(self, "mcp_servers", None) or {}) if str(name).strip())
+        )
+        mcp_tool_names: set[str] = set()
+        get_mcp_tool_names = getattr(self, "_get_mcp_tool_names_for_prompt", None)
+        if callable(get_mcp_tool_names):
+            try:
+                mcp_tool_names.update(str(name).strip() for name in get_mcp_tool_names() if str(name).strip())
+            except Exception:
+                logger.debug("Failed to collect MCP prompt tool names for snapshot identity", exc_info=True)
         return {
             "node_name": self.get_node_name(),
             "prompt_version": str(version or ""),
             "model_name": model_id,
+            "execution_mode": str(getattr(self, "execution_mode", "") or ""),
+            "tool_names": tool_names,
+            "mcp_server_names": mcp_server_names,
+            "mcp_tool_names": ",".join(sorted(mcp_tool_names)),
         }
+
+    def _exposed_tool_names(self) -> set[str]:
+        """Return the native tool names currently exposed to the LLM."""
+
+        return {
+            str(getattr(tool, "name", "")).strip()
+            for tool in (self.tools or [])
+            if str(getattr(tool, "name", "")).strip()
+        }
+
+    @staticmethod
+    def _tool_group_exposed(tool_instance: Any, exposed_names: set[str]) -> bool:
+        """Return whether any tool from one mounted group remains exposed."""
+
+        if not tool_instance:
+            return False
+        try:
+            return any(
+                str(getattr(tool, "name", "")).strip() in exposed_names for tool in tool_instance.available_tools()
+            )
+        except Exception:
+            return False
 
     def _get_session_system_prompt(
         self,
@@ -1258,6 +1306,12 @@ class AgenticNode(Node):
         gating overrides (e.g. artifact-ask nodes) are honored via virtual
         dispatch.
         """
+        # ``execute_stream`` mounts these tools before applying Agent Tool
+        # Policy, then suspends this prompt-finalization side effect while the
+        # filtered prompt is built. Re-mounting here would otherwise bypass an
+        # allowlist in the interval between policy enforcement and dispatch.
+        if getattr(self, "_lazy_tool_mount_suspended", False):
+            return
         self._ensure_skill_tools_in_tools()
         self._ensure_bash_tool_in_tools()
         self._ensure_memory_tool_in_tools()
@@ -2938,6 +2992,18 @@ class AgenticNode(Node):
         try:
             await self._before_stream(ctx)
 
+            # Complete lazy tool assembly before filtering so Skill, Bash,
+            # Memory, and Web tools cannot enter the LLM surface after an
+            # allowlist has already been applied.
+            self._ensure_lazy_tools_mounted()
+
+            # Keep the prompt and SDK tool surface consistent. Applying the
+            # policy only inside ``_stream_once`` lets the prompt advertise a
+            # tool that the same run removes immediately before dispatch.
+            from datus.agent.tool_policy import apply_agent_runtime_policy
+
+            apply_agent_runtime_policy(self)
+
             # Session injection is independent of ``execution_mode``: workflow
             # callers (print mode ``--resume``, API chat with ``interactive=False``,
             # sub-agents continuing a parent session) all want SDK to see prior
@@ -2949,10 +3015,15 @@ class AgenticNode(Node):
             prompt_version = getattr(self.input, "prompt_version", None)
             # Served from a per-session snapshot when available; rebuilt and
             # re-persisted on a cache miss or when the snapshot meta is stale.
-            ctx.system_instruction = await self._get_session_system_prompt_async(
-                prompt_version=prompt_version,
-                template_context=template_context,
-            )
+            previous_mount_suspension = getattr(self, "_lazy_tool_mount_suspended", False)
+            self._lazy_tool_mount_suspended = True
+            try:
+                ctx.system_instruction = await self._get_session_system_prompt_async(
+                    prompt_version=prompt_version,
+                    template_context=template_context,
+                )
+            finally:
+                self._lazy_tool_mount_suspended = previous_mount_suspension
 
             # Compose the user prompt, optionally with a per-run override of
             # ``user_input.user_message`` set during ``_before_stream`` (used
@@ -3119,9 +3190,6 @@ class AgenticNode(Node):
             else None
         )
         effective_max_turns = explicit_turns if explicit_turns is not None else self.max_turns
-        from datus.agent.tool_policy import apply_agent_runtime_policy
-
-        apply_agent_runtime_policy(self)
         # Wrap tools with plugin transformers BEFORE the stream call below
         # captures ``self.tools``: call arguments evaluate left to right, so
         # deferring to ``hooks=self._compose_run_hooks(ctx)`` would be one

@@ -141,7 +141,7 @@ class SchedulerAgenticNode(DeliverableAgenticNode):
         """Scheduler-specific template context."""
         return {
             "native_tools": ", ".join([tool.name for tool in self.tools]) if self.tools else "None",
-            "has_ask_user_tool": self.ask_user_tool is not None,
+            "has_ask_user_tool": "ask_user" in self._exposed_tool_names(),
         }
 
     # ── result construction ────────────────────────────────────────────

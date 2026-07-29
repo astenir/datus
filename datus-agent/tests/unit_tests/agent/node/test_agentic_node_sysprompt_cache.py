@@ -81,6 +81,10 @@ class _SnapshotNode(AgenticNode):
         self.memory_func_tool = None
         self._is_subagent = True
         self._node_model_name = None
+        self.execution_mode = "interactive"
+        self.tools = []
+        self.mcp_servers = {}
+        self.mcp_prompt_tool_names = set()
 
     def _ensure_lazy_tools_mounted(self) -> None:
         self.lazy_mount_count += 1
@@ -91,6 +95,9 @@ class _SnapshotNode(AgenticNode):
 
     def _resolve_workspace_root(self) -> str:
         return "/tmp/ws"
+
+    def _get_mcp_tool_names_for_prompt(self) -> set[str]:
+        return set(self.mcp_prompt_tool_names)
 
     def _get_system_prompt(
         self,
@@ -159,6 +166,34 @@ class TestGetSessionSystemPrompt:
         assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#1"
         assert node._get_session_system_prompt(prompt_version="1.3") == "SYS#2"
 
+    def test_tool_surface_change_rebuilds(self, session_manager):
+        node = _SnapshotNode(session_manager, _agent_config())
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#1"
+
+        node.tools = [SimpleNamespace(name="ask_user")]
+
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#2"
+        assert node.build_count == 2
+
+    def test_execution_mode_change_rebuilds(self, session_manager):
+        node = _SnapshotNode(session_manager, _agent_config())
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#1"
+
+        node.execution_mode = "workflow"
+
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#2"
+        assert node.build_count == 2
+
+    def test_mcp_prompt_surface_change_rebuilds(self, session_manager):
+        node = _SnapshotNode(session_manager, _agent_config())
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#1"
+
+        node.mcp_servers = {"metrics": object()}
+        node.mcp_prompt_tool_names = {"query_metrics"}
+
+        assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#2"
+        assert node.build_count == 2
+
     def test_no_session_id_skips_cache(self, session_manager, tmp_path):
         node = _SnapshotNode(session_manager, _agent_config())
         node.session_id = ""
@@ -204,7 +239,15 @@ class TestSnapshotMeta:
     def test_meta_is_exactly_the_identity_keys(self, session_manager):
         node = _SnapshotNode(session_manager, _agent_config(current_datasource="main"))
         meta = node._system_prompt_snapshot_meta("1.2")
-        assert meta == {"node_name": "chat", "prompt_version": "1.2", "model_name": "openai:gpt-4.1"}
+        assert meta == {
+            "node_name": "chat",
+            "prompt_version": "1.2",
+            "model_name": "openai:gpt-4.1",
+            "execution_mode": "interactive",
+            "tool_names": "",
+            "mcp_server_names": "",
+            "mcp_tool_names": "",
+        }
 
     def test_meta_falls_back_to_agent_config_version(self, session_manager):
         node = _SnapshotNode(session_manager, _agent_config())

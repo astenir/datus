@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -95,14 +96,53 @@ def test_admin_agent_tools_and_tool_reference(monkeypatch):
     with _client(ctx) as client:
         catalog_response = client.get("/api/v1/admin/agents/tools")
         reference_response = client.get("/api/v1/admin/agents/tool-reference", params={"node_class": "gen_sql"})
+        visual_reference_response = client.get(
+            "/api/v1/admin/agents/tool-reference",
+            params={"node_class": "gen_visual_report"},
+        )
 
     assert catalog_response.status_code == 200
     assert catalog_response.json()["success"] is True
     assert "db_tools" in catalog_response.json()["data"]["tools"]
+    assert catalog_response.json()["data"]["tools"]["tools"] == [
+        "ask_user",
+        "confirm_plan",
+        "todo_list",
+        "todo_read",
+        "todo_update",
+        "todo_write",
+    ]
+    assert catalog_response.json()["data"]["tools"]["artifact_tools"] == [
+        "bind_existing_dashboard",
+        "bind_existing_report",
+        "save_query",
+        "save_query_template",
+        "start_new_dashboard",
+        "start_new_report",
+        "validate_render",
+    ]
     assert reference_response.status_code == 200
     assert reference_response.json()["success"] is True
     assert "db_tools.*" in reference_response.json()["data"]["default_tools"]
     assert "db_tools" in reference_response.json()["data"]["tool_types"]
+    assert "tools.*" in reference_response.json()["data"]["default_tools"]
+    assert reference_response.json()["data"]["tool_types"]["tools"]["tools"] == [
+        "ask_user",
+        "confirm_plan",
+        "todo_list",
+        "todo_read",
+        "todo_update",
+        "todo_write",
+    ]
+    assert visual_reference_response.status_code == 200
+    assert visual_reference_response.json()["data"]["tool_types"]["artifact_tools"]["tools"] == [
+        "start_new_report",
+        "bind_existing_report",
+        "save_query",
+        "validate_render",
+    ]
+    assert "artifact_tools.start_new_report" in visual_reference_response.json()["data"]["default_tools"]
+    assert "filesystem_tools.write_file" in visual_reference_response.json()["data"]["default_tools"]
 
 
 def test_admin_agent_node_types(monkeypatch):
@@ -569,6 +609,106 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
     assert agent_store._agents["custom_chat"]["node_class"] == "chat"
 
 
+@pytest.mark.parametrize(
+    ("tool_policy", "expected_message"),
+    [
+        ({"mode": "allowlist", "allowed": ["unknown_tools.*"]}, "Invalid allowed tools"),
+        ({"mode": "allowlist", "allowed": ["bash_tools.*"]}, "Invalid allowed tools"),
+        ({"mode": "allowlist", "denied": ["unknown_tools.*"]}, "Invalid denied tools"),
+    ],
+)
+def test_admin_agent_upsert_rejects_invalid_tool_policy_patterns(
+    monkeypatch,
+    tool_policy,
+    expected_message,
+):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/invalid_policy",
+            json={"node_class": "chat", "tool_policy": tool_policy},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert expected_message in response.json()["errorMessage"]
+    assert agent_store._agents == {}
+
+
+def test_admin_agent_upsert_rejects_unbound_mcp_allow_rule(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/invalid_mcp_policy",
+            json={
+                "node_class": "chat",
+                "mcp": ["filesystem"],
+                "tool_policy": {"mode": "allowlist", "allowed": ["mcp.remote.*"]},
+            },
+        )
+
+    assert response.json()["success"] is False
+    assert "mcp.remote.*" in response.json()["errorMessage"]
+    assert agent_store._agents == {}
+
+
+def test_admin_agent_policy_preserves_known_runtime_deny_categories(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    denied = [
+        "bash_tools.*",
+        "bi_tools.delete_dashboard",
+        "orchestrator_tools.*",
+        "scheduler_tools.delete_job",
+        "skill_authoring_tools.*",
+        "skills.*",
+        "sub_agent_tools.task",
+        "web_tool.web_fetch",
+        "mcp.retired-server.*",
+    ]
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/defensive_denies",
+            json={
+                "node_class": "chat",
+                "tool_policy": {"mode": "inherit", "denied": denied},
+            },
+        )
+
+    assert response.json()["success"] is True
+    assert response.json()["data"]["tool_policy"]["denied"] == sorted(denied)
+
+
+def test_visual_agent_policy_rejects_other_artifact_type_method(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/visual_report_policy",
+            json={
+                "node_class": "gen_visual_report",
+                "tool_policy": {
+                    "mode": "allowlist",
+                    "allowed": ["artifact_tools.start_new_dashboard"],
+                },
+            },
+        )
+
+    assert response.json()["success"] is False
+    assert "artifact_tools.start_new_dashboard" in response.json()["errorMessage"]
+    assert agent_store._agents == {}
+
+
 def test_admin_agent_upsert_rejects_mcp_for_unsupported_node_class(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
@@ -792,6 +932,28 @@ def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch)
         "db_tools.describe_table",
         "db_tools.list_tables",
     ]
+
+
+def test_admin_policy_update_rejects_unknown_pattern_without_persisting(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store, enabled=True)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        client.put("/api/v1/admin/agents/gen_sql/status", json={"status": "published"})
+        before = dict(agent_store._agents["gen_sql"])
+        response = client.put(
+            "/api/v1/admin/agents/gen_sql/policy",
+            json={
+                "tool_policy": {"mode": "allowlist", "allowed": ["unknown_tools.*"]},
+                "runtime_policy": {"allow_subagent_delegation": False},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "AGENT_POLICY_INVALID"
+    assert agent_store._agents["gen_sql"] == before
 
 
 def test_disabled_agent_can_clear_but_not_assign_default_users(monkeypatch):

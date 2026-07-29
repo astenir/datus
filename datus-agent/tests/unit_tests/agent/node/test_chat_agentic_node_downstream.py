@@ -105,6 +105,44 @@ def test_disabled_delegation_removes_task_and_prompt_guidance(real_agent_config,
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_applies_tool_policy_before_prompt_assembly(
+    real_agent_config,
+    mock_llm_create,
+    monkeypatch,
+):
+    """An allowlist-pruned tool must not remain advertised in the same run."""
+    chat_config = dict(real_agent_config.agentic_nodes.get("chat", {}))
+    chat_config["tool_policy"] = {
+        "mode": "allowlist",
+        "allowed": ["db_tools.*"],
+        "denied": [],
+    }
+    real_agent_config.agentic_nodes["chat"] = chat_config
+    node = _node(real_agent_config, node_id="test_policy_before_prompt", description="Test prompt policy order")
+    assert "ask_user" in {tool.name for tool in node.tools}
+
+    observed = {}
+
+    async def capture_stream(ctx):
+        observed["tool_names"] = {tool.name for tool in node.tools}
+        observed["system_instruction"] = ctx.system_instruction
+        if False:  # pragma: no cover - keep this test double an async generator
+            yield None
+
+    monkeypatch.setattr(node, "_stream_once", capture_stream)
+    node.input = ChatNodeInput(user_message="Analyze sales", database="california_schools")
+
+    actions = [action async for action in node.execute_stream(ActionHistoryManager())]
+
+    assert actions[-1].status == ActionStatus.SUCCESS
+    assert "ask_user" not in observed["tool_names"]
+    assert observed["tool_names"]
+    assert all(node.tool_registry.get(name) == "db_tools" for name in observed["tool_names"])
+    assert "Ask user tool (`ask_user`)" not in observed["system_instruction"]
+    assert "No ask_user tool is available" in observed["system_instruction"]
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_formats_permission_denial_as_user_message(real_agent_config, mock_llm_create):
     node = _node(real_agent_config, node_id="test_permission_denied", description="Test permission denial")
     original_method = mock_llm_create.generate_with_tools_stream

@@ -442,6 +442,7 @@ export function useAgentManager() {
   const formMode = shallowRef<AgentFormMode>("create");
   const loading = shallowRef(false);
   const detailLoading = shallowRef(false);
+  const detailError = shallowRef<string | null>(null);
   const saving = shallowRef(false);
   const deleting = shallowRef(false);
   const nodeTypesLoading = shallowRef(false);
@@ -457,6 +458,7 @@ export function useAgentManager() {
   const defaultPolicyLoading = shallowRef(false);
   const error = shallowRef<string | null>(null);
   const enterpriseRoutesUnavailable = shallowRef(false);
+  let selectionRequestId = 0;
 
   const agentCount = computed(() => agents.value.length);
   const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
@@ -746,15 +748,23 @@ export function useAgentManager() {
     }
   }
 
-  async function loadUseToolsForNodeClass(nodeClass = form.value.nodeClass) {
+  async function fetchUseToolsForNodeClass(nodeClass: string) {
     const normalized = nodeClass.trim() || "gen_sql";
+    return agentApi.useTools(connection.effectiveBase(), normalized);
+  }
+
+  function handleUseToolsError(err: unknown) {
+    const message = agentRouteErrorMessage(err, "读取节点工具参考失败");
+    console.error("读取节点工具参考失败:", err);
+    toast.error(message);
+  }
+
+  async function loadUseToolsForNodeClass(nodeClass = form.value.nodeClass) {
     try {
-      selectedUseTools.value = await agentApi.useTools(connection.effectiveBase(), normalized);
+      selectedUseTools.value = await fetchUseToolsForNodeClass(nodeClass);
     } catch (err) {
-      const message = agentRouteErrorMessage(err, "读取节点工具参考失败");
-      console.error("读取节点工具参考失败:", err);
       selectedUseTools.value = null;
-      toast.error(message);
+      handleUseToolsError(err);
     }
   }
 
@@ -820,46 +830,73 @@ export function useAgentManager() {
   }
 
   async function selectAgent(agentName: string | null) {
+    const requestId = ++selectionRequestId;
+
     if (!agentName) {
       selectedAgent.value = null;
       selectedUseTools.value = null;
       form.value = emptyForm();
       formMode.value = "create";
+      detailLoading.value = false;
+      detailError.value = null;
       return;
     }
 
     detailLoading.value = true;
+    detailError.value = null;
+    selectedAgent.value = null;
+    selectedUseTools.value = null;
+    form.value = emptyForm();
+    formMode.value = "edit";
 
     try {
       const detail = await agentApi.get(connection.effectiveBase(), agentName);
-      selectedAgent.value = detail;
-      if (detail) {
-        form.value = formFromDetail(detail);
-        form.value.defaultUserIds = await agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id) ?? [];
-        formMode.value = "edit";
-        const nodeClass = detail.node_class || "gen_sql";
-        if (!nodeTypes.value.length || nodeTypes.value.some(item => item.node_class === nodeClass)) {
-          await loadUseToolsForNodeClass(nodeClass);
-        } else {
-          selectedUseTools.value = null;
-        }
-      } else {
-        selectedUseTools.value = null;
+      if (requestId !== selectionRequestId) return;
+      if (!detail) {
+        detailError.value = "未找到 Agent 详情，请刷新列表后重试。";
+        return;
       }
+
+      const nodeClass = detail.node_class || "gen_sql";
+      const canLoadUseTools = !nodeTypes.value.length
+        || nodeTypes.value.some(item => item.node_class === nodeClass);
+      const useToolsPromise = canLoadUseTools
+        ? fetchUseToolsForNodeClass(nodeClass).catch((err: unknown) => {
+            if (requestId === selectionRequestId) handleUseToolsError(err);
+            return null;
+          })
+        : Promise.resolve(null);
+      const [defaultUserIds, useTools] = await Promise.all([
+        agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id),
+        useToolsPromise,
+      ]);
+      if (requestId !== selectionRequestId) return;
+
+      const nextForm = formFromDetail(detail);
+      nextForm.defaultUserIds = defaultUserIds ?? [];
+      selectedAgent.value = detail;
+      selectedUseTools.value = useTools;
+      form.value = nextForm;
+      formMode.value = "edit";
     } catch (err) {
+      if (requestId !== selectionRequestId) return;
       const message = agentRouteErrorMessage(err, "读取 Agent 详情失败");
+      detailError.value = message;
       console.error("读取 Agent 详情失败:", err);
       toast.error(message);
     } finally {
-      detailLoading.value = false;
+      if (requestId === selectionRequestId) detailLoading.value = false;
     }
   }
 
   function startCreate() {
+    selectionRequestId += 1;
     selectedAgent.value = null;
     selectedUseTools.value = null;
     form.value = emptyForm();
     formMode.value = "create";
+    detailLoading.value = false;
+    detailError.value = null;
   }
 
   function startCreateFromSelectedBuiltin() {
@@ -1090,6 +1127,7 @@ export function useAgentManager() {
     formMode: readonly(formMode),
     loading: readonly(loading),
     detailLoading: readonly(detailLoading),
+    detailError: readonly(detailError),
     saving: readonly(saving),
     deleting: readonly(deleting),
     nodeTypesLoading: readonly(nodeTypesLoading),

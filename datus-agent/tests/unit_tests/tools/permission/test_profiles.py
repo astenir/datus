@@ -98,7 +98,8 @@ class TestNormalProfile:
         assert _resolve(config, "tools", "list_document_nav") == PermissionLevel.ALLOW
         assert _resolve(config, "tools", "search_document") == PermissionLevel.ALLOW
         assert _resolve(config, "tools", "get_anything") == PermissionLevel.ALLOW
-        assert _resolve(config, "tools", "validate_skill") == PermissionLevel.ALLOW
+        assert _resolve(config, "skill_authoring_tools", "validate_skill") == PermissionLevel.ALLOW
+        assert _resolve(config, "skill_authoring_tools", "search_skill_usage") == PermissionLevel.ALLOW
         # Writes still ASK via default.
         assert _resolve(config, "tools", "todo_write") == PermissionLevel.ASK
 

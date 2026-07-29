@@ -414,6 +414,10 @@ class GenSQLAgenticNode(AgenticNode):
                     self._setup_filesystem_tools()
                 elif base_type == "platform_doc_tools":
                     self._setup_platform_doc_tools()
+                elif base_type == "tools":
+                    # Interaction/plan tools are mounted by execution-mode
+                    # setup below; this pattern controls policy visibility.
+                    pass
                 else:
                     logger.warning(f"Unknown tool type: {base_type}")
 
@@ -434,6 +438,10 @@ class GenSQLAgenticNode(AgenticNode):
                 self._setup_filesystem_tools()
             elif pattern == "platform_doc_tools":
                 self._setup_platform_doc_tools()
+            elif pattern == "tools":
+                pass
+            elif pattern.startswith("tools."):
+                pass
 
             # Handle specific method patterns (e.g., "db_tools.list_tables")
             elif "." in pattern:
@@ -650,21 +658,24 @@ class GenSQLAgenticNode(AgenticNode):
         Returns:
             System prompt string loaded from the template
         """
+        exposed = self._exposed_tool_names()
         context = prepare_template_context(
             node_config=self.node_config,
-            has_db_tools=bool(self.db_func_tool),
-            has_filesystem_tools=bool(self.filesystem_func_tool),
+            has_db_tools=self._tool_group_exposed(self.db_func_tool, exposed),
+            has_filesystem_tools=self._tool_group_exposed(self.filesystem_func_tool, exposed),
             has_mf_tools=False,
-            has_context_search_tools=bool(self.context_search_tools),
+            has_context_search_tools=self._tool_group_exposed(self.context_search_tools, exposed),
             has_reference_template_tools=bool(
-                self.reference_template_tools and self.reference_template_tools.has_reference_templates
+                self._tool_group_exposed(self.reference_template_tools, exposed)
+                and self.reference_template_tools
+                and self.reference_template_tools.has_reference_templates
             ),
-            has_parsing_tools=bool(self.date_parsing_tools),
-            has_platform_doc_tools=bool(self._platform_doc_tool),
+            has_parsing_tools=self._tool_group_exposed(self.date_parsing_tools, exposed),
+            has_platform_doc_tools=self._tool_group_exposed(self._platform_doc_tool, exposed),
             agent_config=self.agent_config,
             workspace_root=self._resolve_workspace_root(),
         )
-        context["has_task_tool"] = bool(self.sub_agent_task_tool)
+        context["has_task_tool"] = "task" in exposed
         available_tool_names = self._get_available_tool_names()
         context["available_tool_names"] = available_tool_names
         context["has_describe_table_tool"] = "describe_table" in available_tool_names

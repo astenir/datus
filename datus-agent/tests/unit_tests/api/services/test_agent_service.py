@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from datus.agent.node_capabilities import get_agent_node_capability
 from datus.api.services.agent_service import (
     _ASK_AGENT_FILESYSTEM_READ_ONLY,
     _TOOL_CATEGORIES_BY_AGENT_TYPE,
@@ -107,6 +108,12 @@ class TestValidateTools:
         """Empty input list returns empty list."""
         assert _validate_tools([]) == []
 
+    def test_interaction_tool_category_and_methods_are_valid(self):
+        """Interactive controls are a public, wildcard-selectable tool group."""
+        assert _validate_tools(["tools", "tools.*"]) == []
+        for method in ("ask_user", "confirm_plan", "todo_list", "todo_read", "todo_write", "todo_update"):
+            assert _validate_tools([f"tools.{method}"]) == []
+
 
 class TestValidateToolsForAgentType:
     """Per-agent-type allowlist gate.
@@ -116,12 +123,19 @@ class TestValidateToolsForAgentType:
     documented allowlist; other agent types rely on syntactic tool validation.
     """
 
-    def test_non_artifact_ask_agents_unrestricted(self):
-        """Other agent types fall back to the syntactic _validate_tools
-        check only — this helper returns empty for them."""
-        for agent_type in ("chat", "gen_sql", "gen_report", "ask_metrics"):
+    def test_agents_without_method_allowlists_are_unrestricted(self):
+        """Types without method allowlists rely on syntax validation only."""
+        for agent_type in ("chat", "gen_sql", "ask_metrics"):
             assert _validate_tools_for_agent_type(["filesystem_tools.write_file"], agent_type) == []
             assert _validate_tools_for_agent_type(["filesystem_tools.*"], agent_type) == []
+
+    def test_gen_report_filesystem_gate_excludes_internal_metric_method(self):
+        """gen_report exposes standard filesystem methods, not the OSI helper."""
+        assert _validate_tools_for_agent_type(["filesystem_tools.write_file"], "gen_report") == []
+        assert _validate_tools_for_agent_type(["filesystem_tools.*"], "gen_report") == ["filesystem_tools.*"]
+        assert _validate_tools_for_agent_type(["filesystem_tools.upsert_osi_metrics"], "gen_report") == [
+            "filesystem_tools.upsert_osi_metrics"
+        ]
 
     def test_ask_report_accepts_read_only_filesystem(self):
         """The three read-side filesystem methods are the load-bearing
@@ -231,22 +245,25 @@ class TestConstants:
         """gen_sql tool reference has the saas {default_tools, tool_types} shape."""
         entry = SUBAGENT_TOOL_REFERENCE["gen_sql"]
         assert set(entry.keys()) == {"default_tools", "tool_types"}
-        # gen_sql surfaces only the 3 categories the saas editor renders for
-        # the type — db / semantic / context_search. Other categories
+        # gen_sql surfaces the 3 business-tool categories the saas editor
+        # renders for the type, plus the explicit user-interaction primitive.
+        # Other categories
         # (filesystem / date_parsing / reference_template) are intentionally
         # hidden so the picker matches the actual default_tools surface.
         assert set(entry["tool_types"].keys()) == {
             "db_tools",
             "semantic_tools",
             "context_search_tools",
+            "tools",
         }
         for category, payload in entry["tool_types"].items():
             assert payload == {"tools": sorted(VALID_TOOL_METHODS[category])}
-        # gen_sql defaults to db / semantic / context_search wildcards (matches saas)
+        # gen_sql defaults to business tools plus session interaction controls.
         assert entry["default_tools"] == [
             "db_tools.*",
             "semantic_tools.*",
             "context_search_tools.*",
+            "tools.*",
         ]
 
     def test_user_facing_categories_excludes_platform_doc_tools(self):
@@ -291,21 +308,29 @@ class TestConstants:
             assert framework_method not in catalog
 
     def test_tool_reference_gen_report_has_saas_defaults(self):
-        """gen_report defaults to semantic.* + context_search.list_subject_tree."""
+        """gen_report defaults include its always-mounted workspace tools."""
         entry = SUBAGENT_TOOL_REFERENCE["gen_report"]
         assert entry["default_tools"] == [
             "semantic_tools.*",
             "context_search_tools.list_subject_tree",
+            "filesystem_tools.read_file",
+            "filesystem_tools.write_file",
+            "filesystem_tools.edit_file",
+            "filesystem_tools.delete_file",
+            "filesystem_tools.glob",
+            "filesystem_tools.grep",
+            "tools.*",
         ]
         # gen_report exposes db / semantic / context_search plus date_parsing
-        # and reference_template — the 5-category surface the saas editor's
-        # else-branch rendered before the per-type whitelist moved server-side.
+        # and reference_template, plus the explicit interaction category.
         assert set(entry["tool_types"].keys()) == {
             "db_tools",
             "semantic_tools",
             "context_search_tools",
             "date_parsing_tools",
             "reference_template_tools",
+            "filesystem_tools",
+            "tools",
         }
 
     def test_tool_reference_ask_metrics_has_narrow_defaults(self):
@@ -335,13 +360,18 @@ class TestConstants:
             "filesystem_tools.*",
             "memory_tools.*",
             "platform_doc_tools.*",
+            "tools.*",
         ]
-        # chat is the most permissive agent type — the picker surfaces every
-        # user-facing category plus the dedicated memory tools.
-        # ``platform_doc_tools`` stays in default_tools but not in tool_types
-        # (matches the documented "valid tool, hidden from picker" precedent).
-        assert set(entry["tool_types"].keys()) == set(_USER_FACING_TOOL_CATEGORIES) | {"memory_tools"}
-        assert "platform_doc_tools" not in entry["tool_types"]
+        # Chat's picker expands every default category to concrete methods.
+        assert set(entry["tool_types"].keys()) == set(_USER_FACING_TOOL_CATEGORIES) | {
+            "memory_tools",
+            "platform_doc_tools",
+            "tools",
+        }
+        assert entry["tool_types"]["platform_doc_tools"]["tools"]
+        assert entry["tool_types"]["tools"] == {
+            "tools": ["ask_user", "confirm_plan", "todo_list", "todo_read", "todo_update", "todo_write"]
+        }
 
     def test_reference_template_tools_registered(self):
         """reference_template_tools category exposes the 4 expected methods."""
@@ -389,13 +419,14 @@ class TestGetUseTools:
             "db_tools.*",
             "semantic_tools.*",
             "context_search_tools.*",
+            "tools.*",
         ]
-        # gen_sql surfaces only 3 categories — the per-type whitelist matches
-        # the saas editor's ``gen_sql`` branch in tool-tree.ts.
+        # gen_sql surfaces its 3 business-tool categories plus interaction controls.
         assert set(result.data["tool_types"].keys()) == {
             "db_tools",
             "semantic_tools",
             "context_search_tools",
+            "tools",
         }
         for category, payload in result.data["tool_types"].items():
             assert list(payload.keys()) == ["tools"]
@@ -408,17 +439,26 @@ class TestGetUseTools:
         assert result.data["default_tools"] == [
             "semantic_tools.*",
             "context_search_tools.list_subject_tree",
+            "filesystem_tools.read_file",
+            "filesystem_tools.write_file",
+            "filesystem_tools.edit_file",
+            "filesystem_tools.delete_file",
+            "filesystem_tools.glob",
+            "filesystem_tools.grep",
+            "tools.*",
         ]
-        # gen_report's 5-category surface mirrors the saas editor's else
-        # branch — no filesystem_tools because the type has no filesystem
-        # defaults and the picker historically excluded it.
+        # gen_report keeps its 5 business categories and exposes only the six
+        # standard workspace methods, excluding the internal OSI helper.
         assert set(result.data["tool_types"].keys()) == {
             "db_tools",
             "semantic_tools",
             "context_search_tools",
             "date_parsing_tools",
             "reference_template_tools",
+            "filesystem_tools",
+            "tools",
         }
+        assert "upsert_osi_metrics" not in result.data["tool_types"]["filesystem_tools"]["tools"]
 
     def test_ask_metrics_returns_broad_configurable_tool_types(self):
         """ask_metrics keeps narrow defaults but surfaces valid configurable tools."""
@@ -436,9 +476,15 @@ class TestGetUseTools:
         assert result.success is True
         assert "reference_template_tools.*" in result.data["default_tools"]
         assert "reference_template_tools" in result.data["tool_types"]
-        # chat is the most permissive agent type; its tool_types covers every
-        # user-facing category plus memory_tools so the editor can surface them.
-        assert set(result.data["tool_types"].keys()) == set(_USER_FACING_TOOL_CATEGORIES) | {"memory_tools"}
+        # Chat expands every default category in the dropdown.
+        assert set(result.data["tool_types"].keys()) == set(_USER_FACING_TOOL_CATEGORIES) | {
+            "memory_tools",
+            "platform_doc_tools",
+            "tools",
+        }
+        assert result.data["tool_types"]["tools"] == {
+            "tools": ["ask_user", "confirm_plan", "todo_list", "todo_read", "todo_update", "todo_write"]
+        }
 
     @pytest.mark.parametrize("agent_type", ["ask_report", "ask_dashboard"])
     def test_ask_agent_tool_types_includes_filesystem_read_only(self, agent_type):
@@ -448,8 +494,8 @@ class TestGetUseTools:
         result = AgentService.get_use_tools(agent_type)
         assert result.success is True
         tool_types = result.data["tool_types"]
-        # ask_* surfaces 6 categories — the 5 from gen_report's else-branch
-        # plus filesystem_tools restricted to the read-only methods.
+        # ask_* surfaces the 5 business categories, read-only filesystem
+        # methods, and the session interaction category.
         assert set(tool_types.keys()) == {
             "db_tools",
             "semantic_tools",
@@ -457,8 +503,12 @@ class TestGetUseTools:
             "reference_template_tools",
             "date_parsing_tools",
             "filesystem_tools",
+            "tools",
         }
         assert set(tool_types["filesystem_tools"]["tools"]) == set(_ASK_AGENT_FILESYSTEM_READ_ONLY)
+        assert tool_types["tools"] == {
+            "tools": ["ask_user", "confirm_plan", "todo_list", "todo_read", "todo_update", "todo_write"]
+        }
 
 
 class TestPerAgentTypeCategoryWhitelist:
@@ -500,12 +550,11 @@ class TestPerAgentTypeCategoryWhitelist:
             for category in categories:
                 payload = tool_types[category]
                 assert set(payload.keys()) == {"tools"}
-                if agent_type in {"ask_report", "ask_dashboard"} and category == "filesystem_tools":
-                    # ask_* filesystem is the read-only subset — write tools
-                    # must be absent and the read trio must be present.
-                    assert set(payload["tools"]) == set(_ASK_AGENT_FILESYSTEM_READ_ONLY)
-                else:
-                    assert payload["tools"] == sorted(VALID_TOOL_METHODS[category])
+                capability = get_agent_node_capability(agent_type)
+                assert capability is not None
+                allowed_methods = capability.allowed_tool_methods(category)
+                expected = sorted(VALID_TOOL_METHODS[category]) if allowed_methods is None else list(allowed_methods)
+                assert payload["tools"] == expected
 
     def test_payload_no_longer_wraps_in_tools_key(self):
         """Old shape {"tools": [...]} is gone — data is now {default_tools, tool_types}."""

@@ -57,10 +57,18 @@ const formModeLabel = computed(() => {
   return props.manager.formMode.value === "edit" ? "编辑" : "新建"
 })
 const dialogTitle = computed(() => {
+  if (props.manager.detailLoading.value) return "正在加载 Agent"
+  if (props.manager.detailError.value) return "Agent 加载失败"
   const name = props.manager.form.value.name.trim()
   return name ? `${formModeLabel.value} Agent · ${name}` : `${formModeLabel.value} Agent`
 })
 const formDialogDescription = computed(() => {
+  if (props.manager.detailLoading.value) {
+    return "正在读取 Agent 详情、默认用户和节点工具配置。"
+  }
+  if (props.manager.detailError.value) {
+    return "当前 Agent 的编辑数据未能完整加载。"
+  }
   if (selectedIsReadonly.value) {
     return "系统内置定义保持只读，但可配置企业访问范围、默认分配和运行工具策略。"
   }
@@ -144,13 +152,48 @@ async function submitForm() {
       <DialogHeader class="gap-2 px-5 py-4 pr-14 text-left sm:px-6 sm:py-5 sm:pr-16">
         <div class="flex min-w-0 flex-wrap items-center gap-2">
           <DialogTitle class="min-w-0 truncate">{{ dialogTitle }}</DialogTitle>
-          <Badge :variant="selectedIsReadonly ? 'outline' : 'secondary'">{{ sourceLabel }}</Badge>
-          <Badge variant="outline">{{ statusLabel }}</Badge>
+          <template v-if="!props.manager.detailLoading.value && !props.manager.detailError.value">
+            <Badge :variant="selectedIsReadonly ? 'outline' : 'secondary'">{{ sourceLabel }}</Badge>
+            <Badge variant="outline">{{ statusLabel }}</Badge>
+          </template>
         </div>
         <DialogDescription>{{ formDialogDescription }}</DialogDescription>
       </DialogHeader>
 
+      <div
+        v-if="props.manager.detailLoading.value"
+        class="flex min-h-0 flex-col"
+      >
+        <Separator />
+        <div
+          role="status"
+          aria-live="polite"
+          class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+        >
+          <Spinner aria-hidden="true" />
+          <div class="flex flex-col gap-1">
+            <p class="font-medium">正在加载 Agent 配置</p>
+            <p class="text-sm text-muted-foreground">加载完成后即可编辑，不需要重复点击。</p>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-else-if="props.manager.detailError.value"
+        class="flex min-h-0 flex-col"
+      >
+        <Separator />
+        <div class="p-4 sm:p-6">
+          <Alert variant="destructive">
+            <InfoIcon />
+            <AlertTitle>读取 Agent 配置失败</AlertTitle>
+            <AlertDescription>{{ props.manager.detailError.value }}</AlertDescription>
+          </Alert>
+        </div>
+      </div>
+
       <form
+        v-else
         class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]"
         @submit.prevent="submitForm"
       >

@@ -1195,6 +1195,29 @@ class TestTransferQueryResult:
         connector.execute_insert.return_value = insert_result
         return connector, connector.execute_insert
 
+    def test_read_only_rejects_before_accessing_connectors(self):
+        source = Mock()
+        source.dialect = "duckdb"
+        source.get_databases.return_value = []
+        target, _ = self._make_target_connector()
+        tool = self._make_multi_tool(source, target)
+        tool.read_only = True
+
+        result = tool.transfer_query_result(
+            source_sql="SELECT * FROM users",
+            source_datasource="source_db",
+            target_table="tgt.users",
+            target_datasource="target_db",
+            mode="replace",
+        )
+
+        assert result.success == 0
+        assert "read-only" in (result.error or "")
+        tool._get_connector.assert_not_called()
+        source.execute_pandas.assert_not_called()
+        target.execute_ddl.assert_not_called()
+        target.execute_insert.assert_not_called()
+
     def test_transfer_replace_mode_success(self):
         import pandas as pd
 
@@ -1640,7 +1663,7 @@ class TestPathTraversalGuard:
 class TestDBFuncToolExecuteSql:
     """Tests for the unified ``execute_sql`` dispatch entry point."""
 
-    def _make_tool(self, connector=None):
+    def _make_tool(self, connector=None, *, agent_config=None):
         if connector is None:
             connector = Mock()
             connector.dialect = "sqlite"
@@ -1651,7 +1674,19 @@ class TestDBFuncToolExecuteSql:
         ):
             mock_rag.return_value.schema_store.table_size.return_value = 0
             mock_sem.return_value.get_size.return_value = 0
-            return DBFuncTool(connector)
+            return DBFuncTool(connector, agent_config=agent_config)
+
+    def test_enterprise_request_forces_read_only(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_config = Mock()
+        mock_config._enterprise_enabled = True
+        mock_config.active_model.return_value.model = "gpt-4o"
+
+        tool = self._make_tool(mock_connector, agent_config=mock_config)
+
+        assert tool.read_only is True
 
     def test_select_routes_to_read_query(self):
         mock_connector = Mock()
@@ -1748,6 +1783,45 @@ class TestDBFuncToolExecuteSql:
         assert "read-only" in (result.error or "")
         mock_connector.execute_insert.assert_not_called()
         mock_connector.execute_ddl.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("method_name", "sql"),
+        [
+            ("execute_write", "DELETE FROM users"),
+            ("execute_ddl", "DROP TABLE users"),
+        ],
+    )
+    def test_read_only_rejects_direct_mutation_helpers(self, method_name, sql):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_insert.return_value = Mock(success=True, row_count=1)
+        mock_connector.execute_ddl.return_value = Mock(success=True)
+        tool = self._make_tool(mock_connector)
+        tool.read_only = True
+
+        result = getattr(tool, method_name)(sql)
+
+        assert result.success == 0
+        assert "read-only" in (result.error or "")
+        mock_connector.execute_insert.assert_not_called()
+        mock_connector.execute_ddl.assert_not_called()
+
+    def test_read_only_validate_ddl_skips_mutating_dry_run(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.validate_ddl.return_value = []
+        mock_connector.dry_run_ddl.return_value = []
+        tool = self._make_tool(mock_connector)
+        tool.read_only = True
+
+        result = tool.validate_ddl(ddl="CREATE TABLE users (id INTEGER)", target_table="users")
+
+        assert result.success == 1
+        assert result.result == {"errors": [], "validated": True}
+        mock_connector.validate_ddl.assert_called_once_with("CREATE TABLE users (id INTEGER)")
+        mock_connector.dry_run_ddl.assert_not_called()
 
     def test_min_max_rows_forwarded_to_write(self):
         mock_connector = Mock()

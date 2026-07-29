@@ -179,6 +179,9 @@ class GenReportAgenticNode(AgenticNode):
                     self._setup_context_search_tools()
                 elif base_type == "filesystem_tools":
                     self._setup_filesystem_tools()
+                elif base_type == "tools":
+                    # Interaction tools are mounted after configured groups.
+                    pass
                 else:
                     logger.warning(f"Unknown tool type: {base_type}")
 
@@ -191,6 +194,10 @@ class GenReportAgenticNode(AgenticNode):
                 self._setup_context_search_tools()
             elif pattern == "filesystem_tools":
                 self._setup_filesystem_tools()
+            elif pattern == "tools":
+                pass
+            elif pattern.startswith("tools."):
+                pass
 
             # Handle specific method patterns (e.g., "db_tools.describe_table")
             elif "." in pattern:
@@ -312,11 +319,12 @@ class GenReportAgenticNode(AgenticNode):
         Returns:
             System prompt string loaded from the template
         """
+        exposed = self._exposed_tool_names()
         context = {
-            "has_semantic_tools": bool(self.semantic_tools),
-            "has_db_tools": bool(self.db_func_tool),
-            "has_ask_user_tool": self.ask_user_tool is not None,
-            "has_task_tool": bool(self.sub_agent_task_tool),
+            "has_semantic_tools": self._tool_group_exposed(self.semantic_tools, exposed),
+            "has_db_tools": self._tool_group_exposed(self.db_func_tool, exposed),
+            "has_ask_user_tool": "ask_user" in exposed,
+            "has_task_tool": "task" in exposed,
             "agent_config": self.agent_config,
         }
 

@@ -544,6 +544,70 @@ def _df(rows, columns):
     return pd.DataFrame(rows, columns=columns)
 
 
+@pytest.mark.acceptance
+def test_get_ddl_appends_and_escapes_column_comments():
+    """Table DDL preserves PostgreSQL column comments as COMMENT statements."""
+    connector = _make_pg_connector_for_metadata()
+    connector.get_schema = MagicMock(
+        return_value=[
+            {
+                "name": 'customer"id',
+                "type": "bigint",
+                "nullable": False,
+                "default_value": None,
+                "pk": True,
+                "comment": "Customer's external ID",
+            },
+            {
+                "name": "status",
+                "type": "text",
+                "nullable": True,
+                "default_value": "'pending'::text",
+                "pk": False,
+                "comment": "Order status",
+            },
+        ]
+    )
+
+    ddl = connector._get_ddl("public", "orders")
+    full_name = connector.full_name(schema_name="public", table_name="orders")
+
+    assert f"COMMENT ON COLUMN {full_name}.\"customer\"\"id\" IS 'Customer''s external ID';" in ddl
+    assert f"COMMENT ON COLUMN {full_name}.\"status\" IS 'Order status';" in ddl
+    assert ddl.index("PRIMARY KEY") < ddl.index("COMMENT ON COLUMN")
+
+
+@pytest.mark.acceptance
+def test_get_ddl_skips_empty_column_comments():
+    """Missing and whitespace-only comments do not add empty COMMENT statements."""
+    connector = _make_pg_connector_for_metadata()
+    connector.get_schema = MagicMock(
+        return_value=[
+            {
+                "name": "id",
+                "type": "bigint",
+                "nullable": False,
+                "default_value": None,
+                "pk": True,
+                "comment": None,
+            },
+            {
+                "name": "note",
+                "type": "text",
+                "nullable": True,
+                "default_value": None,
+                "pk": False,
+                "comment": "   ",
+            },
+        ]
+    )
+
+    ddl = connector._get_ddl("public", "orders")
+
+    assert "COMMENT ON COLUMN" not in ddl
+    assert ddl.endswith(";")
+
+
 def test_get_schemas_handles_uppercase_result_column():
     """get_schemas accepts driver-returned column labels with different casing."""
     connector = _make_pg_connector_for_metadata()

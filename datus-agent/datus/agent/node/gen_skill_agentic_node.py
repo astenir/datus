@@ -274,11 +274,12 @@ class SkillCreatorAgenticNode(AgenticNode):
 
         from datus.utils.node_utils import build_datasource_prompt_context
 
+        exposed = self._exposed_tool_names()
         context = {
-            "has_db_tools": bool(self.db_func_tool),
-            "has_filesystem_tools": bool(self.filesystem_func_tool),
-            "has_ask_user_tool": bool(self.ask_user_tool),
-            "has_skill_tools": bool(self.skill_func_tool_instance),
+            "has_db_tools": self._tool_group_exposed(self.db_func_tool, exposed),
+            "has_filesystem_tools": self._tool_group_exposed(self.filesystem_func_tool, exposed),
+            "has_ask_user_tool": "ask_user" in exposed,
+            "has_skill_tools": self._tool_group_exposed(self.skill_func_tool_instance, exposed),
             "skill_directories": skill_directories,
             "existing_skills": existing_skills,
             "workspace_root": self._resolve_workspace_root(),

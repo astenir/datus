@@ -118,7 +118,9 @@ _NORMAL_RULES = [
     _rule("tools", "list_*", PermissionLevel.ALLOW),
     _rule("tools", "search_*", PermissionLevel.ALLOW),
     _rule("tools", "get_*", PermissionLevel.ALLOW),
-    _rule("tools", "validate_skill", PermissionLevel.ALLOW),
+    # Skill-authoring validation and session-history lookup are read-only
+    # helpers mounted only by the gen_skill node.
+    _rule("skill_authoring_tools", "*", PermissionLevel.ALLOW),
     # sub-agent delegation: ALLOW. The ``task()`` tool just spawns a
     # subagent; the tools the subagent actually invokes are gated by the
     # subagent's own PermissionHooks instance. Double-prompting here would

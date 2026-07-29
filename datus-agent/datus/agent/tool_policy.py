@@ -81,7 +81,12 @@ def apply_agent_runtime_policy(node: Any) -> None:
         is_denied = _matches_any(qualified_name, tool_policy["denied"])
         if tool_name == "task" and not runtime_policy["allow_subagent_delegation"]:
             is_denied = True
-        if tool_policy["mode"] == "allowlist" and not _matches_any(qualified_name, tool_policy["allowed"]):
+        is_runtime_delegation_tool = tool_name == "task" and runtime_policy["allow_subagent_delegation"]
+        if (
+            tool_policy["mode"] == "allowlist"
+            and not is_runtime_delegation_tool
+            and not _matches_any(qualified_name, tool_policy["allowed"])
+        ):
             is_denied = True
         if is_denied:
             denied_tools.append((category, tool_name))

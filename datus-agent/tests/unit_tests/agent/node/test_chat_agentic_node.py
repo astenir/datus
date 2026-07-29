@@ -618,6 +618,25 @@ class TestChatAgenticNodeUpdateDatabaseConnection:
         assert "list_tables" in tool_names
         assert "describe_table" in tool_names
 
+    def test_enterprise_read_only_survives_rebuild_and_delegation(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        real_agent_config._enterprise_enabled = True
+        node = ChatAgenticNode(
+            node_id="test_enterprise_read_only",
+            description="Test enterprise datasource read-only",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        assert node.db_func_tool.read_only is True
+
+        node._update_database_connection("california_schools")
+        assert node.db_func_tool.read_only is True
+
+        child = node.sub_agent_task_tool._create_node("gen_sql")
+        assert child.db_func_tool.read_only is True
+
 
 # ===========================================================================
 # _setup_mcp_servers Tests

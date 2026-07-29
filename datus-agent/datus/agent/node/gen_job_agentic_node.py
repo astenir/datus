@@ -58,7 +58,7 @@ class GenJobAgenticNode(DeliverableAgenticNode):
                 sub_agent_name=self.NODE_NAME,
             )
             self.tools.extend(self.db_func_tool.available_tools())
-            if hasattr(self.db_func_tool, "transfer_query_result"):
+            if not self.db_func_tool.read_only and hasattr(self.db_func_tool, "transfer_query_result"):
                 self.tools.append(trans_to_function_tool(self.db_func_tool.transfer_query_result))
             if hasattr(self.db_func_tool, "get_migration_capabilities"):
                 self.tools.append(trans_to_function_tool(self.db_func_tool.get_migration_capabilities))

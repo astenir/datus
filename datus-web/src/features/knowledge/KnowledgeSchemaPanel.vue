@@ -47,7 +47,7 @@ function matchesColumnFilter(column: Readonly<ColumnInfo>) {
 
 function matchesColumnQuery(column: Readonly<ColumnInfo>) {
   if (!normalizedQuery.value) return true
-  return [column.name, column.type, column.default_value ?? ""]
+  return [column.name, column.type, column.default_value ?? "", column.comment ?? ""]
     .some((value) => value.toLocaleLowerCase().includes(normalizedQuery.value))
 }
 
@@ -71,7 +71,7 @@ function updateColumnFilter(value: unknown) {
         <InputGroupInput
           v-model="query"
           aria-label="搜索字段"
-          placeholder="搜索字段名、类型或默认值"
+          placeholder="搜索字段名、类型、默认值或注释"
         />
       </InputGroup>
       <div class="overflow-x-auto pb-1 lg:pb-0">
@@ -92,13 +92,14 @@ function updateColumnFilter(value: unknown) {
     </div>
 
     <div class="overflow-x-auto rounded-md border">
-      <Table class="min-w-2xl table-fixed [&_td]:break-words [&_th]:whitespace-nowrap">
+      <Table class="min-w-3xl table-fixed [&_td]:break-words [&_th]:whitespace-nowrap">
         <TableHeader>
           <TableRow>
             <TableHead>字段</TableHead>
             <TableHead>类型</TableHead>
             <TableHead>约束</TableHead>
             <TableHead>默认值</TableHead>
+            <TableHead>数据库注释</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -133,10 +134,18 @@ function updateColumnFilter(value: unknown) {
                 {{ column.default_value || "-" }}
               </span>
             </TableCell>
+            <TableCell>
+              <span
+                class="block truncate text-sm"
+                :title="column.comment || undefined"
+              >
+                {{ column.comment || "-" }}
+              </span>
+            </TableCell>
           </TableRow>
           <TableEmpty
             v-if="filteredColumns.length === 0"
-            :colspan="4"
+            :colspan="5"
             class="text-muted-foreground"
           >
             {{ detail?.columns.length ? "没有匹配的字段" : "暂无字段信息" }}

@@ -26,6 +26,55 @@ ENTERPRISE_BUILTIN_AGENT_IDS = set(BUILTIN_SUBAGENTS) | {DEFAULT_CHAT_AGENT_ID}
 ENTERPRISE_RESERVED_AGENT_IDS = set(SYS_SUB_AGENTS) | {DEFAULT_CHAT_AGENT_ID}
 AGENT_POLICY_CONTEXT_KEY = "_enterprise_agent_policy"
 
+_RUNTIME_DENY_TOOL_METHODS: dict[str, set[str]] = {
+    "bash_tools": {"bash"},
+    "bi_tools": {
+        "add_chart_to_dashboard",
+        "create_chart",
+        "create_dashboard",
+        "create_dataset",
+        "delete_chart",
+        "delete_dashboard",
+        "delete_dataset",
+        "get_bi_serving_target",
+        "get_chart",
+        "get_chart_data",
+        "get_dashboard",
+        "get_dataset",
+        "list_bi_databases",
+        "list_charts",
+        "list_dashboards",
+        "list_datasets",
+        "update_chart",
+        "update_dashboard",
+    },
+    "orchestrator_tools": {
+        "create_issue_comment",
+        "finish_mission",
+        "mark_blocked",
+        "request_human_input",
+        "update_issue_status",
+    },
+    "skill_authoring_tools": {"search_skill_usage", "validate_skill"},
+    "skills": {"load_skill"},
+    "scheduler_tools": {
+        "delete_job",
+        "get_run_log",
+        "get_scheduler_job",
+        "list_job_runs",
+        "list_scheduler_connections",
+        "list_scheduler_jobs",
+        "pause_job",
+        "resume_job",
+        "submit_sparksql_job",
+        "submit_sql_job",
+        "trigger_scheduler_job",
+        "update_job",
+    },
+    "sub_agent_tools": {"task"},
+    "web_tool": {"web_fetch", "web_search"},
+}
+
 
 def validate_agent_id(agent_id: str) -> str | None:
     """Return an error message if ``agent_id`` cannot be used as a custom agent key."""
@@ -56,6 +105,62 @@ def normalize_acl(raw_acl: dict[str, Any] | None) -> dict[str, Any]:
             {str(user_id).strip() for user_id in raw.get("allowed_user_ids") or [] if str(user_id).strip()}
         ),
     }
+
+
+def normalize_enterprise_agent_tool_policy(
+    raw_policy: Any,
+    *,
+    node_class: str,
+    mcp_server_names: list[str] | None,
+) -> dict[str, Any]:
+    """Validate one newly written enterprise Agent tool policy.
+
+    Allowed native tools must come from the node-specific editor catalog.
+    MCP allow rules are server-level and may only target servers bound to the
+    Agent. Deny rules intentionally have a wider, independent vocabulary so
+    defensive rules for runtime-only surfaces remain representable.
+    """
+
+    policy = normalize_tool_policy(raw_policy)
+    bound_mcp_patterns = {f"mcp.{name}.*" for name in _normalize_list(mcp_server_names) if name}
+
+    native_allowed = [pattern for pattern in policy["allowed"] if not pattern.startswith("mcp.")]
+    invalid_allowed = set(_validate_tools(native_allowed))
+    invalid_allowed.update(_validate_tools_for_agent_type(native_allowed, node_class))
+
+    capability = get_agent_node_capability(node_class)
+    allowed_categories = set(capability.tool_categories if capability is not None else ())
+    invalid_allowed.update(
+        pattern for pattern in native_allowed if _tool_pattern_category(pattern) not in allowed_categories
+    )
+    invalid_allowed.update(
+        pattern for pattern in policy["allowed"] if pattern.startswith("mcp.") and pattern not in bound_mcp_patterns
+    )
+    if invalid_allowed:
+        raise ValueError(f"Invalid allowed tools for {node_class}: {', '.join(sorted(invalid_allowed))}.")
+
+    invalid_denied = [pattern for pattern in policy["denied"] if not _is_valid_denied_tool_pattern(pattern)]
+    if invalid_denied:
+        raise ValueError(f"Invalid denied tools: {', '.join(sorted(invalid_denied))}.")
+
+    return include_bound_mcp_servers(policy, mcp_server_names)
+
+
+def _tool_pattern_category(pattern: str) -> str:
+    return pattern.split(".", 1)[0]
+
+
+def _is_valid_denied_tool_pattern(pattern: str) -> bool:
+    if not _validate_tools([pattern]):
+        return True
+    if pattern.startswith("mcp.") and pattern.endswith(".*"):
+        server_name = pattern[len("mcp.") : -len(".*")]
+        return bool(server_name) and not any(token in server_name for token in ("*", "?", "[", "]"))
+    category, separator, method = pattern.partition(".")
+    methods = _RUNTIME_DENY_TOOL_METHODS.get(category)
+    if methods is None:
+        return False
+    return not separator or method == "*" or method in methods
 
 
 def normalize_agent_payload(
@@ -89,9 +194,10 @@ def normalize_agent_payload(
     scoped_context = dict(payload.get("scoped_context") or {})
     existing_metadata = agent_policy_metadata(existing_record)
     scoped_context[AGENT_POLICY_CONTEXT_KEY] = {
-        "tool_policy": include_bound_mcp_servers(
+        "tool_policy": normalize_enterprise_agent_tool_policy(
             payload.get("tool_policy", existing_metadata.get("tool_policy")),
-            mcp,
+            node_class=node_class,
+            mcp_server_names=mcp,
         ),
         "runtime_policy": normalize_runtime_policy(
             payload.get("runtime_policy", existing_metadata.get("runtime_policy"))
@@ -327,8 +433,17 @@ def with_agent_policy_metadata(
     updated = dict(record)
     scoped_context = dict(record.get("scoped_context") or {})
     current = agent_policy_metadata(record)
+    normalized_tool_policy = (
+        normalize_enterprise_agent_tool_policy(
+            tool_policy,
+            node_class=str(record.get("node_class") or record.get("agent_id") or ""),
+            mcp_server_names=_normalize_list(record.get("mcp")),
+        )
+        if tool_policy is not None
+        else current["tool_policy"]
+    )
     scoped_context[AGENT_POLICY_CONTEXT_KEY] = {
-        "tool_policy": normalize_tool_policy(tool_policy if tool_policy is not None else current["tool_policy"]),
+        "tool_policy": normalized_tool_policy,
         "runtime_policy": normalize_runtime_policy(
             runtime_policy if runtime_policy is not None else current["runtime_policy"]
         ),

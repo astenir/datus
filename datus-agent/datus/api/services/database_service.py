@@ -472,12 +472,18 @@ class DatasourceService:
                 if isinstance(schema_info, list):
                     for _i, col in enumerate(schema_info):
                         if isinstance(col, dict):
+                            nullable = bool(col["nullable"]) if "nullable" in col else col.get("notnull", 0) == 0
+                            default_value = (
+                                col.get("default_value") if "default_value" in col else col.get("dflt_value")
+                            )
+                            comment_value = col.get("comment")
                             column_info = ColumnInfo(
                                 name=col.get("name", ""),
                                 type=col.get("type", ""),
-                                nullable=col.get("notnull", 1) == 0,  # SQLite style: notnull=0 means nullable
-                                default_value=col.get("dflt_value"),
-                                pk=col.get("pk", 0) == 1,
+                                nullable=nullable,
+                                default_value=default_value,
+                                pk=bool(col.get("pk", False)),
+                                comment=(str(comment_value) if comment_value not in (None, "") else None),
                             )
                         else:
                             # Handle string or other formats
@@ -487,6 +493,7 @@ class DatasourceService:
                                 nullable=True,
                                 default_value=None,
                                 pk=False,
+                                comment=None,
                             )
                         columns.append(column_info)
                 else:

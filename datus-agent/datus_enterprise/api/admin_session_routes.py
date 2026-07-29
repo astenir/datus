@@ -39,17 +39,18 @@ class AdminSessionSummary(BaseModel):
     owner_user_id: str | None = None
     status: str
     is_running: bool = False
+    runtime_snapshot_available: bool
     created_at: str | None = None
     updated_at: str | None = None
-    event_count: int = 0
+    event_count: int | None
     exists_on_disk: bool | None = None
 
 
 class AdminSessionDetail(AdminSessionSummary):
     """Detailed bounded session metadata for one session."""
 
-    consumer_offset: int = 0
-    error: str | None = None
+    consumer_offset: int | None
+    error: str | None
 
 
 @router.get(
@@ -503,8 +504,8 @@ async def _resolve_session_detail(svc: ServiceDep, session_id: str) -> AdminSess
     )
     return AdminSessionDetail(
         **summary.model_dump(),
-        consumer_offset=int((task or {}).get("consumer_offset") or 0),
-        error=_optional_str((task or {}).get("error")),
+        consumer_offset=int(task.get("consumer_offset") or 0) if task is not None else None,
+        error=_optional_str(task.get("error")) if task is not None else None,
     )
 
 
@@ -561,9 +562,10 @@ async def _summary_from_record_and_task(
         owner_user_id=owner_user_id,
         status=str((task or {}).get("status") or "persisted"),
         is_running=bool((task or {}).get("is_running")),
+        runtime_snapshot_available=task is not None,
         created_at=_optional_str(record.get("created_at") or (task or {}).get("created_at")),
         updated_at=_optional_str(record.get("updated_at") or (task or {}).get("created_at")),
-        event_count=int((task or {}).get("event_count") or 0),
+        event_count=int(task.get("event_count") or 0) if task is not None else None,
         exists_on_disk=exists_on_disk,
     )
 

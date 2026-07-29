@@ -220,13 +220,13 @@ class TestExploreAgenticNodeTools:
             agent_config=real_agent_config,
             node_name="explore",
         )
-        node.context_search_tools = SimpleNamespace(
-            available_tools=lambda: [
-                SimpleNamespace(name="list_subject_tree"),
-                SimpleNamespace(name="search_reference_sql"),
-                SimpleNamespace(name="get_reference_sql"),
-            ]
-        )
+        exposed_context_tools = [
+            SimpleNamespace(name="list_subject_tree"),
+            SimpleNamespace(name="search_reference_sql"),
+            SimpleNamespace(name="get_reference_sql"),
+        ]
+        node.context_search_tools = SimpleNamespace(available_tools=lambda: exposed_context_tools)
+        node.tools.extend(exposed_context_tools)
 
         prompt = node._get_system_prompt()
 

@@ -171,11 +171,12 @@ class FeedbackAgenticNode(AgenticNode):
         template_name = f"{self.configured_node_name}_system"
 
         try:
+            exposed = self._exposed_tool_names()
             template_vars = {
                 "agent_config": self.agent_config,
                 "native_tools": ", ".join([tool.name for tool in self.tools]) if self.tools else "None",
-                "has_task_tool": bool(self.sub_agent_task_tool),
-                "has_ask_user_tool": self.ask_user_tool is not None,
+                "has_task_tool": "task" in exposed,
+                "has_ask_user_tool": "ask_user" in exposed,
                 "knowledge_base_dir": str(self.agent_config.path_manager.subject_dir),
                 "current_datasource": self.agent_config.current_datasource,
                 "workspace_root": self._resolve_workspace_root(),

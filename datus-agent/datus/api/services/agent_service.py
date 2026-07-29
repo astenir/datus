@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from datus.agent.node_capabilities import (
     AGENT_NODE_CAPABILITIES,
+    ARTIFACT_TOOL_METHODS,
     AgentNodeCapability,
     get_agent_node_capability,
     tool_editor_node_capabilities,
@@ -47,6 +48,11 @@ VALID_TOOL_METHODS: dict[str, set[str]] = {
     "filesystem_tools": set(MetricFilesystemFuncTool.all_tools_name()),
     "memory_tools": set(MemoryFuncTool.all_tools_name()),
     "platform_doc_tools": set(PlatformDocSearchTool.all_tools_name()),
+    "artifact_tools": set(ARTIFACT_TOOL_METHODS),
+    # Session-local interaction and planning controls. These do not access
+    # business resources directly and are enabled by default as ``tools.*``;
+    # execution mode and node state still determine which ones are mounted.
+    "tools": {"ask_user", "confirm_plan", "todo_list", "todo_read", "todo_write", "todo_update"},
 }
 
 VALID_TOOL_CATEGORIES = set(VALID_TOOL_METHODS.keys())
