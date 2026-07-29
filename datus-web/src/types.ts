@@ -86,6 +86,7 @@ export type ChatErrorBlock = {
 
 export type MessageBlock =
   | { type: "markdown"; content: string }
+  | { type: "plan-preview"; content: string }
   | ChatErrorBlock
   | { type: "thinking"; content: string }
   | { type: "code"; language: string; content: string }
@@ -96,7 +97,33 @@ export type MessageBlock =
   | { type: "subagent-complete"; subagent: string; toolCount?: number; duration?: number; errorText?: string }
   | { type: "artifact"; kind: string; slug: string; name: string; description?: string; mode?: string };
 
-export type MessageDisplayBlock = MessageBlock | ToolExecutionBlock;
+export type PlanConfirmationDisplayBlock = {
+  type: "plan-confirmation";
+  content: string;
+  interaction: Extract<MessageBlock, { type: "user-interaction" }>;
+};
+
+export type TodoExecutionItem = {
+  id: string;
+  title: string;
+  status: "pending" | "in_progress" | "completed" | "failed" | "unknown";
+  content?: string;
+};
+
+export type TodoExecutionSummaryBlock = {
+  type: "todo-execution-summary";
+  executionId: string;
+  status: "completed" | "failed" | "interrupted";
+  total: number;
+  completed: number;
+  items: readonly TodoExecutionItem[];
+};
+
+export type MessageDisplayBlock =
+  | MessageBlock
+  | ToolExecutionBlock
+  | PlanConfirmationDisplayBlock
+  | TodoExecutionSummaryBlock;
 
 export type ChatDisplayMessage = Omit<ChatMessage, "blocks"> & {
   blocks?: readonly MessageDisplayBlock[];

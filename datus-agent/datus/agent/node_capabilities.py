@@ -115,6 +115,7 @@ _ARTIFACT_ASK_TOOL_CATEGORIES: tuple[str, ...] = (
 )
 
 _ASK_AGENT_FILESYSTEM_READ_ONLY: tuple[str, ...] = ("glob", "grep", "read_file")
+_EXPLORE_FILESYSTEM_READ_ONLY: tuple[str, ...] = ("read_file", "glob", "grep")
 
 _ARTIFACT_ASK_DEFAULT_TOOLS: tuple[str, ...] = (
     "db_tools.list_databases",
@@ -304,7 +305,23 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         label="数据探索",
         description="以只读方式探索数据和收集上下文。",
         customizable=True,
+        enterprise_visible=True,
         prompt_template="explore_system",
+        default_tools=(
+            "db_tools.*",
+            "context_search_tools.*",
+            "date_parsing_tools.*",
+            "filesystem_tools.read_file",
+            "filesystem_tools.glob",
+            "filesystem_tools.grep",
+        ),
+        tool_categories=(
+            "db_tools",
+            "context_search_tools",
+            "date_parsing_tools",
+            "filesystem_tools",
+        ),
+        tool_method_allowlists=(("filesystem_tools", _EXPLORE_FILESYSTEM_READ_ONLY),),
     ),
     AgentNodeCapability(
         node_class="gen_semantic_model",

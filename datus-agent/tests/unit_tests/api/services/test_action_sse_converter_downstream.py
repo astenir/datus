@@ -66,6 +66,25 @@ class TestBuildErrorContentDownstream:
 class TestActionToHistorySseEvent:
     """Tests for persisted-history-only action conversion."""
 
+    def test_plan_preview_remains_visible_markdown_in_history(self):
+        action = _make_action(
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            action_type="plan_preview",
+            messages="\n---\n\n# Plan\n\n- Inspect metadata",
+            output={
+                "content": "\n---\n\n# Plan\n\n- Inspect metadata",
+                "content_type": "markdown",
+            },
+        )
+
+        event = action_to_history_sse_event(action, event_id=1, message_id="plan-preview-1")
+
+        event = _assert_sse_event(event)
+        content = event.data.payload.content[0]
+        assert content.type == "plan-preview"
+        assert content.payload == {"content": "\n---\n\n# Plan\n\n- Inspect metadata"}
+
     def test_ask_user_result_becomes_read_only_summary(self):
         action = _make_action(
             role=ActionRole.TOOL,
@@ -127,6 +146,25 @@ class TestActionToHistorySseEvent:
 
 class TestActionToSSEEventDownstream:
     """Tests for the main action_to_sse_event dispatcher."""
+
+    def test_plan_preview_renders_as_markdown_in_live_stream(self):
+        action = _make_action(
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            action_type="plan_preview",
+            messages="\n---\n\n# Plan\n\n- Inspect metadata",
+            output={
+                "content": "\n---\n\n# Plan\n\n- Inspect metadata",
+                "content_type": "markdown",
+            },
+        )
+
+        event = action_to_sse_event(action, event_id=21, message_id="plan-preview-1")
+
+        event = _assert_sse_event(event)
+        content = event.data.payload.content[0]
+        assert content.type == "plan-preview"
+        assert content.payload == {"content": "\n---\n\n# Plan\n\n- Inspect metadata"}
 
     def test_response_delta_uses_markdown_content(self):
         """Normal assistant response chunks stream as markdown, not reasoning."""

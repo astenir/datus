@@ -21,6 +21,7 @@ import {
   normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
+  shouldExitPlanModeAfterInteraction,
   shouldResetConversationOnAgentChange,
   visibleMessageActionTargetId
 } from "./chat";
@@ -463,6 +464,64 @@ describe("tool execution blocks", () => {
         role: "assistant",
         content: "最终结论",
         blocks: [{ type: "markdown", content: "最终结论" }],
+      },
+    ]);
+  });
+
+  it("composes a plan preview and its confirmation into one display card", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "plan-preview",
+        role: "assistant",
+        content: "# Plan\n\n- Inspect metadata",
+        blocks: [{ type: "plan-preview", content: "# Plan\n\n- Inspect metadata" }],
+      },
+      {
+        id: "plan-confirmation",
+        role: "assistant",
+        content: "需要确认",
+        blocks: [{
+          type: "user-interaction",
+          interactionKey: "interaction-1",
+          actionType: "confirm_plan",
+          requests: [{
+            title: "Plan",
+            content: "Confirm this plan, or type feedback to revise:",
+            options: [
+              { key: "confirm", title: "Confirm and execute" },
+              { key: "cancel", title: "Cancel plan" },
+            ],
+            allowFreeText: true,
+            multiSelect: false,
+          }],
+        }],
+      },
+    ]);
+
+    expect(displayMessages).toEqual([
+      {
+        id: "plan-confirmation",
+        role: "assistant",
+        content: "# Plan\n\n- Inspect metadata",
+        blocks: [{
+          type: "plan-confirmation",
+          content: "# Plan\n\n- Inspect metadata",
+          interaction: {
+            type: "user-interaction",
+            interactionKey: "interaction-1",
+            actionType: "confirm_plan",
+            requests: [{
+              title: "Plan",
+              content: "Confirm this plan, or type feedback to revise:",
+              options: [
+                { key: "confirm", title: "Confirm and execute" },
+                { key: "cancel", title: "Cancel plan" },
+              ],
+              allowFreeText: true,
+              multiSelect: false,
+            }],
+          },
+        }],
       },
     ]);
   });
@@ -935,6 +994,20 @@ describe("contentFromPayloadBlocks", () => {
     ]);
   });
 
+  it("parses plan previews as dedicated display blocks", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "plan-preview",
+        payload: { content: "# Plan\n\n- Inspect metadata" },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      { type: "plan-preview", content: "# Plan\n\n- Inspect metadata" },
+    ]);
+    expect(parsed.text).toBe("# Plan\n\n- Inspect metadata");
+  });
+
   it("normalizes legacy user interaction payloads into requests", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -1234,6 +1307,40 @@ describe("buildUserInteractionInput", () => {
       interaction_key: "action-123",
       input: [["y"]],
     });
+  });
+});
+
+describe("shouldExitPlanModeAfterInteraction", () => {
+  const interaction = {
+    interactionKey: "plan-interaction-1",
+    messageId: "plan-message-1",
+    block: {
+      type: "user-interaction" as const,
+      interactionKey: "plan-interaction-1",
+      actionType: "confirm_plan",
+      requests: [],
+    },
+  };
+
+  it("turns off plan mode after confirm or cancel", () => {
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["confirm"]],
+    )).toBe(true);
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["cancel"]],
+    )).toBe(true);
+  });
+
+  it("keeps plan mode active while feedback is being revised", () => {
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["补充风险检查"]],
+    )).toBe(false);
   });
 });
 

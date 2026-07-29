@@ -1,0 +1,99 @@
+import { createSSRApp, h } from "vue"
+import { renderToString } from "vue/server-renderer"
+import { describe, expect, it } from "vitest"
+
+import ChatBlockRenderer from "./ChatBlockRenderer.vue"
+import { contentFromPayloadBlocks, mergeToolExecutionBlocks } from "@/lib/chat"
+import type { MessageDisplayBlock } from "@/types"
+
+describe("ChatBlockRenderer todo queue routing", () => {
+  it("renders successful todo_write results with the Queue adapter", async () => {
+    const block: MessageDisplayBlock = {
+      type: "tool-execution",
+      callToolId: "todo-call-1",
+      toolName: "todo_write",
+      params: {
+        todos_json: "[]",
+      },
+      resultStatus: "success",
+      result: {
+        message: "Appended 1 item",
+        items: [{ id: 1, title: "盘点数据库结构", status: "pending" }],
+      },
+    }
+
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, { block }),
+    }))
+
+    expect(html).toContain("执行队列已更新")
+    expect(html).toContain("盘点数据库结构")
+    expect(html).not.toContain("todos_json")
+  })
+
+  it("renders the real todo_update payload as a compact Queue instead of Text", async () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool",
+        payload: {
+          callToolId: "todo-call-update-1",
+          toolName: "todo_update",
+          toolParams: {
+            todo_id: 4,
+            status: "in_progress",
+          },
+        },
+      },
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "todo-call-update-1",
+          toolName: "todo_update",
+          result: {
+            success: 1,
+            result: {
+              message: "Successfully updated todo item to 'in_progress' status",
+              updated_item: {
+                id: 4,
+                title: "汇总分析结论",
+                status: "in_progress",
+                content: "整理关键发现并说明风险。",
+              },
+            },
+          },
+        },
+      },
+    ])
+    const block = mergeToolExecutionBlocks(parsed.blocks)[0]
+    expect(block).toBeDefined()
+
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, { block: block! }),
+    }))
+
+    expect(html).toContain("任务状态已更新")
+    expect(html).toContain("任务 #4")
+    expect(html).toContain("汇总分析结论")
+    expect(html).not.toContain("Successfully updated todo item")
+    expect(html).not.toContain("todo_id")
+  })
+
+  it("keeps failed todo tools on the generic error renderer", async () => {
+    const block: MessageDisplayBlock = {
+      type: "tool-result",
+      callToolId: "todo-call-2",
+      toolName: "todo_write",
+      resultStatus: "error",
+      errorText: "Invalid JSON format for todos",
+      result: null,
+    }
+
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, { block }),
+    }))
+
+    expect(html).toContain("todo_write")
+    expect(html).toContain("Error")
+    expect(html).not.toContain("执行队列已更新")
+  })
+})

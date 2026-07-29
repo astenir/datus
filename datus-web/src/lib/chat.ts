@@ -83,6 +83,18 @@ export function buildUserInteractionInput(
   };
 }
 
+export function shouldExitPlanModeAfterInteraction(
+  interaction: ActiveUserInteraction | null,
+  interactionKey: string,
+  answers: readonly (readonly string[])[],
+) {
+  if (interaction?.interactionKey !== interactionKey) return false;
+  if (interaction.block.actionType !== "confirm_plan") return false;
+
+  const decision = answers[0]?.[0]?.trim().toLowerCase();
+  return decision === "confirm" || decision === "cancel";
+}
+
 export function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
 }
@@ -593,12 +605,49 @@ export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): Ch
     }
   });
 
-  return mergedMessages;
+  return mergePlanConfirmationMessages(mergedMessages);
+}
+
+function mergePlanConfirmationMessages(messages: readonly ChatDisplayMessage[]): ChatDisplayMessage[] {
+  const merged: ChatDisplayMessage[] = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const previewMessage = messages[index];
+    const confirmationMessage = messages[index + 1];
+    const previewBlock = previewMessage?.blocks?.length === 1 ? previewMessage.blocks[0] : null;
+    const interactionBlock = confirmationMessage?.blocks?.length === 1 ? confirmationMessage.blocks[0] : null;
+    const sameExecutionContext = previewMessage?.depth === confirmationMessage?.depth &&
+      previewMessage?.parentActionId === confirmationMessage?.parentActionId;
+
+    if (
+      previewBlock?.type === "plan-preview" &&
+      interactionBlock?.type === "user-interaction" &&
+      interactionBlock.actionType === "confirm_plan" &&
+      sameExecutionContext
+    ) {
+      merged.push({
+        ...confirmationMessage,
+        content: previewMessage.content,
+        blocks: [{
+          type: "plan-confirmation",
+          content: previewBlock.content,
+          interaction: interactionBlock,
+        }],
+      });
+      index += 1;
+      continue;
+    }
+
+    if (previewMessage) merged.push(previewMessage);
+  }
+
+  return merged;
 }
 
 function isReviewableMessageBlock(block: MessageBlock) {
   if (block.type === "artifact") return true;
   if (block.type === "code") return true;
+  if (block.type === "plan-preview") return block.content.trim().length > 0;
   if (block.type !== "markdown") return false;
 
   const content = block.content.trim();
@@ -845,6 +894,8 @@ export function contentFromPayloadBlocks(
 
     if (type === "markdown") {
       blocks.push({ type: "markdown", content: stringifyContent(payload.content) });
+    } else if (type === "plan-preview") {
+      blocks.push({ type: "plan-preview", content: stringifyContent(payload.content) });
     } else if (type === "thinking") {
       blocks.push({ type: "thinking", content: stringifyContent(payload.content) });
     } else if (type === "code") {
@@ -953,6 +1004,7 @@ export function contentFromPayloadBlocks(
   const text = blocks
     .map((block) => {
       if (block.type === "markdown") return block.content;
+      if (block.type === "plan-preview") return block.content;
       if (block.type === "thinking") return block.content;
       if (block.type === "code") return block.content;
       if (block.type === "error") return `${block.title}\n${block.message}`;

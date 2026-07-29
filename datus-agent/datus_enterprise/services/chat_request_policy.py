@@ -1,5 +1,6 @@
 """Enterprise policy checks used by chat request routes."""
 
+from fnmatch import fnmatchcase
 from typing import Any
 
 from fastapi import HTTPException
@@ -12,6 +13,7 @@ from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.model_policy import is_model_ref_allowed
 from datus_enterprise.quota import consume_enterprise_quota
+from datus_enterprise.services.sub_agent_task_policy import configure_enterprise_plan_mode_delegation
 
 logger = get_logger(__name__)
 _ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
@@ -22,6 +24,72 @@ def default_enterprise_chat_permission_mode(request: StreamChatInput, *, enterpr
 
     if enterprise_enabled and request.permission_mode is None:
         request.permission_mode = "normal"
+
+
+async def configure_chat_plan_mode_delegation(
+    ctx: AppContext,
+    request: StreamChatInput,
+    *,
+    agent_config: Any,
+    parent_agent_record: dict[str, Any] | None,
+    operation: str,
+) -> ChatPreCheckOutcome | None:
+    """Make ACL-visible Explore a request-scoped Plan Mode dependency."""
+    missing_agent_ids = configure_enterprise_plan_mode_delegation(
+        agent_config,
+        plan_mode=bool(request.plan_mode),
+    )
+    denial: ChatPreCheckOutcome | None = None
+    if missing_agent_ids:
+        missing_names = ", ".join(sorted(missing_agent_ids))
+        denial = ChatPreCheckOutcome(
+            allow=False,
+            error=(
+                "Plan Mode requires the Explore Agent, but it is not published "
+                f"or is not allowed by the Agent ACL: {missing_names}."
+            ),
+            error_type="PLAN_MODE_EXPLORE_FORBIDDEN",
+        )
+    elif request.plan_mode and _parent_policy_denies_task(parent_agent_record):
+        agent_config._request_required_subagent_ids = set()
+        denial = ChatPreCheckOutcome(
+            allow=False,
+            error="Plan Mode requires task delegation, but the selected Agent explicitly denies sub_agent_tools.task.",
+            error_type="PLAN_MODE_DELEGATION_FORBIDDEN",
+        )
+
+    if denial is None:
+        return None
+
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="agent.dispatch",
+                resource_type="agent",
+                resource_id="explore",
+                decision="deny",
+                reason=denial.error_type,
+                metadata={
+                    "operation": operation,
+                    "session_id": request.session_id,
+                    "subagent_id": request.subagent_id,
+                    "plan_mode": True,
+                },
+            ),
+        )
+    except Exception:
+        logger.warning("Plan Mode Explore denial audit failed for operation=%s", operation, exc_info=True)
+    return denial
+
+
+def _parent_policy_denies_task(parent_agent_record: dict[str, Any] | None) -> bool:
+    if not isinstance(parent_agent_record, dict):
+        return False
+    from datus_enterprise.agent_registry import agent_policy_metadata
+
+    denied_patterns = agent_policy_metadata(parent_agent_record)["tool_policy"]["denied"]
+    return any(fnmatchcase("sub_agent_tools.task", pattern) for pattern in denied_patterns)
 
 
 async def authorize_chat_permission_mode(

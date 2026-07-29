@@ -235,11 +235,19 @@ class InteractionBroker:
         self._output_queue.put_nowait(action)
         logger.debug(f"InteractionBroker: send queued action_type={action_type}")
 
-    async def request(self, events: List["InteractionEvent"]) -> List[List[str]]:
+    async def request(
+        self,
+        events: List["InteractionEvent"],
+        *,
+        action_type: Optional[str] = None,
+    ) -> List[List[str]]:
         """Request user input. Blocks until user responds.
 
         Args:
             events: One or more InteractionEvent objects.
+            action_type: Optional semantic action type for clients that need a
+                dedicated presentation. Defaults to ``request_choice`` or
+                ``request_batch`` according to the event count.
 
         Returns:
             ``List[List[str]]`` — one inner list per event.
@@ -257,7 +265,7 @@ class InteractionBroker:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        action_type = "request_batch" if len(events) > 1 else "request_choice"
+        action_type = action_type or ("request_batch" if len(events) > 1 else "request_choice")
         input_data = {"events": [ev.model_dump() for ev in events]}
 
         pending = PendingInteraction(

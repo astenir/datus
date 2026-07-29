@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BundledLanguage } from "shiki"
+import { computed } from "vue"
 import { CheckCircle2Icon, ExternalLinkIcon, WrenchIcon } from "@lucide/vue"
 import {
   Artifact,
@@ -38,9 +39,14 @@ import { Badge } from "@/components/ui/badge"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
+import PlanConfirmationBlock from "@/features/chat/PlanConfirmationBlock.vue"
+import PlanPreviewBlock from "@/features/chat/PlanPreviewBlock.vue"
+import TodoQueueBlock from "@/features/chat/TodoQueueBlock.vue"
+import TodoExecutionSummaryBlock from "@/features/chat/TodoExecutionSummaryBlock.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
+import { todoQueueFromToolResult } from "@/lib/todo-queue"
 import { isSuccessStoryEligibleToolExecution } from "@/lib/tool-display"
 import type { MessageDisplayBlock, SelectOption, SuccessStorySource, ToolChildMessage } from "@/types"
 
@@ -108,6 +114,12 @@ function isSubAgentTaskTool(toolName: string) {
   return toolName.toLowerCase() === "task"
 }
 
+const todoQueue = computed(() => {
+  if (props.block.type !== "tool-result" && props.block.type !== "tool-execution") return null
+  if (props.block.errorText || props.block.resultStatus === "error") return null
+  return todoQueueFromToolResult(props.block.toolName, props.block.result)
+})
+
 function codeLanguage(language: string) {
   return (language.trim().toLowerCase() || "text") as BundledLanguage
 }
@@ -162,6 +174,18 @@ function readOnlyInteractionDescription() {
     :streaming="streaming"
   />
 
+  <PlanPreviewBlock
+    v-else-if="block.type === 'plan-preview'"
+    :content="block.content"
+  />
+
+  <PlanConfirmationBlock
+    v-else-if="block.type === 'plan-confirmation'"
+    :block="block"
+    :disabled="interactionDisabled || block.interaction.interactionKey !== activeInteractionKey"
+    @submit="submitInteraction"
+  />
+
   <ChatErrorBlock
     v-else-if="block.type === 'error'"
     :block="block"
@@ -187,6 +211,17 @@ function readOnlyInteractionDescription() {
       </CodeBlockActions>
     </CodeBlockHeader>
   </CodeBlock>
+
+  <TodoQueueBlock
+    v-else-if="todoQueue"
+    :queue="todoQueue"
+    :duration="block.type === 'tool-result' || block.type === 'tool-execution' ? block.duration : undefined"
+  />
+
+  <TodoExecutionSummaryBlock
+    v-else-if="block.type === 'todo-execution-summary'"
+    :block="block"
+  />
 
   <Tool
     v-else-if="block.type === 'tool-call'"

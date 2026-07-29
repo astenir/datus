@@ -25,6 +25,7 @@ def _node(*, tool_policy, runtime_policy):
     registry.register_tools("sub_agent_tools", ["task"])
     return SimpleNamespace(
         node_config={"tool_policy": tool_policy, "runtime_policy": runtime_policy},
+        agent_config=SimpleNamespace(_request_required_subagent_ids=set()),
         tools=tools,
         tool_registry=registry,
         permission_manager=SimpleNamespace(global_config=PermissionConfig()),
@@ -73,6 +74,47 @@ def test_runtime_policy_can_limit_delegation_to_explicit_agents():
 
     assert {tool.name for tool in node.tools} == {"read_file", "write_file", "execute_command", "task"}
     assert node.sub_agent_task_tool._allowed_subagents == ["safe_sql"]
+
+
+def test_request_required_subagent_is_added_to_explicit_runtime_allowlist():
+    node = _node(
+        tool_policy={"mode": "inherit"},
+        runtime_policy={
+            "allow_subagent_delegation": True,
+            "allowed_subagents": ["safe_sql"],
+        },
+    )
+    node.agent_config._request_required_subagent_ids = {"explore"}
+
+    apply_agent_runtime_policy(node)
+
+    assert {tool.name for tool in node.tools} == {"read_file", "write_file", "execute_command", "task"}
+    assert node.sub_agent_task_tool._allowed_subagents == ["safe_sql", "explore"]
+
+
+def test_request_required_subagent_enables_only_task_when_general_delegation_is_disabled():
+    node = _node(
+        tool_policy={"mode": "allowlist", "allowed": ["filesystem_tools.read_file"]},
+        runtime_policy={"allow_subagent_delegation": False},
+    )
+    node.agent_config._request_required_subagent_ids = {"explore"}
+
+    apply_agent_runtime_policy(node)
+
+    assert [tool.name for tool in node.tools] == ["read_file", "task"]
+    assert node.sub_agent_task_tool._allowed_subagents == ["explore"]
+
+
+def test_explicit_task_deny_still_blocks_request_required_subagent():
+    node = _node(
+        tool_policy={"mode": "inherit", "denied": ["sub_agent_tools.task"]},
+        runtime_policy={"allow_subagent_delegation": False},
+    )
+    node.agent_config._request_required_subagent_ids = {"explore"}
+
+    apply_agent_runtime_policy(node)
+
+    assert "task" not in {tool.name for tool in node.tools}
 
 
 def test_allowlist_keeps_task_when_runtime_delegation_is_enabled():

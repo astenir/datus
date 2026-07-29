@@ -983,7 +983,9 @@ class AgenticNode(Node):
                 "and full `content`), then call todo_update(id, 'in_progress') before "
                 "starting each step and todo_update(id, 'completed') when done. Use "
                 "ask_user only when a step genuinely requires user input that cannot "
-                "be inferred."
+                "be inferred. Treat todo tool calls as UI state: do not narrate each "
+                "status transition. After all steps, answer the user's request directly; "
+                "do not add a redundant todo-completion list or table unless requested."
             )
             self._plan_just_confirmed = False
 

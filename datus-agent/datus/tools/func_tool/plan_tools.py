@@ -362,10 +362,13 @@ class PlanTool:
         ``todo_write`` is incremental: pass only the items you want to add.
         Existing items stay untouched — use ``todo_update`` to change a
         single item's status, or call this again later to add more.
+        The frontend renders the list in a task execution dock, so continue
+        with the actual work after this call instead of announcing that the
+        list was created.
 
         Args:
             todos_json: JSON string of list of dicts with ``title`` (≤ 8
-                words, used in the sidebar) and ``content`` (full task
+                words, used in the task execution dock) and ``content`` (full task
                 description). ``status`` is NOT accepted — new items are
                 always created in the ``pending`` state.
 
@@ -450,7 +453,10 @@ class PlanTool:
         Recommended flow: ``pending`` → ``in_progress`` → ``completed``.
         Call this with ``in_progress`` immediately before starting work on
         a todo, and again with ``completed`` (or ``failed``) when done, so
-        the sidebar reflects what you are currently doing.
+        the task execution dock reflects what you are currently doing.
+        These calls are UI state: do not narrate individual status changes.
+        After all items finish, answer the user's request directly; do not
+        add a redundant completion list or table unless the user asks for it.
 
         Args:
             todo_id: Integer id of the todo item to update.
@@ -572,12 +578,12 @@ class ConfirmPlanTool:
             title="Plan",
             content="Confirm this plan, or type feedback to revise:",
             content_type="markdown",
-            choices={"confirm": "Confirm"},
+            choices={"confirm": "Confirm and execute", "cancel": "Cancel plan"},
             default_choice="confirm",
             allow_free_text=True,
         )
         try:
-            answers = await broker.request([event])
+            answers = await broker.request([event], action_type="confirm_plan")
         except InteractionCancelled:
             return FuncToolResult(success=0, error="user cancelled plan confirmation")
 
@@ -589,6 +595,8 @@ class ConfirmPlanTool:
 
         if user_choice == "confirm":
             return self._confirmed_result(auto_confirmed=False)
+        if user_choice == "cancel":
+            return self._cancelled_result()
 
         return FuncToolResult(
             result={
@@ -598,6 +606,22 @@ class ConfirmPlanTool:
                     "The user requested revisions to the plan (see ``feedback`` above). "
                     "Apply the changes via edit_file on the plan file. Do NOT call "
                     "confirm_plan again until the feedback is addressed."
+                ),
+            }
+        )
+
+    def _cancelled_result(self) -> FuncToolResult:
+        """Exit plan mode without approving or executing the current plan."""
+        plan_path = self.node.plan_file_path
+        self.node.deactivate_plan_mode()
+        self.node._plan_just_confirmed = False
+        return FuncToolResult(
+            result={
+                "status": "cancelled",
+                "plan_file": plan_path,
+                "next_action": (
+                    "The user cancelled this plan. Do not execute it and do not create todos from it. "
+                    "Acknowledge the cancellation briefly, then end the turn."
                 ),
             }
         )
@@ -624,7 +648,7 @@ class ConfirmPlanTool:
                 "  2. Call todo_write with [{title, content}] for each concrete actionable "
                 "step (title ≤ 8 words; content is the detailed instruction).\n"
                 "  3. Before starting work on a step, call todo_update(id, 'in_progress') "
-                "so the sidebar reflects what you are doing.\n"
+                "so the task execution dock reflects what you are doing.\n"
                 "  4. Execute the step by calling the relevant tools "
                 "(grep / read_file / list_tables / execute_sql / write_file — whatever "
                 "the step requires).\n"
@@ -633,7 +657,10 @@ class ConfirmPlanTool:
                 "next step.\n"
                 "  6. Continue executing steps without asking the user for permission, "
                 "until either all todos are done or you hit a blocker that genuinely "
-                "requires user input (in which case use ask_user)."
+                "requires user input (in which case use ask_user).\n"
+                "Todo tool calls are UI state. Do not narrate each status transition. "
+                "After all steps, answer the user's request directly and do not add a "
+                "redundant todo-completion list or table unless the user requested one."
             ),
         }
         if auto_confirmed:

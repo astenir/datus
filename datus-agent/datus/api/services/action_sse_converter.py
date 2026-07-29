@@ -597,6 +597,16 @@ def action_to_sse_event(
                 contents = _build_response_content(action)
                 if not contents:
                     return None
+        elif role == ActionRole.ASSISTANT and status == ActionStatus.SUCCESS and action.action_type == "plan_preview":
+            output = action.output if isinstance(action.output, dict) else {}
+            plan_content = output.get("content") or action.messages
+            if not plan_content:
+                return None
+            # A dedicated block lets rich clients compose the preview with the
+            # following ``confirm_plan`` interaction. Unknown block types still
+            # degrade to markdown in legacy clients because the payload keeps
+            # the standard ``content`` field.
+            contents = [IMessageContent(type="plan-preview", payload={"content": str(plan_content)})]
         elif _is_plain_assistant_response(action):
             contents = _build_response_content(action)
             if not contents:

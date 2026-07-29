@@ -6,8 +6,12 @@ import pytest
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
-from datus.tools.func_tool.sub_agent_task_tool import SubAgentTaskTool
+from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS, SubAgentTaskTool
+from datus.utils.constants import HIDDEN_SYS_SUB_AGENTS, SYS_SUB_AGENTS
+from datus_enterprise.agent_registry import ENTERPRISE_BUILTIN_AGENT_IDS, ENTERPRISE_RESERVED_AGENT_IDS
 from datus_enterprise.services.sub_agent_task_policy import (
+    ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS,
+    configure_enterprise_plan_mode_delegation,
     enterprise_agent_acl_denial,
     inherit_parent_permission_profile,
 )
@@ -126,6 +130,45 @@ class TestPermissionProfileInheritance:
 
 @pytest.mark.ci
 class TestEnterpriseAgentAclGate:
+    def test_plan_mode_requires_acl_visible_explore_for_current_request(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"chat", "explore"}
+
+        missing = configure_enterprise_plan_mode_delegation(mock_agent_config, plan_mode=True)
+
+        assert missing == set()
+        assert mock_agent_config._request_required_subagent_ids == {"explore"}
+
+    def test_plan_mode_fails_closed_when_explore_is_not_acl_visible(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"chat"}
+
+        missing = configure_enterprise_plan_mode_delegation(mock_agent_config, plan_mode=True)
+
+        assert missing == {"explore"}
+        assert mock_agent_config._request_required_subagent_ids == set()
+
+    def test_normal_mode_does_not_override_parent_runtime_policy(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._enterprise_allowed_agent_ids = {"chat", "explore"}
+
+        missing = configure_enterprise_plan_mode_delegation(mock_agent_config, plan_mode=False)
+
+        assert missing == set()
+        assert mock_agent_config._request_required_subagent_ids == set()
+
+    def test_delegatable_builtin_registry_matches_task_and_enterprise_contracts(self, mock_agent_config):
+        expected = (SYS_SUB_AGENTS - HIDDEN_SYS_SUB_AGENTS) | {"explore"}
+
+        assert set(BUILTIN_SUBAGENT_DESCRIPTIONS) == expected
+        assert set(ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS) == expected
+        assert ENTERPRISE_BUILTIN_AGENT_IDS == expected | {"chat"}
+        assert ENTERPRISE_RESERVED_AGENT_IDS == ENTERPRISE_BUILTIN_AGENT_IDS | HIDDEN_SYS_SUB_AGENTS
+
+        mock_agent_config.agentic_nodes = {"chat": {"model": "default"}}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+        assert set(tool._discover_all_types()) == expected
+
     def test_enterprise_available_types_follow_effective_agent_acl(self, mock_agent_config):
         mock_agent_config._enterprise_enabled = True
         mock_agent_config._enterprise_allowed_agent_ids = {"explore", "ask_metrics"}
