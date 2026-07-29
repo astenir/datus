@@ -256,14 +256,17 @@ def test_admin_sessions_list_merges_owner_records_and_running_tasks(monkeypatch)
         "owner_user_id": "alice",
         "status": "persisted",
         "is_running": False,
+        "runtime_snapshot_available": False,
         "created_at": None,
         "updated_at": None,
-        "event_count": 0,
+        "event_count": None,
         "exists_on_disk": None,
     }
     assert sessions["s2"]["owner_user_id"] == "bob"
     assert sessions["s2"]["status"] == "running"
     assert sessions["s2"]["is_running"] is True
+    assert sessions["s2"]["runtime_snapshot_available"] is True
+    assert sessions["s2"]["event_count"] == 0
     assert sessions["s2"]["exists_on_disk"] is None
     assert audit_sink.events[-1].decision == "allow"
     assert audit_sink.events[-1].metadata == {
@@ -415,11 +418,34 @@ def test_admin_session_detail_returns_owner_and_runtime_status(monkeypatch):
     assert body["data"]["session_id"] == "s2"
     assert body["data"]["owner_user_id"] == "bob"
     assert body["data"]["status"] == "running"
+    assert body["data"]["runtime_snapshot_available"] is True
+    assert body["data"]["event_count"] == 0
     assert body["data"]["consumer_offset"] == 0
     assert body["data"]["created_at"] == "2026-07-01T08:00:00+00:00"
     assert body["data"]["updated_at"] == "2026-07-02T09:30:00+00:00"
     assert audit_sink.events[-1].metadata["operation"] == "get_admin_session"
     assert audit_sink.events[-1].metadata["old"]["status"] == "running"
+
+
+def test_admin_session_detail_marks_missing_runtime_snapshot_as_unavailable(monkeypatch):
+    owner_store = TimestampedOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={("alice", "s1"): True})
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/admin/sessions/s1")
+
+    assert response.status_code == 200
+    detail = response.json()["data"]
+    assert detail["status"] == "persisted"
+    assert detail["is_running"] is False
+    assert detail["runtime_snapshot_available"] is False
+    assert detail["event_count"] is None
+    assert detail["consumer_offset"] is None
+    assert detail["error"] is None
 
 
 def test_admin_session_body_lookup_failure_is_reported_as_unknown(monkeypatch):

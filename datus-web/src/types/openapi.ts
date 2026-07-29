@@ -2903,17 +2903,19 @@ export interface components {
 
             is_running: boolean;
 
+            runtime_snapshot_available: boolean;
+
             created_at?: string | null;
 
             updated_at?: string | null;
 
-            event_count: number;
+            event_count: number | null;
 
             exists_on_disk?: boolean | null;
 
-            consumer_offset: number;
+            consumer_offset: number | null;
 
-            error?: string | null;
+            error: string | null;
         };
 
         AdminSessionSummary: {
@@ -2926,11 +2928,13 @@ export interface components {
 
             is_running: boolean;
 
+            runtime_snapshot_available: boolean;
+
             created_at?: string | null;
 
             updated_at?: string | null;
 
-            event_count: number;
+            event_count: number | null;
 
             exists_on_disk?: boolean | null;
         };

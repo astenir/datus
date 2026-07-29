@@ -54,7 +54,7 @@ import AdminPaginationBar from "@/features/admin/AdminPaginationBar.vue"
 import type { AdminManagementTabProps } from "@/features/admin/types"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
-import { adminSessionStatusLabel } from "@/lib/admin-session"
+import { adminSessionRuntimeValueLabel, adminSessionStatusLabel } from "@/lib/admin-session"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 import type { AdminArtifact, AdminUser } from "@/types/admin"
 import type { AdminViewTab } from "@/features/workspace/types"
@@ -1103,7 +1103,10 @@ function setPermittedActiveTab(value: unknown): void {
                   {{ adminSessionStatusLabel(session.status) }}
                 </Badge>
               </template>
-              <span>缓冲事件 {{ session.event_count }}</span>
+              <span>
+                实时事件数
+                {{ adminSessionRuntimeValueLabel(session.runtime_snapshot_available, session.event_count) }}
+              </span>
               <span>更新于 {{ formatOptionalDate(session.updated_at || session.created_at) }}</span>
               <template #actions>
                 <Button
@@ -1147,7 +1150,7 @@ function setPermittedActiveTab(value: unknown): void {
                 <TableHead>Session ID</TableHead>
                 <TableHead>所有者</TableHead>
                 <TableHead class="text-center">状态</TableHead>
-                <TableHead class="text-center">缓冲事件</TableHead>
+                <TableHead class="text-center">实时事件数</TableHead>
                 <TableHead class="text-center">记录更新时间</TableHead>
                 <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
@@ -1164,7 +1167,9 @@ function setPermittedActiveTab(value: unknown): void {
                     {{ adminSessionStatusLabel(session.status) }}
                   </Badge>
                 </TableCell>
-                <TableCell class="text-center">{{ session.event_count }}</TableCell>
+                <TableCell class="text-center">
+                  {{ adminSessionRuntimeValueLabel(session.runtime_snapshot_available, session.event_count) }}
+                </TableCell>
                 <TableCell class="text-center">{{ formatOptionalDate(session.updated_at || session.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
