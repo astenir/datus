@@ -3,8 +3,12 @@ Explorer service for catalog and subject tree management.
 """
 
 import asyncio
+import hashlib
+import json
 import os
-from typing import List, Optional, Tuple
+import threading
+from collections import OrderedDict
+from typing import ClassVar, List, Optional, Tuple
 
 from datus.api.models.base_models import Result
 from datus.api.models.explorer_models import (
@@ -36,6 +40,10 @@ class ExplorerService:
     Handles database catalog listing and subject tree management including
     directories, metrics, and reference SQL.
     """
+
+    _SEMANTIC_RUNTIME_CACHE_MAX_SIZE = 128
+    _semantic_runtime_cache: ClassVar[OrderedDict[tuple, tuple]] = OrderedDict()
+    _semantic_runtime_cache_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, agent_config):
         """Initialize ExplorerService.
@@ -101,6 +109,108 @@ class ExplorerService:
             context["schema"] = str(schema).strip()
             context["db_schema"] = str(schema).strip()
         return {key: value for key, value in context.items() if value}
+
+    def _metricflow_runtime_cache_key(self, runtime_db_context: dict) -> Optional[tuple]:
+        """Build a safe runtime key from adapter config and semantic YAML revisions."""
+        resolver = getattr(self.agent_config, "resolve_semantic_adapter", None)
+        builder = getattr(self.agent_config, "build_semantic_adapter_config", None)
+        if not callable(resolver) or not callable(builder):
+            return None
+
+        adapter_type = str(resolver() or "").strip().lower()
+        if adapter_type != "metricflow":
+            return None
+
+        adapter_config = builder(
+            adapter_type,
+            database_name=self.datasource_id,
+            runtime_db_context=runtime_db_context,
+        )
+        if not isinstance(adapter_config, dict):
+            return None
+
+        config_json = json.dumps(adapter_config, sort_keys=True, default=str)
+        config_fingerprint = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+        semantic_dir = adapter_config.get("semantic_models_path")
+        if not semantic_dir:
+            return None
+        semantic_dir_path = os.path.realpath(os.fspath(semantic_dir))
+        semantic_revision = []
+        for root, dirs, files in os.walk(semantic_dir_path):
+            dirs[:] = sorted(directory for directory in dirs if not directory.startswith("."))
+            for file_name in sorted(files):
+                if file_name.startswith(".") or os.path.splitext(file_name)[1].lower() not in {".yml", ".yaml"}:
+                    continue
+                file_path = os.path.join(root, file_name)
+                try:
+                    stat = os.stat(file_path)
+                except FileNotFoundError:
+                    continue
+                semantic_revision.append(
+                    (
+                        os.path.relpath(file_path, semantic_dir_path),
+                        stat.st_ino,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                        stat.st_ctime_ns,
+                    )
+                )
+
+        return (
+            adapter_type,
+            config_fingerprint,
+            semantic_dir_path,
+            self.datasource_id,
+            runtime_db_context.get("catalog", ""),
+            runtime_db_context.get("database", ""),
+            runtime_db_context.get("schema", ""),
+            tuple(semantic_revision),
+        )
+
+    def _get_metric_dimension_rows(self, metric_name: str, runtime_db_context: dict) -> Optional[tuple]:
+        """Reuse one initialized MetricFlow runtime across metric dimension reads."""
+        from datus.tools.func_tool.semantic_tools import SemanticTools
+        from datus.utils.async_utils import run_async
+
+        cache_key = self._metricflow_runtime_cache_key(runtime_db_context)
+        runtime = None
+        if cache_key is not None:
+            with self._semantic_runtime_cache_lock:
+                runtime = self._semantic_runtime_cache.get(cache_key)
+                if runtime is not None:
+                    self._semantic_runtime_cache.move_to_end(cache_key)
+
+        if runtime is None:
+            tools = SemanticTools(
+                self.agent_config,
+                runtime_db_context_provider=lambda: runtime_db_context,
+            )
+            adapter = tools.adapter
+            if adapter is None:
+                return None
+            runtime = (adapter, threading.Lock())
+
+        adapter, runtime_lock = runtime
+        with runtime_lock:
+            dimensions = run_async(adapter.get_dimensions(metric_name=metric_name))
+
+        rows = tuple(
+            (
+                dimension.name,
+                getattr(dimension, "type", None),
+                getattr(dimension, "description", None),
+                getattr(dimension, "is_primary_key", None),
+            )
+            for dimension in (dimensions or [])
+        )
+        if cache_key is not None:
+            with self._semantic_runtime_cache_lock:
+                if cache_key not in self._semantic_runtime_cache:
+                    self._semantic_runtime_cache[cache_key] = runtime
+                self._semantic_runtime_cache.move_to_end(cache_key)
+                while len(self._semantic_runtime_cache) > self._SEMANTIC_RUNTIME_CACHE_MAX_SIZE:
+                    self._semantic_runtime_cache.popitem(last=False)
+        return rows
 
     def _gen_reference_sql_id(self, sql: str) -> str:
         """Generate a stable identifier for reference SQL entries."""
@@ -653,30 +763,27 @@ class ExplorerService:
 
             metric_name = request.subject_path[-1]
 
-            from datus.tools.func_tool.semantic_tools import SemanticTools
-
             runtime_db_context = self._semantic_runtime_db_context(request)
-            tools = SemanticTools(
-                self.agent_config,
-                runtime_db_context_provider=lambda: runtime_db_context,
+            dimension_rows = await asyncio.to_thread(
+                self._get_metric_dimension_rows,
+                metric_name,
+                runtime_db_context,
             )
-            adapter = tools.adapter
-            if adapter is None:
+            if dimension_rows is None:
                 return Result[MetricDimensionsData](
                     success=False,
                     errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
                     errorMessage="Semantic adapter is not available; cannot load dimensions.",
                 )
 
-            dimensions = await adapter.get_dimensions(metric_name=metric_name)
             items = [
                 MetricDimensionItem(
-                    name=d.name,
-                    type=getattr(d, "type", None),
-                    description=getattr(d, "description", None),
-                    is_primary_key=getattr(d, "is_primary_key", None),
+                    name=name,
+                    type=dimension_type,
+                    description=description,
+                    is_primary_key=is_primary_key,
                 )
-                for d in (dimensions or [])
+                for name, dimension_type, description, is_primary_key in dimension_rows
             ]
             return Result[MetricDimensionsData](
                 success=True,

@@ -1,5 +1,6 @@
 """Tests for datus.api.services.explorer_service — catalog and subject tree."""
 
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -889,13 +890,21 @@ class TestExplorerServiceHelpers:
 class TestExplorerServiceMetricDimensions:
     """Tests for get_metric_dimensions — power the preview panel's dim picker."""
 
+    @pytest.fixture(autouse=True)
+    def clear_semantic_runtime_cache(self):
+        ExplorerService._semantic_runtime_cache.clear()
+        yield
+        ExplorerService._semantic_runtime_cache.clear()
+
     @staticmethod
     def _patch_adapter(monkeypatch, *, adapter):
         from types import SimpleNamespace
 
         tools_stub = SimpleNamespace(adapter=adapter)
+        tools_stub.call_count = 0
 
         def fake_semantic_tools(*args, **kwargs):
+            tools_stub.call_count += 1
             tools_stub.args = args
             tools_stub.kwargs = kwargs
             return tools_stub
@@ -958,6 +967,93 @@ class TestExplorerServiceMetricDimensions:
             "schema": "runtime_schema",
             "db_schema": "runtime_schema",
         }
+
+    async def test_reuses_runtime_across_metrics_and_service_instances(self, real_agent_config, monkeypatch):
+        """MetricFlow runtime is reused across metrics and request-scoped services."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        adapter = MagicMock()
+        adapter.get_dimensions = AsyncMock(return_value=[SimpleNamespace(name="region")])
+        tools_stub = self._patch_adapter(monkeypatch, adapter=adapter)
+
+        first = await ExplorerService(real_agent_config).get_metric_dimensions(
+            SubjectPathInput(subject_path=["Finance", "revenue"])
+        )
+        second = await ExplorerService(real_agent_config).get_metric_dimensions(
+            SubjectPathInput(subject_path=["Finance", "profit"])
+        )
+
+        assert first.success is True
+        assert second.success is True
+        assert [item.name for item in second.data.dimensions] == ["region"]
+        assert tools_stub.call_count == 1
+        assert adapter.get_dimensions.await_count == 2
+        assert [call.kwargs["metric_name"] for call in adapter.get_dimensions.await_args_list] == ["revenue", "profit"]
+
+    async def test_semantic_yaml_change_invalidates_dimensions(self, real_agent_config, monkeypatch):
+        """Changing a semantic YAML file forces the next request to reload MetricFlow dimensions."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        semantic_dir = real_agent_config.path_manager.semantic_model_path(real_agent_config.current_datasource)
+        semantic_file = semantic_dir / "model.yml"
+        semantic_file.write_text("semantic_models: []\n", encoding="utf-8")
+
+        adapter = MagicMock()
+        adapter.get_dimensions = AsyncMock(
+            side_effect=[
+                [SimpleNamespace(name="region")],
+                [SimpleNamespace(name="school")],
+            ]
+        )
+        tools_stub = self._patch_adapter(monkeypatch, adapter=adapter)
+        svc = ExplorerService(real_agent_config)
+
+        first = await svc.get_metric_dimensions(SubjectPathInput(subject_path=["Finance", "revenue"]))
+        semantic_file.write_text("semantic_models:\n  - name: changed_model\n", encoding="utf-8")
+        second = await svc.get_metric_dimensions(SubjectPathInput(subject_path=["Finance", "revenue"]))
+
+        assert [item.name for item in first.data.dimensions] == ["region"]
+        assert [item.name for item in second.data.dimensions] == ["school"]
+        assert tools_stub.call_count == 2
+        assert adapter.get_dimensions.await_count == 2
+
+    async def test_runtime_database_context_does_not_share_dimensions(self, real_agent_config, monkeypatch):
+        """Different runtime database contexts use separate cache entries."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        adapter = MagicMock()
+        adapter.get_dimensions = AsyncMock(return_value=[SimpleNamespace(name="region")])
+        tools_stub = self._patch_adapter(monkeypatch, adapter=adapter)
+        svc = ExplorerService(real_agent_config)
+
+        await svc.get_metric_dimensions(SubjectPathInput(subject_path=["Finance", "revenue"], database="database_a"))
+        await svc.get_metric_dimensions(SubjectPathInput(subject_path=["Finance", "revenue"], database="database_b"))
+
+        assert tools_stub.call_count == 2
+        assert adapter.get_dimensions.await_count == 2
+
+    async def test_dimension_loading_runs_off_event_loop_thread(self, real_agent_config, monkeypatch):
+        """Synchronous MetricFlow initialization does not block the FastAPI event-loop thread."""
+        call_threads = []
+
+        class RecordingAdapter:
+            async def get_dimensions(self, metric_name):
+                call_threads.append(threading.get_ident())
+                return []
+
+        self._patch_adapter(monkeypatch, adapter=RecordingAdapter())
+        event_loop_thread = threading.get_ident()
+
+        result = await ExplorerService(real_agent_config).get_metric_dimensions(
+            SubjectPathInput(subject_path=["Finance", "revenue"])
+        )
+
+        assert result.success is True
+        assert call_threads
+        assert call_threads[0] != event_loop_thread
 
 
 @pytest.mark.asyncio
