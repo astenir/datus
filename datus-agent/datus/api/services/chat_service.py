@@ -129,6 +129,47 @@ class ChatService(EnterpriseChatServiceMixin):
         session_mgr = self._session_manager(user_id)
         return session_mgr.session_exists(session_id)
 
+    def _merge_runtime_sessions(
+        self,
+        sessions: List[ChatSessionItemInfo],
+        *,
+        user_id: Optional[str],
+        subagent_id: Optional[str],
+    ) -> List[ChatSessionItemInfo]:
+        """Merge current-user in-process task state into persisted session summaries."""
+        snapshots = self._task_manager.list_task_snapshots() if self._task_manager is not None else []
+        owned_running = {
+            str(snapshot.get("session_id") or ""): snapshot
+            for snapshot in snapshots
+            if snapshot.get("is_running")
+            and snapshot.get("owner_user_id") == user_id
+            and snapshot.get("session_id")
+            and (subagent_id is None or session_matches_agent(str(snapshot["session_id"]), subagent_id))
+        }
+
+        merged: List[ChatSessionItemInfo] = []
+        persisted_ids: set[str] = set()
+        for session in sessions:
+            persisted_ids.add(session.session_id)
+            merged.append(session.model_copy(update={"is_active": session.session_id in owned_running}))
+
+        for session_id, snapshot in owned_running.items():
+            if session_id in persisted_ids:
+                continue
+            created_at = str(snapshot.get("created_at") or "")
+            merged.append(
+                ChatSessionItemInfo(
+                    user_query=snapshot.get("user_query"),
+                    session_id=session_id,
+                    created_at=created_at,
+                    last_updated=created_at,
+                    is_active=True,
+                )
+            )
+
+        merged.sort(key=lambda item: item.last_updated or item.created_at, reverse=True)
+        return merged
+
     def list_sessions(
         self,
         user_id: Optional[str] = None,
@@ -170,7 +211,11 @@ class ChatService(EnterpriseChatServiceMixin):
                 except Exception as e:
                     logger.warning(f"Failed to read session {sid}: {e}")
 
-            sessions.sort(key=lambda x: x.last_updated or x.created_at, reverse=True)
+            sessions = self._merge_runtime_sessions(
+                sessions,
+                user_id=user_id,
+                subagent_id=subagent_id,
+            )
             return Result[ChatSessionData](
                 success=True,
                 data=ChatSessionData(

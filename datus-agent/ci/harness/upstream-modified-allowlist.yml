@@ -116,6 +116,7 @@ categories:
     - tests/unit_tests/api/services/test_cli_service.py
     - tests/unit_tests/api/services/test_dashboard_service.py
     - tests/unit_tests/api/services/test_database_service.py
+    - tests/unit_tests/api/services/test_explorer_service.py
     - tests/unit_tests/api/services/test_kb_service.py
     - tests/unit_tests/api/test_api_endpoints.py
     - tests/unit_tests/api/test_deps.py

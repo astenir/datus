@@ -115,6 +115,94 @@ class TestChatServiceListSessions:
         session_ids = {s.session_id for s in result.data.sessions}
         assert {"chat_session_a", "gen_metrics_session_a"} <= session_ids
 
+    def test_list_sessions_merges_owned_running_task_state(self, chat_svc, monkeypatch):
+        """Only the current user's in-process task marks a persisted session active."""
+        session_manager = MagicMock()
+        session_manager.list_sessions.return_value = ["chat_session_a", "chat_session_b"]
+        session_manager.get_session_info.return_value = {
+            "exists": True,
+            "created_at": "2026-07-29T10:00:00Z",
+            "updated_at": "2026-07-29T10:01:00Z",
+            "first_user_message": "hello",
+            "message_count": 1,
+            "total_tokens": 0,
+        }
+        monkeypatch.setattr(chat_svc, "_session_manager", MagicMock(return_value=session_manager))
+        monkeypatch.setattr(
+            chat_svc._task_manager,
+            "list_task_snapshots",
+            MagicMock(
+                return_value=[
+                    {
+                        "session_id": "chat_session_a",
+                        "owner_user_id": "alice",
+                        "status": "running",
+                        "is_running": True,
+                        "created_at": "2026-07-29T10:00:00+00:00",
+                        "user_query": "hello",
+                    },
+                    {
+                        "session_id": "chat_session_b",
+                        "owner_user_id": "bob",
+                        "status": "running",
+                        "is_running": True,
+                        "created_at": "2026-07-29T10:00:00+00:00",
+                        "user_query": "private",
+                    },
+                ]
+            ),
+        )
+
+        result = chat_svc.list_sessions(user_id="alice")
+
+        by_id = {item.session_id: item for item in result.data.sessions}
+        assert by_id["chat_session_a"].is_active is True
+        assert by_id["chat_session_b"].is_active is False
+
+    def test_list_sessions_includes_owned_runtime_before_body_is_persisted(self, chat_svc, monkeypatch):
+        """A refresh can discover an owned task during the pre-persistence startup window."""
+        session_manager = MagicMock()
+        session_manager.list_sessions.return_value = []
+        monkeypatch.setattr(chat_svc, "_session_manager", MagicMock(return_value=session_manager))
+        monkeypatch.setattr(
+            chat_svc._task_manager,
+            "list_task_snapshots",
+            MagicMock(
+                return_value=[
+                    {
+                        "session_id": "chat_session_runtime",
+                        "owner_user_id": "alice",
+                        "status": "running",
+                        "is_running": True,
+                        "created_at": "2026-07-29T10:00:00+00:00",
+                        "user_query": "still starting",
+                    },
+                    {
+                        "session_id": "chat_session_foreign",
+                        "owner_user_id": "bob",
+                        "status": "running",
+                        "is_running": True,
+                        "created_at": "2026-07-29T10:00:00+00:00",
+                        "user_query": "private",
+                    },
+                    {
+                        "session_id": "chat_session_completed",
+                        "owner_user_id": "alice",
+                        "status": "completed",
+                        "is_running": False,
+                        "created_at": "2026-07-29T09:00:00+00:00",
+                        "user_query": "done",
+                    },
+                ]
+            ),
+        )
+
+        result = chat_svc.list_sessions(user_id="alice")
+
+        assert [item.session_id for item in result.data.sessions] == ["chat_session_runtime"]
+        assert result.data.sessions[0].is_active is True
+        assert result.data.sessions[0].user_query == "still starting"
+
     def test_list_sessions_timestamps_use_iso_z_format(self, chat_svc):
         """created_at / last_updated must be ISO-8601 UTC with 'Z' suffix.
 

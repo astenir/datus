@@ -229,7 +229,7 @@ describe("useChatWorkspace", () => {
 
     workspace.startNewSession();
     expect(workspace.selectedAgent.value).toBe("");
-    expect(clearMessages).toHaveBeenCalledTimes(1);
+    expect(clearMessages).not.toHaveBeenCalled();
     expect(selectSession).toHaveBeenCalledWith(null);
 
     await expect(workspace.setDefaultAgent("")).resolves.toBe(true);

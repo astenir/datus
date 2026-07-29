@@ -10,6 +10,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function controlledSseResponse() {
+  let streamController!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+    },
+  }), {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+  const encoder = new TextEncoder();
+  return {
+    response,
+    emit(event: string, data: unknown) {
+      streamController.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    },
+    close() {
+      streamController.close();
+    },
+  };
+}
+
 const chatApi = {
   compact: vi.fn(),
   deleteSession: vi.fn(),
@@ -84,23 +105,30 @@ describe("useChatState", () => {
     expect(state.messages.value.some(message => message.content === "history a")).toBe(false);
   });
 
-  it("does not let an aborted stream clear a newer stream controller", async () => {
-    const request = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => {
-        reject(new DOMException("aborted", "AbortError"));
-      }, { once: true });
-    }));
+  it("keeps concurrent session streams alive while switching between them", async () => {
+    const streamA = controlledSseResponse();
+    const streamB = controlledSseResponse();
+    const request = vi.fn()
+      .mockResolvedValueOnce(streamA.response)
+      .mockResolvedValueOnce(streamB.response);
+    const requestJson = vi.fn().mockResolvedValue({
+      success: true,
+      data: { messages: [] },
+    });
 
     vi.doMock("@/lib/api", () => ({ chatApi }));
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
     vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
 
     const { useChatState } = await import("./useChatState");
     const state = useChatState();
-    const messageOptions = {
-      message: "hello",
+    const options = {
       selectedAgent: "",
       model: "",
       datasource: "",
@@ -108,18 +136,87 @@ describe("useChatState", () => {
       schema: "",
     };
 
-    const firstStream = state.sendMessage(messageOptions);
+    const firstStream = state.sendMessage({ ...options, message: "first" });
+    streamA.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.selectedSession.value).toBe("session-a"));
+
     state.selectSession(null);
-    const secondStream = state.sendMessage({ ...messageOptions, message: "next" });
-    await firstStream;
+    const secondStream = state.sendMessage({ ...options, message: "second" });
+    streamB.emit("session", { session_id: "session-b" });
+    await vi.waitFor(() => expect(state.selectedSession.value).toBe("session-b"));
 
-    expect(state.isStreaming.value).toBe(true);
-
+    const firstSignal = request.mock.calls[0]?.[1]?.signal;
     const secondSignal = request.mock.calls[1]?.[1]?.signal;
+    expect(firstSignal?.aborted).toBe(false);
     expect(secondSignal?.aborted).toBe(false);
+
+    state.selectSession("session-a");
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.messages.value.some(message => message.content === "first")).toBe(true);
+
+    state.selectSession("session-b");
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.messages.value.some(message => message.content === "second")).toBe(true);
+    expect(firstSignal?.aborted).toBe(false);
+
     await state.stopSession();
     expect(secondSignal?.aborted).toBe(true);
-    await secondStream;
+    expect(firstSignal?.aborted).toBe(false);
+    expect(chatApi.stop).toHaveBeenCalledWith("", "session-b");
+
+    state.selectSession("session-a");
+    expect(state.isStreaming.value).toBe(true);
+
+    streamA.close();
+    streamB.close();
+    await Promise.all([firstStream, secondStream]);
+  });
+
+  it("resumes every active owned session from the session list", async () => {
+    const streamA = controlledSseResponse();
+    const streamB = controlledSseResponse();
+    chatApi.sessions.mockResolvedValueOnce({
+      sessions: [
+        { session_id: "session-a", is_active: true },
+        { session_id: "session-b", is_active: true },
+        { session_id: "session-c", is_active: false },
+      ],
+    });
+    const request = vi.fn()
+      .mockResolvedValueOnce(streamA.response)
+      .mockResolvedValueOnce(streamB.response);
+    const requestJson = vi.fn().mockResolvedValue({
+      success: true,
+      data: { messages: [] },
+    });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    await state.loadSessions();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const requestedBodies = request.mock.calls.map(call => JSON.parse(String(call[1]?.body)) as { session_id: string });
+    expect(requestedBodies.map(body => body.session_id).sort()).toEqual(["session-a", "session-b"]);
+
+    state.selectSession("session-a");
+    expect(state.isStreaming.value).toBe(true);
+    state.selectSession("session-b");
+    expect(state.isStreaming.value).toBe(true);
+    state.selectSession("session-c");
+    expect(state.isStreaming.value).toBe(false);
+
+    streamA.close();
+    streamB.close();
   });
 
   it("keeps browser transport failures outside durable conversation messages", async () => {

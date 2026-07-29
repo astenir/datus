@@ -294,4 +294,5 @@ def task_snapshot(task) -> dict[str, Any]:
         "earliest_event_cursor": task.base_offset,
         "consumer_offset": task.consumer_offset,
         "error": task.error,
+        "user_query": getattr(task, "user_query", None),
     }
