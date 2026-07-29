@@ -85,7 +85,7 @@ test("uses the same status vocabulary for interaction history and artifacts", as
   await expect(page.getByText("报表 · 新建", { exact: true })).toBeVisible()
 })
 
-test("aligns interaction and terminal notice density with tool cards", async ({ page }) => {
+test("aligns history and terminal notice density with tool cards", async ({ page }) => {
   const metrics = await page.evaluate(() => {
     const element = (selector: string) => {
       const match = document.querySelector<HTMLElement>(selector)
@@ -100,6 +100,7 @@ test("aligns interaction and terminal notice density with tool cards", async ({ 
       titleFontSizes: [
         fontSize('[data-testid="tool-card-title"]'),
         fontSize('[data-testid="interaction-summary-title"]'),
+        fontSize('[data-testid="todo-summary-title"]'),
         fontSize('[data-testid="chat-error-title"]'),
       ],
       secondaryFontSizes: [
@@ -110,20 +111,29 @@ test("aligns interaction and terminal notice density with tool cards", async ({ 
       iconSizes: [
         iconSize('[data-testid="tool-card-leading-icon"]'),
         iconSize('[data-testid="interaction-summary-leading-icon"]'),
+        iconSize('[data-testid="todo-summary-leading-icon"]'),
         iconSize('[data-testid="chat-error-leading-icon"]'),
       ],
       horizontalPadding: [
         paddingLeft('[data-testid="tool-card-trigger"]'),
         paddingLeft('[data-testid="interaction-summary-trigger"]'),
+        paddingLeft('[data-testid="todo-summary-trigger"]'),
         paddingLeft('[data-testid="chat-error"]'),
       ],
     }
   })
 
-  expect(metrics.titleFontSizes).toEqual(["14px", "14px", "14px"])
+  expect(metrics.titleFontSizes).toEqual(["14px", "14px", "14px", "14px"])
   expect(metrics.secondaryFontSizes).toEqual(["12px", "12px", "12px"])
-  expect(metrics.iconSizes).toEqual([16, 16, 16])
-  expect(metrics.horizontalPadding).toEqual(["12px", "12px", "12px"])
+  expect(metrics.iconSizes).toEqual([16, 16, 16, 16])
+  expect(metrics.horizontalPadding).toEqual(["12px", "12px", "12px", "12px"])
+
+  const todoSummary = page.getByTestId("todo-summary-trigger")
+  await expect(todoSummary).toHaveAccessibleName("展开已执行步骤")
+  await expect(page.getByText("详情", { exact: true })).toHaveCount(0)
+  await todoSummary.click()
+  await expect(todoSummary).toHaveAccessibleName("收起已执行步骤")
+  await expect(page.getByText("输出数字 1", { exact: true })).toBeVisible()
 })
 
 test("does not overflow a narrow conversation viewport", async ({ page }) => {

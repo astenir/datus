@@ -46,7 +46,9 @@ describe("TodoExecutionDock", () => {
     }))
 
     expect(html).toContain("已完成 2/3 个步骤")
-    expect(html).toContain("详情")
+    expect(html).toContain('data-testid="todo-summary-trigger"')
+    expect(html).toContain('data-testid="todo-summary-leading-icon"')
+    expect(html).not.toContain("详情")
     expect(html).not.toContain("任务状态已更新")
   })
 })
