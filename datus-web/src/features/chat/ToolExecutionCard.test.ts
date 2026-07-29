@@ -41,4 +41,20 @@ describe("ToolExecutionCard", () => {
     expect(html).toContain("db_tools.execute_sql")
     expect(html).toContain("原始参数与结果")
   })
+
+  it("renders an interrupted execution as a neutral terminal state", async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ToolExecutionCard, {
+        presentation: {
+          ...presentation,
+          state: "interrupted",
+          statusLabel: "已中断",
+        },
+      }),
+    }))
+
+    expect(html).toContain("已中断")
+    expect(html).toContain('data-variant="outline"')
+    expect(html).not.toContain("animate-spin")
+  })
 })

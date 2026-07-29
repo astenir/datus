@@ -7,6 +7,7 @@ import {
   ChevronDownIcon,
   CircleXIcon,
   LoaderCircleIcon,
+  SquareIcon,
   WrenchIcon,
 } from "@lucide/vue"
 import { Tool, ToolContent } from "@/components/ai-elements/tool"
@@ -24,11 +25,16 @@ const props = withDefaults(defineProps<{
 
 const stateIcon = computed<Component>(() => {
   if (props.presentation.state === "running") return LoaderCircleIcon
+  if (props.presentation.state === "interrupted") return SquareIcon
   if (props.presentation.state === "error") return CircleXIcon
   return CheckCircle2Icon
 })
 const leadingIcon = computed<Component>(() => props.presentation.isSubagent ? BotIcon : WrenchIcon)
-const badgeVariant = computed(() => props.presentation.state === "error" ? "destructive" as const : "secondary" as const)
+const badgeVariant = computed(() => {
+  if (props.presentation.state === "error") return "destructive" as const
+  if (props.presentation.state === "interrupted") return "outline" as const
+  return "secondary" as const
+})
 const stateIconClass = computed(() => {
   if (props.presentation.state === "running") return "animate-spin text-primary"
   if (props.presentation.state === "error") return "text-destructive"

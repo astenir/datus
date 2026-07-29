@@ -49,6 +49,7 @@ import type { MessageDisplayBlock, SelectOption, SuccessStorySource, ToolChildMe
 const props = defineProps<{
   block: MessageDisplayBlock
   streaming?: boolean
+  executionActive?: boolean
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
@@ -103,7 +104,9 @@ function successStorySaved(source?: SuccessStorySource) {
 }
 
 const toolBlock = computed(() => isToolDisplayBlock(props.block) ? props.block : null)
-const currentToolPresentation = computed(() => toolBlock.value ? toolPresentation(toolBlock.value) : null)
+const currentToolPresentation = computed(() => toolBlock.value
+  ? toolPresentation(toolBlock.value, { isActive: props.executionActive !== false })
+  : null)
 const toolChildMessages = computed(() => {
   const current = toolBlock.value
   return visibleToolChildMessages(current && "childMessages" in current ? current.childMessages : undefined)
@@ -173,7 +176,7 @@ function userInteractionSummary(block: MessageDisplayBlock) {
 }
 
 function readOnlyInteractionDescription() {
-  return props.streaming ? "已提交，工具调用继续执行中" : "此交互请求已处理或已失效"
+  return props.executionActive ? "已提交，工具调用继续执行中" : "此交互请求已处理或已失效"
 }
 </script>
 
@@ -279,6 +282,7 @@ function readOnlyInteractionDescription() {
                 :key="`${child.id}-${index}`"
                 :block="childBlock"
                 :streaming="streaming"
+                :execution-active="executionActive"
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
                 :docked-interaction-key="dockedInteractionKey"

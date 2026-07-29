@@ -79,6 +79,33 @@ describe("tool presentation", () => {
     });
   });
 
+  it("marks a delegated task without a result as interrupted after execution stops", () => {
+    const block = {
+      type: "tool-call" as const,
+      callToolId: "task-stopped",
+      toolName: "task",
+      params: { type: "explore", prompt: "探索基金持仓相关表" },
+      childMessages: [{
+        id: "progress-before-stop",
+        role: "assistant" as const,
+        content: "正在列出数据表",
+        blocks: [{ type: "markdown" as const, content: "正在列出数据表" }],
+      }],
+    };
+
+    expect(toolPresentation(block)).toMatchObject({
+      state: "running",
+      statusLabel: "执行中",
+    });
+    expect(toolPresentation(block, { isActive: false })).toMatchObject({
+      title: "探索数据结构",
+      state: "interrupted",
+      statusLabel: "已中断",
+      summary: "探索基金持仓相关表",
+      metadata: ["1 条执行进展"],
+    });
+  });
+
   it("promotes a child sub-agent failure to the parent task state", () => {
     const presentation = toolPresentation({
       type: "tool-execution",

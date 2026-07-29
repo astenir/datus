@@ -269,9 +269,10 @@ function saveSuccessStory(source: SuccessStorySource) {
         <ChatMessageItem
           v-for="message in displayMessages"
           :key="message.id"
-          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
+          v-memo="[message, message.id === streamingMessageId, workspace.isStreaming.value, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
           :message="message"
           :streaming="message.id === streamingMessageId"
+          :execution-active="workspace.isStreaming.value"
           :interaction-disabled="Boolean(pendingInteractionKey)"
           :active-interaction-key="activeInteractionKey"
           :docked-interaction-key="dockedInteraction?.interactionKey ?? null"

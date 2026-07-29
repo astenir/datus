@@ -76,6 +76,15 @@
           result: null,
         },
         {
+          type: "tool-call",
+          callToolId: "task-stopped-browser-1",
+          toolName: "task",
+          params: {
+            type: "gen_report",
+            prompt: "生成基金持仓分析报告",
+          },
+        },
+        {
           type: "interaction-summary",
           status: "answered",
           actionType: "ask_user",
@@ -102,7 +111,11 @@
         render: () => h(
           "main",
           { class: "mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 md:p-8" },
-          blocks.map((block, index) => h(ChatBlockRenderer, { key: index, block })),
+          blocks.map((block, index) => h(ChatBlockRenderer, {
+            key: index,
+            block,
+            executionActive: false,
+          })),
         ),
       }).mount("#app")
     </script>

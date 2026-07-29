@@ -6,7 +6,11 @@ export type ToolDisplayBlock = Extract<
   { type: "tool-call" | "tool-result" | "tool-execution" }
 >;
 
-export type ToolDisplayState = "running" | "completed" | "error";
+export type ToolDisplayState = "running" | "completed" | "interrupted" | "error";
+
+export type ToolPresentationOptions = {
+  isActive?: boolean;
+};
 
 export type ToolPresentation = {
   title: string;
@@ -137,13 +141,16 @@ export function subagentDisplayName(value: string) {
   return subagentLabels[normalized] ?? readableIdentifier(normalized || value);
 }
 
-export function toolPresentation(block: ToolDisplayBlock): ToolPresentation {
+export function toolPresentation(
+  block: ToolDisplayBlock,
+  options: ToolPresentationOptions = {},
+): ToolPresentation {
   const isSubagent = isSubagentTaskName(block.toolName);
   const childMessages = "childMessages" in block ? block.childMessages : undefined;
   const completion = isSubagent ? subagentCompletionFromChildren(childMessages) : null;
   const errorText = toolErrorText(block) || completion?.errorText;
   const state: ToolDisplayState = block.type === "tool-call"
-    ? "running"
+    ? options.isActive === false ? "interrupted" : "running"
     : errorText || block.resultStatus === "error" ? "error" : "completed";
   const subagentType = isSubagent ? subagentTypeFromParams(toolInput(block)) : "";
   const title = subagentType ? subagentDisplayName(subagentType) : toolDisplayName(block.toolName);
@@ -163,11 +170,18 @@ export function toolPresentation(block: ToolDisplayBlock): ToolPresentation {
     title,
     technicalName: isSubagent && subagentType ? `${block.toolName} · ${subagentType}` : block.toolName,
     state,
-    statusLabel: state === "running" ? "执行中" : state === "error" ? "执行失败" : "已完成",
+    statusLabel: toolStatusLabel(state),
     ...(summary ? { summary: truncate(summary, 140) } : {}),
     metadata,
     isSubagent,
   };
+}
+
+function toolStatusLabel(state: ToolDisplayState) {
+  if (state === "running") return "执行中";
+  if (state === "interrupted") return "已中断";
+  if (state === "error") return "执行失败";
+  return "已完成";
 }
 
 export function visibleToolChildMessages(messages: readonly ToolChildMessage[] | undefined) {

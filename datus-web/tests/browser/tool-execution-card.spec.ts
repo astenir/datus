@@ -7,11 +7,13 @@ test.beforeEach(async ({ page }) => {
 
 test("keeps user-facing summaries on the first level and technical data in details", async ({ page }) => {
   const cards = page.getByTestId("tool-execution-card")
-  await expect(cards).toHaveCount(3)
+  await expect(cards).toHaveCount(4)
   await expect(page.getByText("探索数据结构", { exact: true })).toBeVisible()
   await expect(page.getByText("创建执行队列", { exact: true })).toBeVisible()
   await expect(page.getByText("执行失败", { exact: true })).toBeVisible()
   await expect(page.getByText("任务内容格式无效，请检查后重试", { exact: true })).toBeVisible()
+  await expect(page.getByText("生成报表", { exact: true })).toBeVisible()
+  await expect(page.getByText("已中断", { exact: true })).toBeVisible()
 
   await expect(page.getByText("db_tools.execute_sql", { exact: true })).toBeHidden()
   await cards.nth(0).getByRole("button").first().click()

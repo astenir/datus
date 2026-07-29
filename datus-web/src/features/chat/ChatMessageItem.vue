@@ -8,6 +8,7 @@ import type { ChatDisplayMessage, SelectOption, SuccessStorySource } from "@/typ
 const props = defineProps<{
   message: ChatDisplayMessage
   streaming?: boolean
+  executionActive?: boolean
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
@@ -84,6 +85,7 @@ function saveSuccessStory(source: SuccessStorySource) {
             :key="`${message.id}-${index}`"
             :block="block"
             :streaming="streaming"
+            :execution-active="executionActive"
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
             :docked-interaction-key="dockedInteractionKey"

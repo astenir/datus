@@ -98,3 +98,36 @@ describe("ChatBlockRenderer todo queue routing", () => {
     expect(html).not.toContain("执行队列已更新")
   })
 })
+
+describe("ChatBlockRenderer execution lifecycle", () => {
+  const taskBlock: MessageDisplayBlock = {
+    type: "tool-call",
+    callToolId: "task-call-stopped",
+    toolName: "task",
+    params: {
+      type: "explore",
+      prompt: "探索基金持仓相关表",
+    },
+  }
+
+  it("keeps an unfinished child task running while the conversation is active", async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, { block: taskBlock, executionActive: true }),
+    }))
+
+    expect(html).toContain("探索数据结构")
+    expect(html).toContain("执行中")
+    expect(html).not.toContain("已中断")
+  })
+
+  it("closes an unfinished child task as interrupted after the conversation stops", async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ChatBlockRenderer, { block: taskBlock, executionActive: false }),
+    }))
+
+    expect(html).toContain("探索数据结构")
+    expect(html).toContain("已中断")
+    expect(html).not.toContain("执行中")
+    expect(html).not.toContain("animate-spin")
+  })
+})
