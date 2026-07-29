@@ -49,52 +49,63 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
     class="mb-0 overflow-hidden rounded-lg"
     data-testid="tool-execution-card"
   >
-    <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-3 p-3 text-left">
-      <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+    <CollapsibleTrigger
+      class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-3 py-2.5 text-left"
+      data-testid="tool-card-trigger"
+    >
+      <div
+        class="col-start-1 row-start-1 flex min-w-0 items-center gap-2"
+        data-testid="tool-card-primary-row"
+      >
         <component
           :is="leadingIcon"
-          class="size-4"
+          class="size-4 shrink-0 text-muted-foreground"
+          data-testid="tool-card-leading-icon"
           aria-hidden="true"
         />
-      </div>
-
-      <div class="min-w-0 flex-1">
-        <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <span class="truncate text-sm font-medium text-foreground">
-            {{ presentation.title }}
-          </span>
-          <Badge
-            :variant="badgeVariant"
-            role="status"
-            aria-live="polite"
-          >
-            <component
-              :is="stateIcon"
-              :class="stateIconClass"
-              aria-hidden="true"
-            />
-            {{ presentation.statusLabel }}
-          </Badge>
-        </div>
-
-        <p
-          v-if="presentation.summary"
-          class="mt-1 truncate text-xs text-muted-foreground"
+        <span
+          class="min-w-0 truncate text-sm font-medium text-foreground"
+          data-testid="tool-card-title"
         >
-          {{ presentation.summary }}
-        </p>
-        <p
-          v-if="metadataLabel"
-          class="mt-1 text-xs text-muted-foreground"
+          {{ presentation.title }}
+        </span>
+        <Badge
+          :variant="badgeVariant"
+          role="status"
+          aria-live="polite"
         >
-          {{ metadataLabel }}
-        </p>
+          <component
+            :is="stateIcon"
+            :class="stateIconClass"
+            aria-hidden="true"
+          />
+          {{ presentation.statusLabel }}
+        </Badge>
       </div>
 
       <ChevronDownIcon
-        class="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
+        class="col-start-2 row-start-1 size-4 self-center text-muted-foreground transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none"
         aria-hidden="true"
       />
+
+      <div
+        v-if="presentation.summary || metadataLabel"
+        class="col-start-1 row-start-2 flex min-w-0 items-center gap-3 pl-6 text-xs text-muted-foreground"
+        data-testid="tool-card-secondary-row"
+      >
+        <p
+          v-if="presentation.summary"
+          class="min-w-0 flex-1 truncate"
+        >
+          {{ presentation.summary }}
+        </p>
+        <span
+          v-if="metadataLabel"
+          class="ml-auto shrink-0 whitespace-nowrap"
+        >
+          {{ metadataLabel }}
+        </span>
+      </div>
     </CollapsibleTrigger>
 
     <ToolContent>

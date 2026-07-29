@@ -21,6 +21,40 @@ test("keeps user-facing summaries on the first level and technical data in detai
   await expect(page.getByText("工具标识", { exact: true }).first()).toBeVisible()
 })
 
+test("uses a compact two-row header without a vertically floating leading icon", async ({ page }) => {
+  const card = page.getByTestId("tool-execution-card").first()
+  const trigger = card.getByTestId("tool-card-trigger")
+  const primaryRow = card.getByTestId("tool-card-primary-row")
+  const secondaryRow = card.getByTestId("tool-card-secondary-row")
+
+  await expect(trigger).toBeVisible()
+  await expect(primaryRow.getByText("执行 SQL", { exact: true })).toBeVisible()
+  await expect(primaryRow.getByText("已完成", { exact: true })).toBeVisible()
+  await expect(secondaryRow.getByText("select fund_id, position_value from fund_positions", { exact: true })).toBeVisible()
+  await expect(secondaryRow.getByText("1.25 秒 · 2 行", { exact: true })).toBeVisible()
+
+  const alignment = await card.evaluate((element) => {
+    const triggerElement = element.querySelector<HTMLElement>('[data-testid="tool-card-trigger"]')
+    const iconElement = element.querySelector<HTMLElement>('[data-testid="tool-card-leading-icon"]')
+    const titleElement = element.querySelector<HTMLElement>('[data-testid="tool-card-title"]')
+    if (!triggerElement || !iconElement || !titleElement) return null
+
+    const triggerRect = triggerElement.getBoundingClientRect()
+    const iconRect = iconElement.getBoundingClientRect()
+    const titleRect = titleElement.getBoundingClientRect()
+    return {
+      height: triggerRect.height,
+      centerDelta: Math.abs(
+        iconRect.top + iconRect.height / 2 - (titleRect.top + titleRect.height / 2),
+      ),
+    }
+  })
+
+  expect(alignment).not.toBeNull()
+  expect(alignment?.height).toBeLessThanOrEqual(64)
+  expect(alignment?.centerDelta).toBeLessThanOrEqual(1)
+})
+
 test("shows sub-agent progress inside the parent task without duplicating completion events", async ({ page }) => {
   const taskCard = page.getByTestId("tool-execution-card").nth(1)
   await expect(taskCard.getByText("4 次工具调用 · 3.20 秒", { exact: true })).toBeVisible()

@@ -25,6 +25,8 @@ describe("ToolExecutionCard", () => {
     expect(html).toContain("已完成")
     expect(html).toContain("select * from fund_positions")
     expect(html).toContain("1.25 秒 · 2 行")
+    expect(html).toContain('data-testid="tool-card-primary-row"')
+    expect(html).toContain('data-testid="tool-card-secondary-row"')
     expect(html).not.toContain("db_tools.execute_sql")
   })
 
