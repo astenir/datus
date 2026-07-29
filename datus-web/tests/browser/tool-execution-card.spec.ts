@@ -85,6 +85,25 @@ test("uses the same status vocabulary for interaction history and artifacts", as
   await expect(page.getByText("报表 · 新建", { exact: true })).toBeVisible()
 })
 
+test("uses execution-state colors consistently for tools and sub-agents", async ({ page }) => {
+  const cards = page.getByTestId("tool-execution-card")
+  const regularCompleted = cards.nth(0).getByTestId("tool-card-status")
+  const taskCompleted = cards.nth(1).getByTestId("tool-card-status")
+  const failed = cards.nth(2).getByTestId("tool-card-status")
+  const taskInterrupted = cards.nth(3).getByTestId("tool-card-status")
+
+  await expect(regularCompleted).toHaveClass(/bg-emerald-500\/10/)
+  await expect(taskCompleted).toHaveClass(/bg-emerald-500\/10/)
+  await expect(failed).toHaveClass(/bg-destructive\/10/)
+  await expect(taskInterrupted).toHaveClass(/bg-amber-500\/10/)
+
+  const [regularTone, taskTone] = await Promise.all([
+    regularCompleted.evaluate((element) => getComputedStyle(element).backgroundColor),
+    taskCompleted.evaluate((element) => getComputedStyle(element).backgroundColor),
+  ])
+  expect(taskTone).toBe(regularTone)
+})
+
 test("aligns history and terminal notice density with tool cards", async ({ page }) => {
   const metrics = await page.evaluate(() => {
     const element = (selector: string) => {

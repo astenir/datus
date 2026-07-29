@@ -61,19 +61,48 @@ describe("ToolExecutionCard", () => {
     expect(html).not.toContain('data-testid="tool-card-secondary-row"')
   })
 
-  it("renders an interrupted execution as a neutral terminal state", async () => {
-    const html = await renderToString(createSSRApp({
-      render: () => h(ToolExecutionCard, {
-        presentation: {
-          ...presentation,
-          state: "interrupted",
-          statusLabel: "已中断",
-        },
-      }),
-    }))
+  it("uses one semantic color mapping for every execution state", async () => {
+    const states = [
+      {
+        state: "running" as const,
+        statusLabel: "执行中",
+        toneClass: "bg-blue-500/10",
+        animated: true,
+      },
+      {
+        state: "completed" as const,
+        statusLabel: "已完成",
+        toneClass: "bg-emerald-500/10",
+        animated: false,
+      },
+      {
+        state: "interrupted" as const,
+        statusLabel: "已中断",
+        toneClass: "bg-amber-500/10",
+        animated: false,
+      },
+      {
+        state: "error" as const,
+        statusLabel: "执行失败",
+        toneClass: "bg-destructive/10",
+        animated: false,
+      },
+    ]
 
-    expect(html).toContain("已中断")
-    expect(html).toContain('data-variant="outline"')
-    expect(html).not.toContain("animate-spin")
+    for (const state of states) {
+      const html = await renderToString(createSSRApp({
+        render: () => h(ToolExecutionCard, {
+          presentation: {
+            ...presentation,
+            state: state.state,
+            statusLabel: state.statusLabel,
+          },
+        }),
+      }))
+
+      expect(html).toContain('data-testid="tool-card-status"')
+      expect(html).toContain(state.toneClass)
+      expect(html.includes("animate-spin")).toBe(state.animated)
+    }
   })
 })

@@ -30,16 +30,19 @@ const stateIcon = computed<Component>(() => {
   return CheckCircle2Icon
 })
 const leadingIcon = computed<Component>(() => props.presentation.isSubagent ? BotIcon : WrenchIcon)
-const badgeVariant = computed(() => {
-  if (props.presentation.state === "error") return "destructive" as const
-  if (props.presentation.state === "interrupted") return "outline" as const
-  return "secondary" as const
+const statusToneClass = computed(() => {
+  if (props.presentation.state === "running") {
+    return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+  }
+  if (props.presentation.state === "completed") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+  }
+  if (props.presentation.state === "interrupted") {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+  }
+  return "border-destructive/30 bg-destructive/10 text-destructive"
 })
-const stateIconClass = computed(() => {
-  if (props.presentation.state === "running") return "animate-spin text-primary"
-  if (props.presentation.state === "error") return "text-destructive"
-  return "text-muted-foreground"
-})
+const stateIconClass = computed(() => props.presentation.state === "running" ? "animate-spin" : "")
 const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
 </script>
 
@@ -70,9 +73,11 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
           {{ presentation.title }}
         </span>
         <Badge
-          :variant="badgeVariant"
+          variant="outline"
+          :class="statusToneClass"
           role="status"
           aria-live="polite"
+          data-testid="tool-card-status"
         >
           <component
             :is="stateIcon"
