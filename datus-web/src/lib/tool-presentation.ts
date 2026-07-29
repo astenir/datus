@@ -284,6 +284,8 @@ function namespaceSummary(value: unknown, options: { includeSchema: boolean }) {
 
 function searchContextSummary(value: unknown) {
   const direct = stringFromRecord(value, [
+    "query_text",
+    "queryText",
     "query",
     "keyword",
     "search_text",

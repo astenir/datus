@@ -114,6 +114,20 @@ describe("tool presentation", () => {
   it("supports table-search aliases and leaves parameterless discovery summaries optional", () => {
     expect(toolPresentation({
       type: "tool-call",
+      callToolId: "search-table-1",
+      toolName: "search_table",
+      params: {
+        query_text: "基金持仓和投资组合相关的数据表",
+        database: "datus_enterprise",
+        schema_name: "public",
+      },
+    })).toMatchObject({
+      title: "搜索数据表",
+      summary: "基金持仓和投资组合相关的数据表",
+    });
+
+    expect(toolPresentation({
+      type: "tool-call",
       callToolId: "search-1",
       toolName: "search_tables",
       params: { keywords: ["基金", "持仓"] },
