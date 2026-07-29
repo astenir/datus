@@ -66,25 +66,25 @@ describe("ToolExecutionCard", () => {
       {
         state: "running" as const,
         statusLabel: "执行中",
-        toneClass: "bg-blue-500/10",
+        iconClass: "text-blue-600",
         animated: true,
       },
       {
         state: "completed" as const,
         statusLabel: "已完成",
-        toneClass: "bg-emerald-500/10",
+        iconClass: "text-green-600",
         animated: false,
       },
       {
         state: "interrupted" as const,
         statusLabel: "已中断",
-        toneClass: "bg-amber-500/10",
+        iconClass: "text-orange-600",
         animated: false,
       },
       {
         state: "error" as const,
         statusLabel: "执行失败",
-        toneClass: "bg-destructive/10",
+        iconClass: "text-red-600",
         animated: false,
       },
     ]
@@ -101,7 +101,10 @@ describe("ToolExecutionCard", () => {
       }))
 
       expect(html).toContain('data-testid="tool-card-status"')
-      expect(html).toContain(state.toneClass)
+      expect(html).toContain('data-variant="secondary"')
+      expect(html).toContain("bg-secondary")
+      expect(html).toContain('data-testid="tool-card-status-icon"')
+      expect(html).toContain(state.iconClass)
       expect(html.includes("animate-spin")).toBe(state.animated)
     }
   })

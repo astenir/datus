@@ -30,19 +30,18 @@ const stateIcon = computed<Component>(() => {
   return CheckCircle2Icon
 })
 const leadingIcon = computed<Component>(() => props.presentation.isSubagent ? BotIcon : WrenchIcon)
-const statusToneClass = computed(() => {
+const stateIconClass = computed(() => {
   if (props.presentation.state === "running") {
-    return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+    return "animate-spin text-blue-600 dark:text-blue-400"
   }
   if (props.presentation.state === "completed") {
-    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    return "text-green-600 dark:text-green-400"
   }
   if (props.presentation.state === "interrupted") {
-    return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+    return "text-orange-600 dark:text-orange-400"
   }
-  return "border-destructive/30 bg-destructive/10 text-destructive"
+  return "text-red-600 dark:text-red-400"
 })
-const stateIconClass = computed(() => props.presentation.state === "running" ? "animate-spin" : "")
 const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
 </script>
 
@@ -73,8 +72,7 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
           {{ presentation.title }}
         </span>
         <Badge
-          variant="outline"
-          :class="statusToneClass"
+          variant="secondary"
           role="status"
           aria-live="polite"
           data-testid="tool-card-status"
@@ -82,6 +80,7 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
           <component
             :is="stateIcon"
             :class="stateIconClass"
+            data-testid="tool-card-status-icon"
             aria-hidden="true"
           />
           {{ presentation.statusLabel }}

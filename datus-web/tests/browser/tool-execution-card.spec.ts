@@ -85,23 +85,27 @@ test("uses the same status vocabulary for interaction history and artifacts", as
   await expect(page.getByText("报表 · 新建", { exact: true })).toBeVisible()
 })
 
-test("uses execution-state colors consistently for tools and sub-agents", async ({ page }) => {
+test("keeps neutral badges and state-colored icons consistent for tools and sub-agents", async ({ page }) => {
   const cards = page.getByTestId("tool-execution-card")
   const regularCompleted = cards.nth(0).getByTestId("tool-card-status")
   const taskCompleted = cards.nth(1).getByTestId("tool-card-status")
   const failed = cards.nth(2).getByTestId("tool-card-status")
   const taskInterrupted = cards.nth(3).getByTestId("tool-card-status")
 
-  await expect(regularCompleted).toHaveClass(/bg-emerald-500\/10/)
-  await expect(taskCompleted).toHaveClass(/bg-emerald-500\/10/)
-  await expect(failed).toHaveClass(/bg-destructive\/10/)
-  await expect(taskInterrupted).toHaveClass(/bg-amber-500\/10/)
+  for (const status of [regularCompleted, taskCompleted, failed, taskInterrupted]) {
+    await expect(status).toHaveClass(/bg-secondary/)
+  }
+  await expect(regularCompleted.getByTestId("tool-card-status-icon")).toHaveClass(/text-green-600/)
+  await expect(taskCompleted.getByTestId("tool-card-status-icon")).toHaveClass(/text-green-600/)
+  await expect(failed.getByTestId("tool-card-status-icon")).toHaveClass(/text-red-600/)
+  await expect(taskInterrupted.getByTestId("tool-card-status-icon")).toHaveClass(/text-orange-600/)
 
-  const [regularTone, taskTone] = await Promise.all([
-    regularCompleted.evaluate((element) => getComputedStyle(element).backgroundColor),
-    taskCompleted.evaluate((element) => getComputedStyle(element).backgroundColor),
-  ])
-  expect(taskTone).toBe(regularTone)
+  const tones = await Promise.all(
+    [regularCompleted, taskCompleted, failed, taskInterrupted].map((status) =>
+      status.evaluate((element) => getComputedStyle(element).backgroundColor),
+    ),
+  )
+  expect(new Set(tones).size).toBe(1)
 })
 
 test("aligns history and terminal notice density with tool cards", async ({ page }) => {
