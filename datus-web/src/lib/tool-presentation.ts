@@ -32,11 +32,15 @@ const toolLabels: Readonly<Record<string, string>> = {
   todo_update: "更新任务状态",
   todo_write: "创建执行队列",
   task: "委派子 Agent",
+  list_database: "列出数据库",
   list_databases: "列出数据库",
+  list_schema: "列出 Schema",
   list_schemas: "列出 Schema",
+  list_table: "列出数据表",
   list_tables: "列出数据表",
   describe_table: "查看表结构",
   search_table: "搜索数据表",
+  search_tables: "搜索数据表",
   get_table_ddl: "查看建表语句",
   execute_sql: "执行 SQL",
   read_query: "查询数据",
@@ -156,7 +160,7 @@ export function toolPresentation(
   const title = subagentType ? subagentDisplayName(subagentType) : toolDisplayName(block.toolName);
   const context = isSubagent
     ? stringFromRecord(toolInput(block), ["prompt", "description"])
-    : contextSummary(toolInput(block));
+    : contextSummary(block.toolName, toolInput(block));
   const summary = state === "error"
     ? firstNonEmpty(errorText, toolShortDescription(block), context)
     : firstNonEmpty(toolShortDescription(block), context);
@@ -225,7 +229,27 @@ function subagentTypeFromParams(value: unknown) {
   return stringFromRecord(value, ["type", "subagent_type", "subagentType"]);
 }
 
-function contextSummary(value: unknown) {
+function contextSummary(toolName: string, value: unknown) {
+  const normalized = normalizedToolName(toolName);
+  if (normalized === "list_database" || normalized === "list_databases") {
+    return labeledScopeSummary(value, [
+      { keys: ["datasource", "datasource_id", "datasourceId"], label: "数据源" },
+      { keys: ["catalog"], label: "Catalog" },
+    ]);
+  }
+  if (normalized === "list_schema" || normalized === "list_schemas") {
+    return namespaceSummary(value, { includeSchema: false });
+  }
+  if (normalized === "list_table" || normalized === "list_tables") {
+    return namespaceSummary(value, { includeSchema: true });
+  }
+  if (normalized === "search_table" || normalized === "search_tables") {
+    return searchContextSummary(value);
+  }
+  if (normalized === "list_subject_tree") {
+    return stringFromRecord(value, ["subject_path", "subjectPath", "path"]);
+  }
+
   return stringFromRecord(value, [
     "prompt",
     "description",
@@ -236,6 +260,52 @@ function contextSummary(value: unknown) {
     "sql",
     "statement",
   ]);
+}
+
+function namespaceSummary(value: unknown, options: { includeSchema: boolean }) {
+  if (!isRecord(value)) return undefined;
+  const catalog = stringFromRecord(value, ["catalog"]);
+  const database = stringFromRecord(value, ["database", "database_name", "databaseName"]);
+  const schema = options.includeSchema
+    ? stringFromRecord(value, ["schema_name", "schemaName", "schema"])
+    : undefined;
+  const namespace = [catalog, database, schema].filter((entry): entry is string => Boolean(entry));
+  if (namespace.length > 1) return namespace.join(".");
+  if (schema) return `Schema ${schema}`;
+  if (database) return `数据库 ${database}`;
+  if (catalog) return `Catalog ${catalog}`;
+  return labeledScopeSummary(value, [
+    { keys: ["datasource", "datasource_id", "datasourceId"], label: "数据源" },
+  ]);
+}
+
+function searchContextSummary(value: unknown) {
+  const direct = stringFromRecord(value, [
+    "query",
+    "keyword",
+    "search_text",
+    "searchText",
+    "description",
+  ]);
+  if (direct || !isRecord(value)) return direct;
+  const keywords = value.keywords;
+  if (!Array.isArray(keywords)) return undefined;
+  const normalized = keywords
+    .filter((keyword): keyword is string => typeof keyword === "string")
+    .map((keyword) => keyword.trim())
+    .filter(Boolean);
+  return normalized.length ? normalized.join("、") : undefined;
+}
+
+function labeledScopeSummary(
+  value: unknown,
+  scopes: ReadonlyArray<{ keys: readonly string[]; label: string }>,
+) {
+  for (const scope of scopes) {
+    const candidate = stringFromRecord(value, scope.keys);
+    if (candidate) return `${scope.label} ${candidate}`;
+  }
+  return undefined;
 }
 
 function childProgressLabel(messages: readonly ToolChildMessage[] | undefined) {

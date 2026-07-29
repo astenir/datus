@@ -44,6 +44,23 @@ describe("ToolExecutionCard", () => {
     expect(html).toContain("原始参数与结果")
   })
 
+  it("keeps metadata on the primary row when no meaningful summary exists", async () => {
+    const html = await renderToString(createSSRApp({
+      render: () => h(ToolExecutionCard, {
+        presentation: {
+          ...presentation,
+          title: "列出数据库",
+          summary: undefined,
+          metadata: ["3 项", "0.42 秒"],
+        },
+      }),
+    }))
+
+    expect(html).toContain('data-testid="tool-card-inline-metadata"')
+    expect(html).toContain("3 项 · 0.42 秒")
+    expect(html).not.toContain('data-testid="tool-card-secondary-row"')
+  })
+
   it("renders an interrupted execution as a neutral terminal state", async () => {
     const html = await renderToString(createSSRApp({
       render: () => h(ToolExecutionCard, {

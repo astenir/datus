@@ -81,6 +81,13 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
           />
           {{ presentation.statusLabel }}
         </Badge>
+        <span
+          v-if="!presentation.summary && metadataLabel"
+          class="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground"
+          data-testid="tool-card-inline-metadata"
+        >
+          {{ metadataLabel }}
+        </span>
       </div>
 
       <ChevronDownIcon
@@ -89,14 +96,11 @@ const metadataLabel = computed(() => props.presentation.metadata.join(" · "))
       />
 
       <div
-        v-if="presentation.summary || metadataLabel"
+        v-if="presentation.summary"
         class="col-start-1 row-start-2 flex min-w-0 items-center gap-3 pl-6 text-xs text-muted-foreground"
         data-testid="tool-card-secondary-row"
       >
-        <p
-          v-if="presentation.summary"
-          class="min-w-0 flex-1 truncate"
-        >
+        <p class="min-w-0 flex-1 truncate">
           {{ presentation.summary }}
         </p>
         <span

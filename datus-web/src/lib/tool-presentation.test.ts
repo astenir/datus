@@ -15,6 +15,8 @@ describe("tool presentation", () => {
     expect(toolDisplayName("custom_server.lookup_fund")).toBe("lookup fund");
     expect(toolDisplayName("semantic_tools.attribution_analyze")).toBe("执行归因分析");
     expect(toolDisplayName("artifact_tools.validate_render")).toBe("校验产物渲染");
+    expect(toolDisplayName("db_tools.list_database")).toBe("列出数据库");
+    expect(toolDisplayName("db_tools.search_tables")).toBe("搜索数据表");
   });
 
   it("builds a completed SQL presentation with summary and duration", () => {
@@ -77,6 +79,57 @@ describe("tool presentation", () => {
       metadata: ["4 次工具调用", "3.20 秒"],
       isSubagent: true,
     });
+  });
+
+  it("adds meaningful scope summaries to database discovery tools", () => {
+    expect(toolPresentation({
+      type: "tool-execution",
+      callToolId: "databases-1",
+      toolName: "list_databases",
+      params: { datasource: "datus_enterprise" },
+      duration: 0.25,
+      result: ["postgres"],
+    })).toMatchObject({
+      summary: "数据源 datus_enterprise",
+      metadata: ["0.25 秒", "1 项"],
+    });
+
+    expect(toolPresentation({
+      type: "tool-execution",
+      callToolId: "schemas-1",
+      toolName: "list_schemas",
+      params: { database: "datus_enterprise" },
+      result: ["public", "semantic"],
+    })).toMatchObject({ summary: "数据库 datus_enterprise" });
+
+    expect(toolPresentation({
+      type: "tool-execution",
+      callToolId: "tables-1",
+      toolName: "list_tables",
+      params: { database: "datus_enterprise", schema_name: "public" },
+      result: [],
+    })).toMatchObject({ summary: "datus_enterprise.public" });
+  });
+
+  it("supports table-search aliases and leaves parameterless discovery summaries optional", () => {
+    expect(toolPresentation({
+      type: "tool-call",
+      callToolId: "search-1",
+      toolName: "search_tables",
+      params: { keywords: ["基金", "持仓"] },
+    })).toMatchObject({
+      title: "搜索数据表",
+      summary: "基金、持仓",
+    });
+
+    expect(toolPresentation({
+      type: "tool-execution",
+      callToolId: "subject-tree-1",
+      toolName: "list_subject_tree",
+      params: {},
+      duration: 0.4,
+      result: {},
+    })).not.toHaveProperty("summary");
   });
 
   it("marks a delegated task without a result as interrupted after execution stops", () => {

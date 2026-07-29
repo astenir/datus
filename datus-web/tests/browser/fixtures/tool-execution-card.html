@@ -46,10 +46,14 @@
                 type: "tool-execution",
                 callToolId: "list-tables-browser-1",
                 toolName: "list_tables",
-                params: { database: "datus_enterprise" },
+                params: {},
                 duration: 0.8,
                 resultStatus: "success",
-                result: { tables: ["funds", "positions", "portfolios"] },
+                result: [
+                  { type: "table", qualified_name: "funds" },
+                  { type: "table", qualified_name: "positions" },
+                  { type: "table", qualified_name: "portfolios" },
+                ],
               }],
             },
             {

@@ -63,6 +63,15 @@ test("shows sub-agent progress inside the parent task without duplicating comple
   await expect(taskCard.getByText("子 Agent 执行过程", { exact: true })).toBeVisible()
   await expect(taskCard.getByText("列出数据表", { exact: true })).toBeVisible()
   await expect(page.getByText("仅用于完成事件", { exact: true })).toHaveCount(0)
+
+  const childCard = taskCard.getByTestId("tool-execution-card")
+  await expect(childCard.getByTestId("tool-card-inline-metadata")).toHaveText("0.80 秒 · 3 行")
+  await expect(childCard.getByTestId("tool-card-secondary-row")).toHaveCount(0)
+
+  const childTriggerHeight = await childCard.getByTestId("tool-card-trigger").evaluate(
+    (element) => element.getBoundingClientRect().height,
+  )
+  expect(childTriggerHeight).toBeLessThanOrEqual(40)
 })
 
 test("uses the same status vocabulary for interaction history and artifacts", async ({ page }) => {
