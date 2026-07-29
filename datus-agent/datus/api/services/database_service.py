@@ -472,15 +472,9 @@ class DatasourceService:
                 if isinstance(schema_info, list):
                     for _i, col in enumerate(schema_info):
                         if isinstance(col, dict):
-                            nullable = (
-                                bool(col["nullable"])
-                                if "nullable" in col
-                                else col.get("notnull", 0) == 0
-                            )
+                            nullable = bool(col["nullable"]) if "nullable" in col else col.get("notnull", 0) == 0
                             default_value = (
-                                col.get("default_value")
-                                if "default_value" in col
-                                else col.get("dflt_value")
+                                col.get("default_value") if "default_value" in col else col.get("dflt_value")
                             )
                             comment_value = col.get("comment")
                             column_info = ColumnInfo(
@@ -489,11 +483,7 @@ class DatasourceService:
                                 nullable=nullable,
                                 default_value=default_value,
                                 pk=bool(col.get("pk", False)),
-                                comment=(
-                                    str(comment_value)
-                                    if comment_value not in (None, "")
-                                    else None
-                                ),
+                                comment=(str(comment_value) if comment_value not in (None, "") else None),
                             )
                         else:
                             # Handle string or other formats

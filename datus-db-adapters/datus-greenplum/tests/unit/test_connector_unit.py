@@ -489,7 +489,7 @@ def test_get_ddl_places_distribution_before_column_comments():
         full_name = connector.full_name(schema_name="public", table_name="t")
 
         assert ddl.index('DISTRIBUTED BY ("id");') < ddl.index("COMMENT ON COLUMN")
-        assert f'COMMENT ON COLUMN {full_name}."id" IS \'Primary identifier\';' in ddl
+        assert f"COMMENT ON COLUMN {full_name}.\"id\" IS 'Primary identifier';" in ddl
 
 
 def test_get_ddl_no_distribution_for_view():

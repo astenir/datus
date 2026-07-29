@@ -572,8 +572,8 @@ def test_get_ddl_appends_and_escapes_column_comments():
     ddl = connector._get_ddl("public", "orders")
     full_name = connector.full_name(schema_name="public", table_name="orders")
 
-    assert f'COMMENT ON COLUMN {full_name}."customer""id" IS \'Customer\'\'s external ID\';' in ddl
-    assert f'COMMENT ON COLUMN {full_name}."status" IS \'Order status\';' in ddl
+    assert f"COMMENT ON COLUMN {full_name}.\"customer\"\"id\" IS 'Customer''s external ID';" in ddl
+    assert f"COMMENT ON COLUMN {full_name}.\"status\" IS 'Order status';" in ddl
     assert ddl.index("PRIMARY KEY") < ddl.index("COMMENT ON COLUMN")
 
 

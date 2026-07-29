@@ -292,8 +292,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 if raw_comment is not None and str(raw_comment).strip():
                     escaped_comment = str(raw_comment).replace("'", "''")
                     comment_statements.append(
-                        f"COMMENT ON COLUMN {full_name}.{self.quote_identifier(col['name'])} "
-                        f"IS '{escaped_comment}';"
+                        f"COMMENT ON COLUMN {full_name}.{self.quote_identifier(col['name'])} IS '{escaped_comment}';"
                     )
 
             ddl = f"CREATE TABLE {full_name} (\n"
