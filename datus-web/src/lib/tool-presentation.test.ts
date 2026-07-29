@@ -132,6 +132,28 @@ describe("tool presentation", () => {
     })).not.toHaveProperty("summary");
   });
 
+  it("uses the pattern instead of the search path for file discovery tools", () => {
+    expect(toolPresentation({
+      type: "tool-call",
+      callToolId: "glob-1",
+      toolName: "glob",
+      params: { pattern: "**/*.sql", path: "subject" },
+    })).toMatchObject({
+      title: "查找文件",
+      summary: "**/*.sql",
+    });
+
+    expect(toolPresentation({
+      type: "tool-call",
+      callToolId: "grep-1",
+      toolName: "grep",
+      params: { pattern: "fund_positions", path: "src" },
+    })).toMatchObject({
+      title: "搜索文件内容",
+      summary: "fund_positions",
+    });
+  });
+
   it("marks a delegated task without a result as interrupted after execution stops", () => {
     const block = {
       type: "tool-call" as const,

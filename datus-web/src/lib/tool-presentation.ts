@@ -249,6 +249,9 @@ function contextSummary(toolName: string, value: unknown) {
   if (normalized === "list_subject_tree") {
     return stringFromRecord(value, ["subject_path", "subjectPath", "path"]);
   }
+  if (normalized === "glob" || normalized === "grep") {
+    return stringFromRecord(value, ["pattern"]);
+  }
 
   return stringFromRecord(value, [
     "prompt",
