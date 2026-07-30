@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Optional
 
 from datus.tools.func_tool.base import FuncToolResult
+from datus.utils.constants import HIDDEN_SYS_SUB_AGENTS, SYS_SUB_AGENTS
 from datus.utils.loggings import get_logger
 
 if TYPE_CHECKING:
@@ -13,6 +14,34 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _MISSING_AGENT_ID = object()
+
+# ``explore`` is a first-class upstream task() target but intentionally does
+# not live in SYS_SUB_AGENTS. Keep enterprise registration and task discovery
+# on one downstream-owned definition so built-ins cannot silently drift out
+# of Agent ACL governance.
+ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS = frozenset((SYS_SUB_AGENTS - HIDDEN_SYS_SUB_AGENTS) | {"explore"})
+ENTERPRISE_PLAN_MODE_REQUIRED_AGENT_IDS = frozenset({"explore"})
+
+
+def configure_enterprise_plan_mode_delegation(
+    agent_config: "AgentConfig",
+    *,
+    plan_mode: bool,
+) -> set[str]:
+    """Enable Plan Mode's required delegation on the request-scoped config.
+
+    The required target must already be visible through the effective
+    enterprise Agent ACL. This only removes duplication with the parent
+    Agent's general delegation policy; it never grants access to the target.
+    """
+    required_agent_ids: set[str] = set()
+    if bool(getattr(agent_config, "_enterprise_enabled", False)) and plan_mode:
+        required_agent_ids.update(ENTERPRISE_PLAN_MODE_REQUIRED_AGENT_IDS)
+
+    allowed_agent_ids = set(getattr(agent_config, "_enterprise_allowed_agent_ids", set()) or set())
+    missing_agent_ids = required_agent_ids - allowed_agent_ids
+    agent_config._request_required_subagent_ids = set() if missing_agent_ids else required_agent_ids
+    return missing_agent_ids
 
 
 def inherit_parent_permission_profile(

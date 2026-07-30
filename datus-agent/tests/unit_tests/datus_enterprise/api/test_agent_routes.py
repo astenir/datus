@@ -20,7 +20,9 @@ from datus.api.service import create_app
 from datus_enterprise.agent_registry import (
     ENTERPRISE_AGENT_NODE_CAPABILITIES,
     ENTERPRISE_AGENT_NODE_CLASSES,
+    ENTERPRISE_BUILTIN_AGENT_IDS,
     materialize_enterprise_agent,
+    validate_agent_id,
 )
 from datus_enterprise.api import agent_routes
 from datus_enterprise.postgres_stores import _agent_record, _normalized_agent_metadata
@@ -164,6 +166,7 @@ def test_admin_agent_node_types(monkeypatch):
         "ask_metrics",
         "ask_report",
         "ask_dashboard",
+        "explore",
     ]
     assert {item["node_class"] for item in items} == ENTERPRISE_AGENT_NODE_CLASSES
     assert all(item["label"] and item["description"] for item in items)
@@ -284,6 +287,10 @@ def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
     assert items["gen_sql"]["source"] == "builtin"
     assert items["gen_sql"]["status"] == "disabled"
     assert items["gen_sql"]["acl"]["visibility"] == "private"
+    assert items["explore"]["source"] == "builtin"
+    assert items["explore"]["node_class"] == "explore"
+    assert items["explore"]["status"] == "disabled"
+    assert items["explore"]["acl"]["visibility"] == "private"
     assert "feedback" not in items
     assert items["sales_sql"]["source"] == "enterprise"
     assert items["sales_sql"]["acl"]["visibility"] == "enterprise"
@@ -340,6 +347,29 @@ def test_admin_builtin_agent_detail_uses_special_template_mapping(monkeypatch):
     assert response.json()["data"]["prompt_template_name"] == "skill_creator_system"
     assert response.json()["data"]["prompt_version"] == "1.0"
     assert "skill engineer" in response.json()["data"]["prompt_template"]
+
+
+def test_explore_is_reserved_and_has_readonly_enterprise_tool_reference(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/tool-reference", params={"node_class": "explore"})
+
+    assert "explore" in ENTERPRISE_BUILTIN_AGENT_IDS
+    assert validate_agent_id("explore") is not None
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    data = response.json()["data"]
+    assert data["default_tools"] == [
+        "db_tools.*",
+        "context_search_tools.*",
+        "date_parsing_tools.*",
+        "filesystem_tools.read_file",
+        "filesystem_tools.glob",
+        "filesystem_tools.grep",
+    ]
+    assert data["tool_types"]["filesystem_tools"]["tools"] == ["read_file", "glob", "grep"]
 
 
 def test_admin_default_chat_agent_detail_is_readonly(monkeypatch):
@@ -932,6 +962,35 @@ def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch)
         "db_tools.describe_table",
         "db_tools.list_tables",
     ]
+
+
+def test_published_explore_builtin_is_available_only_through_its_acl(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store, enabled=True)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        status_response = client.put("/api/v1/admin/agents/explore/status", json={"status": "published"})
+        acl_response = client.put(
+            "/api/v1/admin/agents/explore/acl",
+            json={"visibility": "role", "allowed_roles": ["analyst"], "allowed_user_ids": []},
+        )
+
+    assert status_response.json()["success"] is True
+    assert acl_response.json()["success"] is True
+
+    allowed_ctx = AppContext(user_id="alice", roles=["analyst"], permissions=set())
+    denied_ctx = AppContext(user_id="bob", roles=["viewer"], permissions={"module.sql_executor"})
+    with _client(allowed_ctx) as client:
+        allowed_response = client.get("/api/v1/agents")
+        tools_response = client.get("/api/v1/agents/explore/tools")
+    with _client(denied_ctx) as client:
+        denied_response = client.get("/api/v1/agents")
+
+    assert "explore" in {item["agent_id"] for item in allowed_response.json()["data"]}
+    assert tools_response.json()["success"] is True
+    assert "filesystem_tools.write_file" not in tools_response.json()["data"]["default_tools"]
+    assert "explore" not in {item["agent_id"] for item in denied_response.json()["data"]}
 
 
 def test_admin_policy_update_rejects_unknown_pattern_without_persisting(monkeypatch):

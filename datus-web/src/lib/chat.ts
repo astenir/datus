@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   InteractionSummaryStatus,
   MessageDisplayBlock,
+  PlanConfirmationOutcome,
   ChatSessionOption,
   MessageBlock,
   MessageOperation,
@@ -15,6 +16,7 @@ import type {
 } from "@/types";
 import { request } from "@/lib/request";
 import { isSqlExecutionTool, toolResultStatus } from "@/lib/tool-display";
+import { isInteractionToolName, normalizedToolName } from "@/lib/tool-presentation";
 
 export type ChatStreamRequestInput = {
   message: string;
@@ -81,6 +83,18 @@ export function buildUserInteractionInput(
     interaction_key: interactionKey,
     input,
   };
+}
+
+export function shouldExitPlanModeAfterInteraction(
+  interaction: ActiveUserInteraction | null,
+  interactionKey: string,
+  answers: readonly (readonly string[])[],
+) {
+  if (interaction?.interactionKey !== interactionKey) return false;
+  if (interaction.block.actionType !== "confirm_plan") return false;
+
+  const decision = answers[0]?.[0]?.trim().toLowerCase();
+  return decision === "confirm" || decision === "cancel";
 }
 
 export function normalizeBaseUrl(value: string) {
@@ -593,12 +607,133 @@ export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): Ch
     }
   });
 
-  return mergedMessages;
+  return mergePlanConfirmationMessages(mergedMessages);
+}
+
+function mergePlanConfirmationMessages(messages: readonly ChatDisplayMessage[]): ChatDisplayMessage[] {
+  const outcomesByContext = new Map<string, PlanConfirmationOutcome[]>();
+  const withoutInteractionTools = messages.flatMap((message) => {
+    if (!message.blocks?.length) return [message];
+
+    const blocks: MessageDisplayBlock[] = [];
+    for (const block of message.blocks) {
+      if (!isInteractionToolBlock(block)) {
+        blocks.push(block);
+        continue;
+      }
+
+      if (normalizedToolName(block.toolName) === "confirm_plan") {
+        const context = executionContextKey(message);
+        const outcome = planOutcomeFromToolBlock(block);
+        if (outcome) {
+          const outcomes = outcomesByContext.get(context) ?? [];
+          outcomes.push(outcome);
+          outcomesByContext.set(context, outcomes);
+        }
+      }
+    }
+
+    if (blocks.length === 0) return [];
+    return [{ ...message, blocks }];
+  });
+
+  const merged: ChatDisplayMessage[] = [];
+
+  for (let index = 0; index < withoutInteractionTools.length; index += 1) {
+    const previewMessage = withoutInteractionTools[index];
+    const confirmationMessage = withoutInteractionTools[index + 1];
+    const previewBlock = previewMessage?.blocks?.length === 1 ? previewMessage.blocks[0] : null;
+    const interactionBlock = confirmationMessage?.blocks?.length === 1 ? confirmationMessage.blocks[0] : null;
+    const sameExecutionContext = previewMessage?.depth === confirmationMessage?.depth &&
+      previewMessage?.parentActionId === confirmationMessage?.parentActionId;
+    const context = previewMessage ? executionContextKey(previewMessage) : "";
+    const pendingOutcomes = outcomesByContext.get(context) ?? [];
+    const outcome = pendingOutcomes.shift();
+
+    if (
+      previewBlock?.type === "plan-preview" &&
+      interactionBlock?.type === "user-interaction" &&
+      interactionBlock.actionType === "confirm_plan" &&
+      sameExecutionContext
+    ) {
+      merged.push({
+        ...confirmationMessage,
+        content: previewMessage.content,
+        blocks: [{
+          type: "plan-confirmation",
+          content: previewBlock.content,
+          interaction: interactionBlock,
+          ...(outcome ? { outcome } : {}),
+        }],
+      });
+      index += 1;
+      continue;
+    }
+
+    if (previewBlock?.type === "plan-preview" && outcome) {
+      merged.push({
+        ...previewMessage,
+        blocks: [{
+          type: "plan-confirmation",
+          content: previewBlock.content,
+          outcome,
+        }],
+      });
+      continue;
+    }
+
+    if (previewMessage) merged.push(previewMessage);
+  }
+
+  return merged;
+}
+
+function isInteractionToolBlock(
+  block: MessageDisplayBlock,
+): block is Extract<MessageDisplayBlock, { type: "tool-call" | "tool-result" | "tool-execution" }> {
+  return (
+    block.type === "tool-call" ||
+    block.type === "tool-result" ||
+    block.type === "tool-execution"
+  ) && isInteractionToolName(block.toolName);
+}
+
+function executionContextKey(message: Pick<ChatDisplayMessage, "depth" | "parentActionId">) {
+  return `${message.depth ?? 0}:${message.parentActionId ?? "root"}`;
+}
+
+function planOutcomeFromToolBlock(
+  block: Extract<MessageDisplayBlock, { type: "tool-call" | "tool-result" | "tool-execution" }>,
+): PlanConfirmationOutcome | undefined {
+  if (block.type === "tool-call") return undefined;
+  if (block.errorText || block.resultStatus === "error") {
+    return {
+      status: "error",
+      error: block.errorText || "计划确认失败，请重试。",
+    };
+  }
+
+  const result = unwrapResultRecord(block.result);
+  const status = typeof result?.status === "string" ? result.status.trim().toLowerCase() : "";
+  if (status === "confirmed") return { status: "confirmed" };
+  if (status === "cancelled") return { status: "cancelled" };
+  if (status === "feedback") {
+    const feedback = typeof result?.feedback === "string" ? result.feedback.trim() : "";
+    return { status: "feedback", ...(feedback ? { feedback } : {}) };
+  }
+  return undefined;
+}
+
+function unwrapResultRecord(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  if (isRecord(value.result) && ("success" in value || Object.keys(value).length === 1)) return value.result;
+  return value;
 }
 
 function isReviewableMessageBlock(block: MessageBlock) {
   if (block.type === "artifact") return true;
   if (block.type === "code") return true;
+  if (block.type === "plan-preview") return block.content.trim().length > 0;
   if (block.type !== "markdown") return false;
 
   const content = block.content.trim();
@@ -845,6 +980,8 @@ export function contentFromPayloadBlocks(
 
     if (type === "markdown") {
       blocks.push({ type: "markdown", content: stringifyContent(payload.content) });
+    } else if (type === "plan-preview") {
+      blocks.push({ type: "plan-preview", content: stringifyContent(payload.content) });
     } else if (type === "thinking") {
       blocks.push({ type: "thinking", content: stringifyContent(payload.content) });
     } else if (type === "code") {
@@ -953,6 +1090,7 @@ export function contentFromPayloadBlocks(
   const text = blocks
     .map((block) => {
       if (block.type === "markdown") return block.content;
+      if (block.type === "plan-preview") return block.content;
       if (block.type === "thinking") return block.content;
       if (block.type === "code") return block.content;
       if (block.type === "error") return `${block.title}\n${block.message}`;

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
+import { Badge } from "@/components/ui/badge"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
 import type { ChatDisplayMessage, SelectOption, SuccessStorySource } from "@/types"
 
 const props = defineProps<{
   message: ChatDisplayMessage
   streaming?: boolean
+  executionActive?: boolean
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
@@ -69,9 +71,11 @@ function saveSuccessStory(source: SuccessStorySource) {
     <MessageContent :class="contentClass">
       <div
         v-if="message.depth && !isUserMessage && !isSystemMessage"
-        class="mb-3 text-sm text-muted-foreground"
+        class="mb-3"
       >
-        depth {{ message.depth }}
+        <Badge variant="outline">
+          子 Agent 执行
+        </Badge>
       </div>
 
       <div class="flex flex-col gap-3">
@@ -81,6 +85,7 @@ function saveSuccessStory(source: SuccessStorySource) {
             :key="`${message.id}-${index}`"
             :block="block"
             :streaming="streaming"
+            :execution-active="executionActive"
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
             :docked-interaction-key="dockedInteractionKey"

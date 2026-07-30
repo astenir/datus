@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tool execution card fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from "vue"
+      import "/src/style.css"
+      import ChatBlockRenderer from "/src/features/chat/ChatBlockRenderer.vue"
+
+      const blocks = [
+        {
+          type: "tool-execution",
+          callToolId: "sql-browser-1",
+          toolName: "db_tools.execute_sql",
+          params: { sql: "select fund_id, position_value from fund_positions" },
+          duration: 1.25,
+          resultStatus: "success",
+          result: {
+            columns: ["fund_id", "position_value"],
+            rows: [["F001", 1200000], ["F002", 980000]],
+          },
+        },
+        {
+          type: "tool-execution",
+          callToolId: "task-browser-1",
+          toolName: "task",
+          params: {
+            type: "explore",
+            prompt: "探索基金、持仓和投资组合相关表",
+          },
+          resultStatus: "success",
+          result: { session_id: "explore-browser-1" },
+          childMessages: [
+            {
+              id: "task-progress-1",
+              role: "assistant",
+              content: "正在列出数据表",
+              depth: 1,
+              parentActionId: "task-browser-1",
+              blocks: [{
+                type: "tool-execution",
+                callToolId: "list-tables-browser-1",
+                toolName: "list_tables",
+                params: {},
+                duration: 0.8,
+                resultStatus: "success",
+                result: [
+                  { type: "table", qualified_name: "funds" },
+                  { type: "table", qualified_name: "positions" },
+                  { type: "table", qualified_name: "portfolios" },
+                ],
+              }],
+            },
+            {
+              id: "task-complete-1",
+              role: "assistant",
+              content: "仅用于完成事件",
+              depth: 1,
+              parentActionId: "task-browser-1",
+              blocks: [{
+                type: "subagent-complete",
+                subagent: "explore",
+                toolCount: 4,
+                duration: 3.2,
+              }],
+            },
+          ],
+        },
+        {
+          type: "tool-result",
+          callToolId: "todo-error-browser-1",
+          toolName: "todo_write",
+          resultStatus: "error",
+          errorText: "任务内容格式无效，请检查后重试",
+          result: null,
+        },
+        {
+          type: "tool-call",
+          callToolId: "task-stopped-browser-1",
+          toolName: "task",
+          params: {
+            type: "gen_report",
+            prompt: "生成基金持仓分析报告",
+          },
+        },
+        {
+          type: "interaction-summary",
+          status: "answered",
+          actionType: "ask_user",
+          requests: [{
+            title: "选择分析范围",
+            content: "请选择需要分析的基金范围",
+            options: [{ key: "active", title: "在管基金" }],
+            allowFreeText: false,
+            multiSelect: false,
+          }],
+          answers: [{ question: "请选择需要分析的基金范围", answer: ["active"] }],
+        },
+        {
+          type: "error",
+          title: "已停止生成",
+          message: "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
+          tone: "info",
+        },
+        {
+          type: "todo-execution-summary",
+          executionId: "todo-browser-1",
+          status: "completed",
+          total: 3,
+          completed: 3,
+          items: [
+            { id: "1", title: "输出数字 1", status: "completed" },
+            { id: "2", title: "输出数字 2", status: "completed" },
+            { id: "3", title: "输出数字 3", status: "completed" },
+          ],
+        },
+        {
+          type: "artifact",
+          kind: "report",
+          slug: "fund-position-report",
+          name: "基金持仓分析报告",
+          description: "汇总持仓结构与风险暴露",
+          mode: "new",
+        },
+      ]
+
+      createApp({
+        render: () => h(
+          "main",
+          { class: "mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 md:p-8" },
+          blocks.map((block, index) => h(ChatBlockRenderer, {
+            key: index,
+            block,
+            executionActive: false,
+          })),
+        ),
+      }).mount("#app")
+    </script>
+  </body>
+</html>

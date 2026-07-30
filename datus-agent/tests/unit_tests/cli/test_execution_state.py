@@ -851,6 +851,24 @@ class TestInteractionBrokerSend:
         assert broker._output_queue.qsize() == 1
 
 
+class TestInteractionBrokerActionType:
+    @pytest.mark.asyncio
+    async def test_request_uses_explicit_semantic_action_type(self):
+        broker = InteractionBroker()
+        request_task = asyncio.create_task(
+            broker.request(
+                [InteractionEvent(content="Confirm plan?", choices={"confirm": "Confirm"})],
+                action_type="confirm_plan",
+            )
+        )
+
+        action = await broker._output_queue.get()
+        assert action.action_type == "confirm_plan"
+
+        await broker.submit(action.action_id, [["confirm"]])
+        assert await request_task == [["confirm"]]
+
+
 class TestInteractionBrokerAllowFreeText:
     """Tests for the ``allow_free_text`` flag on ``InteractionEvent`` / ``submit``."""
 

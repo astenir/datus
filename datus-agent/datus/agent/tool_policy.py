@@ -66,6 +66,14 @@ def apply_agent_runtime_policy(node: Any) -> None:
     raw_runtime_policy = node_config.get("runtime_policy") if isinstance(node_config, dict) else None
     tool_policy = normalize_tool_policy(raw_tool_policy)
     runtime_policy = normalize_runtime_policy(raw_runtime_policy)
+    agent_config = getattr(node, "agent_config", None)
+    raw_required_subagents = getattr(agent_config, "_request_required_subagent_ids", None)
+    required_subagents = (
+        _normalized_patterns(raw_required_subagents)
+        if isinstance(raw_required_subagents, (str, list, tuple, set))
+        else []
+    )
+    has_required_delegation = bool(required_subagents)
 
     populate_registry = getattr(node, "_populate_tool_registry", None)
     if callable(populate_registry):
@@ -79,9 +87,11 @@ def apply_agent_runtime_policy(node: Any) -> None:
         category = str(registry.get(tool_name, "tools")) if registry is not None else "tools"
         qualified_name = f"{category}.{tool_name}"
         is_denied = _matches_any(qualified_name, tool_policy["denied"])
-        if tool_name == "task" and not runtime_policy["allow_subagent_delegation"]:
+        if tool_name == "task" and not (runtime_policy["allow_subagent_delegation"] or has_required_delegation):
             is_denied = True
-        is_runtime_delegation_tool = tool_name == "task" and runtime_policy["allow_subagent_delegation"]
+        is_runtime_delegation_tool = tool_name == "task" and (
+            runtime_policy["allow_subagent_delegation"] or has_required_delegation
+        )
         if (
             tool_policy["mode"] == "allowlist"
             and not is_runtime_delegation_tool
@@ -94,14 +104,20 @@ def apply_agent_runtime_policy(node: Any) -> None:
         visible_tools.append(tool)
     node.tools = visible_tools
 
-    if not runtime_policy["allow_subagent_delegation"]:
-        subagent_tool = getattr(node, "sub_agent_task_tool", None)
-        if subagent_tool is not None:
-            subagent_tool._allowed_subagents = []
-    elif runtime_policy["allowed_subagents"]:
-        subagent_tool = getattr(node, "sub_agent_task_tool", None)
-        if subagent_tool is not None:
-            subagent_tool._allowed_subagents = list(runtime_policy["allowed_subagents"])
+    subagent_tool = getattr(node, "sub_agent_task_tool", None)
+    if subagent_tool is not None and has_required_delegation:
+        if not runtime_policy["allow_subagent_delegation"]:
+            configured_subagents: list[str] | None = []
+        elif runtime_policy["allowed_subagents"]:
+            configured_subagents = list(runtime_policy["allowed_subagents"])
+        else:
+            configured_subagents = getattr(subagent_tool, "_allowed_subagents", None)
+        if configured_subagents is not None:
+            subagent_tool._allowed_subagents = list(dict.fromkeys([*configured_subagents, *required_subagents]))
+    elif subagent_tool is not None and not runtime_policy["allow_subagent_delegation"]:
+        subagent_tool._allowed_subagents = []
+    elif subagent_tool is not None and runtime_policy["allowed_subagents"]:
+        subagent_tool._allowed_subagents = list(runtime_policy["allowed_subagents"])
 
     permission_manager = getattr(node, "permission_manager", None)
     global_config = getattr(permission_manager, "global_config", None)

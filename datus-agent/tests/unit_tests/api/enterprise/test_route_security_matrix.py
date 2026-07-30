@@ -194,6 +194,8 @@ def test_agent_catalog_and_dispatch_use_agent_acl_not_module_rbac():
 
     chat_stream_policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/chat/stream")]
     assert PERMISSION_MODE_RBAC in chat_stream_policy.categories
+    assert "ACL-visible Explore" in chat_stream_policy.note
+    assert "sub_agent_tools.task" in chat_stream_policy.note
 
 
 def test_datasource_grant_admin_routes_carry_datasource_boundary():

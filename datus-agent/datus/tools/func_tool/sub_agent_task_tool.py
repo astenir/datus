@@ -1500,16 +1500,19 @@ class SubAgentTaskTool:
         not a delegatable subagent, so it is excluded here even though it lives
         in SYS_SUB_AGENTS (which only guards reserved system names).
         """
-        from datus_enterprise.services.sub_agent_task_policy import enterprise_agent_acl_allows
+        from datus_enterprise.services.sub_agent_task_policy import (
+            ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS,
+            enterprise_agent_acl_allows,
+        )
 
-        discovered_types = ["explore", *sorted(name for name in SYS_SUB_AGENTS if name != "feedback")]
+        discovered_types = sorted(ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS)
         types = [name for name in discovered_types if enterprise_agent_acl_allows(self.agent_config, name)]
 
         if self.agent_config and hasattr(self.agent_config, "agentic_nodes"):
             current_datasource = self.agent_config.current_datasource
 
             for name, config in self.agent_config.agentic_nodes.items():
-                if name in ("chat", "explore", "feedback") or name in SYS_SUB_AGENTS:
+                if name in ("chat", "feedback") or name in ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS:
                     continue
                 entry_id = config.get("id") if isinstance(config, dict) else None
                 if not enterprise_agent_acl_allows(self.agent_config, name, entry_id=entry_id):

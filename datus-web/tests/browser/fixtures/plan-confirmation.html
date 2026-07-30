@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plan confirmation fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue"
+      import "/src/style.css"
+      import PlanConfirmationBlock from "/src/features/chat/PlanConfirmationBlock.vue"
+
+      const block = {
+        type: "plan-confirmation",
+        content: [
+          "# 基金持仓分析计划",
+          "",
+          "1. 盘点数据库、schema 与候选表",
+          "2. 描述基金、持仓和投资组合相关表",
+          "3. 汇总可执行的分析步骤与风险检查",
+        ].join("\n"),
+        interaction: {
+          type: "user-interaction",
+          interactionKey: "plan-browser-1",
+          actionType: "confirm_plan",
+          requests: [{
+            title: "Plan",
+            content: "Confirm this plan, or type feedback to revise:",
+            options: [
+              { key: "confirm", title: "Confirm and execute" },
+              { key: "cancel", title: "Cancel plan" },
+            ],
+            allowFreeText: true,
+            multiSelect: false,
+          }],
+        },
+      }
+
+      createApp({
+        setup() {
+          const submission = ref("")
+          return () => h("main", { class: "mx-auto w-full max-w-3xl p-4 md:p-8" }, [
+            h(PlanConfirmationBlock, {
+              block,
+              onSubmit: (interactionKey, answers) => {
+                submission.value = JSON.stringify({ interactionKey, answers })
+              },
+            }),
+            h("output", { "data-testid": "submission" }, submission.value),
+          ])
+        },
+      }).mount("#app")
+    </script>
+  </body>
+</html>

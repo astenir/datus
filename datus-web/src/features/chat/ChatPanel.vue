@@ -32,7 +32,12 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
-import { activeStreamingMessageId, activeUserInteractionRequest, mergeToolExecutionMessages } from "@/lib/chat"
+import {
+  activeStreamingMessageId,
+  activeUserInteractionRequest,
+  mergeToolExecutionMessages,
+  shouldExitPlanModeAfterInteraction,
+} from "@/lib/chat"
 import { parsePermissionRequest } from "@/lib/interaction-display"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { usePermission } from "@/composables/usePermission"
@@ -44,6 +49,8 @@ import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
+import TodoExecutionDock from "@/features/chat/TodoExecutionDock.vue"
+import { deriveTodoExecutionDisplay } from "@/lib/todo-execution"
 
 const props = defineProps<{
   workspace: ChatWorkspace
@@ -65,7 +72,12 @@ type ModelOptionGroup = {
   options: SelectOption[]
 }
 
-const displayMessages = computed(() => mergeToolExecutionMessages(props.workspace.messages.value))
+const todoDisplay = computed(() => deriveTodoExecutionDisplay(
+  mergeToolExecutionMessages(props.workspace.messages.value),
+  { isStreaming: props.workspace.isStreaming.value },
+))
+const displayMessages = computed(() => todoDisplay.value.messages)
+const activeTodoExecution = computed(() => todoDisplay.value.activeExecution)
 const canSaveSuccessStory = computed(() => permission.isAdmin() || permission.hasPermission("module.kb"))
 const successStorySessionLink = computed(() => {
   const sessionId = props.workspace.selectedSession.value
@@ -195,9 +207,16 @@ function selectModel(value: string) {
 async function submitInteraction(interactionKey: string, answers: string[][]) {
   if (pendingInteractionKey.value) return
 
+  const exitsPlanMode = shouldExitPlanModeAfterInteraction(
+    activeInteraction.value,
+    interactionKey,
+    answers,
+  )
+
   pendingInteractionKey.value = interactionKey
   try {
     await props.workspace.sendInteraction(interactionKey, answers)
+    if (exitsPlanMode) props.workspace.setPlanMode(false)
   } catch (error) {
     console.error("Failed to submit interaction:", error)
     toast.error("提交交互失败，请重试")
@@ -250,9 +269,10 @@ function saveSuccessStory(source: SuccessStorySource) {
         <ChatMessageItem
           v-for="message in displayMessages"
           :key="message.id"
-          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
+          v-memo="[message, message.id === streamingMessageId, workspace.isStreaming.value, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
           :message="message"
           :streaming="message.id === streamingMessageId"
+          :execution-active="workspace.isStreaming.value"
           :interaction-disabled="Boolean(pendingInteractionKey)"
           :active-interaction-key="activeInteractionKey"
           :docked-interaction-key="dockedInteraction?.interactionKey ?? null"
@@ -270,7 +290,7 @@ function saveSuccessStory(source: SuccessStorySource) {
           @save-success-story="saveSuccessStory"
         />
         <ChatActivityStatus
-          v-if="workspace.isStreaming.value"
+          v-if="workspace.isStreaming.value && !activeTodoExecution"
           :activity="workspace.streamActivity.value"
           @stop="workspace.stopSession"
         />
@@ -286,6 +306,11 @@ function saveSuccessStory(source: SuccessStorySource) {
           dismissible
           class="mb-3"
           @dismiss="workspace.clearTransportError"
+        />
+
+        <TodoExecutionDock
+          :execution="activeTodoExecution"
+          @stop="workspace.stopSession"
         />
 
         <ActiveInteractionDock

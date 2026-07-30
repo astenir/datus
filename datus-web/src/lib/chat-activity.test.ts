@@ -303,7 +303,7 @@ describe("chat activity presentation", () => {
       toolCompletedCount: 0,
     }, 10_000)).toMatchObject({
       visible: true,
-      label: "正在执行 execute_sql",
+      label: "正在执行：执行 SQL",
       detail: "8 秒",
     });
 

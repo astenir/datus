@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Todo execution dock fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from "vue"
+      import "/src/style.css"
+      import TodoExecutionDock from "/src/features/chat/TodoExecutionDock.vue"
+      import TodoExecutionSummaryBlock from "/src/features/chat/TodoExecutionSummaryBlock.vue"
+
+      const execution = {
+        executionId: "todo-execution-1",
+        status: "running",
+        currentItemId: "3",
+        total: 3,
+        completed: 2,
+        items: [
+          { id: "1", title: "输出数字 1", status: "completed" },
+          { id: "2", title: "输出数字 2", status: "completed" },
+          { id: "3", title: "输出数字 3", status: "in_progress", content: "执行第三步，输出数字 3。" },
+        ],
+      }
+
+      const summary = {
+        type: "todo-execution-summary",
+        executionId: "todo-execution-0",
+        status: "completed",
+        total: 3,
+        completed: 3,
+        items: execution.items.map((item) => ({ ...item, status: "completed" })),
+      }
+
+      createApp({
+        render: () => h("main", { class: "flex min-h-screen flex-col bg-muted/20 p-4 md:p-8" }, [
+          h("section", { class: "mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4" }, [
+            h("p", { class: "text-sm leading-6" }, "对话正文只保留实际输出：1，2，3"),
+            h(TodoExecutionSummaryBlock, { block: summary, "data-testid": "todo-summary" }),
+          ]),
+          h("footer", { class: "mx-auto w-full max-w-2xl" }, [
+            h(TodoExecutionDock, { execution, "data-testid": "todo-dock" }),
+            h("div", { class: "min-h-28 rounded-4xl border bg-background shadow-xl" }),
+          ]),
+        ]),
+      }).mount("#app")
+    </script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import type {
   ParsedMessage,
   SseEvent,
 } from "@/types";
+import { toolDisplayName } from "@/lib/tool-presentation";
 
 export const CHAT_ACTIVITY_REVEAL_DELAY_MS = 800;
 export const CHAT_ACTIVITY_LONG_WAIT_MS = 8_000;
@@ -208,7 +209,7 @@ export function chatActivityPresentation(
       visible: true,
       tone: "normal",
       label: activeCount === 1
-        ? `正在执行 ${activeTools[0]?.toolName ?? "工具"}`
+        ? `正在执行：${toolDisplayName(activeTools[0]?.toolName ?? "工具")}`
         : `正在并行执行 ${activeCount} 个工具`,
       detail: [progress, elapsedDetail].filter(Boolean).join(" · ") || undefined,
     };

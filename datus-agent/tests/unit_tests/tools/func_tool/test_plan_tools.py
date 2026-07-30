@@ -545,6 +545,8 @@ class TestConfirmPlanTool:
         assert result.result["auto_confirmed"] is True
         assert result.result["plan_file"] == str(tmp_path / "plan.md")
         assert "todo_write" in result.result["next_action"]
+        assert "Do not narrate each status transition" in result.result["next_action"]
+        assert "redundant todo-completion list or table" in result.result["next_action"]
         node.deactivate_plan_mode.assert_called_once()
         assert node._plan_just_confirmed is True
         # The plan preview is still streamed, but no approval prompt is issued.
@@ -580,9 +582,25 @@ class TestConfirmPlanTool:
         assert result.success == 1
         assert result.result["status"] == "confirmed"
         assert "auto_confirmed" not in result.result
-        node.interaction_broker.request.assert_awaited_once()
+        request_call = node.interaction_broker.request.await_args
+        assert request_call.kwargs == {"action_type": "confirm_plan"}
+        event = request_call.args[0][0]
+        assert event.choices == {"confirm": "Confirm and execute", "cancel": "Cancel plan"}
         node.deactivate_plan_mode.assert_called_once()
         assert node._plan_just_confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_interactive_cancel_exits_without_approving(self, tmp_path):
+        node = _make_plan_node(tmp_path, auto_execute=False)
+        node.interaction_broker.request = AsyncMock(return_value=[["cancel"]])
+
+        result = await ConfirmPlanTool(node).confirm_plan()
+
+        assert result.success == 1
+        assert result.result["status"] == "cancelled"
+        assert "Do not execute it" in result.result["next_action"]
+        node.deactivate_plan_mode.assert_called_once()
+        assert node._plan_just_confirmed is False
 
     @pytest.mark.asyncio
     async def test_interactive_feedback_keeps_plan_mode(self, tmp_path):

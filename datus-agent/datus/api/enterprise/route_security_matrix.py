@@ -282,7 +282,8 @@ _add(
         audit_action="chat.stream",
         note=(
             "Agent dispatch uses Agent ACL; auto/dangerous permission modes additionally require "
-            "module.chat.permission_mode before execution."
+            "module.chat.permission_mode before execution. Plan Mode adds ACL-visible Explore as a "
+            "request-scoped dependency while preserving explicit sub_agent_tools.task denies."
         ),
         data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, SQL_POLICY},
     ),

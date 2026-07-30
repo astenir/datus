@@ -77,6 +77,7 @@ from datus_enterprise.model_credentials import apply_user_model_credential
 from datus_enterprise.services.chat_request_policy import (
     audit_chat_sql_policy_denial,
     authorize_chat_permission_mode,
+    configure_chat_plan_mode_delegation,
     consume_chat_request_quota,
     default_enterprise_chat_permission_mode,
     enforce_chat_model_policy,
@@ -394,6 +395,19 @@ async def stream_chat(
         projection.config._enterprise_allowed_agent_ids = {str(record["agent_id"]) for record in available_records}
         for record in available_records:
             materialize_enterprise_agent(projection.config, record)
+        plan_mode_denial = await configure_chat_plan_mode_delegation(
+            ctx,
+            request,
+            agent_config=projection.config,
+            parent_agent_record=enterprise_agent_record,
+            operation="chat.stream",
+        )
+        if plan_mode_denial:
+            return StreamingResponse(
+                _emit_pre_check_denial(request, plan_mode_denial),
+                media_type="text/event-stream",
+                headers=_sse_headers(),
+            )
 
     requested_credential_id = getattr(request, "model_credential_id", None)
     try:

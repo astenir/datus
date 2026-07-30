@@ -9,11 +9,11 @@ from typing import Any
 from datus.agent.node_capabilities import enterprise_agent_node_capabilities, get_agent_node_capability
 from datus.agent.tool_policy import include_bound_mcp_servers, normalize_runtime_policy, normalize_tool_policy
 from datus.api.auth.context import AppContext
-from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.services.agent_service import _validate_tools, _validate_tools_for_agent_type
 from datus.prompts.prompt_manager import PromptManager
 from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS
-from datus.utils.constants import SYS_SUB_AGENTS
+from datus.utils.constants import HIDDEN_SYS_SUB_AGENTS
+from datus_enterprise.services.sub_agent_task_policy import ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS
 
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
 AGENT_STATUSES = {"draft", "published", "disabled", "archived"}
@@ -22,8 +22,8 @@ ADMIN_AGENT_PERMISSION = "module.admin.agents"
 DEFAULT_CHAT_AGENT_ID = "chat"
 ENTERPRISE_AGENT_NODE_CAPABILITIES = enterprise_agent_node_capabilities()
 ENTERPRISE_AGENT_NODE_CLASSES = {capability.node_class for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES}
-ENTERPRISE_BUILTIN_AGENT_IDS = set(BUILTIN_SUBAGENTS) | {DEFAULT_CHAT_AGENT_ID}
-ENTERPRISE_RESERVED_AGENT_IDS = set(SYS_SUB_AGENTS) | {DEFAULT_CHAT_AGENT_ID}
+ENTERPRISE_BUILTIN_AGENT_IDS = set(ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS) | {DEFAULT_CHAT_AGENT_ID}
+ENTERPRISE_RESERVED_AGENT_IDS = ENTERPRISE_BUILTIN_AGENT_IDS | HIDDEN_SYS_SUB_AGENTS
 AGENT_POLICY_CONTEXT_KEY = "_enterprise_agent_policy"
 
 _RUNTIME_DENY_TOOL_METHODS: dict[str, set[str]] = {

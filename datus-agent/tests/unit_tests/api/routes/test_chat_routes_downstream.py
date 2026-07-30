@@ -47,6 +47,7 @@ def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_
     import datus.api.enterprise.deps as enterprise_deps
     from datus.api.enterprise.defaults import (
         InMemoryEnterpriseAgentStore,
+        InMemoryEnterpriseQuotaStore,
         InMemoryEnterpriseRoleStore,
         InMemoryEnterpriseUserStore,
         PassthroughConfigProjector,
@@ -60,9 +61,11 @@ def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_
         user_store=InMemoryEnterpriseUserStore(),
         role_store=InMemoryEnterpriseRoleStore(),
         agent_store=InMemoryEnterpriseAgentStore(),
+        quota_store=InMemoryEnterpriseQuotaStore(),
     )
     monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
     monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
+    return extensions
 
 
 class TestChatPermissionModeAuthorization:
@@ -271,6 +274,104 @@ class TestEnterpriseBuiltinDispatch:
             _mock_ctx(user_id="local"),
             "gen_skill",
         )
+
+
+class TestEnterprisePlanModeExplore:
+    @staticmethod
+    def _published_builtin_overlay(agent_id, *, runtime_policy=None, tool_policy=None):
+        return {
+            "agent_id": agent_id,
+            "node_class": agent_id,
+            "status": "published",
+            "acl": {"visibility": "enterprise"},
+            "scoped_context": {
+                "_enterprise_agent_policy": {
+                    "tool_policy": tool_policy or {"mode": "inherit", "allowed": [], "denied": []},
+                    "runtime_policy": runtime_policy or {"allow_subagent_delegation": False, "allowed_subagents": []},
+                }
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_injects_acl_visible_explore_into_request_policy(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        extensions = _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+        extensions.agent_store._agents["chat"] = self._published_builtin_overlay(
+            "chat",
+            runtime_policy={
+                "allow_subagent_delegation": True,
+                "allowed_subagents": ["gen_sql"],
+            },
+        )
+        extensions.agent_store._agents["explore"] = self._published_builtin_overlay("explore")
+
+        async def empty_stream(*_args, **_kwargs):
+            if False:
+                yield
+
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+        request = StreamChatInput(message="plan this", plan_mode=True)
+
+        response = await stream_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
+        async for _ in response.body_iterator:
+            pass
+
+        projected_config = svc.chat.stream_chat.call_args.kwargs["agent_config"]
+        assert projected_config._enterprise_allowed_agent_ids >= {"chat", "explore"}
+        assert projected_config._request_required_subagent_ids == {"explore"}
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_returns_typed_sse_error_when_explore_is_not_acl_visible(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        extensions = _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+        extensions.agent_store._agents["chat"] = self._published_builtin_overlay(
+            "chat",
+            runtime_policy={
+                "allow_subagent_delegation": True,
+                "allowed_subagents": ["gen_sql"],
+            },
+        )
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("chat execution must not start"))
+        request = StreamChatInput(message="plan this", plan_mode=True)
+
+        response = await stream_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
+        chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+
+        assert payload["error_type"] == "PLAN_MODE_EXPLORE_FORBIDDEN"
+        assert "Explore Agent" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_preserves_explicit_parent_task_deny(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        extensions = _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+        extensions.agent_store._agents["chat"] = self._published_builtin_overlay(
+            "chat",
+            runtime_policy={"allow_subagent_delegation": False, "allowed_subagents": []},
+            tool_policy={"mode": "inherit", "allowed": [], "denied": ["sub_agent_tools.task"]},
+        )
+        extensions.agent_store._agents["explore"] = self._published_builtin_overlay("explore")
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("chat execution must not start"))
+        request = StreamChatInput(message="plan this", plan_mode=True)
+
+        response = await stream_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
+        chunks = [chunk.decode() if isinstance(chunk, bytes) else chunk async for chunk in response.body_iterator]
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+
+        assert payload["error_type"] == "PLAN_MODE_DELEGATION_FORBIDDEN"
+        assert "sub_agent_tools.task" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
 
 
 class TestResumeChatBufferExpiry:

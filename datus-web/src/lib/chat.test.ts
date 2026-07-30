@@ -21,6 +21,7 @@ import {
   normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
+  shouldExitPlanModeAfterInteraction,
   shouldResetConversationOnAgentChange,
   visibleMessageActionTargetId
 } from "./chat";
@@ -465,6 +466,248 @@ describe("tool execution blocks", () => {
         blocks: [{ type: "markdown", content: "最终结论" }],
       },
     ]);
+  });
+
+  it("composes a plan preview and its confirmation into one display card", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "plan-preview",
+        role: "assistant",
+        content: "# Plan\n\n- Inspect metadata",
+        blocks: [{ type: "plan-preview", content: "# Plan\n\n- Inspect metadata" }],
+      },
+      {
+        id: "plan-confirmation",
+        role: "assistant",
+        content: "需要确认",
+        blocks: [{
+          type: "user-interaction",
+          interactionKey: "interaction-1",
+          actionType: "confirm_plan",
+          requests: [{
+            title: "Plan",
+            content: "Confirm this plan, or type feedback to revise:",
+            options: [
+              { key: "confirm", title: "Confirm and execute" },
+              { key: "cancel", title: "Cancel plan" },
+            ],
+            allowFreeText: true,
+            multiSelect: false,
+          }],
+        }],
+      },
+    ]);
+
+    expect(displayMessages).toEqual([
+      {
+        id: "plan-confirmation",
+        role: "assistant",
+        content: "# Plan\n\n- Inspect metadata",
+        blocks: [{
+          type: "plan-confirmation",
+          content: "# Plan\n\n- Inspect metadata",
+          interaction: {
+            type: "user-interaction",
+            interactionKey: "interaction-1",
+            actionType: "confirm_plan",
+            requests: [{
+              title: "Plan",
+              content: "Confirm this plan, or type feedback to revise:",
+              options: [
+                { key: "confirm", title: "Confirm and execute" },
+                { key: "cancel", title: "Cancel plan" },
+              ],
+              allowFreeText: true,
+              multiSelect: false,
+            }],
+          },
+        }],
+      },
+    ]);
+  });
+
+  it("folds the confirm_plan result into the plan card and hides its generic tool card", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "confirm-call",
+        role: "assistant",
+        content: "调用工具 confirm_plan",
+        blocks: [{
+          type: "tool-call",
+          callToolId: "confirm-1",
+          toolName: "confirm_plan",
+          params: {},
+        }],
+      },
+      {
+        id: "plan-preview",
+        role: "assistant",
+        content: "# Plan\n\n- Inspect metadata",
+        blocks: [{ type: "plan-preview", content: "# Plan\n\n- Inspect metadata" }],
+      },
+      {
+        id: "plan-interaction",
+        role: "assistant",
+        content: "需要确认",
+        blocks: [{
+          type: "user-interaction",
+          interactionKey: "interaction-1",
+          actionType: "confirm_plan",
+          requests: [],
+        }],
+      },
+      {
+        id: "confirm-result",
+        role: "assistant",
+        content: "工具结果 confirm_plan",
+        blocks: [{
+          type: "tool-result",
+          callToolId: "confirm-1",
+          toolName: "confirm_plan",
+          resultStatus: "success",
+          result: { success: 1, result: { status: "confirmed" } },
+        }],
+      },
+    ]);
+
+    expect(displayMessages).toHaveLength(1);
+    expect(displayMessages[0]).toMatchObject({
+      id: "plan-interaction",
+      blocks: [{
+        type: "plan-confirmation",
+        interaction: { interactionKey: "interaction-1" },
+        outcome: { status: "confirmed" },
+      }],
+    });
+    expect(JSON.stringify(displayMessages)).not.toContain('"toolName":"confirm_plan"');
+  });
+
+  it("associates revision and confirmation outcomes with consecutive plan versions", () => {
+    const interaction = (key: string) => ({
+      type: "user-interaction" as const,
+      interactionKey: key,
+      actionType: "confirm_plan",
+      requests: [],
+    });
+    const confirmCall = (id: string) => ({
+      type: "tool-call" as const,
+      callToolId: id,
+      toolName: "confirm_plan",
+      params: {},
+    });
+    const confirmResult = (id: string, result: Record<string, unknown>) => ({
+      type: "tool-result" as const,
+      callToolId: id,
+      toolName: "confirm_plan",
+      result: { success: 1, result },
+    });
+
+    const displayMessages = mergeToolExecutionMessages([
+      { id: "call-1", role: "assistant", content: "call", blocks: [confirmCall("confirm-1")] },
+      { id: "preview-1", role: "assistant", content: "v1", blocks: [{ type: "plan-preview", content: "# Plan v1" }] },
+      { id: "interaction-1", role: "assistant", content: "confirm", blocks: [interaction("interaction-1")] },
+      { id: "result-1", role: "assistant", content: "result", blocks: [confirmResult("confirm-1", { status: "feedback", feedback: "先检查风险" })] },
+      { id: "call-2", role: "assistant", content: "call", blocks: [confirmCall("confirm-2")] },
+      { id: "preview-2", role: "assistant", content: "v2", blocks: [{ type: "plan-preview", content: "# Plan v2" }] },
+      { id: "interaction-2", role: "assistant", content: "confirm", blocks: [interaction("interaction-2")] },
+      { id: "result-2", role: "assistant", content: "result", blocks: [confirmResult("confirm-2", { status: "confirmed" })] },
+    ]);
+
+    expect(displayMessages).toHaveLength(2);
+    expect(displayMessages[0]?.blocks?.[0]).toMatchObject({
+      type: "plan-confirmation",
+      content: "# Plan v1",
+      outcome: { status: "feedback", feedback: "先检查风险" },
+    });
+    expect(displayMessages[1]?.blocks?.[0]).toMatchObject({
+      type: "plan-confirmation",
+      content: "# Plan v2",
+      outcome: { status: "confirmed" },
+    });
+  });
+
+  it("renders an auto-confirmed plan outcome without an interaction prompt", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "auto-call",
+        role: "assistant",
+        content: "call",
+        blocks: [{ type: "tool-call", callToolId: "auto-1", toolName: "confirm_plan", params: {} }],
+      },
+      {
+        id: "auto-preview",
+        role: "assistant",
+        content: "plan",
+        blocks: [{ type: "plan-preview", content: "# Auto plan" }],
+      },
+      {
+        id: "auto-result",
+        role: "assistant",
+        content: "result",
+        blocks: [{
+          type: "tool-result",
+          callToolId: "auto-1",
+          toolName: "confirm_plan",
+          result: { success: 1, result: { status: "confirmed", auto_confirmed: true } },
+        }],
+      },
+    ]);
+
+    expect(displayMessages).toEqual([{
+      id: "auto-preview",
+      role: "assistant",
+      content: "plan",
+      blocks: [{
+        type: "plan-confirmation",
+        content: "# Auto plan",
+        outcome: { status: "confirmed" },
+      }],
+    }]);
+  });
+
+  it("hides generic ask_user tool blocks while preserving the interaction", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "ask-call",
+        role: "assistant",
+        content: "call",
+        blocks: [{ type: "tool-call", callToolId: "ask-1", toolName: "tools.ask_user", params: {} }],
+      },
+      {
+        id: "ask-interaction",
+        role: "assistant",
+        content: "question",
+        blocks: [{
+          type: "user-interaction",
+          interactionKey: "ask-interaction-1",
+          actionType: "ask_user",
+          requests: [],
+        }],
+      },
+      {
+        id: "ask-result",
+        role: "assistant",
+        content: "result",
+        blocks: [{
+          type: "tool-result",
+          callToolId: "ask-1",
+          toolName: "tools.ask_user",
+          result: { success: 1 },
+        }],
+      },
+    ]);
+
+    expect(displayMessages).toEqual([{
+      id: "ask-interaction",
+      role: "assistant",
+      content: "question",
+      blocks: [{
+        type: "user-interaction",
+        interactionKey: "ask-interaction-1",
+        actionType: "ask_user",
+        requests: [],
+      }],
+    }]);
   });
 
   it("groups sub-agent task stream messages under the parent task tool call", () => {
@@ -935,6 +1178,20 @@ describe("contentFromPayloadBlocks", () => {
     ]);
   });
 
+  it("parses plan previews as dedicated display blocks", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "plan-preview",
+        payload: { content: "# Plan\n\n- Inspect metadata" },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      { type: "plan-preview", content: "# Plan\n\n- Inspect metadata" },
+    ]);
+    expect(parsed.text).toBe("# Plan\n\n- Inspect metadata");
+  });
+
   it("normalizes legacy user interaction payloads into requests", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -1234,6 +1491,40 @@ describe("buildUserInteractionInput", () => {
       interaction_key: "action-123",
       input: [["y"]],
     });
+  });
+});
+
+describe("shouldExitPlanModeAfterInteraction", () => {
+  const interaction = {
+    interactionKey: "plan-interaction-1",
+    messageId: "plan-message-1",
+    block: {
+      type: "user-interaction" as const,
+      interactionKey: "plan-interaction-1",
+      actionType: "confirm_plan",
+      requests: [],
+    },
+  };
+
+  it("turns off plan mode after confirm or cancel", () => {
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["confirm"]],
+    )).toBe(true);
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["cancel"]],
+    )).toBe(true);
+  });
+
+  it("keeps plan mode active while feedback is being revised", () => {
+    expect(shouldExitPlanModeAfterInteraction(
+      interaction,
+      "plan-interaction-1",
+      [["补充风险检查"]],
+    )).toBe(false);
   });
 });
 
