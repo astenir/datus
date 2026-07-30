@@ -2,19 +2,15 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-"""Unified per-tool one-line summary registry.
+"""Unified per-tool one-line summary helpers.
 
-The same string is consumed by:
+The registry provides result-based summaries for SSE/API and CLI consumers.
+The live/history display contract goes through :func:`summarize_tool_execution`,
+which keeps failures result-based while preferring the submitted statement for
+SQL execution tools.
 
-* SSE / API streams via ``ActionHistory.output["summary"]`` →
-  ``datus.schemas.action_content_builder.build_tool_result_content`` →
-  frontend ``shortDesc``.
-* CLI compact rendering via ``ToolCallContent.compact_result`` in
-  ``datus.cli.action_display.tool_content``.
-
-Both call sites must produce identical wording, so the per-tool formatters
-live in one place. Only the ``success`` path is per-tool; failure
-summaries are produced uniformly by :func:`format_failure`.
+Only the ``success`` path is per-tool; failure summaries are produced uniformly
+by :func:`format_failure`.
 
 All non-filesystem summaries are clipped to ``SUMMARY_TEXT_MAX_CHARS``
 characters at the registry exit; filesystem tools (``read_file``,
@@ -40,6 +36,7 @@ SUMMARY_ERROR_MAX_CHARS = 19
 FS_TOOLS_NO_CLIP = frozenset(
     {"read_file", "write_file", "edit_file", "delete_file", "glob", "grep", "web_search", "web_fetch"}
 )
+SQL_EXECUTION_TOOLS = frozenset({"execute_sql", "read_query", "query", "execute_write", "execute_ddl"})
 
 
 # ── Generic helpers (public API) ────────────────────────────────────────
@@ -93,6 +90,38 @@ def detect_tool_failure(output_content: Any) -> bool:
     if data is None:
         return False
     return looks_like_failure(data)
+
+
+def summarize_tool_execution(output_content: Any, tool_name: str, arguments: Any = None) -> str:
+    """Build the display summary shared by live tool events and history replay.
+
+    SQL execution is identified by its input statement because that remains
+    useful after the result table is collapsed. Failures always take priority
+    over the SQL text. Other tools retain their registered result summaries.
+    """
+    normalized_name = str(tool_name or "").strip().lower().rsplit(".", 1)[-1]
+    if detect_tool_failure(output_content):
+        return _summarize_tool_output(output_content, normalized_name)
+
+    parsed_arguments = arguments
+    if isinstance(parsed_arguments, str):
+        try:
+            parsed_arguments = json.loads(parsed_arguments)
+        except (TypeError, ValueError):
+            parsed_arguments = None
+    if normalized_name in SQL_EXECUTION_TOOLS and isinstance(parsed_arguments, dict):
+        for key in ("sql", "query", "statement"):
+            statement = parsed_arguments.get(key)
+            if isinstance(statement, str) and statement.strip():
+                return statement.strip()
+
+    return _summarize_tool_output(output_content, normalized_name)
+
+
+def _summarize_tool_output(output_content: Any, tool_name: str) -> str:
+    if isinstance(output_content, str):
+        return TOOL_SUMMARY_REGISTRY.summarize_content(output_content, tool_name)
+    return TOOL_SUMMARY_REGISTRY.summarize_dict(output_content, tool_name)
 
 
 def format_failure(data: dict) -> str:

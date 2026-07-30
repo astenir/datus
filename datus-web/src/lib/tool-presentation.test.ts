@@ -25,6 +25,7 @@ describe("tool presentation", () => {
       callToolId: "sql-1",
       toolName: "db_tools.execute_sql",
       params: { sql: "select * from fund_positions" },
+      shortDesc: "select * from fund_positions",
       duration: 1.25,
       resultStatus: "success",
       result: {
@@ -227,6 +228,7 @@ describe("tool presentation", () => {
       callToolId: "sql-error",
       toolName: "execute_sql",
       params: { sql: "drop table fund_positions" },
+      shortDesc: "drop table fund_positions",
       resultStatus: "error",
       errorText: "只读模式不允许执行写操作",
       result: null,

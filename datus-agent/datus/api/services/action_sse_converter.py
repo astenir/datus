@@ -20,6 +20,7 @@ from datus.api.models.cli_models import (
     SSEUsageDelta,
 )
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
+from datus.schemas.tool_summary import summarize_tool_execution
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso, to_utc_iso
@@ -95,8 +96,10 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
             duration = measured_duration
 
     output_dict = output if isinstance(output, dict) else None
+    function_name, arguments = _extract_function(action)
     short_desc = output_dict.get("summary", "") if output_dict else ""
-    function_name, _ = _extract_function(action)
+    if not short_desc:
+        short_desc = summarize_tool_execution(output, function_name, arguments)
     result_payload = _normalize_tool_result_payload(
         output=output,
         status=action.status,

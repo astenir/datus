@@ -13,7 +13,7 @@ from typing import Any
 from agents.lifecycle import AgentHooks
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
-from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure
+from datus.schemas.tool_summary import detect_tool_failure, summarize_tool_execution
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -64,7 +64,7 @@ class ToolLifecycleHook(AgentHooks):
         tool_name = str(getattr(context, "tool_name", None) or getattr(tool, "name", None) or "tool")
         arguments = self._arguments(context)
         failed = detect_tool_failure(result)
-        summary = self._summary(result, tool_name)
+        summary = summarize_tool_execution(result, tool_name, arguments)
         action = ActionHistory(
             action_id=completion_id,
             role=ActionRole.TOOL,
@@ -110,9 +110,3 @@ class ToolLifecycleHook(AgentHooks):
             return json.loads(raw)
         except (TypeError, ValueError):
             return raw
-
-    @staticmethod
-    def _summary(result: Any, tool_name: str) -> str:
-        if isinstance(result, str):
-            return TOOL_SUMMARY_REGISTRY.summarize_content(result, tool_name)
-        return TOOL_SUMMARY_REGISTRY.summarize_dict(result, tool_name)

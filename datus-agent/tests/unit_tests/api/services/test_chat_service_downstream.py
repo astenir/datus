@@ -173,6 +173,69 @@ class TestChatServiceGetHistory:
         assert len(sm.get_tool_execution_events(session_id)) == 1
         assert len(sm.get_session_messages(session_id)) == 1
 
+    def test_history_rebuilds_sql_statement_summary_and_failure(self, chat_svc):
+        session_id = "history-sql-summary"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            (
+                {
+                    "type": "function_call",
+                    "call_id": "sql-ok",
+                    "name": "execute_sql",
+                    "arguments": json.dumps({"sql": "SELECT * FROM fund_positions"}),
+                },
+                "2026-01-01T00:00:01",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": "sql-ok",
+                    "output": json.dumps(
+                        {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
+                    ),
+                },
+                "2026-01-01T00:00:02",
+            ),
+            (
+                {
+                    "type": "function_call",
+                    "call_id": "sql-failed",
+                    "name": "execute_sql",
+                    "arguments": json.dumps({"sql": "SELECT * FROM missing_table"}),
+                },
+                "2026-01-01T00:00:03",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": "sql-failed",
+                    "output": json.dumps({"success": 0, "error": "no such table: missing_table"}),
+                },
+                "2026-01-01T00:00:04",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, json.dumps(message), created_at) for message, created_at in rows],
+            )
+
+        result = chat_svc.get_history(session_id)
+        tool_results = {
+            content.payload["callToolId"]: content.payload
+            for message in result.data.messages
+            for content in message.content
+            if content.type == "call-tool-result"
+        }
+
+        assert tool_results["sql-ok"]["shortDesc"] == "SELECT * FROM fund_positions"
+        assert tool_results["sql-ok"]["result"]["success"] == 1
+        assert tool_results["sql-failed"]["shortDesc"].startswith("Failed: no such")
+        assert tool_results["sql-failed"]["result"]["success"] == 0
+        assert tool_results["sql-failed"]["error"] == "no such table: missing_table"
+
     def test_history_keeps_provider_reasoning_separate_from_final_answer(self, chat_svc):
         """Reasoning rebuilds as thinking while assistant output rebuilds as markdown."""
         import json

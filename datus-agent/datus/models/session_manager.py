@@ -18,6 +18,7 @@ from agents.extensions.memory import AdvancedSQLiteSession
 
 from datus.models.session_message_parser import message_rows_to_raw_messages
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.tool_summary import detect_tool_failure
 from datus.utils.async_utils import run_async
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import llm_result2json
@@ -1354,7 +1355,7 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
             action_type=match.action_type,
             input=match.input,
             output=output_data,
-            status=ActionStatus.SUCCESS,
+            status=ActionStatus.FAILED if detect_tool_failure(output_data) else ActionStatus.SUCCESS,
             start_time=match.start_time,
             end_time=datetime.fromisoformat(created_at) if created_at else datetime.now(),
         )

@@ -32,6 +32,7 @@ from datus.schemas.tool_summary import (
     is_empty_result,
     looks_like_failure,
     pluralize,
+    summarize_tool_execution,
     truncate_text,
 )
 
@@ -96,6 +97,33 @@ class TestPublicHelpers:
     def test_detect_tool_failure_other_types(self):
         assert detect_tool_failure(None) is False
         assert detect_tool_failure([{"success": 0}]) is False
+
+    def test_sql_execution_summary_prefers_statement_over_row_count(self):
+        output = {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
+
+        assert (
+            summarize_tool_execution(
+                output,
+                "db_tools.execute_sql",
+                {"sql": "  SELECT * FROM fund_positions  "},
+            )
+            == "SELECT * FROM fund_positions"
+        )
+
+    def test_sql_execution_summary_prefers_failure_over_statement(self):
+        summary = summarize_tool_execution(
+            {"success": 0, "error": "no such table: missing_table"},
+            "execute_sql",
+            {"sql": "SELECT * FROM missing_table"},
+        )
+
+        assert summary.startswith("Failed: no such")
+        assert "SELECT" not in summary
+
+    def test_sql_execution_summary_falls_back_when_statement_is_missing(self):
+        output = {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
+
+        assert summarize_tool_execution(output, "execute_sql") == "2×3 rows"
 
     def test_detect_tool_failure_real_functoolresult_contract(self):
         """Contract test: the exact payload model backends receive from a
