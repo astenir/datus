@@ -271,7 +271,8 @@ function readOnlyInteractionDescription() {
         <div
           v-for="child in toolChildMessages"
           :key="child.id"
-          class="flex min-w-0 flex-col gap-2 border-l border-border pl-3"
+          class="flex min-w-0 flex-col gap-2"
+          data-testid="subagent-process-item"
         >
           <div
             v-if="childMessageSourceLabel(child)"

@@ -68,6 +68,17 @@ test("keeps task execution concise without repeated progress labels or wrapper r
   await expect(taskCard.getByText("结果", { exact: true })).toHaveCount(0)
   await expect(taskCard).not.toContainText("explore-browser-1")
 
+  const processItem = taskCard.getByTestId("subagent-process-item")
+  await expect(processItem).toHaveCount(1)
+  const processItemSpacing = await processItem.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      borderLeftWidth: style.borderLeftWidth,
+      paddingLeft: style.paddingLeft,
+    }
+  })
+  expect(processItemSpacing).toEqual({ borderLeftWidth: "0px", paddingLeft: "0px" })
+
   const childCard = taskCard.getByTestId("tool-execution-card")
   await expect(childCard.getByTestId("tool-card-inline-metadata")).toHaveText("0.80 秒 · 3 行")
   await expect(childCard.getByTestId("tool-card-secondary-row")).toHaveCount(0)
