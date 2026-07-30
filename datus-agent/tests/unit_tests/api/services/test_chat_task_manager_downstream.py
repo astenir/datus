@@ -85,6 +85,200 @@ class TestChatTaskManagerBehavior:
         assert event.parent_action_id == "task-call-1"
 
     @pytest.mark.asyncio
+    async def test_slow_tool_timing_persistence_does_not_block_live_sse(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        persistence_started = asyncio.Event()
+        allow_persistence_to_finish = asyncio.Event()
+        all_actions_yielded = asyncio.Event()
+        persisted_action_ids = []
+        start = datetime(2026, 1, 1, 12, 0, 0)
+
+        def completed_tool(call_id: str, offset: float) -> ActionHistory:
+            return ActionHistory(
+                action_id=f"complete_{call_id}",
+                role=ActionRole.TOOL,
+                action_type="list_tables",
+                status=ActionStatus.SUCCESS,
+                input={"function_name": "list_tables", "arguments": {}},
+                output={"success": 1, "result": [call_id]},
+                start_time=start,
+                end_time=start + timedelta(seconds=offset),
+            )
+
+        class CompletedToolsNode:
+            session_id = "llm-live-tool-timing"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield completed_tool("tool-1", 0.1)
+                yield completed_tool("tool-2", 0.2)
+                all_actions_yielded.set()
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: CompletedToolsNode()  # type: ignore[method-assign]
+
+        async def slow_persist(**kwargs):
+            persistence_started.set()
+            await allow_persistence_to_finish.wait()
+            persisted_action_ids.append(kwargs["action"].action_id)
+
+        manager._persist_tool_execution_event = slow_persist  # type: ignore[method-assign]
+        task = ChatTask(session_id="live-tool-timing", asyncio_task=MagicMock())
+        run = asyncio.create_task(
+            manager._run_loop(
+                task,
+                real_agent_config,
+                StreamChatInput(message="list tables", session_id=task.session_id),
+            )
+        )
+
+        stream_progressed_while_persistence_blocked = True
+        try:
+            await asyncio.wait_for(persistence_started.wait(), timeout=2)
+            try:
+                await asyncio.wait_for(all_actions_yielded.wait(), timeout=0.2)
+            except asyncio.TimeoutError:
+                stream_progressed_while_persistence_blocked = False
+
+            live_tool_results = [
+                content
+                for event in task.events
+                if event.event == "message"
+                for content in event.data.payload.content
+                if content.type == "call-tool-result"
+            ]
+            assert stream_progressed_while_persistence_blocked is True
+            assert len(live_tool_results) == 2
+            assert not any(event.event == "end" for event in task.events)
+        finally:
+            allow_persistence_to_finish.set()
+            await asyncio.wait_for(run, timeout=2)
+
+        assert persisted_action_ids == ["complete_tool-1", "complete_tool-2"]
+        assert task.events[-1].event == "end"
+        assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_tool_timing_persistence_failure_does_not_stop_later_tool_sse(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        attempted_action_ids = []
+
+        class CompletedToolsNode:
+            session_id = "llm-failing-tool-timing"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                for call_id in ("tool-1", "tool-2"):
+                    yield ActionHistory(
+                        action_id=f"complete_{call_id}",
+                        role=ActionRole.TOOL,
+                        action_type="list_tables",
+                        status=ActionStatus.SUCCESS,
+                        input={"function_name": "list_tables", "arguments": {}},
+                        output={"success": 1, "result": [call_id]},
+                    )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: CompletedToolsNode()  # type: ignore[method-assign]
+
+        async def persist_with_first_failure(**kwargs):
+            action_id = kwargs["action"].action_id
+            attempted_action_ids.append(action_id)
+            if action_id == "complete_tool-1":
+                raise RuntimeError("sidecar unavailable")
+
+        manager._persist_tool_execution_event = persist_with_first_failure  # type: ignore[method-assign]
+        task = ChatTask(session_id="failing-tool-timing", asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="list tables", session_id=task.session_id),
+        )
+
+        tool_results = [
+            content
+            for event in task.events
+            if event.event == "message"
+            for content in event.data.payload.content
+            if content.type == "call-tool-result"
+        ]
+        assert attempted_action_ids == ["complete_tool-1", "complete_tool-2"]
+        assert len(tool_results) == 2
+        assert task.events[-1].event == "end"
+        assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_end_is_pushed_after_tool_timing_is_readable_from_history_store(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        session_id = "tool-timing-before-end"
+        body_manager = SessionManager(session_dir=real_agent_config.session_dir)
+        body_manager.create_session(session_id)
+        start = datetime(2026, 1, 1, 12, 0, 0, 125000)
+
+        class CompletedToolNode:
+            session_id = "llm-tool-timing-before-end"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                yield ActionHistory(
+                    action_id="complete_tool-call-1",
+                    role=ActionRole.TOOL,
+                    action_type="list_tables",
+                    status=ActionStatus.SUCCESS,
+                    input={"function_name": "list_tables", "arguments": {}},
+                    output={"success": 1, "result": ["orders"]},
+                    start_time=start,
+                    end_time=start + timedelta(seconds=0.375),
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: CompletedToolNode()  # type: ignore[method-assign]
+        original_push_event = manager._push_event
+        events_visible_when_end_is_pushed = []
+
+        async def capture_end_order(task, event):
+            if event.event == "end":
+                events_visible_when_end_is_pushed.extend(body_manager.get_tool_execution_events(session_id))
+            await original_push_event(task, event)
+
+        manager._push_event = capture_end_order  # type: ignore[method-assign]
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="list tables", session_id=session_id),
+        )
+
+        [tool_event] = events_visible_when_end_is_pushed
+        assert tool_event.call_tool_id == "tool-call-1"
+        assert tool_event.duration == 0.375
+        assert task.events[-1].event == "end"
+
+    @pytest.mark.asyncio
     async def test_established_stream_error_is_durable_in_fresh_history(self, real_agent_config):
         """A terminal SSE error must survive destruction of in-memory task state."""
         from datus.api.models.cli_models import StreamChatInput

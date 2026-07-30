@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from datus.api.services.chat_admission import ChatAdmissionController
 
 HEARTBEAT_INTERVAL = 10  # seconds
+_TOOL_EXECUTION_QUEUE_STOP = object()
 
 
 def is_thinking_only_content(content_items) -> bool:
@@ -697,6 +698,44 @@ class ChatTaskManager:
             session_manager_type=SessionManager,
         )
 
+    async def _consume_tool_execution_persistence_queue(
+        self,
+        queue: asyncio.Queue[Any],
+        *,
+        task: ChatTask,
+        agent_config: AgentConfig,
+        user_id: Optional[str],
+    ) -> None:
+        """Persist tool timings in order without blocking the live action stream."""
+        while True:
+            action = await queue.get()
+            try:
+                if action is _TOOL_EXECUTION_QUEUE_STOP:
+                    return
+                try:
+                    await self._persist_tool_execution_event(
+                        task=task,
+                        action=action,
+                        agent_config=agent_config,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist queued tool execution event for session=%s action=%s",
+                        task.session_id,
+                        getattr(action, "action_id", None),
+                        exc_info=True,
+                    )
+            finally:
+                queue.task_done()
+
+    @staticmethod
+    async def _finish_tool_execution_persistence(queue: asyncio.Queue[Any], worker: asyncio.Task[None]) -> None:
+        """Drain queued timings before the stream advertises completion."""
+        await queue.join()
+        queue.put_nowait(_TOOL_EXECUTION_QUEUE_STOP)
+        await worker
+
     _terminal_outcome_from_action = staticmethod(terminal_outcome_from_action)
 
     async def _run_loop(
@@ -711,6 +750,8 @@ class ChatTaskManager:
         session_id = task.session_id
         event_id = 0
         trace_token = None
+        tool_execution_queue: Optional[asyncio.Queue[Any]] = None
+        tool_execution_worker: Optional[asyncio.Task[None]] = None
 
         # Pin the path manager into this task's context. Required when the caller
         # dispatched us from a thread that never inherited AgentConfig's ContextVar
@@ -813,6 +854,16 @@ class ChatTaskManager:
             task.session_established = True
             event_id += 1
             event_id = await self._push_degraded_capability_warnings(task, node, event_id)
+            tool_execution_queue = asyncio.Queue()
+            tool_execution_worker = asyncio.create_task(
+                self._consume_tool_execution_persistence_queue(
+                    tool_execution_queue,
+                    task=task,
+                    agent_config=agent_config,
+                    user_id=user_id,
+                ),
+                name=f"chat-tool-timing:{session_id}",
+            )
 
             # 3. Resolve @-references
             at_tables, at_metrics, at_sqls = self._resolve_at_context(
@@ -926,12 +977,7 @@ class ChatTaskManager:
                         error_type=terminal_error_type,
                     )
                 if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
-                    await self._persist_tool_execution_event(
-                        task=task,
-                        action=action,
-                        agent_config=agent_config,
-                        user_id=user_id,
-                    )
+                    tool_execution_queue.put_nowait(action)
                 if sse:
                     # Per-LLM-call usage event: the converter has no access
                     # to the service-level session ids, so we stamp them
@@ -980,6 +1026,10 @@ class ChatTaskManager:
             except Exception:
                 logger.debug("Failed to extract turn token usage for end event", exc_info=True)
 
+            await self._finish_tool_execution_persistence(tool_execution_queue, tool_execution_worker)
+            tool_execution_queue = None
+            tool_execution_worker = None
+
             await self._push_event(
                 task,
                 SSEEvent(
@@ -1019,7 +1069,6 @@ class ChatTaskManager:
 
         except Exception as e:
             logger.error(f"Chat task error for session {session_id}: {e}")
-            task.status = "error"
             task.error = str(e)
             is_timeout = isinstance(e, TimeoutError)
             await self._persist_terminal_event(
@@ -1045,8 +1094,16 @@ class ChatTaskManager:
                 ),
             )
             event_id += 1
+            if tool_execution_queue is not None and tool_execution_worker is not None:
+                await self._finish_tool_execution_persistence(tool_execution_queue, tool_execution_worker)
+                tool_execution_queue = None
+                tool_execution_worker = None
+            task.status = "error"
 
         finally:
+            if tool_execution_worker is not None:
+                tool_execution_worker.cancel()
+                await asyncio.gather(tool_execution_worker, return_exceptions=True)
             if trace_token is not None:
                 reset_trace_context(trace_token)
             async with task.condition:
