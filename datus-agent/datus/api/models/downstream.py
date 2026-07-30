@@ -96,6 +96,22 @@ class ChatSessionSubagentEvent(BaseModel):
     created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
 
 
+class ChatSessionToolExecutionEvent(BaseModel):
+    """Durable display-only timing for one completed tool call."""
+
+    event_id: str = Field(..., description="Stable idempotency key for the tool execution event")
+    event_type: Literal["tool_execution"] = Field(
+        default="tool_execution", description="Display sidecar event type"
+    )
+    call_tool_id: str = Field(..., description="Tool call id shared by the start and result payloads")
+    duration: float = Field(..., ge=0, allow_inf_nan=False, description="Measured execution duration in seconds")
+    started_at: str = Field(..., description="Measured UTC tool start timestamp")
+    completed_at: str = Field(..., description="Measured UTC tool completion timestamp")
+    depth: int = Field(default=0, ge=0, description="Tool nesting depth in the rendered transcript")
+    parent_action_id: Optional[str] = Field(default=None, description="Parent action id for nested tools")
+    created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
+
+
 class ModelInfo(BaseModel):
     """A single model entry returned by the catalog endpoint."""
 

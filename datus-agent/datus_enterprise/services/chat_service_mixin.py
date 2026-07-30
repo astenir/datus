@@ -20,6 +20,7 @@ from datus.api.models.cli_models import (
 from datus.api.models.downstream import (
     ChatSessionSubagentEvent,
     ChatSessionTerminalEvent,
+    ChatSessionToolExecutionEvent,
     SuccessStorySource,
 )
 from datus.api.services.action_sse_converter import action_to_history_sse_event
@@ -200,10 +201,14 @@ class EnterpriseChatServiceMixin:
                 )
                 terminal_events = SessionManager._validate_terminal_events(terminal_rows, session_id=session_id)
                 subagent_events = SessionManager._validate_subagent_events(terminal_rows, session_id=session_id)
+                tool_execution_events = SessionManager._validate_tool_execution_events(
+                    terminal_rows, session_id=session_id
+                )
             except Exception:
                 logger.warning("Failed to load display sidecar events for session %s", session_id, exc_info=True)
                 terminal_events = []
                 subagent_events = []
+                tool_execution_events = []
             history_messages = self._with_subagent_anchors(raw_messages, subagent_events)
             subagent_messages = await self._load_nested_subagent_messages_async(
                 session_id,
@@ -216,6 +221,7 @@ class EnterpriseChatServiceMixin:
                 history_messages,
                 terminal_events=terminal_events,
                 subagent_messages=subagent_messages,
+                tool_execution_events=tool_execution_events,
             )
         except Exception as e:
             logger.error(f"Failed to get history for session {session_id}: {e}")
@@ -241,6 +247,11 @@ class EnterpriseChatServiceMixin:
         except Exception:
             logger.warning("Failed to load sub-agent events for session %s", session_id, exc_info=True)
             subagent_events = []
+        try:
+            tool_execution_events = session_manager.get_tool_execution_events(session_id)
+        except Exception:
+            logger.warning("Failed to load tool execution events for session %s", session_id, exc_info=True)
+            tool_execution_events = []
         history_messages = self._with_subagent_anchors(raw_messages, subagent_events)
         subagent_messages = self._load_nested_subagent_messages(
             session_id,
@@ -253,6 +264,7 @@ class EnterpriseChatServiceMixin:
             history_messages,
             terminal_events=terminal_events,
             subagent_messages=subagent_messages,
+            tool_execution_events=tool_execution_events,
         )
 
     async def resolve_success_story_source_async(
@@ -561,6 +573,7 @@ class EnterpriseChatServiceMixin:
         *,
         terminal_events: Optional[List[ChatSessionTerminalEvent]] = None,
         subagent_messages: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        tool_execution_events: Optional[List[ChatSessionToolExecutionEvent]] = None,
     ) -> Result[ChatHistoryData]:
         if not raw_messages and not terminal_events:
             return Result[ChatHistoryData](success=True, data=ChatHistoryData())
@@ -570,6 +583,7 @@ class EnterpriseChatServiceMixin:
         sse_messages, _ = self._history_payloads_from_raw_messages(
             display_messages,
             subagent_messages=subagent_messages,
+            tool_execution_events={event.call_tool_id: event for event in tool_execution_events or []},
         )
         logger.info(f"Retrieved {len(sse_messages)} messages for session {session_id}")
         return Result[ChatHistoryData](success=True, data=ChatHistoryData(messages=sse_messages))
@@ -582,6 +596,7 @@ class EnterpriseChatServiceMixin:
         depth: int = 0,
         parent_action_id: Optional[str] = None,
         subagent_messages: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        tool_execution_events: Optional[Dict[str, ChatSessionToolExecutionEvent]] = None,
     ) -> tuple[List[SSEMessagePayload], int]:
         sse_messages: List[SSEMessagePayload] = []
         task_completions = {
@@ -655,6 +670,13 @@ class EnterpriseChatServiceMixin:
                             ):
                                 continue
                             payload = sse_event.data.payload
+                            if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
+                                call_tool_id = action.action_id.removeprefix("complete_")
+                                timing = (tool_execution_events or {}).get(call_tool_id)
+                                if timing is not None:
+                                    for content in payload.content:
+                                        if content.type == "call-tool-result":
+                                            content.payload["duration"] = timing.duration
                             if parent_action_id is not None:
                                 payload.depth = depth
                                 payload.parent_action_id = parent_action_id
@@ -677,15 +699,18 @@ class EnterpriseChatServiceMixin:
                                     event_id=event_id,
                                     depth=1,
                                     parent_action_id=action.action_id,
+                                    tool_execution_events=tool_execution_events,
                                 )
                                 sse_messages.extend(child_payloads)
                                 completion = task_completions.get(action.action_id)
                                 if completion is not None:
+                                    task_timing = (tool_execution_events or {}).get(action.action_id)
                                     sse_messages.append(
                                         self._subagent_completion_history_payload(
                                             action,
                                             completion,
                                             child_raw_messages,
+                                            duration=task_timing.duration if task_timing is not None else None,
                                         )
                                     )
                                     event_id += 1
@@ -708,6 +733,8 @@ class EnterpriseChatServiceMixin:
         task_action: ActionHistory,
         completion_action: ActionHistory,
         child_raw_messages: List[Dict[str, Any]],
+        *,
+        duration: Optional[float] = None,
     ) -> SSEMessagePayload:
         arguments = task_action.input.get("arguments", {}) if isinstance(task_action.input, dict) else {}
         if isinstance(arguments, str):
@@ -722,15 +749,12 @@ class EnterpriseChatServiceMixin:
             for action in msg.get("actions", [])
             if action.role == ActionRole.TOOL and action.status == ActionStatus.PROCESSING
         )
-        duration = 0.0
-        if task_action.start_time and completion_action.end_time:
-            duration = (completion_action.end_time - task_action.start_time).total_seconds()
-
         payload: Dict[str, Any] = {
             "subagentType": subagent_type,
             "toolCount": tool_count,
-            "duration": duration,
         }
+        if duration is not None:
+            payload["duration"] = duration
         output = completion_action.output if isinstance(completion_action.output, dict) else {}
         if output.get("success") in (0, False) and output.get("error"):
             payload["error"] = output["error"]

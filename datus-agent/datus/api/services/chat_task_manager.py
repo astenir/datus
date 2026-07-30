@@ -49,6 +49,7 @@ from datus_enterprise.services.chat_task_runtime import (
     get_artifact_edit_session,
     initialize_chat_task_runtime,
     persist_terminal_event,
+    persist_tool_execution_event,
     prepare_chat_request_config,
     task_snapshot,
     terminal_outcome_from_action,
@@ -678,6 +679,24 @@ class ChatTaskManager:
             session_manager_type=SessionManager,
         )
 
+    async def _persist_tool_execution_event(
+        self,
+        *,
+        task: ChatTask,
+        action: Any,
+        agent_config: AgentConfig,
+        user_id: Optional[str],
+    ) -> None:
+        await persist_tool_execution_event(
+            task=task,
+            action=action,
+            agent_config=agent_config,
+            user_id=user_id,
+            project_id=self._project_id,
+            session_body_store=self._session_body_store,
+            session_manager_type=SessionManager,
+        )
+
     _terminal_outcome_from_action = staticmethod(terminal_outcome_from_action)
 
     async def _run_loop(
@@ -905,6 +924,13 @@ class ChatTaskManager:
                         event_type=terminal_type,
                         error=terminal_error,
                         error_type=terminal_error_type,
+                    )
+                if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
+                    await self._persist_tool_execution_event(
+                        task=task,
+                        action=action,
+                        agent_config=agent_config,
+                        user_id=user_id,
                     )
                 if sse:
                     # Per-LLM-call usage event: the converter has no access

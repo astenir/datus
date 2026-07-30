@@ -1,6 +1,7 @@
 """Downstream ChatTaskManager owner, terminal, and enterprise coverage."""
 
 import asyncio
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,6 +43,47 @@ class TestApplyPermissionModeOverride:
 
 
 class TestChatTaskManagerBehavior:
+    @pytest.mark.asyncio
+    async def test_completed_tool_timing_is_persisted_for_history(self, real_agent_config):
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus_enterprise.services.chat_task_runtime import persist_tool_execution_event
+
+        session_id = "durable-tool-timing"
+        manager = SessionManager(session_dir=real_agent_config.session_dir)
+        manager.create_session(session_id)
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+        task.session_established = True
+        task.run_id = "run-1"
+        start = datetime(2026, 1, 1, 12, 0, 0, 125000)
+        action = ActionHistory(
+            action_id="complete_tool-call-1",
+            role=ActionRole.TOOL,
+            action_type="list_tables",
+            status=ActionStatus.SUCCESS,
+            input={"function_name": "list_tables", "arguments": {}},
+            output={"success": 1, "result": ["orders"]},
+            start_time=start,
+            end_time=start + timedelta(seconds=0.375),
+            depth=1,
+            parent_action_id="task-call-1",
+        )
+
+        await persist_tool_execution_event(
+            task=task,
+            action=action,
+            agent_config=real_agent_config,
+            user_id=None,
+            project_id="test-proj",
+            session_body_store=None,
+        )
+
+        [event] = manager.get_tool_execution_events(session_id)
+        assert event.call_tool_id == "tool-call-1"
+        assert event.duration == 0.375
+        assert event.depth == 1
+        assert event.parent_action_id == "task-call-1"
+
     @pytest.mark.asyncio
     async def test_established_stream_error_is_durable_in_fresh_history(self, real_agent_config):
         """A terminal SSE error must survive destruction of in-memory task state."""

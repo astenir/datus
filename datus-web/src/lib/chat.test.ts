@@ -226,6 +226,33 @@ describe("tool execution blocks", () => {
     ]);
   });
 
+  it("keeps only finite non-negative tool durations from canonical history", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: { callToolId: "valid", toolName: "read_query", duration: 0.42, result: {} },
+      },
+      {
+        type: "call-tool-result",
+        payload: { callToolId: "missing", toolName: "read_query", result: {} },
+      },
+      {
+        type: "call-tool-result",
+        payload: { callToolId: "negative", toolName: "read_query", duration: -1, result: {} },
+      },
+      {
+        type: "call-tool-result",
+        payload: { callToolId: "infinite", toolName: "read_query", duration: Infinity, result: {} },
+      },
+    ]);
+
+    const results = parsed.blocks.filter((block) => block.type === "tool-result");
+    expect(results[0]).toMatchObject({ callToolId: "valid", duration: 0.42 });
+    expect(results[1]).not.toHaveProperty("duration");
+    expect(results[2]).not.toHaveProperty("duration");
+    expect(results[3]).not.toHaveProperty("duration");
+  });
+
   it("unwraps tool result envelopes and keeps error text for the tool UI", () => {
     const parsed = contentFromPayloadBlocks([
       {

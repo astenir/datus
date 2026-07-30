@@ -6,6 +6,7 @@ chat-history retrieval can share the same conversion logic.
 """
 
 import json
+import math
 from typing import Any, List, Optional, Set
 
 from datus.agent.node.compact_archive import parse_archived_marker
@@ -87,9 +88,11 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
 
     start_time = action.start_time
     end_time = action.end_time
-    duration = 0.0
+    duration = None
     if start_time and end_time:
-        duration = (end_time - start_time).total_seconds()
+        measured_duration = (end_time - start_time).total_seconds()
+        if math.isfinite(measured_duration) and measured_duration >= 0:
+            duration = measured_duration
 
     output_dict = output if isinstance(output, dict) else None
     short_desc = output_dict.get("summary", "") if output_dict else ""
@@ -103,10 +106,11 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
     payload_data = {
         "callToolId": action.action_id.removeprefix("complete_"),
         "toolName": function_name,
-        "duration": duration,
         "shortDesc": short_desc,
         "result": result_payload,
     }
+    if duration is not None:
+        payload_data["duration"] = duration
 
     error_message = result_payload.get("error")
     if error_message:
@@ -349,12 +353,14 @@ def _build_subagent_complete_content(action: ActionHistory) -> List[IMessageCont
     frontend can render the matching subagent card in a failure state.
     """
     output = action.output if isinstance(action.output, dict) else {}
-    duration = (action.end_time - action.start_time).total_seconds() if action.start_time and action.end_time else 0.0
     payload_data = {
         "subagentType": output.get("subagent_type", "unknown"),
         "toolCount": output.get("tool_count", 0),
-        "duration": duration,
     }
+    if action.start_time and action.end_time:
+        duration = (action.end_time - action.start_time).total_seconds()
+        if math.isfinite(duration) and duration >= 0:
+            payload_data["duration"] = duration
 
     error_message = output.get("error")
     if not error_message and action.status == ActionStatus.FAILED:

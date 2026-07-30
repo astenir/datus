@@ -117,6 +117,10 @@ function callToolIdFromPayload(payload: Record<string, unknown>) {
   return stringifyContent(payload.callToolId ?? payload.call_tool_id).trim() || undefined;
 }
 
+function toolDurationFromPayload(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function parseInteractionRequests(rawRequests: readonly unknown[]) {
   return rawRequests.map((request) => {
     const req = isRecord(request) ? request : {};
@@ -1002,7 +1006,7 @@ export function contentFromPayloadBlocks(
     } else if (type === "call-tool-result") {
       const callToolId = callToolIdFromPayload(payload);
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
-      const duration = typeof payload.duration === "number" ? payload.duration : undefined;
+      const duration = toolDurationFromPayload(payload.duration);
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
       const errorText = toolErrorText(payload, toolName);
       const resultStatus = toolResultStatus(payload.result);
@@ -1055,7 +1059,7 @@ export function contentFromPayloadBlocks(
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
-      const duration = typeof payload.duration === "number" ? payload.duration : undefined;
+      const duration = toolDurationFromPayload(payload.duration);
       const rawErrorText = stringifyContent(payload.error).trim();
       const block: Extract<MessageBlock, { type: "subagent-complete" }> = {
         type: "subagent-complete",

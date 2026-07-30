@@ -8,7 +8,11 @@ import os
 import sqlite3
 from typing import Any, Dict, List
 
-from datus.api.models.downstream import ChatSessionSubagentEvent, ChatSessionTerminalEvent
+from datus.api.models.downstream import (
+    ChatSessionSubagentEvent,
+    ChatSessionTerminalEvent,
+    ChatSessionToolExecutionEvent,
+)
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -120,6 +124,54 @@ class SessionSidecarMixin:
             return
         await asyncio.to_thread(self.append_subagent_event, session_id, subagent_event)
 
+    def append_tool_execution_event(
+        self, session_id: str, event: ChatSessionToolExecutionEvent | Dict[str, Any]
+    ) -> None:
+        """Idempotently persist measured tool timing outside SDK history."""
+        self._validate_session_id(session_id)
+        tool_event = ChatSessionToolExecutionEvent.model_validate(event)
+        if self._body_store is not None:
+            self._run_body_store_sync(
+                lambda: self._body_store.append_session_terminal_event(
+                    **self._store_kwargs(session_id),
+                    event=tool_event.model_dump(),
+                )
+            )
+            return
+
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        with sqlite3.connect(db_path, timeout=5.0) as conn:
+            conn.execute(self._terminal_event_table_sql())
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_session_terminal_events_created "
+                "ON chat_session_terminal_events(session_id, created_at, event_id)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO chat_session_terminal_events "
+                "(event_id, session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    tool_event.event_id,
+                    session_id,
+                    tool_event.event_type,
+                    tool_event.model_dump_json(),
+                    tool_event.created_at,
+                ),
+            )
+
+    async def append_tool_execution_event_async(
+        self, session_id: str, event: ChatSessionToolExecutionEvent | Dict[str, Any]
+    ) -> None:
+        """Persist measured tool timing without crossing async body-store loops."""
+        self._validate_session_id(session_id)
+        tool_event = ChatSessionToolExecutionEvent.model_validate(event)
+        if self._body_store is not None:
+            await self._body_store.append_session_terminal_event(
+                **self._store_kwargs(session_id),
+                event=tool_event.model_dump(),
+            )
+            return
+        await asyncio.to_thread(self.append_tool_execution_event, session_id, tool_event)
+
     def get_terminal_events(self, session_id: str) -> List[ChatSessionTerminalEvent]:
         """Load valid terminal events without creating history for missing sessions."""
         self._validate_session_id(session_id)
@@ -186,6 +238,39 @@ class SessionSidecarMixin:
             return self._validate_subagent_events(rows, session_id=session_id)
         return await asyncio.to_thread(self.get_subagent_events, session_id)
 
+    def get_tool_execution_events(self, session_id: str) -> List[ChatSessionToolExecutionEvent]:
+        """Load valid measured tool timings for canonical history rendering."""
+        self._validate_session_id(session_id)
+        if self._body_store is not None:
+            rows = self._run_body_store_sync(
+                lambda: self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
+            )
+            return self._validate_tool_execution_events(rows, session_id=session_id)
+
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return []
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                rows = conn.execute(
+                    "SELECT payload_json FROM chat_session_terminal_events "
+                    "WHERE session_id = ? ORDER BY created_at, event_id",
+                    (session_id,),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return []
+            raise
+        return self._validate_tool_execution_events((row[0] for row in rows), session_id=session_id)
+
+    async def get_tool_execution_events_async(self, session_id: str) -> List[ChatSessionToolExecutionEvent]:
+        """Load measured tool timings without crossing async body-store loops."""
+        self._validate_session_id(session_id)
+        if self._body_store is not None:
+            rows = await self._body_store.get_session_terminal_events(**self._store_kwargs(session_id))
+            return self._validate_tool_execution_events(rows, session_id=session_id)
+        return await asyncio.to_thread(self.get_tool_execution_events, session_id)
+
     @staticmethod
     def _validate_terminal_events(rows: Any, *, session_id: str) -> List[ChatSessionTerminalEvent]:
         events: List[ChatSessionTerminalEvent] = []
@@ -214,4 +299,17 @@ class SessionSidecarMixin:
                 events.append(ChatSessionSubagentEvent.model_validate(payload))
             except (TypeError, ValueError) as exc:
                 logger.warning("Skipping malformed subagent event for session %s: %s", session_id, exc)
+        return events
+
+    @staticmethod
+    def _validate_tool_execution_events(rows: Any, *, session_id: str) -> List[ChatSessionToolExecutionEvent]:
+        events: List[ChatSessionToolExecutionEvent] = []
+        for row in rows or []:
+            try:
+                payload = json.loads(row) if isinstance(row, str) else row
+                if isinstance(payload, dict) and payload.get("event_type") != "tool_execution":
+                    continue
+                events.append(ChatSessionToolExecutionEvent.model_validate(payload))
+            except (TypeError, ValueError) as exc:
+                logger.warning("Skipping malformed tool execution event for session %s: %s", session_id, exc)
         return events

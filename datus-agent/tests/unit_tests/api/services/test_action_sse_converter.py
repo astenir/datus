@@ -188,8 +188,8 @@ class TestBuildToolResultContent:
         assert contents[0].payload["shortDesc"] == "Found 10 rows"
         assert contents[0].payload["result"] == {"success": 1, "result": "data..."}
 
-    def test_zero_duration_when_end_time_missing(self):
-        """Duration is 0 when end_time is None."""
+    def test_omits_duration_when_end_time_missing(self):
+        """Unknown duration must not be encoded as a real zero-second run."""
         action = _make_action(
             action_id="complete_t",
             end_time=None,
@@ -197,7 +197,7 @@ class TestBuildToolResultContent:
             output={},
         )
         contents = _build_tool_result_content(action)
-        assert contents[0].payload["duration"] == 0.0
+        assert "duration" not in contents[0].payload
 
     def test_failed_tool_includes_error_from_output(self):
         """Failed tool action includes an error field from output.error."""
@@ -1296,8 +1296,8 @@ class TestActionToSSEEvent:
         assert content.payload["subagentType"] == "unknown"
         assert content.payload["toolCount"] == 0
 
-    def test_subagent_complete_missing_times_gives_zero_duration(self):
-        """subagent_complete with missing end_time gives duration=0."""
+    def test_subagent_complete_missing_times_omits_duration(self):
+        """subagent_complete with unknown timing must not claim a zero duration."""
         action = _make_action(
             role=ActionRole.SYSTEM,
             status=ActionStatus.SUCCESS,
@@ -1307,7 +1307,7 @@ class TestActionToSSEEvent:
         )
         event = action_to_sse_event(action, event_id=16, message_id="msg-16")
         event = _assert_sse_event(event)
-        assert event.data.payload.content[0].payload["duration"] == 0.0
+        assert "duration" not in event.data.payload.content[0].payload
 
     def test_thinking_delta_first_creates_message(self):
         """First thinking_delta uses CREATE_MESSAGE SSE type."""

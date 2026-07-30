@@ -164,10 +164,15 @@ def action_to_history_sse_event(
     if action.role == ActionRole.INTERACTION:
         return None
 
-    return action_to_sse_event(
+    event = action_to_sse_event(
         action,
         event_id,
         message_id,
         include_user_message=include_user_message,
         include_final_response=include_final_response,
     )
+    if event and action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
+        for content in event.data.payload.content:
+            if content.type == "call-tool-result":
+                content.payload.pop("duration", None)
+    return event
