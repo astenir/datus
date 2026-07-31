@@ -1019,6 +1019,26 @@ class TestPendingInputQueue:
         q = PendingInputQueue()
         assert q.drain() == []
 
+    def test_drain_or_close_keeps_accepted_residual_open_then_closes_empty_queue(self):
+        q = PendingInputQueue()
+        assert q.push("follow-up") is True
+
+        assert q.drain_or_close() == ["follow-up"]
+        assert q.push("next turn") is True
+        assert q.drain() == ["next turn"]
+
+        assert q.drain_or_close() == []
+        assert q.push("too late") is False
+
+    def test_close_discards_pending_items_and_rejects_later_pushes(self):
+        q = PendingInputQueue()
+        assert q.push("cancelled work") is True
+
+        q.close()
+
+        assert q.snapshot() == []
+        assert q.push("too late") is False
+
     def test_concurrent_push_from_multiple_threads_preserves_count(self):
         import threading
 

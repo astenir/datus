@@ -556,6 +556,22 @@ class TestInsertMessageEndpoint:
         assert result.errorCode == "QUEUE_UNAVAILABLE"
 
     @pytest.mark.asyncio
+    async def test_closed_queue_returns_session_not_running(self):
+        from datus.api.routes.chat_routes import insert_message
+        from datus.cli.execution_state import PendingInputQueue
+
+        queue = PendingInputQueue()
+        queue.close()
+        task = self._make_task_with_queue(queue)
+        svc = _mock_svc(task=task)
+
+        result = await insert_message(self._make_request("too late"), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is False
+        assert result.errorCode == "SESSION_NOT_RUNNING"
+        assert queue.snapshot() == []
+
+    @pytest.mark.asyncio
     async def test_message_is_stripped_before_push(self):
         from datus.api.routes.chat_routes import insert_message
 

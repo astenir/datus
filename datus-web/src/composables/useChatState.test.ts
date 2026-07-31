@@ -22,11 +22,15 @@ function controlledSseResponse() {
   const encoder = new TextEncoder();
   return {
     response,
-    emit(event: string, data: unknown) {
-      streamController.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    emit(event: string, data: unknown, id?: number) {
+      const eventId = typeof id === "number" ? `id: ${id}\n` : "";
+      streamController.enqueue(encoder.encode(`${eventId}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
     },
     close() {
       streamController.close();
+    },
+    fail(error: Error) {
+      streamController.error(error);
     },
   };
 }
@@ -249,6 +253,277 @@ describe("useChatState", () => {
 
     state.clearTransportError();
     expect(state.transportError.value).toBeNull();
+  });
+
+  it("allows a supplemental message only after the current session event", async () => {
+    const stream = controlledSseResponse();
+    const request = vi.fn().mockResolvedValue(stream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+    chatApi.insert.mockResolvedValueOnce({ session_id: "session-a", queued_count: 1 });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const streamTask = state.sendMessage({
+      message: "分析当前持仓",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.isInsertReady.value).toBe(false);
+    await expect(state.insertMessage("补充条件")).rejects.toThrow("当前会话尚未建立");
+    expect(chatApi.insert).not.toHaveBeenCalled();
+
+    stream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+
+    await expect(state.insertMessage("  补充条件  ")).resolves.toEqual({
+      session_id: "session-a",
+      queued_count: 1,
+    });
+
+    expect(chatApi.insert).toHaveBeenCalledWith("", "session-a", "补充条件");
+    expect(state.transportError.value).toBeNull();
+
+    stream.close();
+    await streamTask;
+    expect(state.isInsertReady.value).toBe(false);
+  });
+
+  it("waits for a new session event before supplementing a later turn in the same session", async () => {
+    const firstStream = controlledSseResponse();
+    const secondStream = controlledSseResponse();
+    const request = vi.fn()
+      .mockResolvedValueOnce(firstStream.response)
+      .mockResolvedValueOnce(secondStream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const options = {
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    };
+
+    const firstTask = state.sendMessage({ ...options, message: "第一轮" });
+    firstStream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+    firstStream.close();
+    await firstTask;
+
+    const secondTask = state.sendMessage({ ...options, message: "第二轮" });
+    expect(state.selectedSession.value).toBe("session-a");
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.isInsertReady.value).toBe(false);
+    await expect(state.insertMessage("补充条件")).rejects.toThrow("正在建立会话，请稍候");
+    expect(chatApi.insert).not.toHaveBeenCalled();
+
+    secondStream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+    secondStream.close();
+    await secondTask;
+  });
+
+  it("keeps insert readiness when resuming from a cursor after the session event", async () => {
+    const firstStream = controlledSseResponse();
+    const resumedStream = controlledSseResponse();
+    const request = vi.fn()
+      .mockResolvedValueOnce(firstStream.response)
+      .mockResolvedValueOnce(resumedStream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const streamTask = state.sendMessage({
+      message: "分析当前持仓",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+    firstStream.emit("session", { session_id: "session-a" }, 0);
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+
+    firstStream.fail(new Error("network disconnected"));
+    await streamTask;
+    expect(state.isStreaming.value).toBe(false);
+    expect(state.isInsertReady.value).toBe(true);
+
+    const resumeTask = state.resumeSession();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(request.mock.calls[1]?.[1]?.body))).toEqual({
+      session_id: "session-a",
+      from_event_id: 1,
+    });
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.isInsertReady.value).toBe(true);
+
+    resumedStream.close();
+    await resumeTask;
+  });
+
+  it("propagates a ready supplemental-message rejection without turning it into a stream error", async () => {
+    const stream = controlledSseResponse();
+    const request = vi.fn().mockResolvedValue(stream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+    chatApi.insert.mockRejectedValueOnce(new Error("chat task is ending"));
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const streamTask = state.sendMessage({
+      message: "分析当前持仓",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+    stream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+
+    await expect(state.insertMessage("补充条件")).rejects.toThrow("chat task is ending");
+
+    expect(state.transportError.value).toBeNull();
+
+    stream.close();
+    await streamTask;
+  });
+
+  it("keeps the session streaming while stop is pending and blocks supplemental messages", async () => {
+    const stream = controlledSseResponse();
+    const request = vi.fn().mockResolvedValue(stream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+    const stop = deferred<unknown>();
+    chatApi.stop.mockReturnValueOnce(stop.promise);
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const streamTask = state.sendMessage({
+      message: "分析当前持仓",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+    stream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+
+    const stopTask = state.stopSession();
+    expect(state.isStreaming.value).toBe(true);
+    expect(state.isStopping.value).toBe(true);
+    expect(state.isInsertReady.value).toBe(false);
+    expect(state.streamActivity.value.phase).toBe("stopping");
+    await expect(state.insertMessage("补充条件")).rejects.toThrow("正在停止当前任务");
+    expect(chatApi.insert).not.toHaveBeenCalled();
+
+    stop.resolve({ session_id: "session-a", stopped: true });
+    await stopTask;
+
+    expect(state.isStreaming.value).toBe(false);
+    expect(state.isStopping.value).toBe(false);
+    expect(state.isInsertReady.value).toBe(false);
+    expect(state.streamActivity.value.phase).toBe("idle");
+
+    stream.close();
+    await streamTask;
+  });
+
+  it("keeps insert readiness for a later resume when stopping fails", async () => {
+    const stream = controlledSseResponse();
+    const request = vi.fn().mockResolvedValue(stream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+    chatApi.stop.mockRejectedValueOnce(new Error("stop request failed"));
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    const streamTask = state.sendMessage({
+      message: "分析当前持仓",
+      selectedAgent: "",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+    });
+    stream.emit("session", { session_id: "session-a" });
+    await vi.waitFor(() => expect(state.isInsertReady.value).toBe(true));
+
+    await state.stopSession();
+
+    expect(state.isStreaming.value).toBe(false);
+    expect(state.isStopping.value).toBe(false);
+    expect(state.isInsertReady.value).toBe(true);
+    expect(state.transportError.value?.title).toBe("停止会话失败");
+
+    stream.close();
+    await streamTask;
   });
 
   it("does not cache a partial transcript after a transport failure", async () => {

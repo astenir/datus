@@ -336,6 +336,8 @@ export type UserInteractionInput = {
   input: string[][];
 };
 
+export type InsertMessageData = components["schemas"]["InsertMessageData"];
+
 // ─── Subject / Knowledge Explorer ────────────────────────────────────────────
 
 export type SubjectNodeType = "directory" | "metric" | "reference_sql";

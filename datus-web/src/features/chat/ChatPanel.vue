@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, shallowRef } from "vue"
-import type { ChatStatus } from "ai"
 import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import { useRouter } from "vue-router"
@@ -87,7 +86,29 @@ const successStorySessionLink = computed(() => {
     params: { sessionId },
   }).href
 })
-const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.value ? "streaming" : "ready")
+const isWaitingForSession = computed(() =>
+  props.workspace.isStreaming.value && !props.workspace.isInsertReady.value,
+)
+const promptSubmitDisabled = computed(() =>
+  isWaitingForSession.value || props.workspace.isStopping.value,
+)
+const promptSubmitLabel = computed(() => {
+  if (props.workspace.isStopping.value) return "正在停止当前任务"
+  if (isWaitingForSession.value) return "正在建立会话"
+  return props.workspace.isStreaming.value ? "补充当前任务" : "发送"
+})
+const promptPlaceholder = computed(() => {
+  if (!props.workspace.isStreaming.value) return "有什么想了解的？"
+  if (props.workspace.isStopping.value) return "正在停止…"
+  return isWaitingForSession.value ? "正在建立会话…" : "补充当前任务，按 Enter 发送"
+})
+const streamStatusLabel = computed(() => {
+  if (props.workspace.isStopping.value) return "正在停止当前任务"
+  return isWaitingForSession.value ? "正在建立会话" : "AI 正在生成，按 Enter 补充当前任务"
+})
+const stopButtonLabel = computed(() =>
+  props.workspace.isStopping.value ? "正在停止当前任务" : "AI 正在生成，点击停止",
+)
 const streamingMessageId = computed(() =>
   props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
 )
@@ -140,10 +161,24 @@ const promptSuggestions = [
   "帮我总结这个会话的重点",
 ]
 
-function send(payload: PromptInputMessage) {
+async function send(payload: PromptInputMessage): Promise<void> {
   const text = payload.text.trim()
   if (!text) return
-  props.workspace.handleSend(text)
+
+  if (!props.workspace.isStreaming.value) {
+    props.workspace.handleSend(text)
+    return
+  }
+
+  try {
+    const result = await props.workspace.handleInsert(text)
+    const queueHint = result.queued_count > 0 ? `（队列中 ${result.queued_count} 条）` : ""
+    toast.success(`已加入当前任务${queueHint}`)
+  } catch (error) {
+    console.error("Failed to insert message:", error)
+    toast.error("未能加入当前任务，请重试")
+    throw error
+  }
 }
 
 function sendSuggestion(suggestion: string) {
@@ -330,7 +365,7 @@ function saveSuccessStory(source: SuccessStorySource) {
             <PromptInputTextarea
               name="message"
               aria-label="消息内容"
-              placeholder="有什么想了解的？"
+              :placeholder="promptPlaceholder"
               :rows="2"
               autocomplete="off"
               autocapitalize="sentences"
@@ -377,7 +412,7 @@ function saveSuccessStory(source: SuccessStorySource) {
                 aria-live="polite"
                 class="sr-only"
               >
-                AI 正在生成
+                {{ streamStatusLabel }}
               </span>
 
               <ModelSelector v-model:open="modelSelectorOpen">
@@ -459,23 +494,29 @@ function saveSuccessStory(source: SuccessStorySource) {
               </ModelSelector>
 
               <PromptInputSubmit
-                v-if="!workspace.isStreaming.value"
-                :status="currentStatus"
-                :disabled="workspace.isStreaming.value"
-                title="发送"
+                v-show="!workspace.isStreaming.value"
+                status="ready"
+                :disabled="promptSubmitDisabled"
+                :aria-label="promptSubmitLabel"
+                :title="promptSubmitLabel"
                 class="size-10 shrink-0 rounded-full shadow-none"
               />
               <PromptInputButton
-                v-else
+                v-if="workspace.isStreaming.value"
                 variant="default"
                 size="icon-sm"
                 type="button"
-                aria-label="AI 正在生成，点击停止"
-                title="AI 正在生成，点击停止"
+                :disabled="workspace.isStopping.value"
+                :aria-label="stopButtonLabel"
+                :title="stopButtonLabel"
                 class="size-10 shrink-0 rounded-full shadow-none"
                 @click="workspace.stopSession"
               >
-                <SquareIcon />
+                <Loader2Icon
+                  v-if="workspace.isStopping.value"
+                  class="animate-spin"
+                />
+                <SquareIcon v-else />
               </PromptInputButton>
             </div>
           </PromptInputFooter>

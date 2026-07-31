@@ -44,6 +44,67 @@ class TestApplyPermissionModeOverride:
 
 class TestChatTaskManagerBehavior:
     @pytest.mark.asyncio
+    async def test_tail_insert_continues_same_task_and_emits_one_user_message(self, real_agent_config):
+        """An insert after a completed model turn starts one continuation before end."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.cli.execution_state import PendingInputQueue
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class ContinuationNode:
+            session_id = "llm-tail-insert"
+
+            def __init__(self):
+                self.pending_input_queue = None
+                self.inputs = []
+                self.execution_count = 0
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                self.execution_count += 1
+                self.inputs.append(self.input.user_message)
+                if self.execution_count == 1:
+                    assert isinstance(self.pending_input_queue, PendingInputQueue)
+                    assert self.pending_input_queue.push("补充内容") is True
+                yield ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="response",
+                    messages=f"response-{self.execution_count}",
+                    input_data={},
+                    output_data={"content_type": "markdown", "content": f"response-{self.execution_count}"},
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        node = ContinuationNode()
+        manager = ChatTaskManager(project_id="test-proj")
+        manager._create_node = lambda *args, **kwargs: node  # type: ignore[method-assign]
+        task = ChatTask(session_id="tail-insert", asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="first prompt", session_id=task.session_id),
+        )
+
+        assert node.inputs == ["first prompt", "补充内容"]
+        assert node.execution_count == 2
+        inserted = [
+            event
+            for event in task.events
+            if event.event == "message" and event.data.payload.role == "user"
+        ]
+        assert len(inserted) == 1
+        assert inserted[0].data.payload.content[0].payload["content"] == "补充内容"
+        assert [event.event for event in task.events].count("end") == 1
+        assert task.events[-1].event == "end"
+        assert task.status == "completed"
+        assert node.pending_input_queue.push("too late") is False
+
+    @pytest.mark.asyncio
     async def test_completed_tool_timing_is_persisted_for_history(self, real_agent_config):
         from datus.models.session_manager import SessionManager
         from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
@@ -544,12 +605,15 @@ class TestStartChat:
 
     async def test_stop_established_task_waits_for_graceful_interrupt(self):
         """Established tasks get a chance to emit their durable interrupted action."""
+        from datus.cli.execution_state import PendingInputQueue
+
         manager = ChatTaskManager()
         interrupted = asyncio.Event()
         running = asyncio.create_task(interrupted.wait())
         task = ChatTask(session_id="graceful-stop", asyncio_task=running)
         task.session_established = True
         task.node = MagicMock()
+        task.node.pending_input_queue = PendingInputQueue()
         task.node.interrupt_controller.interrupt.side_effect = interrupted.set
         manager._tasks[task.session_id] = task
 
@@ -557,6 +621,7 @@ class TestStartChat:
         assert running.done() is True
         assert running.cancelled() is False
         task.node.interrupt_controller.interrupt.assert_called_once()
+        assert task.node.pending_input_queue.push("too late") is False
 
 
 class TestStartChatLanguageOverride:

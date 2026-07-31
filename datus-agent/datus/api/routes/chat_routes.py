@@ -989,7 +989,12 @@ async def insert_message(
             errorMessage="Pending input queue is not initialized for this session",
         )
 
-    queue.push(text)
+    if not queue.push(text):
+        return Result[InsertMessageData](
+            success=False,
+            errorCode="SESSION_NOT_RUNNING",
+            errorMessage="Chat task is already ending or stopped",
+        )
     return Result[InsertMessageData](
         success=True,
         data=InsertMessageData(session_id=request.session_id, queued_count=len(queue)),

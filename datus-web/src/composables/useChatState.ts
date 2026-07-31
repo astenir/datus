@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   ChatSessionOption,
   ChatStreamActivity,
+  InsertMessageData,
   ParsedMessage,
   SseEvent,
 } from "@/types";
@@ -37,6 +38,8 @@ import { useChatSettings } from "./useChatSettings";
 type ChatSessionRuntime = {
   messages: ChatMessage[];
   isStreaming: boolean;
+  isInsertReady: boolean;
+  isStopping: boolean;
   streamActivity: ChatStreamActivity;
   transportError: ChatErrorBlock | null;
   submittedInteractionKeys: ReadonlySet<string>;
@@ -67,6 +70,8 @@ function newRuntime(messages: ChatMessage[] = []): ChatSessionRuntime {
   return {
     messages,
     isStreaming: false,
+    isInsertReady: false,
+    isStopping: false,
     streamActivity: idleChatStreamActivity(),
     transportError: null,
     submittedInteractionKeys: new Set(),
@@ -125,6 +130,8 @@ const selectedRuntime = computed(() => {
 });
 const messages = computed(() => selectedRuntime.value.messages);
 const isStreaming = computed(() => selectedRuntime.value.isStreaming);
+const isInsertReady = computed(() => selectedRuntime.value.isInsertReady);
+const isStopping = computed(() => selectedRuntime.value.isStopping);
 const streamActivity = computed(() => selectedRuntime.value.streamActivity);
 const transportError = computed(() => selectedRuntime.value.transportError);
 const activeInteractionKey = computed(() =>
@@ -235,6 +242,7 @@ function applyStreamEvent(context: StreamContext, event: SseEvent): ParsedMessag
   const eventId = Number.parseInt(event.id ?? "", 10);
   updateRuntime(context.runtimeKey, runtime => ({
     ...runtime,
+    isInsertReady: event.event === "session" || runtime.isInsertReady,
     streamActivity: chatStreamActivityAfterEvent(runtime.streamActivity, event, incoming),
     nextEventCursor: Number.isInteger(eventId) && eventId >= 0
       ? Math.max(runtime.nextEventCursor, eventId + 1)
@@ -328,6 +336,7 @@ async function loadSessions(subagentId?: string) {
         resumeAttemptedSessions.delete(session.session_id);
         continue;
       }
+      if (runtimes.value.get(session.session_id)?.isStopping) continue;
       if (!streamControllers.has(session.session_id) && !resumeAttemptedSessions.has(session.session_id)) {
         void resumeSession(session.session_id);
       }
@@ -355,7 +364,7 @@ function selectSession(sessionId: string | null) {
     void loadSessionHistory(sessionId);
   }
   const listedSession = sessions.value.find(session => session.session_id === sessionId);
-  if (listedSession?.is_active && !streamControllers.has(sessionId)) {
+  if (listedSession?.is_active && !streamControllers.has(sessionId) && !runtimes.value.get(sessionId)?.isStopping) {
     void resumeSession(sessionId);
   }
 }
@@ -366,6 +375,8 @@ async function finalizeStream(context: StreamContext, streamCompleted: boolean) 
   updateRuntime(context.runtimeKey, runtime => ({
     ...runtime,
     isStreaming: false,
+    isInsertReady: streamCompleted ? false : runtime.isInsertReady,
+    isStopping: false,
     streamActivity: idleChatStreamActivity(),
     submittedInteractionKeys: new Set(),
     nextEventCursor: streamCompleted ? 0 : runtime.nextEventCursor,
@@ -401,6 +412,8 @@ async function sendMessage(opts: {
     ...runtime,
     messages: [...runtime.messages, userMessage],
     isStreaming: true,
+    isInsertReady: false,
+    isStopping: false,
     streamActivity: startedChatStreamActivity(),
     transportError: null,
     submittedInteractionKeys: new Set(),
@@ -451,9 +464,17 @@ async function stopSession() {
   const runtimeKey = selectedRuntimeKey.value;
   if (!runtimeKey) return;
   const sessionId = selectedSession.value;
+  const currentRuntime = runtimes.value.get(runtimeKey);
+  if (!currentRuntime?.isStreaming || currentRuntime.isStopping) return;
+  const wasInsertReady = currentRuntime.isInsertReady;
+  let stopSucceeded = false;
+
   updateRuntime(runtimeKey, runtime => ({
     ...runtime,
-    streamActivity: runtime.isStreaming ? { ...runtime.streamActivity, phase: "stopping" } : runtime.streamActivity,
+    isStreaming: true,
+    isInsertReady: false,
+    isStopping: true,
+    streamActivity: { ...runtime.streamActivity, phase: "stopping" },
   }));
 
   const controller = streamControllers.get(runtimeKey);
@@ -461,28 +482,32 @@ async function stopSession() {
     streamControllers.delete(runtimeKey);
     controller.abort();
   }
-  updateRuntime(runtimeKey, runtime => ({
-    ...runtime,
-    isStreaming: false,
-    streamActivity: idleChatStreamActivity(),
-    submittedInteractionKeys: new Set(),
-  }));
 
-  if (sessionId) {
-    resumeAttemptedSessions.delete(sessionId);
-    try {
+  try {
+    if (sessionId) {
       await chatApi.stop(effectiveBase(), sessionId);
+      stopSucceeded = true;
       markSessionActive(sessionId, false);
       await loadSessionHistory(sessionId);
-    } catch (error) {
-      console.error("Failed to stop session:", error);
-      updateRuntime(runtimeKey, runtime => ({
-        ...runtime,
-        transportError: friendlyTransportErrorBlock(error, "stop"),
-      }));
     }
+  } catch (error) {
+    console.error("Failed to stop session:", error);
+    updateRuntime(runtimeKey, runtime => ({
+      ...runtime,
+      transportError: friendlyTransportErrorBlock(error, "stop"),
+    }));
+  } finally {
+    updateRuntime(runtimeKey, runtime => ({
+      ...runtime,
+      isStreaming: false,
+      isInsertReady: stopSucceeded ? false : wasInsertReady,
+      isStopping: false,
+      streamActivity: idleChatStreamActivity(),
+      submittedInteractionKeys: new Set(),
+    }));
+    if (sessionId) resumeAttemptedSessions.delete(sessionId);
+    void loadSessions();
   }
-  void loadSessions();
 }
 
 async function deleteSession(sessionId: string) {
@@ -517,6 +542,7 @@ async function compactSession(sessionId: string) {
 async function resumeSession(sessionId?: string) {
   const targetSession = sessionId ?? selectedSession.value;
   if (!targetSession || streamControllers.has(targetSession) || resumeInFlightSessions.has(targetSession)) return;
+  if (runtimes.value.get(targetSession)?.isStopping) return;
   resumeInFlightSessions.add(targetSession);
   resumeAttemptedSessions.add(targetSession);
   if (!runtimes.value.has(targetSession)) setRuntime(targetSession, newRuntime());
@@ -539,6 +565,7 @@ async function resumeSession(sessionId?: string) {
   updateRuntime(targetSession, runtime => ({
     ...runtime,
     isStreaming: true,
+    isStopping: false,
     streamActivity: startedChatStreamActivity(),
     transportError: null,
   }));
@@ -571,28 +598,18 @@ async function resumeSession(sessionId?: string) {
   }
 }
 
-async function insertMessage(message: string) {
+async function insertMessage(message: string): Promise<InsertMessageData> {
   const sessionId = selectedSession.value;
-  if (!sessionId || !message.trim()) return;
-  const userMessage: ChatMessage = {
-    id: createClientId(),
-    role: "user",
-    content: message,
-  };
-  updateRuntime(sessionId, runtime => ({
-    ...runtime,
-    messages: [...runtime.messages, userMessage],
-  }));
-  try {
-    await chatApi.insert(effectiveBase(), sessionId, message);
-  } catch (error) {
-    console.error("Failed to insert message:", error);
-    updateRuntime(sessionId, runtime => ({
-      ...runtime,
-      messages: runtime.messages.filter(item => item.id !== userMessage.id),
-      transportError: friendlyTransportErrorBlock(error, "insert"),
-    }));
-  }
+  const text = message.trim();
+  if (!sessionId) throw new Error("当前会话尚未建立，无法补充消息");
+  if (!text) throw new Error("补充内容不能为空");
+  if (!isStreaming.value) throw new Error("当前会话未在生成中，无法补充消息");
+  if (isStopping.value) throw new Error("正在停止当前任务");
+  if (!isInsertReady.value) throw new Error("正在建立会话，请稍候");
+
+  const result = await chatApi.insert(effectiveBase(), sessionId, text);
+  if (!result) throw new Error("后端未确认本次补充消息");
+  return result;
 }
 
 function clearTransportError() {
@@ -654,6 +671,8 @@ export function useChatState() {
     sessions: readonly(sessions),
     selectedSession: readonly(selectedSession),
     isStreaming,
+    isInsertReady,
+    isStopping,
     streamActivity,
     isLoadingSessions: readonly(isLoadingSessions),
     transportError,

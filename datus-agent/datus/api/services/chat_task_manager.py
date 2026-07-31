@@ -29,9 +29,10 @@ from datus.api.models.cli_models import (
 from datus.api.models.downstream import DashboardEditSession, ReportEditSession, StreamChatInput
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
+from datus.cli.execution_state import PendingInputQueue
 from datus.configuration.agent_config import AgentConfig
 from datus.models.session_manager import SessionManager, session_scope_from_user_id
-from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
 from datus.tools.proxy.proxy_tool import apply_proxy_tools
 from datus.utils.loggings import get_logger
@@ -493,6 +494,9 @@ class ChatTaskManager:
         task.stop_requested = True
 
         if task.node:
+            queue = getattr(task.node, "pending_input_queue", None)
+            if queue is not None:
+                queue.close()
             try:
                 task.node.interrupt_controller.interrupt()
                 logger.info(f"Interrupted running task: {session_id}")
@@ -812,6 +816,11 @@ class ChatTaskManager:
 
             node = await asyncio.to_thread(_init_node)
             task.node = node
+            # The API path accepts free-text mid-run insertions just like the
+            # interactive CLI/TUI path. Initialize the queue before exposing
+            # the session event so /chat/insert always targets a live queue.
+            if getattr(node, "pending_input_queue", None) is None:
+                node.pending_input_queue = PendingInputQueue()
             trace_token = set_trace_context(
                 build_chat_trace_context(
                     session_id=session_id,
@@ -918,96 +927,151 @@ class ChatTaskManager:
             elif effective_source:
                 logger.warning("Unsupported source '%s'; skipping proxy shortcut", effective_source)
 
-            # 6. Execute streaming
-            action_history = ActionHistoryManager()
+            # 6. Execute streaming. A model turn normally drains staged input
+            # through its call_model_input_filter. Residual input that arrives
+            # after the final model turn starts a continuation run below.
             action_count = 0
-            seen_delta_action_ids: set[str] = set()
-            assistant_response_sent = False
-            tool_result_seen = False
-            seen_assistant_message_fingerprints: set[str] = set()
-
-            async for action in node.execute_stream_with_interactions(action_history):
-                action_count += 1
-
-                # Convert action to SSE
-                # Per-request stream_response overrides the server-level --stream flag
-                effective_stream = (
-                    request.stream_response if request.stream_response is not None else self._stream_thinking
-                )
-
-                is_first_delta = True
-                if action.action_type in {"thinking_delta", "response_delta"}:
-                    is_first_delta = action.action_id not in seen_delta_action_ids
-                    seen_delta_action_ids.add(action.action_id)
-
-                # finalize_progress actions reuse the same id across stages
-                # so the SSE wire emits CREATE then UPDATE_MESSAGE; we mark
-                # everything past the first emission as an update.
-                is_finalize_progress_update = False
-                if action.action_type == "finalize_progress":
-                    is_finalize_progress_update = action.action_id in seen_delta_action_ids
-                    seen_delta_action_ids.add(action.action_id)
-
-                is_update = is_finalize_progress_update or (
-                    effective_stream
-                    and action.action_type in {"response", "thinking"}
-                    and isinstance(action.output, dict)
-                    and action.action_id in seen_delta_action_ids
-                )
-
-                sse = action_to_sse_event(
-                    action,
-                    event_id,
-                    action.action_id,
-                    stream_thinking=effective_stream,
-                    is_first_delta=is_first_delta,
-                    is_update=bool(is_update),
-                    include_final_response=_should_include_final_response(action, assistant_response_sent),
-                    proxied_tool_names=getattr(node, "proxied_tool_names", None),
-                )
-                terminal_outcome = self._terminal_outcome_from_action(action)
-                if terminal_outcome is not None:
-                    terminal_type, terminal_error, terminal_error_type = terminal_outcome
-                    await self._persist_terminal_event(
-                        task=task,
-                        agent_config=agent_config,
-                        user_id=user_id,
-                        event_type=terminal_type,
-                        error=terminal_error,
-                        error_type=terminal_error_type,
+            continuation_message: Optional[str] = None
+            while True:
+                if continuation_message is not None:
+                    continuation_action = ActionHistory.create_action(
+                        role=ActionRole.USER,
+                        action_type="user_insert",
+                        messages=continuation_message,
+                        input_data={"user_message": continuation_message, "source": "mid_run_insert"},
+                        output_data={"user_message": continuation_message},
+                        status=ActionStatus.SUCCESS,
                     )
-                if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
-                    tool_execution_queue.put_nowait(action)
-                if sse:
-                    # Per-LLM-call usage event: the converter has no access
-                    # to the service-level session ids, so we stamp them
-                    # here before fan-out. Skip the assistant-message dedup
-                    # path entirely since usage carries no rendered text.
-                    if sse.event == "usage" and isinstance(sse.data, SSEUsageData):
-                        sse.data.session_id = session_id
-                        # Only main-agent usage (depth==0) belongs to this
-                        # node's LLM session. Sub-agent usage (depth>0) keeps the
-                        # sub-agent session id stamped by the converter so the
-                        # consumer can attribute it to the right session instead
-                        # of mislabelling it as the parent's.
-                        if sse.data.depth == 0:
-                            sse.data.llm_session_id = node.session_id
+                    continuation_event = action_to_sse_event(
+                        continuation_action,
+                        event_id,
+                        continuation_action.action_id,
+                    )
+                    if continuation_event is not None:
+                        await self._push_event(task, continuation_event)
+                        event_id += 1
+                        action_count += 1
+                    node.input = self._create_node_input(
+                        user_message=continuation_message,
+                        current_node=node,
+                        at_tables=at_tables,
+                        at_metrics=at_metrics,
+                        at_sqls=at_sqls,
+                        catalog=request.catalog,
+                        database=request.database,
+                        db_schema=request.db_schema,
+                        plan_mode=request.plan_mode or False,
+                        source_session_id=request.source_session_id,
+                    )
+
+                if task.stop_requested:
+                    queue = getattr(node, "pending_input_queue", None)
+                    if queue is not None:
+                        queue.close()
+                    break
+
+                action_history = ActionHistoryManager()
+                seen_delta_action_ids: set[str] = set()
+                assistant_response_sent = False
+                tool_result_seen = False
+                seen_assistant_message_fingerprints: set[str] = set()
+
+                async for action in node.execute_stream_with_interactions(action_history):
+                    action_count += 1
+
+                    # Convert action to SSE.
+                    # Per-request stream_response overrides the server-level --stream flag.
+                    effective_stream = (
+                        request.stream_response if request.stream_response is not None else self._stream_thinking
+                    )
+
+                    is_first_delta = True
+                    if action.action_type in {"thinking_delta", "response_delta"}:
+                        is_first_delta = action.action_id not in seen_delta_action_ids
+                        seen_delta_action_ids.add(action.action_id)
+
+                    # finalize_progress actions reuse the same id across stages
+                    # so the SSE wire emits CREATE then UPDATE_MESSAGE; we mark
+                    # everything past the first emission as an update.
+                    is_finalize_progress_update = False
+                    if action.action_type == "finalize_progress":
+                        is_finalize_progress_update = action.action_id in seen_delta_action_ids
+                        seen_delta_action_ids.add(action.action_id)
+
+                    is_update = is_finalize_progress_update or (
+                        effective_stream
+                        and action.action_type in {"response", "thinking"}
+                        and isinstance(action.output, dict)
+                        and action.action_id in seen_delta_action_ids
+                    )
+
+                    sse = action_to_sse_event(
+                        action,
+                        event_id,
+                        action.action_id,
+                        stream_thinking=effective_stream,
+                        is_first_delta=is_first_delta,
+                        is_update=bool(is_update),
+                        include_final_response=_should_include_final_response(action, assistant_response_sent),
+                        proxied_tool_names=getattr(node, "proxied_tool_names", None),
+                    )
+                    terminal_outcome = self._terminal_outcome_from_action(action)
+                    if terminal_outcome is not None:
+                        terminal_type, terminal_error, terminal_error_type = terminal_outcome
+                        await self._persist_terminal_event(
+                            task=task,
+                            agent_config=agent_config,
+                            user_id=user_id,
+                            event_type=terminal_type,
+                            error=terminal_error,
+                            error_type=terminal_error_type,
+                        )
+                    if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
+                        tool_execution_queue.put_nowait(action)
+                    if sse:
+                        # Per-LLM-call usage event: the converter has no access
+                        # to the service-level session ids, so we stamp them
+                        # here before fan-out. Skip the assistant-message dedup
+                        # path entirely since usage carries no rendered text.
+                        if sse.event == "usage" and isinstance(sse.data, SSEUsageData):
+                            sse.data.session_id = session_id
+                            # Only main-agent usage (depth==0) belongs to this
+                            # node's LLM session. Sub-agent usage (depth>0) keeps the
+                            # sub-agent session id stamped by the converter so the
+                            # consumer can attribute it to the right session instead
+                            # of mislabelling it as the parent's.
+                            if sse.data.depth == 0:
+                                sse.data.llm_session_id = node.session_id
+                            await self._push_event(task, sse)
+                            event_id += 1
+                            continue
+                        if _should_skip_duplicate_assistant_message(
+                            action,
+                            sse,
+                            seen_assistant_message_fingerprints,
+                        ):
+                            continue
                         await self._push_event(task, sse)
                         event_id += 1
-                        continue
-                    if _should_skip_duplicate_assistant_message(
-                        action,
-                        sse,
-                        seen_assistant_message_fingerprints,
-                    ):
-                        continue
-                    await self._push_event(task, sse)
-                    event_id += 1
-                    _remember_assistant_message(sse, seen_assistant_message_fingerprints)
-                    if _is_visible_assistant_response(action, sse, tool_result_seen=tool_result_seen):
-                        assistant_response_sent = True
-                    if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
-                        tool_result_seen = True
+                        _remember_assistant_message(sse, seen_assistant_message_fingerprints)
+                        if _is_visible_assistant_response(action, sse, tool_result_seen=tool_result_seen):
+                            assistant_response_sent = True
+                        if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
+                            tool_result_seen = True
+
+                queue = getattr(node, "pending_input_queue", None)
+                interrupted = bool(getattr(getattr(node, "interrupt_controller", None), "is_interrupted", False))
+                if task.stop_requested or interrupted:
+                    if queue is not None:
+                        queue.close()
+                    break
+                if queue is None:
+                    break
+
+                residual = queue.drain_or_close()
+                if not residual:
+                    break
+                continuation_message = "\n\n".join(residual)
 
             # 7. End event
             token_kwargs: dict = {}
@@ -1056,6 +1120,9 @@ class ChatTaskManager:
                 task.status = "completed"
 
         except asyncio.CancelledError:
+            queue = getattr(task.node, "pending_input_queue", None)
+            if queue is not None:
+                queue.close()
             if task.stop_requested:
                 await self._persist_terminal_event(
                     task=task,
@@ -1068,6 +1135,9 @@ class ChatTaskManager:
             task.status = "cancelled"
 
         except Exception as e:
+            queue = getattr(task.node, "pending_input_queue", None)
+            if queue is not None:
+                queue.close()
             logger.error(f"Chat task error for session {session_id}: {e}")
             task.error = str(e)
             is_timeout = isinstance(e, TimeoutError)
@@ -1101,6 +1171,9 @@ class ChatTaskManager:
             task.status = "error"
 
         finally:
+            queue = getattr(task.node, "pending_input_queue", None)
+            if queue is not None:
+                queue.close()
             if tool_execution_worker is not None:
                 tool_execution_worker.cancel()
                 await asyncio.gather(tool_execution_worker, return_exceptions=True)

@@ -69,6 +69,8 @@ export function useChatWorkspace() {
     sessions,
     selectedSession,
     isStreaming,
+    isInsertReady,
+    isStopping,
     streamActivity,
     transportError,
     isLoadingSessions,
@@ -273,7 +275,7 @@ export function useChatWorkspace() {
   }
 
   function handleInsert(message: string) {
-    void insertMessage(message);
+    return insertMessage(message);
   }
 
   function artifactKindLabel(session: ArtifactEditSession) {
@@ -546,6 +548,8 @@ export function useChatWorkspace() {
     sessions,
     selectedSession,
     isStreaming,
+    isInsertReady,
+    isStopping,
     streamActivity,
     transportError,
     isLoadingSessions,

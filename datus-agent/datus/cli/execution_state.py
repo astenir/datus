@@ -60,8 +60,10 @@ class PendingInputQueue:
     :meth:`push`. Consumer side (``call_model_input_filter`` closure,
     chat-layer auto-continuation) calls :meth:`drain`, which empties the
     queue in one shot — every staged message is delivered to the next
-    LLM turn. A hard ceiling of :attr:`MAX_PENDING_ITEMS` protects
-    against runaway producers.
+    LLM turn. The API task manager uses :meth:`drain_or_close` at a run
+    boundary so a late producer either creates a follow-up turn or is
+    rejected after the task has ended. A hard ceiling of
+    :attr:`MAX_PENDING_ITEMS` protects against runaway producers.
     """
 
     MAX_PENDING_ITEMS = 200
@@ -69,12 +71,18 @@ class PendingInputQueue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._items: "deque[str]" = deque(maxlen=self.MAX_PENDING_ITEMS)
+        self._closed = False
 
-    def push(self, text: str) -> None:
+    def push(self, text: str) -> bool:
+        """Stage *text* when the queue still belongs to a running task."""
         with self._lock:
+            if self._closed:
+                logger.debug("PendingInputQueue rejected staged input after close.")
+                return False
             if len(self._items) == self.MAX_PENDING_ITEMS:
                 logger.warning("PendingInputQueue overflow; dropping oldest staged input.")
             self._items.append(text)
+            return True
 
     def drain(self) -> List[str]:
         """Pop every queued item in FIFO order."""
@@ -82,6 +90,33 @@ class PendingInputQueue:
             result = list(self._items)
             self._items.clear()
         return result
+
+    def drain_or_close(self) -> List[str]:
+        """Drain pending input or atomically reject all future producers.
+
+        A task calls this only after a streaming turn finishes. If an input
+        was accepted before this lock is acquired, it is returned for the
+        follow-up turn and the queue remains open. Otherwise the queue is
+        closed while still holding the lock, so an insert racing with task
+        cleanup cannot report success and then be silently dropped.
+        """
+        with self._lock:
+            result = list(self._items)
+            self._items.clear()
+            if not result:
+                self._closed = True
+            return result
+
+    def close(self) -> None:
+        """Reject future input and discard any staged text.
+
+        This is used when a task is stopped or fails, where queued input must
+        not revive work the user explicitly cancelled or that can no longer
+        execute safely.
+        """
+        with self._lock:
+            self._closed = True
+            self._items.clear()
 
     def snapshot(self) -> List[str]:
         """Return a read-only copy of the current queue without consuming."""
