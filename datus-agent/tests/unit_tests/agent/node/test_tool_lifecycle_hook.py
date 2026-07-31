@@ -155,6 +155,32 @@ async def test_execute_sql_failure_uses_error_as_summary():
 
 
 @pytest.mark.asyncio
+async def test_input_first_tool_completion_keeps_invocation_summary():
+    manager = ActionHistoryManager()
+    action_bus = SimpleNamespace(put=MagicMock())
+    node = SimpleNamespace(
+        _current_action_history=manager,
+        action_bus=action_bus,
+        _tool_completion_bus_active=True,
+    )
+    hook = ToolLifecycleHook(node)
+    context = _context()
+    context.tool_name = "grep"
+    context.tool_arguments = '{"pattern":"shortDesc","path":"datus-web/src","include":"*.ts"}'
+
+    await hook.on_tool_end(
+        context,
+        None,
+        SimpleNamespace(name="grep"),
+        {"success": 1, "result": {"matches": [{"path": "a.ts"}]}},
+    )
+
+    completion = manager.find_action_by_id("complete_call-1")
+    assert completion is not None
+    assert completion.output["summary"] == "shortDesc · datus-web/src · *.ts"
+
+
+@pytest.mark.asyncio
 async def test_does_not_publish_or_suppress_without_live_action_bus():
     manager = ActionHistoryManager()
     action_bus = SimpleNamespace(put=MagicMock())

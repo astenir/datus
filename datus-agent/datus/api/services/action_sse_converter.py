@@ -20,7 +20,7 @@ from datus.api.models.cli_models import (
     SSEUsageDelta,
 )
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
-from datus.schemas.tool_summary import summarize_tool_execution
+from datus.schemas.tool_summary import summarize_tool_execution, summarize_tool_input
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso, to_utc_iso
@@ -74,6 +74,9 @@ def _build_tool_call_content(
         "toolName": function_name,
         "toolParams": arguments,
     }
+    short_desc = summarize_tool_input(function_name, arguments)
+    if short_desc:
+        payload_data["shortDesc"] = short_desc
     if proxied_tool_names is not None:
         payload_data["proxied"] = function_name in proxied_tool_names
     return [IMessageContent(type="call-tool", payload=payload_data)]

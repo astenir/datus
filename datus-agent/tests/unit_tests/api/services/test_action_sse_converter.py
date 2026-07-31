@@ -125,14 +125,27 @@ class TestBuildToolCallContent:
         """Produces IMessageContent with type='call-tool' and correct payload."""
         action = _make_action(
             action_id="tool-123",
-            input={"function_name": "search_table_metadata", "arguments": {"query": "revenue"}},
+            input={
+                "function_name": "search_table",
+                "arguments": {"query_text": "revenue", "database": "analytics"},
+            },
         )
         contents = _build_tool_call_content(action)
         assert len(contents) == 1
         assert contents[0].type == "call-tool"
         assert contents[0].payload["callToolId"] == "tool-123"
-        assert contents[0].payload["toolName"] == "search_table_metadata"
-        assert contents[0].payload["toolParams"] == {"query": "revenue"}
+        assert contents[0].payload["toolName"] == "search_table"
+        assert contents[0].payload["toolParams"] == {"query_text": "revenue", "database": "analytics"}
+        assert contents[0].payload["shortDesc"] == "revenue · analytics"
+
+    def test_unknown_tool_call_omits_short_description(self):
+        action = _make_action(
+            input={"function_name": "external_tool", "arguments": {"token": "secret"}},
+        )
+
+        contents = _build_tool_call_content(action)
+
+        assert "shortDesc" not in contents[0].payload
 
     def test_archived_arguments_marker_falls_back_to_empty_params(self):
         """A marker string in ``arguments`` (only possible in legacy sessions)
@@ -959,7 +972,7 @@ class TestActionToSSEEvent:
         content = event.data.payload.content[0]
         assert content.type == "call-tool-result"
         assert content.payload["result"] == {"success": 1, "result": "plain string result"}
-        assert content.payload["shortDesc"] == ""
+        assert content.payload["shortDesc"] == "plain string result"
 
     def test_user_role_excluded_by_default(self):
         """USER role returns None when include_user_message=False."""

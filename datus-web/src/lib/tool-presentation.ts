@@ -207,7 +207,7 @@ function toolErrorText(block: ToolDisplayBlock) {
 }
 
 function toolShortDescription(block: ToolDisplayBlock) {
-  return block.type === "tool-call" ? undefined : block.shortDesc;
+  return block.shortDesc;
 }
 
 function toolDuration(block: ToolDisplayBlock) {

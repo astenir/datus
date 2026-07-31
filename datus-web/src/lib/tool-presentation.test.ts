@@ -169,6 +169,19 @@ describe("tool presentation", () => {
     });
   });
 
+  it("uses the canonical backend summary while a tool is running", () => {
+    expect(toolPresentation({
+      type: "tool-call",
+      callToolId: "grep-running",
+      toolName: "grep",
+      params: { pattern: "fund_positions", path: "src", include: "*.py" },
+      shortDesc: "fund_positions · src · *.py",
+    })).toMatchObject({
+      state: "running",
+      summary: "fund_positions · src · *.py",
+    });
+  });
+
   it("marks a delegated task without a result as interrupted after execution stops", () => {
     const block = {
       type: "tool-call" as const,

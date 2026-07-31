@@ -10,17 +10,19 @@ which keeps failures result-based while preferring the submitted statement for
 SQL execution tools.
 
 Only the ``success`` path is per-tool; failure summaries are produced uniformly
-by :func:`format_failure`.
+by :func:`format_failure`. Input summaries use an explicit safe-field allow-list
+and are bounded separately from the compact result registry.
 
-All non-filesystem summaries are clipped to ``SUMMARY_TEXT_MAX_CHARS``
-characters at the registry exit; filesystem tools (``read_file``,
-``write_file``, ``edit_file``, ``glob``, ``grep``) bypass the clip.
+All non-filesystem result summaries are clipped to ``SUMMARY_TEXT_MAX_CHARS``
+characters at the result-registry exit; filesystem tools (``read_file``,
+``write_file``, ``edit_file``, ``glob``, ``grep``) bypass that result clip.
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlsplit
 
 from datus.utils.loggings import get_logger
 
@@ -29,6 +31,10 @@ logger = get_logger(__name__)
 
 SUMMARY_TEXT_MAX_CHARS = 19
 SUMMARY_ERROR_MAX_CHARS = 19
+INPUT_SUMMARY_MAX_CHARS = 240
+SQL_INPUT_SUMMARY_TOOLS = frozenset(
+    {"execute_sql", "read_query", "query", "execute_write", "execute_ddl", "write_query"}
+)
 
 # Filesystem tools want full path/count visibility; web tools want their
 # result titles / page label visible on the compact line rather than clipped
@@ -36,7 +42,23 @@ SUMMARY_ERROR_MAX_CHARS = 19
 FS_TOOLS_NO_CLIP = frozenset(
     {"read_file", "write_file", "edit_file", "delete_file", "glob", "grep", "web_search", "web_fetch"}
 )
-SQL_EXECUTION_TOOLS = frozenset({"execute_sql", "read_query", "query", "execute_write", "execute_ddl"})
+HYBRID_INPUT_RESULT_TOOLS = frozenset(
+    {
+        "analyze_column_usage_patterns",
+        "analyze_metric_candidates_from_history",
+        "analyze_table_relationships",
+        "ask_user",
+        "attribution_analyze",
+        "check_semantic_model_exists",
+        "check_semantic_object_exists",
+        "end_metric_generation",
+        "end_semantic_model_generation",
+        "parse_temporal_expressions",
+        "profile_semantic_model_evidence",
+        "validate_semantic",
+        "validate_skill",
+    }
+)
 
 
 # ── Generic helpers (public API) ────────────────────────────────────────
@@ -53,6 +75,445 @@ def truncate_text(text: str, limit: int = SUMMARY_TEXT_MAX_CHARS) -> str:
     if len(first_line) <= limit:
         return first_line
     return first_line[: limit - 1].rstrip() + "…"
+
+
+def _clean_input_text(value: Any, *, limit: int = INPUT_SUMMARY_MAX_CHARS) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return str(value)
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split()).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _arg_text(arguments: dict, *keys: str, limit: int = INPUT_SUMMARY_MAX_CHARS) -> str:
+    for key in keys:
+        text = _clean_input_text(arguments.get(key), limit=limit)
+        if text:
+            return text
+    return ""
+
+
+def _arg_list(arguments: dict, *keys: str) -> list[str]:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("["):
+                try:
+                    value = json.loads(stripped)
+                except (TypeError, ValueError):
+                    return [stripped]
+            else:
+                return [stripped]
+        if isinstance(value, (list, tuple)):
+            items = [_clean_input_text(item, limit=80) for item in value]
+            return [item for item in items if item]
+    return []
+
+
+def _list_preview(items: list[str], *, limit: int = 3) -> str:
+    if not items:
+        return ""
+    visible = items[:limit]
+    preview = "、".join(visible)
+    if len(items) > limit:
+        preview = f"{preview} +{len(items) - limit}"
+    return preview
+
+
+def _join_summary(*parts: str, separator: str = " · ") -> str:
+    return separator.join(part for part in parts if part)
+
+
+def _namespace_summary(arguments: dict, *, include_schema: bool = True) -> str:
+    namespace = [
+        _arg_text(arguments, "catalog"),
+        _arg_text(arguments, "database", "database_name", "databaseName"),
+    ]
+    if include_schema:
+        namespace.append(_arg_text(arguments, "schema_name", "schemaName", "schema"))
+    qualified = ".".join(part for part in namespace if part)
+    datasource = _arg_text(arguments, "datasource", "datasource_id", "datasourceId")
+    return _join_summary(datasource, qualified)
+
+
+def _qualified_table_summary(arguments: dict) -> str:
+    table = _arg_text(arguments, "table_name", "table", "name")
+    namespace = _namespace_summary(arguments)
+    if namespace and table:
+        if " · " in namespace:
+            datasource, qualified = namespace.split(" · ", 1)
+            return _join_summary(datasource, f"{qualified}.{table}")
+        return f"{namespace}.{table}"
+    return table or namespace
+
+
+def _query_with_scope_summary(arguments: dict) -> str:
+    query = _arg_text(arguments, "query_text", "query", "keywords", "search_text", "description")
+    return _join_summary(query, _namespace_summary(arguments))
+
+
+def _fields_summary(*keys: str) -> Callable[[dict], str]:
+    def formatter(arguments: dict) -> str:
+        return _join_summary(*(_arg_text(arguments, key) for key in keys))
+
+    return formatter
+
+
+def _first_field_summary(*keys: str) -> Callable[[dict], str]:
+    return lambda arguments: _arg_text(arguments, *keys)
+
+
+def _sql_input_summary(arguments: dict) -> str:
+    # SQL is intentionally not clipped here. The UI applies its own visual
+    # limit while the expanded card retains the exact submitted statement.
+    return _arg_text(arguments, "sql", "query", "statement", limit=10**9)
+
+
+def _transfer_input_summary(arguments: dict) -> str:
+    source = _arg_text(arguments, "source_datasource")
+    target = _arg_text(arguments, "target_table")
+    target_datasource = _arg_text(arguments, "target_datasource")
+    route = " → ".join(part for part in (source, _join_summary(target_datasource, target, separator=".")) if part)
+    return route or _arg_text(arguments, "source_sql", limit=10**9)
+
+
+def _metrics_query_input_summary(arguments: dict) -> str:
+    metrics = _list_preview(_arg_list(arguments, "metrics"))
+    dimensions = _list_preview(_arg_list(arguments, "dimensions"))
+    date_range = "～".join(
+        part for part in (_arg_text(arguments, "time_start"), _arg_text(arguments, "time_end")) if part
+    )
+    return _join_summary(metrics, dimensions, date_range)
+
+
+def _attribution_input_summary(arguments: dict) -> str:
+    baseline = "～".join(
+        part for part in (_arg_text(arguments, "baseline_start"), _arg_text(arguments, "baseline_end")) if part
+    )
+    current = "～".join(
+        part for part in (_arg_text(arguments, "current_start"), _arg_text(arguments, "current_end")) if part
+    )
+    comparison = " → ".join(part for part in (baseline, current) if part)
+    return _join_summary(_arg_text(arguments, "metric_name"), comparison)
+
+
+def _reference_template_input_summary(arguments: dict) -> str:
+    subject = _list_preview(_arg_list(arguments, "subject_path"))
+    name = _arg_text(arguments, "name", "template_id")
+    params = arguments.get("params")
+    param_count = f"{len(params)} params" if isinstance(params, dict) and params else ""
+    datasource = _arg_text(arguments, "datasource")
+    return _join_summary(subject, name, param_count, datasource)
+
+
+def _file_search_input_summary(arguments: dict) -> str:
+    pattern = _arg_text(arguments, "pattern")
+    path = _arg_text(arguments, "path")
+    include = _arg_text(arguments, "include")
+    return _join_summary(pattern, path, include)
+
+
+def _todo_write_input_summary(arguments: dict) -> str:
+    todos = arguments.get("todos_json")
+    if isinstance(todos, str):
+        try:
+            todos = json.loads(todos)
+        except (TypeError, ValueError):
+            return ""
+    if not isinstance(todos, list) or not todos:
+        return ""
+    first = todos[0] if isinstance(todos[0], dict) else {}
+    title = _arg_text(first, "title", "content", "description")
+    count = f"{len(todos)} todos"
+    return _join_summary(count, title)
+
+
+def _task_input_summary(arguments: dict) -> str:
+    return _join_summary(
+        _arg_text(arguments, "type", "subagent_type", "subagentType"),
+        _arg_text(arguments, "prompt", "description"),
+    )
+
+
+def _question_input_summary(arguments: dict) -> str:
+    questions = arguments.get("questions")
+    if isinstance(questions, str):
+        try:
+            questions = json.loads(questions)
+        except (TypeError, ValueError):
+            return ""
+    if not isinstance(questions, list) or not questions:
+        return ""
+    first = questions[0]
+    if not isinstance(first, dict):
+        return ""
+    question = _arg_text(first, "question", "title")
+    return f"{question} +{len(questions) - 1}" if question and len(questions) > 1 else question
+
+
+def _generation_files_input_summary(arguments: dict) -> str:
+    files = _arg_list(arguments, "semantic_model_files")
+    if not files:
+        single = _arg_text(arguments, "metric_file", "semantic_model_file")
+        files = [single] if single else []
+    return _list_preview(files)
+
+
+def _discovery_input_summary(arguments: dict) -> str:
+    tables = _list_preview(_arg_list(arguments, "tables"))
+    table = _arg_text(arguments, "table_name")
+    query = _arg_text(arguments, "query_text")
+    return _join_summary(query or tables or table, _namespace_summary(arguments))
+
+
+def _safe_url_input_summary(arguments: dict) -> str:
+    raw = _arg_text(arguments, "url")
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return ""
+    if not parsed.netloc:
+        path = parsed.path
+        if "@" in path:
+            path = path.rsplit("@", 1)[-1]
+        return path
+    host = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port:
+        host = f"{host}:{port}"
+    return f"{host}{parsed.path or '/'}"
+
+
+def _memory_add_input_summary(arguments: dict) -> str:
+    content = _arg_text(arguments, "content", limit=10**9)
+    return f"add memory · {len(content)} chars" if content else ""
+
+
+def _memory_edit_input_summary(arguments: dict) -> str:
+    old = _arg_text(arguments, "old_string", limit=10**9)
+    new = _arg_text(arguments, "new_string", limit=10**9)
+    if not old and not new:
+        return ""
+    return f"edit memory · {len(old)}→{len(new)} chars"
+
+
+def _osi_metrics_input_summary(arguments: dict) -> str:
+    path = _arg_text(arguments, "path")
+    metrics = arguments.get("metrics_json")
+    if isinstance(metrics, str):
+        try:
+            metrics = json.loads(metrics)
+        except (TypeError, ValueError):
+            metrics = None
+    if isinstance(metrics, list):
+        return _join_summary(path, f"{len(metrics)} metrics")
+    if isinstance(metrics, dict):
+        nested = metrics.get("metrics")
+        count = len(nested) if isinstance(nested, list) else len(metrics)
+        return _join_summary(path, f"{count} metrics")
+    return path
+
+
+InputFormatterFn = Callable[[dict], str]
+
+
+class ToolInputSummaryRegistry:
+    """Explicit allow-list for safe, stable summaries derived from tool input."""
+
+    def __init__(self) -> None:
+        self._formatters: Dict[str, InputFormatterFn] = {}
+
+    def register(self, tool_name: str, fn: InputFormatterFn) -> None:
+        self._formatters[tool_name] = fn
+
+    def names(self) -> list[str]:
+        return sorted(self._formatters)
+
+    def summarize(self, arguments: Any, tool_name: str) -> str:
+        parsed = arguments
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except (TypeError, ValueError):
+                return ""
+        if not isinstance(parsed, dict):
+            return ""
+        formatter = self._formatters.get(tool_name)
+        if formatter is None:
+            return ""
+        try:
+            summary = formatter(parsed).strip()
+            if tool_name in SQL_INPUT_SUMMARY_TOOLS:
+                return summary
+            return _clean_input_text(summary)
+        except Exception as fmt_err:  # pragma: no cover - defensive
+            logger.debug(f"Tool input summary formatter for {tool_name} raised: {fmt_err}")
+            return ""
+
+
+def _register_input_summaries(registry: ToolInputSummaryRegistry) -> None:
+    formatters: Dict[str, InputFormatterFn] = {
+        # Database tools and compatibility names.
+        "execute_sql": _sql_input_summary,
+        "read_query": _sql_input_summary,
+        "query": _sql_input_summary,
+        "execute_write": _sql_input_summary,
+        "execute_ddl": _sql_input_summary,
+        "write_query": _sql_input_summary,
+        "describe_table": _qualified_table_summary,
+        "list_tables": _namespace_summary,
+        "table_overview": _namespace_summary,
+        "list_databases": lambda args: _join_summary(
+            _arg_text(args, "datasource", "datasource_id", "datasourceId"),
+            _arg_text(args, "catalog"),
+        ),
+        "list_schemas": lambda args: _namespace_summary(args, include_schema=False),
+        "search_table": _query_with_scope_summary,
+        "transfer_query_result": _transfer_input_summary,
+        # BI tools.
+        "list_dashboards": _first_field_summary("search"),
+        "get_dashboard": _first_field_summary("dashboard_id"),
+        "list_charts": _first_field_summary("dashboard_id"),
+        "get_chart": _fields_summary("dashboard_id", "chart_id"),
+        "get_chart_data": _fields_summary("dashboard_id", "chart_id"),
+        "list_datasets": _first_field_summary("dashboard_id"),
+        "create_dashboard": _first_field_summary("title", "name"),
+        "update_dashboard": _fields_summary("dashboard_id", "title"),
+        "delete_dashboard": _first_field_summary("dashboard_id"),
+        "create_chart": _fields_summary("title", "chart_type"),
+        "update_chart": _fields_summary("chart_id", "title", "chart_type"),
+        "add_chart_to_dashboard": lambda args: " → ".join(
+            part for part in (_arg_text(args, "chart_id"), _arg_text(args, "dashboard_id")) if part
+        ),
+        "delete_chart": _first_field_summary("chart_id"),
+        "create_dataset": _fields_summary("name", "database_id"),
+        "delete_dataset": _first_field_summary("dataset_id"),
+        # Semantic query, validation, and discovery tools.
+        "list_metrics": _first_field_summary("path"),
+        "get_dimensions": _fields_summary("metric_name", "path"),
+        "query_metrics": _metrics_query_input_summary,
+        "validate_semantic": lambda args: _join_summary(
+            _arg_text(args, "scope"), _list_preview(_arg_list(args, "checks"))
+        ),
+        "attribution_analyze": _attribution_input_summary,
+        "search_metrics": lambda args: _join_summary(
+            _arg_text(args, "query_text", "query"), _list_preview(_arg_list(args, "subject_path"))
+        ),
+        "search_reference_sql": lambda args: _join_summary(
+            _arg_text(args, "query_text", "query"), _list_preview(_arg_list(args, "subject_path"))
+        ),
+        "search_semantic_objects": lambda args: _join_summary(
+            _arg_text(args, "query_text", "query"), _list_preview(_arg_list(args, "kinds"))
+        ),
+        "check_semantic_object_exists": _fields_summary("kind", "name", "table_context", "object_name"),
+        "check_semantic_model_exists": lambda args: _join_summary(
+            _namespace_summary(
+                {
+                    **args,
+                    "catalog": args.get("catalog_name", args.get("catalog")),
+                    "database": args.get("database_name", args.get("database")),
+                    "schema_name": args.get("schema_name", args.get("schema")),
+                }
+            ),
+            _arg_text(args, "table_name"),
+        ),
+        "end_semantic_model_generation": _generation_files_input_summary,
+        "end_metric_generation": _generation_files_input_summary,
+        "analyze_table_relationships": _discovery_input_summary,
+        "analyze_column_usage_patterns": _discovery_input_summary,
+        "profile_semantic_model_evidence": _discovery_input_summary,
+        "analyze_metric_candidates_from_history": _discovery_input_summary,
+        "get_multiple_tables_ddl": _discovery_input_summary,
+        # Scheduler tools.
+        "submit_sql_job": _fields_summary("job_name", "sql_file_path", "conn_id"),
+        "submit_sparksql_job": _fields_summary("job_name", "sql_file_path", "spark_master"),
+        "trigger_scheduler_job": _first_field_summary("job_id"),
+        "get_scheduler_job": _first_field_summary("job_id"),
+        "pause_job": _first_field_summary("job_id"),
+        "resume_job": _first_field_summary("job_id"),
+        "delete_job": _first_field_summary("job_id"),
+        "delete_scheduler_job": _first_field_summary("job_id"),
+        "update_job": _fields_summary("job_id", "job_name", "sql_file_path"),
+        "list_job_runs": _first_field_summary("job_id"),
+        "get_run_log": _fields_summary("job_id", "run_id"),
+        # Subject context and reference templates.
+        "get_metrics": lambda args: _join_summary(
+            _list_preview(_arg_list(args, "subject_path")), _arg_text(args, "name", "metric_name", "metric_id")
+        ),
+        "get_reference_sql": lambda args: _join_summary(
+            _list_preview(_arg_list(args, "subject_path")), _arg_text(args, "name", "ref_id", "sql_id")
+        ),
+        "search_reference_template": lambda args: _join_summary(
+            _arg_text(args, "query_text", "query"), _list_preview(_arg_list(args, "subject_path"))
+        ),
+        "get_reference_template": _reference_template_input_summary,
+        "render_reference_template": _reference_template_input_summary,
+        "execute_reference_template": _reference_template_input_summary,
+        # Filesystem tools. Content and replacement text are deliberately not
+        # included in compact summaries.
+        "read_file": _first_field_summary("path", "file_path"),
+        "write_file": _first_field_summary("path", "file_path"),
+        "edit_file": _first_field_summary("path", "file_path"),
+        "delete_file": _first_field_summary("path", "file_path"),
+        "glob": _file_search_input_summary,
+        "grep": _file_search_input_summary,
+        # Todo, date, skill, interaction, and sub-agent tools.
+        "todo_read": _first_field_summary("todo_id"),
+        "todo_write": _todo_write_input_summary,
+        "todo_update": _fields_summary("todo_id", "status"),
+        "parse_temporal_expressions": _first_field_summary("task_text", "expression", "text", "query"),
+        "search_skill_usage": _first_field_summary("skill_name"),
+        "load_skill": _first_field_summary("skill_name", "name"),
+        "validate_skill": _first_field_summary("skill_path"),
+        "ask_user": _question_input_summary,
+        "task": _task_input_summary,
+        # Platform documentation and web tools.
+        "list_document_nav": _fields_summary("platform", "version"),
+        "get_document": lambda args: _join_summary(
+            _arg_text(args, "platform"), _list_preview(_arg_list(args, "titles")), _arg_text(args, "version")
+        ),
+        "search_document": lambda args: _join_summary(
+            _arg_text(args, "platform"), _list_preview(_arg_list(args, "keywords")), _arg_text(args, "version")
+        ),
+        "web_search": lambda args: _list_preview(_arg_list(args, "keywords", "query", "query_text")),
+        "web_fetch": _safe_url_input_summary,
+        # Active built-ins that do not yet have result-summary formatters.
+        "bash": _first_field_summary("command"),
+        "get_dataset": _fields_summary("dashboard_id", "dataset_id"),
+        "start_new_report": _fields_summary("slug", "name"),
+        "bind_existing_report": _first_field_summary("report_slug"),
+        "save_query": _fields_summary("name", "goal"),
+        "start_new_dashboard": _fields_summary("slug", "name"),
+        "bind_existing_dashboard": _first_field_summary("dashboard_slug"),
+        "save_query_template": _fields_summary("name", "goal"),
+        "create_issue_comment": _first_field_summary("issue_id"),
+        "update_issue_status": _fields_summary("issue_id", "status"),
+        "request_human_input": _fields_summary("issue_id", "question"),
+        "mark_blocked": _fields_summary("issue_id", "reason"),
+        "finish_mission": _fields_summary("issue_id", "outcome", "summary"),
+        "upsert_osi_metrics": _osi_metrics_input_summary,
+        "add_memory": _memory_add_input_summary,
+        "edit_memory": _memory_edit_input_summary,
+    }
+    for name, formatter in formatters.items():
+        registry.register(name, formatter)
+
+
+TOOL_INPUT_SUMMARY_REGISTRY = ToolInputSummaryRegistry()
+_register_input_summaries(TOOL_INPUT_SUMMARY_REGISTRY)
 
 
 def looks_like_failure(data: dict) -> bool:
@@ -95,27 +556,31 @@ def detect_tool_failure(output_content: Any) -> bool:
 def summarize_tool_execution(output_content: Any, tool_name: str, arguments: Any = None) -> str:
     """Build the display summary shared by live tool events and history replay.
 
-    SQL execution is identified by its input statement because that remains
-    useful after the result table is collapsed. Failures always take priority
-    over the SQL text. Other tools retain their registered result summaries.
+    Failures always take priority. Successful tools use an explicit allow-list
+    of safe input fields when the invocation target is more useful than a
+    result count. Validation and analysis tools keep the target first and append
+    their compact result. Missing/unknown inputs fall back to result summaries.
     """
     normalized_name = str(tool_name or "").strip().lower().rsplit(".", 1)[-1]
     if detect_tool_failure(output_content):
         return _summarize_tool_output(output_content, normalized_name)
 
-    parsed_arguments = arguments
-    if isinstance(parsed_arguments, str):
-        try:
-            parsed_arguments = json.loads(parsed_arguments)
-        except (TypeError, ValueError):
-            parsed_arguments = None
-    if normalized_name in SQL_EXECUTION_TOOLS and isinstance(parsed_arguments, dict):
-        for key in ("sql", "query", "statement"):
-            statement = parsed_arguments.get(key)
-            if isinstance(statement, str) and statement.strip():
-                return statement.strip()
+    input_summary = TOOL_INPUT_SUMMARY_REGISTRY.summarize(arguments, normalized_name)
+    if input_summary and normalized_name in HYBRID_INPUT_RESULT_TOOLS:
+        result_summary = _summarize_tool_output(output_content, normalized_name)
+        if result_summary not in ("", "OK", "Empty result") and result_summary != input_summary:
+            return _join_summary(input_summary, result_summary)
+        return input_summary
+    if input_summary:
+        return input_summary
 
     return _summarize_tool_output(output_content, normalized_name)
+
+
+def summarize_tool_input(tool_name: str, arguments: Any = None) -> str:
+    """Build the stable running-state summary for a tool invocation."""
+    normalized_name = str(tool_name or "").strip().lower().rsplit(".", 1)[-1]
+    return TOOL_INPUT_SUMMARY_REGISTRY.summarize(arguments, normalized_name)
 
 
 def _summarize_tool_output(output_content: Any, tool_name: str) -> str:
@@ -993,6 +1458,18 @@ def _fmt_parse_temporal_expressions(result: Any) -> str:
     if isinstance(result, dict):
         dates = result.get("extracted_dates")
         if isinstance(dates, list):
+            resolved: list[str] = []
+            for item in dates:
+                if not isinstance(item, dict):
+                    continue
+                start = _clean_input_text(item.get("start"), limit=32)
+                end = _clean_input_text(item.get("end"), limit=32)
+                compact_end = end[5:] if start[:4] == end[:4] and len(start) >= 10 and len(end) >= 10 else end
+                date_range = "～".join(part for part in (start, compact_end) if part)
+                if date_range:
+                    resolved.append(date_range)
+            if resolved:
+                return f"{resolved[0]} +{len(resolved) - 1}" if len(resolved) > 1 else resolved[0]
             return f"parsed {len(dates)} dates"
     return ""
 

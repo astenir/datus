@@ -199,6 +199,7 @@ describe("tool execution blocks", () => {
           callToolId: "call-1",
           toolName: "read_query",
           toolParams: { sql: "select 1" },
+          shortDesc: "select 1",
         },
       },
       {
@@ -214,7 +215,13 @@ describe("tool execution blocks", () => {
     ]);
 
     expect(parsed.blocks).toEqual([
-      { type: "tool-call", callToolId: "call-1", toolName: "read_query", params: { sql: "select 1" } },
+      {
+        type: "tool-call",
+        callToolId: "call-1",
+        toolName: "read_query",
+        params: { sql: "select 1" },
+        shortDesc: "select 1",
+      },
       {
         type: "tool-result",
         callToolId: "call-1",
@@ -433,6 +440,29 @@ describe("tool execution blocks", () => {
       },
       { type: "markdown", content: "继续分析" },
     ]);
+  });
+
+  it("preserves the running summary when a legacy result has no short description", () => {
+    const displayBlocks = mergeToolExecutionBlocks([
+      {
+        type: "tool-call",
+        callToolId: "grep-1",
+        toolName: "grep",
+        params: { pattern: "shortDesc", path: "src" },
+        shortDesc: "shortDesc · src",
+      },
+      {
+        type: "tool-result",
+        callToolId: "grep-1",
+        toolName: "grep",
+        result: { matches: [] },
+      },
+    ]);
+
+    expect(displayBlocks[0]).toMatchObject({
+      type: "tool-execution",
+      shortDesc: "shortDesc · src",
+    });
   });
 
   it("keeps unmatched tool blocks separate", () => {

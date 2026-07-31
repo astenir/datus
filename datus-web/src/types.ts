@@ -49,6 +49,7 @@ export type ToolCallBlock = {
   callToolId?: string;
   toolName: string;
   params: unknown;
+  shortDesc?: string;
   proxied?: boolean;
   childMessages?: readonly ToolChildMessage[];
 };
