@@ -1338,9 +1338,7 @@ class TestGetSessionMessages:
                     {
                         "type": "function_call_output",
                         "call_id": "sql-ok",
-                        "output": json.dumps(
-                            {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
-                        ),
+                        "output": json.dumps({"success": 1, "result": {"original_rows": 2, "column_count": 3}}),
                     }
                 ),
                 "2026-01-01T00:00:02",

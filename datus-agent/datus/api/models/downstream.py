@@ -100,9 +100,7 @@ class ChatSessionToolExecutionEvent(BaseModel):
     """Durable display-only timing for one completed tool call."""
 
     event_id: str = Field(..., description="Stable idempotency key for the tool execution event")
-    event_type: Literal["tool_execution"] = Field(
-        default="tool_execution", description="Display sidecar event type"
-    )
+    event_type: Literal["tool_execution"] = Field(default="tool_execution", description="Display sidecar event type")
     call_tool_id: str = Field(..., description="Tool call id shared by the start and result payloads")
     duration: float = Field(..., ge=0, allow_inf_nan=False, description="Measured execution duration in seconds")
     started_at: str = Field(..., description="Measured UTC tool start timestamp")

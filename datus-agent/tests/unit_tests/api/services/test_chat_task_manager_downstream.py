@@ -92,11 +92,7 @@ class TestChatTaskManagerBehavior:
 
         assert node.inputs == ["first prompt", "补充内容"]
         assert node.execution_count == 2
-        inserted = [
-            event
-            for event in task.events
-            if event.event == "message" and event.data.payload.role == "user"
-        ]
+        inserted = [event for event in task.events if event.event == "message" and event.data.payload.role == "user"]
         assert len(inserted) == 1
         assert inserted[0].data.payload.content[0].payload["content"] == "补充内容"
         assert [event.event for event in task.events].count("end") == 1
