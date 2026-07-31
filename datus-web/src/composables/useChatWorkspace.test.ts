@@ -57,6 +57,9 @@ describe("useChatWorkspace", () => {
     const compactSession = vi.fn(async () => ({ session_id: "s1", success: true }));
     const selectSession = vi.fn();
     const sendMessage = vi.fn();
+    const insertMessage = vi.fn(async () => ({ session_id: "s1", queued_count: 1 }));
+    const isInsertReady = shallowRef(true);
+    const isStopping = shallowRef(true);
     const clearMessages = vi.fn();
     const agentPreference = vi.fn(async () => ({
       success: true,
@@ -136,12 +139,14 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(isInsertReady),
+        isStopping: readonly(isStopping),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions,
         selectSession,
         sendMessage,
-        insertMessage: vi.fn(),
+        insertMessage,
         stopSession: vi.fn(),
         deleteSession: vi.fn(),
         compactSession,
@@ -203,6 +208,8 @@ describe("useChatWorkspace", () => {
     expect(workspace.defaultAgentId.value).toBe("research");
     expect(workspace.userDefaultAgentId.value).toBe("research");
     expect(workspace.selectedAgent.value).toBe("");
+    expect(workspace.isInsertReady.value).toBe(true);
+    expect(workspace.isStopping.value).toBe(true);
 
     let resolveAgentRefresh: ((value: typeof initialAgents) => void) | undefined;
     loadAgentOptions.mockImplementationOnce(() => new Promise<typeof initialAgents>((resolve) => {
@@ -246,6 +253,9 @@ describe("useChatWorkspace", () => {
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
     expect(compactSession).toHaveBeenCalledWith("s1");
+
+    await expect(workspace.handleInsert("补充条件")).resolves.toEqual({ session_id: "s1", queued_count: 1 });
+    expect(insertMessage).toHaveBeenCalledWith("补充条件");
 
     workspace.startReportEditSession({
       edit_session_id: "edit-1",
@@ -356,6 +366,8 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(shallowRef(false)),
+        isStopping: readonly(shallowRef(false)),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions,
@@ -502,6 +514,8 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(shallowRef(false)),
+        isStopping: readonly(shallowRef(false)),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions,
@@ -651,6 +665,8 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(shallowRef(false)),
+        isStopping: readonly(shallowRef(false)),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions,
@@ -808,6 +824,8 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(shallowRef(false)),
+        isStopping: readonly(shallowRef(false)),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions: vi.fn(),
@@ -961,6 +979,8 @@ describe("useChatWorkspace", () => {
         sessions: readonly(ref([])),
         selectedSession: readonly(shallowRef(null)),
         isStreaming: readonly(shallowRef(false)),
+        isInsertReady: readonly(shallowRef(false)),
+        isStopping: readonly(shallowRef(false)),
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions: vi.fn(),

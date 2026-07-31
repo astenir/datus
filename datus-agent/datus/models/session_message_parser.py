@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.tool_summary import detect_tool_failure
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import extract_user_input
 from datus.utils.time_utils import to_utc_iso
@@ -196,6 +197,7 @@ def message_rows_to_raw_messages(
                                 output_data = {"result": output_text}
 
                     call_id = message_json.get("call_id", last_action.action_id)
+                    failed = detect_tool_failure(output_data)
                     success_action = ActionHistory(
                         action_id="complete_" + call_id,
                         role=ActionRole.TOOL,
@@ -203,7 +205,7 @@ def message_rows_to_raw_messages(
                         action_type=last_action.action_type,
                         input=last_action.input,
                         output=output_data,
-                        status=ActionStatus.SUCCESS,
+                        status=ActionStatus.FAILED if failed else ActionStatus.SUCCESS,
                         start_time=last_action.start_time,
                         end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
                     )

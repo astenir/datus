@@ -36,7 +36,7 @@ from datus.models.mcp_utils import multiple_mcp_servers
 from datus.models.openai_compatible import OpenAICompatibleModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
-from datus.schemas.tool_summary import detect_tool_failure
+from datus.schemas.tool_summary import detect_tool_failure, summarize_tool_execution
 from datus.utils.constants import SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -1183,9 +1183,8 @@ class ClaudeModel(OpenAICompatibleModel):
                             if block.id in tool_call_cache:
                                 result_text = tool_call_cache[block.id].content[0].text
                             tool_failed = (not tool_executed) or detect_tool_failure(hook_result)
-                            result_summary = (
-                                self._format_tool_result(result_text, block.name) if not tool_failed else "Failed"
-                            )
+                            summary_source = hook_result if tool_executed else {"success": 0}
+                            result_summary = summarize_tool_execution(summary_source, block.name, block.input)
                             tool_output = {
                                 "success": not tool_failed,
                                 "raw_output": result_text,

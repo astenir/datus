@@ -572,6 +572,24 @@ describe("api client", () => {
     });
   });
 
+  it("returns queue state when inserting a message into a running chat", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({
+      success: true,
+      data: { session_id: "session-1", queued_count: 2 },
+    }));
+
+    await expect(chatApi.insert("http://localhost:8000", "session-1", "补充条件")).resolves.toEqual({
+      session_id: "session-1",
+      queued_count: 2,
+    });
+
+    const init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      session_id: "session-1",
+      message: "补充条件",
+    });
+  });
+
   it("preserves remote MCP headers when adding an SSE or HTTP server", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: {} }));
 

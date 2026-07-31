@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 from datus.schemas.action_history import ActionHistory, ActionStatus
-from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, search_table_result_counts
+from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, search_table_result_counts, summarize_tool_input
 from datus.utils.loggings import get_logger
 from datus.utils.tool_archive import is_archived_output, parse_archived_marker
 
@@ -318,10 +318,13 @@ def tool_specific_args_summary(action: ActionHistory) -> str:
     """
     function_name = action.input.get("function_name", "") if action.input else ""
     formatter = _TOOL_ARGS_FORMATTERS.get(function_name)
-    if formatter is None:
-        return ""
     try:
-        return formatter(_parse_args_dict(action)) or ""
+        arguments = _parse_args_dict(action)
+        if formatter is not None:
+            summary = formatter(arguments)
+            if summary:
+                return summary
+        return summarize_tool_input(function_name, arguments)
     except Exception:  # pragma: no cover - defensive
         return ""
 

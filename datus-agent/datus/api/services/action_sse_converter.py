@@ -6,6 +6,7 @@ chat-history retrieval can share the same conversion logic.
 """
 
 import json
+import math
 from typing import Any, List, Optional, Set
 
 from datus.agent.node.compact_archive import parse_archived_marker
@@ -19,6 +20,7 @@ from datus.api.models.cli_models import (
     SSEUsageDelta,
 )
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
+from datus.schemas.tool_summary import summarize_tool_execution, summarize_tool_input
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso, to_utc_iso
@@ -72,6 +74,9 @@ def _build_tool_call_content(
         "toolName": function_name,
         "toolParams": arguments,
     }
+    short_desc = summarize_tool_input(function_name, arguments)
+    if short_desc:
+        payload_data["shortDesc"] = short_desc
     if proxied_tool_names is not None:
         payload_data["proxied"] = function_name in proxied_tool_names
     return [IMessageContent(type="call-tool", payload=payload_data)]
@@ -87,13 +92,17 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
 
     start_time = action.start_time
     end_time = action.end_time
-    duration = 0.0
+    duration = None
     if start_time and end_time:
-        duration = (end_time - start_time).total_seconds()
+        measured_duration = (end_time - start_time).total_seconds()
+        if math.isfinite(measured_duration) and measured_duration >= 0:
+            duration = measured_duration
 
     output_dict = output if isinstance(output, dict) else None
+    function_name, arguments = _extract_function(action)
     short_desc = output_dict.get("summary", "") if output_dict else ""
-    function_name, _ = _extract_function(action)
+    if not short_desc:
+        short_desc = summarize_tool_execution(output, function_name, arguments)
     result_payload = _normalize_tool_result_payload(
         output=output,
         status=action.status,
@@ -103,10 +112,11 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
     payload_data = {
         "callToolId": action.action_id.removeprefix("complete_"),
         "toolName": function_name,
-        "duration": duration,
         "shortDesc": short_desc,
         "result": result_payload,
     }
+    if duration is not None:
+        payload_data["duration"] = duration
 
     error_message = result_payload.get("error")
     if error_message:
@@ -349,12 +359,14 @@ def _build_subagent_complete_content(action: ActionHistory) -> List[IMessageCont
     frontend can render the matching subagent card in a failure state.
     """
     output = action.output if isinstance(action.output, dict) else {}
-    duration = (action.end_time - action.start_time).total_seconds() if action.start_time and action.end_time else 0.0
     payload_data = {
         "subagentType": output.get("subagent_type", "unknown"),
         "toolCount": output.get("tool_count", 0),
-        "duration": duration,
     }
+    if action.start_time and action.end_time:
+        duration = (action.end_time - action.start_time).total_seconds()
+        if math.isfinite(duration) and duration >= 0:
+            payload_data["duration"] = duration
 
     error_message = output.get("error")
     if not error_message and action.status == ActionStatus.FAILED:

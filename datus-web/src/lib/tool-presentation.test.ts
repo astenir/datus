@@ -25,6 +25,7 @@ describe("tool presentation", () => {
       callToolId: "sql-1",
       toolName: "db_tools.execute_sql",
       params: { sql: "select * from fund_positions" },
+      shortDesc: "select * from fund_positions",
       duration: 1.25,
       resultStatus: "success",
       result: {
@@ -168,6 +169,19 @@ describe("tool presentation", () => {
     });
   });
 
+  it("uses the canonical backend summary while a tool is running", () => {
+    expect(toolPresentation({
+      type: "tool-call",
+      callToolId: "grep-running",
+      toolName: "grep",
+      params: { pattern: "fund_positions", path: "src", include: "*.py" },
+      shortDesc: "fund_positions · src · *.py",
+    })).toMatchObject({
+      state: "running",
+      summary: "fund_positions · src · *.py",
+    });
+  });
+
   it("marks a delegated task without a result as interrupted after execution stops", () => {
     const block = {
       type: "tool-call" as const,
@@ -227,6 +241,7 @@ describe("tool presentation", () => {
       callToolId: "sql-error",
       toolName: "execute_sql",
       params: { sql: "drop table fund_positions" },
+      shortDesc: "drop table fund_positions",
       resultStatus: "error",
       errorText: "只读模式不允许执行写操作",
       result: null,

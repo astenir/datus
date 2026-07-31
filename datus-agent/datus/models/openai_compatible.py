@@ -36,7 +36,7 @@ from datus.models.mcp_utils import multiple_mcp_servers
 from datus.models.stream_interrupt import handle_stream_interrupt
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure
+from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure, summarize_tool_execution
 from datus.utils.constants import LLMProvider
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import to_str
@@ -1641,16 +1641,11 @@ class OpenAICompatibleModel(LLMBaseModel):
                                 tool_name = tool_info["tool_name"]
                                 args_display = tool_info["args_display"]
 
-                                # Format result summary (only count info)
-                                # output_content might already be a dict or string
-                                if isinstance(output_content, dict):
-                                    result_summary = self._format_tool_result_from_dict(output_content, tool_name)
-                                elif isinstance(output_content, str):
-                                    result_summary = self._format_tool_result(output_content, tool_name)
-                                else:
-                                    # Log unexpected type and try to convert
-                                    logger.warning(f"Unexpected output_content type: {type(output_content)}")
-                                    result_summary = self._format_tool_result(str(output_content), tool_name)
+                                result_summary = summarize_tool_execution(
+                                    output_content,
+                                    tool_name,
+                                    tool_info["arguments"],
+                                )
 
                                 # Detect failure from FuncToolResult-shaped payload so the
                                 # CLI renders ✗ (and SSE reports FAILED) when the tool

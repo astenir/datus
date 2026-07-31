@@ -125,14 +125,27 @@ class TestBuildToolCallContent:
         """Produces IMessageContent with type='call-tool' and correct payload."""
         action = _make_action(
             action_id="tool-123",
-            input={"function_name": "search_table_metadata", "arguments": {"query": "revenue"}},
+            input={
+                "function_name": "search_table",
+                "arguments": {"query_text": "revenue", "database": "analytics"},
+            },
         )
         contents = _build_tool_call_content(action)
         assert len(contents) == 1
         assert contents[0].type == "call-tool"
         assert contents[0].payload["callToolId"] == "tool-123"
-        assert contents[0].payload["toolName"] == "search_table_metadata"
-        assert contents[0].payload["toolParams"] == {"query": "revenue"}
+        assert contents[0].payload["toolName"] == "search_table"
+        assert contents[0].payload["toolParams"] == {"query_text": "revenue", "database": "analytics"}
+        assert contents[0].payload["shortDesc"] == "revenue · analytics"
+
+    def test_unknown_tool_call_omits_short_description(self):
+        action = _make_action(
+            input={"function_name": "external_tool", "arguments": {"token": "secret"}},
+        )
+
+        contents = _build_tool_call_content(action)
+
+        assert "shortDesc" not in contents[0].payload
 
     def test_archived_arguments_marker_falls_back_to_empty_params(self):
         """A marker string in ``arguments`` (only possible in legacy sessions)
@@ -188,8 +201,8 @@ class TestBuildToolResultContent:
         assert contents[0].payload["shortDesc"] == "Found 10 rows"
         assert contents[0].payload["result"] == {"success": 1, "result": "data..."}
 
-    def test_zero_duration_when_end_time_missing(self):
-        """Duration is 0 when end_time is None."""
+    def test_omits_duration_when_end_time_missing(self):
+        """Unknown duration must not be encoded as a real zero-second run."""
         action = _make_action(
             action_id="complete_t",
             end_time=None,
@@ -197,7 +210,7 @@ class TestBuildToolResultContent:
             output={},
         )
         contents = _build_tool_result_content(action)
-        assert contents[0].payload["duration"] == 0.0
+        assert "duration" not in contents[0].payload
 
     def test_failed_tool_includes_error_from_output(self):
         """Failed tool action includes an error field from output.error."""
@@ -959,7 +972,7 @@ class TestActionToSSEEvent:
         content = event.data.payload.content[0]
         assert content.type == "call-tool-result"
         assert content.payload["result"] == {"success": 1, "result": "plain string result"}
-        assert content.payload["shortDesc"] == ""
+        assert content.payload["shortDesc"] == "plain string result"
 
     def test_user_role_excluded_by_default(self):
         """USER role returns None when include_user_message=False."""
@@ -1296,8 +1309,8 @@ class TestActionToSSEEvent:
         assert content.payload["subagentType"] == "unknown"
         assert content.payload["toolCount"] == 0
 
-    def test_subagent_complete_missing_times_gives_zero_duration(self):
-        """subagent_complete with missing end_time gives duration=0."""
+    def test_subagent_complete_missing_times_omits_duration(self):
+        """subagent_complete with unknown timing must not claim a zero duration."""
         action = _make_action(
             role=ActionRole.SYSTEM,
             status=ActionStatus.SUCCESS,
@@ -1307,7 +1320,7 @@ class TestActionToSSEEvent:
         )
         event = action_to_sse_event(action, event_id=16, message_id="msg-16")
         event = _assert_sse_event(event)
-        assert event.data.payload.content[0].payload["duration"] == 0.0
+        assert "duration" not in event.data.payload.content[0].payload
 
     def test_thinking_delta_first_creates_message(self):
         """First thinking_delta uses CREATE_MESSAGE SSE type."""

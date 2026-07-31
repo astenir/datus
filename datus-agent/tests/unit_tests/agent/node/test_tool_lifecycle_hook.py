@@ -101,6 +101,86 @@ async def test_marks_soft_failure_as_failed():
 
 
 @pytest.mark.asyncio
+async def test_execute_sql_completion_uses_sql_as_summary():
+    manager = ActionHistoryManager()
+    action_bus = SimpleNamespace(put=MagicMock())
+    node = SimpleNamespace(
+        _current_action_history=manager,
+        action_bus=action_bus,
+        _tool_completion_bus_active=True,
+    )
+    hook = ToolLifecycleHook(node)
+    context = _context()
+    context.tool_name = "execute_sql"
+    context.tool_arguments = '{"sql":"SELECT * FROM fund_positions"}'
+
+    await hook.on_tool_end(
+        context,
+        None,
+        SimpleNamespace(name="execute_sql"),
+        {"success": 1, "result": {"original_rows": 2, "column_count": 3}},
+    )
+
+    completion = manager.find_action_by_id("complete_call-1")
+    assert completion is not None
+    assert completion.output["summary"] == "SELECT * FROM fund_positions"
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_failure_uses_error_as_summary():
+    manager = ActionHistoryManager()
+    action_bus = SimpleNamespace(put=MagicMock())
+    node = SimpleNamespace(
+        _current_action_history=manager,
+        action_bus=action_bus,
+        _tool_completion_bus_active=True,
+    )
+    hook = ToolLifecycleHook(node)
+    context = _context()
+    context.tool_name = "execute_sql"
+    context.tool_arguments = '{"sql":"SELECT * FROM missing_table"}'
+
+    await hook.on_tool_end(
+        context,
+        None,
+        SimpleNamespace(name="execute_sql"),
+        {"success": 0, "error": "no such table: missing_table"},
+    )
+
+    completion = manager.find_action_by_id("complete_call-1")
+    assert completion is not None
+    assert completion.status == ActionStatus.FAILED
+    assert completion.output["summary"].startswith("Failed: no such")
+    assert "SELECT" not in completion.output["summary"]
+
+
+@pytest.mark.asyncio
+async def test_input_first_tool_completion_keeps_invocation_summary():
+    manager = ActionHistoryManager()
+    action_bus = SimpleNamespace(put=MagicMock())
+    node = SimpleNamespace(
+        _current_action_history=manager,
+        action_bus=action_bus,
+        _tool_completion_bus_active=True,
+    )
+    hook = ToolLifecycleHook(node)
+    context = _context()
+    context.tool_name = "grep"
+    context.tool_arguments = '{"pattern":"shortDesc","path":"datus-web/src","include":"*.ts"}'
+
+    await hook.on_tool_end(
+        context,
+        None,
+        SimpleNamespace(name="grep"),
+        {"success": 1, "result": {"matches": [{"path": "a.ts"}]}},
+    )
+
+    completion = manager.find_action_by_id("complete_call-1")
+    assert completion is not None
+    assert completion.output["summary"] == "shortDesc · datus-web/src · *.ts"
+
+
+@pytest.mark.asyncio
 async def test_does_not_publish_or_suppress_without_live_action_bus():
     manager = ActionHistoryManager()
     action_bus = SimpleNamespace(put=MagicMock())

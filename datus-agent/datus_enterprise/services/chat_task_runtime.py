@@ -1,18 +1,24 @@
 """Downstream chat-task limits and stateless buffer helpers."""
 
 import asyncio
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Type, TypeAlias
 
-from datus.api.models.downstream import ChatSessionTerminalEvent, DashboardEditSession, ReportEditSession
+from datus.api.models.downstream import (
+    ChatSessionTerminalEvent,
+    ChatSessionToolExecutionEvent,
+    DashboardEditSession,
+    ReportEditSession,
+)
 from datus.configuration.agent_config import AgentConfig
 from datus.models.session_manager import SessionManager, session_scope_from_user_id
 from datus.schemas.action_history import ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
-from datus.utils.time_utils import now_utc_iso
+from datus.utils.time_utils import now_utc_iso, to_utc_iso
 
 logger = get_logger(__name__)
 
@@ -128,6 +134,67 @@ async def persist_terminal_event(
         return
     task.terminal_event_persisted = True
     task.terminal_event_type = event_type
+
+
+async def persist_tool_execution_event(
+    *,
+    task: Any,
+    action: Any,
+    agent_config: AgentConfig,
+    user_id: Optional[str],
+    project_id: str,
+    session_body_store: Any,
+    session_manager_type: Type[SessionManager] = SessionManager,
+) -> None:
+    """Best-effort persistence of measured tool timing for canonical history."""
+
+    if not task.session_established or action.role != ActionRole.TOOL or action.status == ActionStatus.PROCESSING:
+        return
+    start_time = action.start_time
+    end_time = action.end_time
+    if start_time is None or end_time is None:
+        return
+    try:
+        duration = (end_time - start_time).total_seconds()
+    except (OverflowError, TypeError):
+        return
+    if not math.isfinite(duration) or duration < 0:
+        return
+    started_at = to_utc_iso(start_time)
+    completed_at = to_utc_iso(end_time)
+    if not started_at or not completed_at:
+        return
+
+    call_tool_id = action.action_id.removeprefix("complete_")
+    tool_event = ChatSessionToolExecutionEvent(
+        event_id=f"{task.run_id}-tool-{call_tool_id}",
+        call_tool_id=call_tool_id,
+        duration=duration,
+        started_at=started_at,
+        completed_at=completed_at,
+        depth=max(int(getattr(action, "depth", 0) or 0), 0),
+        parent_action_id=getattr(action, "parent_action_id", None),
+        created_at=completed_at,
+    )
+    base_dir = getattr(agent_config, "session_dir", None) or str(
+        get_path_manager(agent_config=agent_config).sessions_dir
+    )
+    session_manager = session_manager_type(
+        session_dir=base_dir,
+        scope=session_scope_from_user_id(user_id),
+        agent_config=agent_config,
+        project_id=project_id,
+        body_store=session_body_store,
+    )
+    try:
+        await session_manager.append_tool_execution_event_async(task.session_id, tool_event)
+    except Exception:
+        logger.warning(
+            "Failed to persist tool execution event for session %s and call %s",
+            task.session_id,
+            call_tool_id,
+            exc_info=True,
+        )
 
 
 def _positive_int(value: Any, default: int) -> int:

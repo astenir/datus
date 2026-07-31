@@ -22,7 +22,9 @@ import pytest
 
 from datus.schemas.tool_summary import (
     FS_TOOLS_NO_CLIP,
+    INPUT_SUMMARY_MAX_CHARS,
     SUMMARY_TEXT_MAX_CHARS,
+    TOOL_INPUT_SUMMARY_REGISTRY,
     TOOL_SUMMARY_REGISTRY,
     ToolSummaryRegistry,
     detect_tool_failure,
@@ -32,6 +34,8 @@ from datus.schemas.tool_summary import (
     is_empty_result,
     looks_like_failure,
     pluralize,
+    summarize_tool_execution,
+    summarize_tool_input,
     truncate_text,
 )
 
@@ -96,6 +100,155 @@ class TestPublicHelpers:
     def test_detect_tool_failure_other_types(self):
         assert detect_tool_failure(None) is False
         assert detect_tool_failure([{"success": 0}]) is False
+
+    def test_sql_execution_summary_prefers_statement_over_row_count(self):
+        output = {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
+
+        assert (
+            summarize_tool_execution(
+                output,
+                "db_tools.execute_sql",
+                {"sql": "  SELECT * FROM fund_positions  "},
+            )
+            == "SELECT * FROM fund_positions"
+        )
+
+    def test_sql_execution_summary_prefers_failure_over_statement(self):
+        summary = summarize_tool_execution(
+            {"success": 0, "error": "no such table: missing_table"},
+            "execute_sql",
+            {"sql": "SELECT * FROM missing_table"},
+        )
+
+        assert summary.startswith("Failed: no such")
+        assert "SELECT" not in summary
+
+    def test_sql_execution_summary_falls_back_when_statement_is_missing(self):
+        output = {"success": 1, "result": {"original_rows": 2, "column_count": 3}}
+
+        assert summarize_tool_execution(output, "execute_sql") == "2×3 rows"
+
+    @pytest.mark.parametrize(
+        ("tool_name", "arguments", "expected"),
+        [
+            (
+                "describe_table",
+                {
+                    "datasource": "warehouse",
+                    "catalog": "analytics",
+                    "database": "sales",
+                    "schema_name": "public",
+                    "table_name": "orders",
+                },
+                "warehouse · analytics.sales.public.orders",
+            ),
+            ("list_tables", {"database": "sales", "schema_name": "public"}, "sales.public"),
+            ("glob", {"pattern": "**/*.sql", "path": "subject"}, "**/*.sql · subject"),
+            (
+                "grep",
+                {"pattern": "fund_positions", "path": "src", "include": "*.py"},
+                "fund_positions · src · *.py",
+            ),
+            ("get_run_log", {"job_id": "daily-sales", "run_id": "run-42"}, "daily-sales · run-42"),
+            (
+                "query_metrics",
+                {
+                    "metrics": ["revenue", "orders"],
+                    "dimensions": ["region"],
+                    "time_start": "2026-07-01",
+                    "time_end": "2026-07-31",
+                },
+                "revenue、orders · region · 2026-07-01～2026-07-31",
+            ),
+            ("task", {"type": "gen_sql", "prompt": "查询区域收入"}, "gen_sql · 查询区域收入"),
+        ],
+    )
+    def test_input_summary_uses_explicit_tool_fields(self, tool_name, arguments, expected):
+        assert summarize_tool_input(tool_name, arguments) == expected
+
+    def test_web_fetch_summary_removes_credentials_query_and_fragment(self):
+        assert (
+            summarize_tool_input(
+                "web_fetch",
+                {"url": "https://alice:secret@docs.example.com:8443/api/reference?token=secret#part"},
+            )
+            == "docs.example.com:8443/api/reference"
+        )
+
+    def test_web_fetch_summary_fails_closed_for_malformed_url(self):
+        summary = summarize_tool_input(
+            "web_fetch",
+            {"url": "https://user:secret@[invalid-host/path?token=secret"},
+        )
+
+        assert summary == ""
+
+    def test_web_fetch_summary_removes_userinfo_from_scheme_less_url(self):
+        summary = summarize_tool_input(
+            "web_fetch",
+            {"url": "user:secret@docs.example.com/api/reference?token=secret"},
+        )
+
+        assert summary == "docs.example.com/api/reference"
+
+    def test_non_sql_input_summary_is_bounded_after_fields_are_joined(self):
+        summary = summarize_tool_input(
+            "get_document",
+            {
+                "platform": "p" * 240,
+                "titles": ["t" * 80, "u" * 80, "v" * 80],
+                "version": "v" * 240,
+            },
+        )
+
+        assert len(summary) == INPUT_SUMMARY_MAX_CHARS
+        assert summary.endswith("…")
+
+    def test_sql_input_summary_keeps_full_statement(self):
+        sql = "SELECT " + "x" * INPUT_SUMMARY_MAX_CHARS
+
+        assert summarize_tool_input("execute_sql", {"sql": sql}) == sql
+
+    def test_memory_summary_reports_shape_without_exposing_content(self):
+        summary = summarize_tool_input("add_memory", {"content": "private customer details"})
+
+        assert summary == "add memory · 24 chars"
+        assert "customer" not in summary
+
+    def test_unknown_tool_does_not_guess_the_first_string_argument(self):
+        assert summarize_tool_input("external_mcp_tool", {"token": "secret", "prompt": "search"}) == ""
+
+    def test_input_first_execution_summary_is_stable_after_success(self):
+        output = {"success": 1, "result": {"files": ["a.sql", "b.sql"]}}
+
+        assert summarize_tool_execution(output, "glob", {"pattern": "**/*.sql", "path": "subject"}) == (
+            "**/*.sql · subject"
+        )
+
+    def test_hybrid_execution_summary_keeps_target_and_appends_result(self):
+        output = {"success": 1, "result": {"valid": False, "issues": ["missing metric"]}}
+
+        assert summarize_tool_execution(output, "validate_semantic", {"scope": "metrics"}) == "metrics · 1 issue"
+
+    def test_output_first_tool_keeps_result_summary(self):
+        output = {"success": 1, "result": {"items": [{"id": "a"}], "total": 1}}
+
+        assert summarize_tool_execution(output, "list_scheduler_jobs", {"limit": 20}) == "1 job"
+
+    def test_input_registry_covers_all_declared_input_and_hybrid_tools(self):
+        # This count deliberately excludes the ten output-first names. It pins
+        # the explicit allow-list so new generic string guessing cannot replace
+        # per-tool review.
+        assert len(TOOL_INPUT_SUMMARY_REGISTRY.names()) == 98
+        assert set(TOOL_SUMMARY_REGISTRY.names()) - set(TOOL_INPUT_SUMMARY_REGISTRY.names()) == {
+            "generate_sql_summary_id",
+            "get_current_date",
+            "list_bi_databases",
+            "list_scheduler_connections",
+            "list_scheduler_jobs",
+            "list_subject_tree",
+            "todo_list",
+        }
 
     def test_detect_tool_failure_real_functoolresult_contract(self):
         """Contract test: the exact payload model backends receive from a
@@ -791,6 +944,19 @@ class TestDateAndSessionFormatters:
             {"success": 1, "result": {"extracted_dates": [1, 2]}},
         )
         assert out == "parsed 2 dates"
+
+    def test_parse_temporal_expressions_prefers_resolved_range(self):
+        out = _summarize(
+            "parse_temporal_expressions",
+            {
+                "success": 1,
+                "result": {
+                    "extracted_dates": [{"expression": "last month", "start": "2026-06-01", "end": "2026-06-30"}]
+                },
+            },
+        )
+
+        assert out == "2026-06-01～06-30"
 
     def test_get_current_date(self):
         out = _summarize("get_current_date", {"success": 1, "result": {"current_date": "2026-04-25"}})

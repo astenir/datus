@@ -49,6 +49,7 @@ export type ToolCallBlock = {
   callToolId?: string;
   toolName: string;
   params: unknown;
+  shortDesc?: string;
   proxied?: boolean;
   childMessages?: readonly ToolChildMessage[];
 };
@@ -334,6 +335,8 @@ export type UserInteractionInput = {
   interaction_key: string;
   input: string[][];
 };
+
+export type InsertMessageData = components["schemas"]["InsertMessageData"];
 
 // ─── Subject / Knowledge Explorer ────────────────────────────────────────────
 

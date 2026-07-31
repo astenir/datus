@@ -8,6 +8,7 @@ import type {
   CompactSessionData,
   KbUploadCreateInput,
   KbUploadRecord,
+  InsertMessageData,
   SuccessStoryInput,
   SuccessStoryResult,
   UserInteractionInput,
@@ -58,7 +59,7 @@ export const chatApi = {
     return apiResult(baseUrl, "/api/v1/chat/user_interaction", jsonBody(input));
   },
 
-  insert(baseUrl: string, sessionId: string, message: string): Promise<unknown> {
+  insert(baseUrl: string, sessionId: string, message: string): Promise<InsertMessageData | null> {
     return apiResult(baseUrl, "/api/v1/chat/insert", jsonBody({ session_id: sessionId, message }));
   },
 

@@ -129,6 +129,22 @@ class TestActionToHistorySseEvent:
         )
         assert action_to_history_sse_event(action, event_id=1, message_id="msg-1") is None
 
+    def test_tool_result_does_not_infer_duration_from_message_timestamps(self):
+        action = _make_action(
+            action_id="complete_tool-call-1",
+            role=ActionRole.TOOL,
+            status=ActionStatus.SUCCESS,
+            action_type="list_tables",
+            input={"function_name": "list_tables", "arguments": {}},
+            output={"success": 1, "result": ["orders"]},
+        )
+
+        event = _assert_sse_event(action_to_history_sse_event(action, event_id=1, message_id="msg-1"))
+
+        content = event.data.payload.content[0]
+        assert content.type == "call-tool-result"
+        assert "duration" not in content.payload
+
     def test_cancelled_ask_user_result_is_read_only_summary(self):
         action = _make_action(
             role=ActionRole.TOOL,

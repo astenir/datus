@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from datus.api.models.downstream import ChatSessionSubagentEvent, ChatSessionTerminalEvent
+from datus.api.models.downstream import (
+    ChatSessionSubagentEvent,
+    ChatSessionTerminalEvent,
+    ChatSessionToolExecutionEvent,
+)
 from datus.api.services.chat_admission import ChatCapacityError
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
@@ -113,6 +117,169 @@ class TestChatServiceListSessions:
 
 
 class TestChatServiceGetHistory:
+    def test_tool_duration_round_trips_through_display_sidecar(self, chat_svc):
+        session_id = "history-tool-duration"
+        call_id = "tool-call-1"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            (
+                {"type": "function_call", "call_id": call_id, "name": "list_tables", "arguments": "{}"},
+                "2026-01-01T00:00:01",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps({"success": 1, "result": ["orders"]}),
+                },
+                "2026-01-01T00:00:01",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, json.dumps(message), created_at) for message, created_at in rows],
+            )
+
+        without_sidecar = chat_svc.get_history(session_id)
+        result_content = next(
+            content
+            for message in without_sidecar.data.messages
+            for content in message.content
+            if content.type == "call-tool-result"
+        )
+        assert "duration" not in result_content.payload
+
+        event = ChatSessionToolExecutionEvent(
+            event_id="run-1-tool-tool-call-1",
+            call_tool_id=call_id,
+            duration=0.375,
+            started_at="2026-01-01T00:00:00.625Z",
+            completed_at="2026-01-01T00:00:01Z",
+        )
+        sm.append_tool_execution_event(session_id, event)
+        sm.append_tool_execution_event(session_id, event)
+
+        with_sidecar = chat_svc.get_history(session_id)
+        result_content = next(
+            content
+            for message in with_sidecar.data.messages
+            for content in message.content
+            if content.type == "call-tool-result"
+        )
+        assert result_content.payload["duration"] == 0.375
+        assert len(sm.get_tool_execution_events(session_id)) == 1
+        assert len(sm.get_session_messages(session_id)) == 1
+
+    def test_history_rebuilds_sql_statement_summary_and_failure(self, chat_svc):
+        session_id = "history-sql-summary"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            (
+                {
+                    "type": "function_call",
+                    "call_id": "sql-ok",
+                    "name": "execute_sql",
+                    "arguments": json.dumps({"sql": "SELECT * FROM fund_positions"}),
+                },
+                "2026-01-01T00:00:01",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": "sql-ok",
+                    "output": json.dumps({"success": 1, "result": {"original_rows": 2, "column_count": 3}}),
+                },
+                "2026-01-01T00:00:02",
+            ),
+            (
+                {
+                    "type": "function_call",
+                    "call_id": "sql-failed",
+                    "name": "execute_sql",
+                    "arguments": json.dumps({"sql": "SELECT * FROM missing_table"}),
+                },
+                "2026-01-01T00:00:03",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": "sql-failed",
+                    "output": json.dumps({"success": 0, "error": "no such table: missing_table"}),
+                },
+                "2026-01-01T00:00:04",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, json.dumps(message), created_at) for message, created_at in rows],
+            )
+
+        result = chat_svc.get_history(session_id)
+        tool_results = {
+            content.payload["callToolId"]: content.payload
+            for message in result.data.messages
+            for content in message.content
+            if content.type == "call-tool-result"
+        }
+
+        assert tool_results["sql-ok"]["shortDesc"] == "SELECT * FROM fund_positions"
+        assert tool_results["sql-ok"]["result"]["success"] == 1
+        assert tool_results["sql-failed"]["shortDesc"].startswith("Failed: no such")
+        assert tool_results["sql-failed"]["result"]["success"] == 0
+        assert tool_results["sql-failed"]["error"] == "no such table: missing_table"
+
+    def test_history_rebuilds_input_first_tool_summary(self, chat_svc):
+        session_id = "history-input-first-summary"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        rows = [
+            (
+                {
+                    "type": "function_call",
+                    "call_id": "glob-call",
+                    "name": "glob",
+                    "arguments": json.dumps({"pattern": "**/*.sql", "path": "subject"}),
+                },
+                "2026-01-01T00:00:01",
+            ),
+            (
+                {
+                    "type": "function_call_output",
+                    "call_id": "glob-call",
+                    "output": json.dumps(
+                        {
+                            "success": 1,
+                            "result": ["subject/orders.sql", "subject/revenue.sql"],
+                        }
+                    ),
+                },
+                "2026-01-01T00:00:02",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, json.dumps(message), created_at) for message, created_at in rows],
+            )
+
+        result = chat_svc.get_history(session_id)
+        tool_result = next(
+            content.payload
+            for message in result.data.messages
+            for content in message.content
+            if content.type == "call-tool-result"
+        )
+
+        assert tool_result["callToolId"] == "glob-call"
+        assert tool_result["shortDesc"] == "**/*.sql · subject"
+
     def test_history_keeps_provider_reasoning_separate_from_final_answer(self, chat_svc):
         """Reasoning rebuilds as thinking while assistant output rebuilds as markdown."""
         import json
@@ -414,6 +581,28 @@ class TestChatServiceGetHistory:
                 created_at="2026-01-01T00:00:01Z",
             ),
         )
+        parent_manager.append_tool_execution_event(
+            parent_session_id,
+            ChatSessionToolExecutionEvent(
+                event_id="run-parent-tool-task-call-1",
+                call_tool_id=parent_call_id,
+                duration=4.25,
+                started_at="2026-01-01T00:00:00.750Z",
+                completed_at="2026-01-01T00:00:05Z",
+            ),
+        )
+        parent_manager.append_tool_execution_event(
+            parent_session_id,
+            ChatSessionToolExecutionEvent(
+                event_id="run-parent-tool-child-tool-call-1",
+                call_tool_id="child-tool-call-1",
+                duration=0.42,
+                started_at="2026-01-01T00:00:02Z",
+                completed_at="2026-01-01T00:00:02.420Z",
+                depth=1,
+                parent_action_id=parent_call_id,
+            ),
+        )
 
         child_dir = os.path.join(chat_svc._session_dir, parent_session_id)
         child_manager = SessionManager(session_dir=child_dir)
@@ -488,6 +677,22 @@ class TestChatServiceGetHistory:
         )
         assert completion.payload["subagentType"] == "gen_sql"
         assert completion.payload["toolCount"] == 1
+        assert completion.payload["duration"] == 4.25
+        parent_result = next(
+            content
+            for message in result.data.messages
+            if message.depth == 0
+            for content in message.content
+            if content.type == "call-tool-result" and content.payload.get("callToolId") == parent_call_id
+        )
+        assert parent_result.payload["duration"] == 4.25
+        child_result = next(
+            content
+            for message in child_messages
+            for content in message.content
+            if content.type == "call-tool-result" and content.payload.get("callToolId") == "child-tool-call-1"
+        )
+        assert child_result.payload["duration"] == 0.42
 
     def test_get_history_restores_interrupted_subagent_from_sidecar(self, chat_svc):
         """A delegation sidecar anchors child history before task() returns."""
@@ -743,6 +948,17 @@ class TestChatServiceGetHistory:
                 "created_at": "2026-07-22T14:46:15Z",
             },
             {
+                "event_id": "run-async-tool-child-list-metrics-async",
+                "event_type": "tool_execution",
+                "call_tool_id": "child-list-metrics-async",
+                "duration": 0.31,
+                "started_at": "2026-07-22T14:46:16.690Z",
+                "completed_at": "2026-07-22T14:46:17Z",
+                "depth": 1,
+                "parent_action_id": parent_call_id,
+                "created_at": "2026-07-22T14:46:17Z",
+            },
+            {
                 "event_id": "run-cancelled-async-terminal",
                 "event_type": "cancelled",
                 "error": "本轮对话已停止。已完成的内容仍会保留，你可以继续发送新的消息。",
@@ -809,6 +1025,13 @@ class TestChatServiceGetHistory:
             for content in message.content
             if content.type == "thinking"
         )
+        child_result = next(
+            content
+            for message in child_messages
+            for content in message.content
+            if content.type == "call-tool-result" and content.payload.get("callToolId") == "child-list-metrics-async"
+        )
+        assert child_result.payload["duration"] == 0.31
         assert result.data.messages[-1].content[0].payload["error_type"] == "CHAT_CANCELLED"
 
     def test_terminal_sidecar_failure_does_not_hide_sdk_history(self, chat_svc):

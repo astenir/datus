@@ -30,6 +30,7 @@ from types import SimpleNamespace
 import pytest
 from agents.extensions.memory import AdvancedSQLiteSession
 
+from datus.api.services.action_history_sse_converter import action_to_history_sse_event
 from datus.models.session_manager import (
     SessionManager,
     extract_agent_from_session_id,
@@ -1315,6 +1316,75 @@ class TestGetSessionMessages:
         assert success_by_call_id[call_id_a].input["arguments"] == args_a
         assert success_by_call_id[call_id_b].input["arguments"] == args_b
 
+    def test_function_call_output_rebuilds_sql_summary_and_failure_status(self, sm):
+        rows = [
+            (
+                json.dumps({"role": "user", "content": "go"}),
+                "2026-01-01T00:00:00",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call",
+                        "call_id": "sql-ok",
+                        "name": "execute_sql",
+                        "arguments": json.dumps({"sql": "SELECT * FROM fund_positions"}),
+                    }
+                ),
+                "2026-01-01T00:00:01",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call_output",
+                        "call_id": "sql-ok",
+                        "output": json.dumps({"success": 1, "result": {"original_rows": 2, "column_count": 3}}),
+                    }
+                ),
+                "2026-01-01T00:00:02",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call",
+                        "call_id": "sql-failed",
+                        "name": "execute_sql",
+                        "arguments": json.dumps({"sql": "SELECT * FROM missing_table"}),
+                    }
+                ),
+                "2026-01-01T00:00:03",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call_output",
+                        "call_id": "sql-failed",
+                        "output": json.dumps({"success": 0, "error": "no such table: missing_table"}),
+                    }
+                ),
+                "2026-01-01T00:00:04",
+            ),
+        ]
+
+        messages = sm._message_rows_to_raw_messages(rows)
+        actions = messages[-1]["actions"]
+        completions = {
+            action.action_id.removeprefix("complete_"): action
+            for action in actions
+            if action.action_id.startswith("complete_")
+        }
+
+        assert completions["sql-ok"].status == ActionStatus.SUCCESS
+        assert completions["sql-ok"].output["result"]["original_rows"] == 2
+        assert completions["sql-failed"].status == ActionStatus.FAILED
+
+        ok_event = action_to_history_sse_event(completions["sql-ok"], 1, "complete_sql-ok")
+        failed_event = action_to_history_sse_event(completions["sql-failed"], 2, "complete_sql-failed")
+        assert ok_event is not None
+        assert failed_event is not None
+        assert ok_event.data.payload.content[0].payload["shortDesc"] == "SELECT * FROM fund_positions"
+        assert failed_event.data.payload.content[0].payload["shortDesc"].startswith("Failed: no such")
+
     def test_anthropic_native_text_blocks_resume_show_content(self, sm):
         """Claude OAuth/native path persists assistant turns as ``type=text``.
 
@@ -1426,6 +1496,9 @@ class TestGetSessionMessages:
         complete = next(a for a in actions if a.action_id == "complete_toolu_1")
         assert complete.status == ActionStatus.SUCCESS
         assert complete.output == {"rows": 30000}
+        event = action_to_history_sse_event(complete, 1, complete.action_id)
+        assert event is not None
+        assert event.data.payload.content[0].payload["shortDesc"] == "SELECT COUNT(*) FROM t"
 
     def test_native_server_web_tool_result_resume(self, sm):
         """A ``server_tool_use`` block plus inline ``web_search_tool_result`` in
@@ -1549,6 +1622,28 @@ class TestNativeToolHelpers:
         sm._restore_native_tool_call({"id": "t1", "name": "fetch", "input": {}}, actions, [], None)
         sm._attach_native_tool_result(actions, "t1", {"nested": "value"}, None)
         assert actions[-1].output == {"nested": "value"}
+
+    def test_attach_native_tool_result_restores_failure_status(self, sm):
+        actions: list = []
+        sm._restore_native_tool_call(
+            {
+                "id": "sql-native",
+                "name": "execute_sql",
+                "input": {"sql": "SELECT * FROM fund_positions"},
+            },
+            actions,
+            [],
+            None,
+        )
+        sm._attach_native_tool_result(
+            actions,
+            "sql-native",
+            {"success": 0, "error": "database unavailable"},
+            None,
+        )
+
+        completion = actions[-1]
+        assert completion.status == ActionStatus.FAILED
 
 
 # ===========================================================================
