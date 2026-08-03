@@ -575,6 +575,8 @@ def test_semantic_model_invalid_body_does_not_resolve_datus_service(monkeypatch,
         response = client.post(path, json=[])
 
     assert response.status_code == 422
+
+
 class TestGetTableDetail:
     @pytest.mark.asyncio
     async def test_delegates_to_service(self):
