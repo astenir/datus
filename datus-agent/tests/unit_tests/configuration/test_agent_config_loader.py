@@ -279,6 +279,76 @@ class TestApplyProjectOverride:
             _apply_project_override(agent_raw)
         assert agent_raw["project_name"] == "my_proj"
 
+    @pytest.mark.parametrize("value", [True, False])
+    def test_sandbox_override_sets_bash_sandbox_enabled(self, value):
+        agent_raw = self._base_raw()
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sandbox=value),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["bash"]["sandbox"]["enabled"] is value
+
+    def test_sandbox_override_preserves_existing_bash_section(self):
+        # Only ``enabled`` is overridden; allow_read/allow_write and sibling
+        # bash keys from the global agent.yml must survive.
+        agent_raw = self._base_raw()
+        agent_raw["bash"] = {
+            "enabled": True,
+            "allowed_patterns": ["datus*"],
+            "sandbox": {"enabled": False, "allow_read": ["/data"]},
+        }
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sandbox=True),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["bash"]["sandbox"]["enabled"] is True
+        assert agent_raw["bash"]["sandbox"]["allow_read"] == ["/data"]
+        assert agent_raw["bash"]["allowed_patterns"] == ["datus*"]
+        assert agent_raw["bash"]["enabled"] is True
+
+    @pytest.mark.parametrize("mode", ["strict", "normal"])
+    def test_sandbox_mode_string_enables_and_pins_mode(self, mode):
+        agent_raw = self._base_raw()
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sandbox=mode),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["bash"]["sandbox"]["enabled"] is True
+        assert agent_raw["bash"]["sandbox"]["mode"] == mode
+
+    def test_sandbox_bool_does_not_touch_mode(self):
+        agent_raw = self._base_raw()
+        agent_raw["bash"] = {"sandbox": {"enabled": False, "mode": "strict"}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sandbox=True),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["bash"]["sandbox"]["enabled"] is True
+        assert agent_raw["bash"]["sandbox"]["mode"] == "strict"
+
+    def test_sandbox_override_tolerates_malformed_bash_section(self):
+        agent_raw = self._base_raw()
+        agent_raw["bash"] = "not-a-mapping"
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sandbox=True),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["bash"]["sandbox"]["enabled"] is True
+
+    def test_no_sandbox_override_leaves_bash_untouched(self):
+        agent_raw = self._base_raw()
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(project_name="p"),
+        ):
+            _apply_project_override(agent_raw)
+        assert "bash" not in agent_raw
+
     def test_valid_default_datasource_flips_default_flags(self):
         """default_datasource overlay is applied by flipping datasources[*].default
         so AgentConfig.services.default_datasource resolves to the override target
@@ -677,6 +747,40 @@ class TestApplyProjectOverrideBashAllow:
         assert "project_bash_allow" not in agent_raw
 
 
+class TestApplyProjectOverrideSqlAllow:
+    """sql_allow rides as a raw grant list only — never merged into permissions."""
+
+    def test_sql_allow_forwarded_as_raw_grant_list(self):
+        agent_raw = {"target": "openai", "models": {"openai": {}}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sql_allow=["insert", "drop"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["project_sql_allow"] == ["insert", "drop"]
+
+    def test_sql_allow_does_not_touch_permissions(self):
+        """Unlike bash_allow, SQL grants act only through the exact-match
+        grant set — the permissions section must stay untouched."""
+        agent_raw = {"permissions": {"profile": "normal"}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(sql_allow=["drop"]),
+        ):
+            _apply_project_override(agent_raw)
+        assert agent_raw["permissions"] == {"profile": "normal"}
+        assert agent_raw["project_sql_allow"] == ["drop"]
+
+    def test_no_sql_allow_leaves_grant_list_unset(self):
+        agent_raw = {"target": "openai", "models": {"openai": {}}}
+        with patch(
+            "datus.configuration.agent_config_loader.load_project_override",
+            return_value=ProjectOverride(project_name="p"),
+        ):
+            _apply_project_override(agent_raw)
+        assert "project_sql_allow" not in agent_raw
+
+
 class TestPermissionModeCliOverride:
     """--permission-mode kwarg reshapes permissions.profile at load time."""
 
@@ -706,3 +810,47 @@ class TestPermissionModeCliOverride:
 
         config = load_agent_config(reload=True, config=str(cfg), permission_mode="auto")
         assert config.active_profile_name == "auto"
+
+
+# ---------------------------------------------------------------------------
+# get_plugin_paths
+# ---------------------------------------------------------------------------
+
+
+class TestGetPluginPaths:
+    """``get_plugin_paths`` reads ``agent.plugin_paths`` without an AgentConfig."""
+
+    def test_reads_string_entries(self, tmp_path):
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text(yaml.safe_dump({"agent": {"plugin_paths": ["/opt/plugins/foo", "  ~/dev/bar ", "", 42, None]}}))
+        assert get_plugin_paths(str(cfg)) == ["/opt/plugins/foo", "~/dev/bar"]
+
+    def test_missing_key_returns_empty(self, tmp_path):
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text(yaml.safe_dump({"agent": {}}))
+        assert get_plugin_paths(str(cfg)) == []
+
+    def test_non_list_value_returns_empty(self, tmp_path):
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text(yaml.safe_dump({"agent": {"plugin_paths": "/opt/plugins/foo"}}))
+        assert get_plugin_paths(str(cfg)) == []
+
+    def test_unreadable_config_returns_empty(self, tmp_path, monkeypatch):
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        monkeypatch.chdir(tmp_path)  # no conf/agent.yml anywhere
+        with patch("datus.configuration.agent_config_loader.Path.home", return_value=tmp_path / "noexist"):
+            assert get_plugin_paths() == []
+
+    def test_invalid_yaml_returns_empty(self, tmp_path):
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        cfg = tmp_path / "agent.yml"
+        cfg.write_text("agent: [unbalanced")
+        assert get_plugin_paths(str(cfg)) == []

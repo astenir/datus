@@ -699,6 +699,7 @@ class TestSessionOwnerAccess:
         )
         task = TestInsertMessageEndpoint._make_task_with_queue()
         task.owner_user_id = "alice"
+        task.accepting_inserts = True
         svc = _mock_svc(task=task)
         svc.project_id = "project-1"
         svc.chat.session_exists_async = AsyncMock(return_value=False)
@@ -711,7 +712,7 @@ class TestSessionOwnerAccess:
 
         assert result.success is False
         assert result.errorCode == "SESSION_FORBIDDEN"
-        assert task.node.pending_input_queue.snapshot() == []
+        assert task.pending_input_queue.snapshot() == []
 
     @pytest.mark.asyncio
     async def test_insert_allows_admin_session_permission_for_non_owner(self, monkeypatch):
@@ -727,6 +728,7 @@ class TestSessionOwnerAccess:
         )
         task = TestInsertMessageEndpoint._make_task_with_queue()
         task.owner_user_id = "alice"
+        task.accepting_inserts = True
         svc = _mock_svc(task=task)
         svc.project_id = "project-1"
 
@@ -737,7 +739,7 @@ class TestSessionOwnerAccess:
         )
 
         assert result.success is True
-        assert task.node.pending_input_queue.snapshot() == ["hello"]
+        assert task.pending_input_queue.snapshot() == ["hello"]
 
 
 class TestSubmitToolResultEndpoint:
@@ -788,11 +790,12 @@ class TestInsertMessageEndpoint:
         return InsertMessageInput(session_id=session_id, message=message)
 
     @staticmethod
-    def _make_task_with_queue(queue=None):
+    def _make_task_with_queue(queue=None, status="running"):
         from datus.cli.execution_state import PendingInputQueue
 
         task = MagicMock()
-        task.node.pending_input_queue = queue if queue is not None else PendingInputQueue()
+        task.status = status
+        task.pending_input_queue = queue if queue is not None else PendingInputQueue()
         return task
 
 

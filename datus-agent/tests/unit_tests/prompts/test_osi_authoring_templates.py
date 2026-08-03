@@ -18,8 +18,6 @@ COMMON_VARS = {
     "knowledge_base_dir": "/kb",
     "semantic_model_dir": "/kb/semantic_models/duckdb",
     "kind_subdir": "subject/semantic_models/duckdb",
-    "default_osi_semantic_model_name": "sales_domain",
-    "default_osi_semantic_model_file": "subject/semantic_models/duckdb/sales_domain.yml",
 }
 
 
@@ -52,14 +50,23 @@ def test_semantic_model_template_metricflow_mode():
     assert "OSI expression dialect" not in text
     assert '"semantic_model_files"' in text
     assert "validate_semantic" in text
-    assert "end_semantic_model_generation" in text
+    assert "publish_semantic_model" in text
 
 
 def test_semantic_model_template_osi_mode():
     text = _render("gen_semantic_model_system", "osi")
     assert "OSI (Open Semantic Interchange) core schema" in text
     assert "never write backend YAML" in text
-    assert "Target semantic model file: `subject/semantic_models/duckdb/sales_domain.yml`" in text
+    assert "Semantic model target is not planned yet" in text
+    assert "create it with `write_file`" not in text
+    assert "Call `upsert_osi_datasets` with the first non-empty dataset batch" in text
+    assert "It creates a missing target as a complete valid document" in text
+    assert "Use `edit_file` only for relationships or model metadata" in text
+    assert "repair datasets and fields through `upsert_osi_datasets`" in text
+    assert "Never create an empty semantic-model shell" in text
+    assert "Dimension tables never participate in the name" in text
+    assert "without a custom `checks` subset" in text
+    assert "check_semantic_object_exists" not in text
     assert '"semantic_model_files"' in text  # same publish contract as metricflow
 
 
@@ -126,7 +133,7 @@ def test_metrics_template_metricflow_mode_contract():
     assert '"metric_file"' in text
     assert "locked_metadata.tags" in text
     assert "OSI expression dialect" not in text
-    assert "end_metric_generation" in text
+    assert "publish_metrics" in text
 
 
 def test_metrics_template_osi_mode_contract():
@@ -137,6 +144,15 @@ def test_metrics_template_osi_mode_contract():
     assert "subject_path" in text
     assert "locked_metadata.tags" not in text.split("Record the classification")[1].split("\n")[0]
     assert "Covered by an existing base metric" in text
+    assert "bind_osi_semantic_model_target" in text
+    assert "list_existing_osi_semantic_models" in text
+    assert "request SQL tables, dataset names/sources/descriptions, and business meaning" in text
+    assert "semantic_model_selection_required" in text
+    assert "resolve_osi_semantic_model_target" not in text
+    assert "check_semantic_object_exists" not in text
+    assert "list_metrics" not in text
+    assert "non-metric request" not in text
+    assert "without a custom `checks` subset" in text
 
 
 def test_semantic_model_template_includes_profiler_gate_both_formats():

@@ -9,8 +9,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from datus.tools.func_tool import metric_queryability
-from datus.tools.func_tool.base import FuncToolResult, normalize_null
+from datus.tools.func_tool.attribution_utils import (
+    AttributionValidationErrorPayload,
+    AttributionValidationException,
+)
+from datus.tools.func_tool.base import FuncToolResult, normalize_null, trans_to_function_tool
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.func_tool.metric_queryability import extract_metric_queryability_contracts
 from datus.tools.func_tool.semantic_tools import _run_async
@@ -21,7 +24,7 @@ class _Severity(Enum):
     ERROR = "error"
 
 
-class TestGenerationEvidence:
+class TestSemanticToolsGenerationEvidence:
     def test_missing_success_key_is_not_success(self):
         evidence = GenerationEvidence()
 
@@ -515,13 +518,8 @@ class TestGenerationEvidence:
                     }
                 ],
                 "metric_hints": ["shipped_revenue"],
-                "sql": (
-                    "SELECT n.n_name AS supplier_nation, SUM(l.l_extendedprice) AS shipped_revenue\n"
-                    "            FROM lineitem l\n"
-                    "            JOIN supplier s ON l.l_suppkey = s.s_suppkey\n"
-                    "            JOIN nation n ON s.s_nationkey = n.n_nationkey\n"
-                    "            GROUP BY n.n_name"
-                ),
+                "metric_output_ids": ["sql_1:statement_1:output_2:shipped_revenue"],
+                "contract_source": "final_group_by",
             }
         ]
 
@@ -548,37 +546,10 @@ class TestGenerationEvidence:
                     }
                 ],
                 "metric_hints": ["revenue_total"],
-                "sql": (
-                    "SELECT customer_segment, SUM(revenue) AS revenue_total\n"
-                    "            FROM orders\n"
-                    "            GROUP BY customer_segment"
-                ),
+                "metric_output_ids": ["sql_1:statement_1:output_2:revenue_total"],
+                "contract_source": "final_group_by",
             }
         ]
-
-    def test_parse_sql_candidates_attempts_advertised_dialects(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import sqlglot
-
-        calls: list[str | None] = []
-
-        class FakeParsed:
-            def __init__(self, read_dialect: str | None) -> None:
-                self.read_dialect = read_dialect
-
-            def sql(self, dialect: str | None = None) -> str:
-                return f"SELECT {self.read_dialect or 'default'}"
-
-        def fake_parse_one(sql: str, read: str | None = None) -> FakeParsed:
-            calls.append(read)
-            return FakeParsed(read)
-
-        monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
-
-        list(metric_queryability._parse_sql_candidates("SELECT 1"))
-
-        assert {"mysql", "postgres", "sqlite", "starrocks"}.issubset(set(calls))
-        assert calls.count("postgres") >= 2
-        assert None in calls
 
     def test_extracts_contracts_from_multiple_labeled_sql_blocks_without_semicolons(self):
         contracts = extract_metric_queryability_contracts(
@@ -636,15 +607,8 @@ class TestGenerationEvidence:
         assert len(contracts) == 1
         assert contracts[0]["source"] == "sql_1"
         assert contracts[0]["dimension_hints"] == ["customer_segment"]
-        assert contracts[0]["dimension_expr_hints"] == [
-            {
-                "alias": "customer_segment",
-                "expr": "customer_segment",
-                "column": "customer_segment",
-            }
-        ]
         assert contracts[0]["metric_hints"] == ["revenue_total"]
-        assert contracts[0]["sql"].startswith("WITH daily AS")
+        assert contracts[0]["contract_source"] == "query_backed_output_grain"
 
     def test_extracts_date_trunc_grouped_metric_queryability_contract(self):
         contracts = extract_metric_queryability_contracts(
@@ -992,6 +956,45 @@ class TestQueryMetricsCompression:
             dry_run=False,
         )
 
+    def test_query_metrics_runs_warehouse_dry_run_for_compiled_sql(self, semantic_tools, mock_adapter):
+        query_result = QueryResult(
+            columns=["sql"],
+            data=[{"sql": "SELECT COUNT(*) FROM orders"}],
+            metadata={"sql": "SELECT COUNT(*) FROM orders"},
+        )
+        calls = []
+        semantic_tools._warehouse_dry_run_provider = lambda sql: (
+            calls.append(sql) or {"status": "success", "datasource": "warehouse"}
+        )
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+            result = semantic_tools.query_metrics(metrics=["order_count"], dry_run=True)
+
+        assert result.success == 1
+        assert calls == ["SELECT COUNT(*) FROM orders"]
+        assert result.result["metadata"]["warehouse_dry_run"] == {
+            "status": "success",
+            "datasource": "warehouse",
+        }
+
+    def test_query_metrics_returns_failure_when_warehouse_dry_run_fails(self, semantic_tools, mock_adapter):
+        query_result = QueryResult(
+            columns=["sql"],
+            data=[{"sql": "SELECT COUNT(*) FROM missing_orders"}],
+            metadata={"sql": "SELECT COUNT(*) FROM missing_orders"},
+        )
+        semantic_tools._warehouse_dry_run_provider = lambda _sql: {
+            "status": "failed",
+            "error": "table not found",
+        }
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+            result = semantic_tools.query_metrics(metrics=["order_count"], dry_run=True)
+
+        assert result.success == 0
+        assert result.error == "Warehouse dry-run failed: table not found"
+        assert result.result["metadata"]["warehouse_dry_run"]["status"] == "failed"
+
     def test_query_metrics_rejects_dimensions_not_common_to_all_metrics(self, semantic_tools, mock_adapter):
         """Preflight reports incompatible metric/dimension combinations before adapter query."""
         with patch(
@@ -1066,6 +1069,86 @@ class TestQueryMetricsCompression:
             )
 
         assert result.success == 1
+
+    def test_query_metrics_preflight_rejects_unsupported_time_granularity(self, semantic_tools, mock_adapter):
+        dimensions = [
+            {
+                "name": "event_month",
+                "type": "time",
+                "is_primary_time": True,
+                "time_granularities": ["month", "quarter", "year"],
+            }
+        ]
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            return_value=dimensions,
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["event_total"],
+                time_granularity="day",
+            )
+
+        assert result.success == 0
+        assert result.result["code"] == "unsupported_time_granularity"
+        assert result.result["required_time_granularity"] == "month"
+        assert result.result["time_granularities"] == [
+            "month",
+            "quarter",
+            "year",
+        ]
+        mock_adapter.query_metrics.assert_not_called()
+
+    def test_query_metrics_preflight_rejects_unsupported_metric_time_suffix(self, semantic_tools, mock_adapter):
+        dimensions = [
+            {
+                "name": "event_month",
+                "type": "time",
+                "is_primary_time": True,
+                "time_granularities": ["month", "quarter", "year"],
+            }
+        ]
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            return_value=dimensions,
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["event_total"],
+                dimensions=["metric_time__day"],
+            )
+
+        assert result.success == 0
+        assert result.result["code"] == "unsupported_time_granularity"
+        assert result.result["requested_time_granularity"] == "day"
+        mock_adapter.query_metrics.assert_not_called()
+
+    def test_query_metrics_preflight_accepts_supported_time_granularity(self, semantic_tools, mock_adapter):
+        dimensions = [
+            {
+                "name": "event_month",
+                "type": "time",
+                "is_primary_time": True,
+                "time_granularities": ["month", "quarter", "year"],
+            }
+        ]
+        query_result = QueryResult(
+            columns=["event_total"],
+            data=[{"event_total": 3}],
+            metadata={},
+        )
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[dimensions, query_result],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["event_total"],
+                time_granularity="quarter",
+            )
+
+        assert result.success == 1
+        mock_adapter.query_metrics.assert_called_once()
 
     def test_query_metrics_adapter_exception(self, semantic_tools):
         """Test query_metrics handles adapter exceptions gracefully."""
@@ -1226,129 +1309,32 @@ class TestQueryMetricsCompression:
             assert result.result["data"]["original_rows"] == 1
             assert result.result["data"]["original_columns"] == ["x"]
 
-    def test_query_metrics_passes_join_controls_to_supporting_adapter(self, semantic_tools):
-        """Test that semantic join controls are forwarded when the adapter supports them."""
-        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+    def test_query_metrics_preserves_join_filtered_rows_metadata(self, semantic_tools):
+        """Adapter-reported unmatched-row counts must reach the tool result metadata.
 
-        class AdapterWithJoinControls:
-            def __init__(self):
-                self.query_kwargs = None
+        The ask_metrics prompt instructs the model to disclose
+        `join_policy_filtered_rows` to the user; this protects that contract.
+        """
+        query_result = QueryResult(
+            columns=["x"],
+            data=[{"x": 1}],
+            metadata={"join_policy": "match_only", "join_policy_filtered_rows": 3},
+        )
 
-            def get_dimensions(self, metric_name, path=None):
-                return [{"name": "customer_id__customer_name"}]
-
-            def query_metrics(
-                self,
-                metrics,
-                dimensions=None,
-                path=None,
-                time_start=None,
-                time_end=None,
-                time_granularity=None,
-                where=None,
-                limit=None,
-                order_by=None,
-                join_policy=None,
-                zero_fill=False,
-                dry_run=False,
-            ):
-                self.query_kwargs = {
-                    "metrics": metrics,
-                    "dimensions": dimensions,
-                    "path": path,
-                    "time_start": time_start,
-                    "time_end": time_end,
-                    "time_granularity": time_granularity,
-                    "where": where,
-                    "limit": limit,
-                    "order_by": order_by,
-                    "join_policy": join_policy,
-                    "zero_fill": zero_fill,
-                    "dry_run": dry_run,
-                }
-                return query_result
-
-        adapter = AdapterWithJoinControls()
-        semantic_tools._adapter = adapter
-        with patch(
-            "datus.tools.func_tool.semantic_tools._run_async",
-            side_effect=[
-                [{"name": "customer_id__customer_name"}],
-                query_result,
-            ],
-        ):
-            result = semantic_tools.query_metrics(
-                metrics=["order_count"],
-                dimensions=["customer_id__customer_name"],
-                join_policy="dimension_preserving",
-                zero_fill=True,
-            )
-
-        assert result.success == 1
-        assert adapter.query_kwargs["join_policy"] == "dimension_preserving"
-        assert adapter.query_kwargs["zero_fill"] is True
-
-    def test_query_metrics_passes_join_controls_to_kwargs_adapter(self, semantic_tools):
-        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
-
-        class AdapterWithKwargs:
-            def __init__(self):
-                self.query_kwargs = None
-
-            def get_dimensions(self, metric_name, path=None):
-                return [{"name": "customer_id__customer_name"}]
-
-            def query_metrics(self, metrics, dimensions=None, path=None, **kwargs):
-                self.query_kwargs = kwargs
-                return query_result
-
-        adapter = AdapterWithKwargs()
-        semantic_tools._adapter = adapter
-        with patch(
-            "datus.tools.func_tool.semantic_tools._run_async",
-            side_effect=[
-                [{"name": "customer_id__customer_name"}],
-                query_result,
-            ],
-        ):
-            result = semantic_tools.query_metrics(
-                metrics=["order_count"],
-                dimensions=["customer_id__customer_name"],
-                join_policy="dimension_preserving",
-                zero_fill=True,
-            )
-
-        assert result.success == 1
-        assert adapter.query_kwargs["join_policy"] == "dimension_preserving"
-        assert adapter.query_kwargs["zero_fill"] is True
-
-    def test_query_metrics_normalizes_false_zero_fill_before_adapter_gating(self, semantic_tools):
-        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
-
-        class AdapterWithoutJoinControls:
+        class Adapter:
             def get_dimensions(self, metric_name, path=None):
                 return []
 
-            def query_metrics(
-                self,
-                metrics,
-                dimensions=None,
-                path=None,
-                time_start=None,
-                time_end=None,
-                time_granularity=None,
-                where=None,
-                limit=None,
-                order_by=None,
-                dry_run=False,
-            ):
+            def query_metrics(self, metrics, **kwargs):
                 return query_result
 
-        semantic_tools._adapter = AdapterWithoutJoinControls()
+        semantic_tools._adapter = Adapter()
         with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
-            result = semantic_tools.query_metrics(metrics=["order_count"], zero_fill="false")
+            result = semantic_tools.query_metrics(metrics=["order_count"])
 
         assert result.success == 1
+        assert result.result["metadata"]["join_policy"] == "match_only"
+        assert result.result["metadata"]["join_policy_filtered_rows"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1967,6 +1953,36 @@ class TestGetDimensions:
         assert envelope["items"] == [{"name": "date"}, {"name": "region"}]
         assert envelope["total"] == 2
         assert envelope["has_more"] is False
+        assert envelope["extra"] == {
+            "time_dimension": None,
+            "time_granularities": [],
+        }
+
+    def test_returns_time_query_capabilities_in_existing_envelope(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+        dimensions = [
+            {
+                "name": "event_month",
+                "type": "time",
+                "is_primary_time": True,
+                "time_granularities": ["month", "quarter", "year"],
+            },
+            {"name": "event_type", "type": "categorical"},
+        ]
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            return_value=dimensions,
+        ):
+            result = tool.get_dimensions("event_total")
+
+        assert result.success == 1
+        assert result.result["extra"] == {
+            "time_dimension": "event_month",
+            "time_granularities": ["month", "quarter", "year"],
+        }
+        assert "is_primary_time" not in result.result["items"][0]
+        assert "time_granularities" not in result.result["items"][0]
 
     def test_no_adapter_returns_error(self, semantic_tools_ext):
         result = semantic_tools_ext.get_dimensions("revenue")
@@ -2039,6 +2055,29 @@ class TestValidateSemantic:
         assert "1 validation errors" in result.error
         assert "bad config" in result.error
         assert evidence.validation_passed is False
+
+    def test_invalid_result_is_compact_for_large_backend_errors(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+        mock_validation = Mock()
+        mock_validation.valid = False
+        mock_validation.issues = []
+        for index in range(20):
+            issue = Mock()
+            issue.model_dump.return_value = {
+                "severity": "error",
+                "message": f"issue {index}: " + ("x" * 5000),
+            }
+            mock_validation.issues.append(issue)
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=mock_validation):
+            result = tool.validate_semantic()
+
+        assert result.success == 0
+        assert result.result["issue_count"] == 20
+        assert len(result.result["issues"]) == 9
+        assert len(json.dumps(result.result, ensure_ascii=False)) < 8_000
+        assert len(result.error) < 2_500
+        assert "additional validation issue" in result.result["issues"][-1]["message"]
 
     def test_all_scope_keeps_no_metrics_validation_error(self, semantic_tools_with_adapter):
         tool, mock_adapter = semantic_tools_with_adapter
@@ -2159,8 +2198,15 @@ class TestValidateSemantic:
         calls = {}
 
         class _Adapter:
-            async def validate_semantic(self, scope="all", checks=None, baseline_artifact=None):
+            async def validate_semantic(
+                self,
+                scope="all",
+                semantic_model_name=None,
+                checks=None,
+                baseline_artifact=None,
+            ):
                 calls["scope"] = scope
+                calls["semantic_model_name"] = semantic_model_name
                 calls["checks"] = checks
                 calls["baseline_artifact"] = baseline_artifact
                 result = Mock()
@@ -2173,6 +2219,7 @@ class TestValidateSemantic:
 
         with patch.object(tool, "_reload_adapter", return_value=True):
             result = tool.validate_semantic(
+                semantic_model_name="shop",
                 checks="authoring_quality,mutation_guard",
                 baseline_artifact_json=json.dumps(baseline),
             )
@@ -2181,6 +2228,7 @@ class TestValidateSemantic:
         assert result.result["checks"] == ["authoring_quality", "mutation_guard"]
         assert calls == {
             "scope": "all",
+            "semantic_model_name": "shop",
             "checks": ["authoring_quality", "mutation_guard"],
             "baseline_artifact": baseline,
         }
@@ -2203,6 +2251,7 @@ class TestValidateSemantic:
         with patch.object(tool, "_reload_adapter", return_value=True):
             result = tool.validate_semantic(
                 scope="semantic_model",
+                semantic_model_name="commerce",
                 checks=["authoring_quality"],
                 baseline_artifact_json=json.dumps(baseline),
             )
@@ -2210,9 +2259,82 @@ class TestValidateSemantic:
         assert result.success == 1
         assert calls == {
             "scope": "semantic_model",
+            "semantic_model_name": "commerce",
             "checks": ["authoring_quality"],
             "baseline_artifact": baseline,
         }
+
+    def test_records_target_artifact_validation_evidence(self, semantic_tools_with_adapter, tmp_path):
+        tool, _ = semantic_tools_with_adapter
+        artifact = tmp_path / "commerce.yml"
+        artifact.write_text("semantic_model: commerce\n", encoding="utf-8")
+        evidence = GenerationEvidence()
+        tool.generation_evidence = evidence
+
+        class _Adapter:
+            async def validate_semantic(self, scope="all", semantic_model_name=None):
+                result = Mock()
+                result.valid = True
+                result.issues = []
+                return result
+
+        tool._adapter = _Adapter()
+        with (
+            patch.object(tool, "_reload_adapter", return_value=True),
+            patch.object(
+                tool,
+                "_semantic_model_artifact_evidence",
+                return_value={
+                    "semantic_model_name": "commerce",
+                    "semantic_model_file": str(artifact),
+                },
+            ),
+        ):
+            result = tool.validate_semantic(
+                scope="semantic_model",
+                semantic_model_name="commerce",
+            )
+
+        assert result.success == 1
+        assert evidence.semantic_artifact_validation_passed("commerce", artifact)
+
+    def test_resolves_target_artifact_validation_evidence(self, semantic_tools_with_adapter, tmp_path):
+        tool, _ = semantic_tools_with_adapter
+        artifact = tmp_path / "commerce.yml"
+        artifact.write_text("semantic_model: commerce\n", encoding="utf-8")
+        tool.adapter_type = "osi"
+
+        with patch(
+            "datus.agent.node.semantic_authoring.discover_osi_semantic_models",
+            return_value=[
+                {
+                    "semantic_model_name": "commerce",
+                    "absolute_path": str(artifact),
+                }
+            ],
+        ):
+            result = tool._semantic_model_artifact_evidence("commerce")
+
+        assert result["semantic_model_name"] == "commerce"
+        assert result["semantic_model_file"] == str(artifact.resolve())
+        assert len(result["semantic_model_file_sha256"]) == 64
+
+    def test_rejects_target_when_adapter_does_not_support_it(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+
+        class _Adapter:
+            async def validate_semantic(self, scope="all"):
+                result = Mock()
+                result.valid = True
+                result.issues = []
+                return result
+
+        tool._adapter = _Adapter()
+
+        result = tool.validate_semantic(semantic_model_name="shop")
+
+        assert result.success == 0
+        assert "Targeted semantic-model validation is not supported" in result.error
 
     def test_rejects_checks_when_adapter_does_not_support_them(self, semantic_tools_with_adapter):
         tool, _ = semantic_tools_with_adapter
@@ -2250,6 +2372,22 @@ class TestValidateSemantic:
 
 
 class TestAttributionAnalyze:
+    def test_tool_schema_exposes_drilldown_guardrail_parameters(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+
+        schema = trans_to_function_tool(tool.attribution_analyze).params_json_schema
+
+        assert {"where", "path", "max_dimension_values"}.issubset(schema["properties"])
+
+    def test_tool_description_is_explicitly_non_causal(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+
+        description = trans_to_function_tool(tool.attribution_analyze).description.lower()
+
+        assert "descriptive dimension analysis" in description
+        assert "do not establish causation" in description
+        assert "root cause analysis" not in description
+
     def test_no_attribution_tool_returns_error(self, semantic_tools_ext):
         result = semantic_tools_ext.attribution_analyze(
             metric_name="revenue",
@@ -2272,6 +2410,7 @@ class TestAttributionAnalyze:
             "dimension_ranking": [],
             "selected_dimensions": [],
             "top_dimension_values": {},
+            "warnings": [{"code": "UNEQUAL_WINDOWS", "message": "not equal"}],
         }
 
         with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=mock_result):
@@ -2283,9 +2422,27 @@ class TestAttributionAnalyze:
                 current_start="2024-01-08",
                 current_end="2024-01-14",
                 anomaly_context={"rule": "3sigma", "observed_change_pct": 20.0},
+                where="region = 'US'",
+                path=["sales"],
+                max_dimension_values=25,
             )
 
         assert result.success == 1
+        assert result.result["warnings"][0]["code"] == "UNEQUAL_WINDOWS"
+        mock_attribution.attribution_analyze.assert_called_once_with(
+            metric_name="revenue",
+            candidate_dimensions=["region"],
+            baseline_start="2024-01-01",
+            baseline_end="2024-01-07",
+            current_start="2024-01-08",
+            current_end="2024-01-14",
+            anomaly_context={"rule": "3sigma", "observed_change_pct": 20.0},
+            max_selected_dimensions=3,
+            top_n_values=10,
+            where="region = 'US'",
+            path=["sales"],
+            max_dimension_values=25,
+        )
 
     def test_success_none_anomaly_context(self, semantic_tools_with_adapter):
         tool, mock_adapter = semantic_tools_with_adapter
@@ -2325,6 +2482,34 @@ class TestAttributionAnalyze:
 
         assert result.success == 0
         assert "analysis failed" in result.error
+
+    def test_validation_exception_returns_structured_failure(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
+        tool._attribution_tool = Mock()
+        payload = AttributionValidationErrorPayload(
+            code="MULTI_ROW_TOTAL",
+            message="Expected one total row.",
+            period="baseline",
+            columns=["revenue"],
+            row_count=2,
+        )
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=AttributionValidationException(payload),
+        ):
+            result = tool.attribution_analyze(
+                metric_name="revenue",
+                candidate_dimensions=["region"],
+                baseline_start="2024-01-01",
+                baseline_end="2024-01-07",
+                current_start="2024-01-08",
+                current_end="2024-01-14",
+            )
+
+        assert result.success == 0
+        assert result.error == "Expected one total row."
+        assert result.result == payload.model_dump()
 
 
 class TestExtractDbConfig:

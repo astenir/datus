@@ -294,7 +294,6 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "execute_reference_template": lambda a: _format_positional(a, "template_id", "name"),
     # Semantic discovery tools
     "profile_semantic_model_evidence": lambda a: _format_kw(a, "query_text", "tables", "profile_mode"),
-    "analyze_metric_candidates_from_history": lambda a: _format_kw(a, "query_text", "tables", "sample_sql_queries"),
     # Platform document tools
     "list_document_nav": lambda _a: "",
     "get_document": lambda a: _format_positional(a, "doc_id", "doc_name", "name"),
@@ -1585,7 +1584,11 @@ def _build_attribution_analyze(action: ActionHistory, verbose: bool) -> ToolCall
             if isinstance(result, dict):
                 dims = result.get("selected_dimensions") or result.get("dimension_ranking", [])
                 count = len(dims) if isinstance(dims, list) else 0
-                tc.compact_result = f"{count} dimensions analyzed"
+                warnings = result.get("warnings") or []
+                warning_count = len(warnings) if isinstance(warnings, list) else 0
+                tc.compact_result = f"{count} {'dimension' if count == 1 else 'dimensions'} analyzed"
+                if warning_count:
+                    tc.compact_result += f", {warning_count} {'warning' if warning_count == 1 else 'warnings'}"
     return tc
 
 
@@ -1853,8 +1856,8 @@ def _build_check_exists(action: ActionHistory, verbose: bool) -> ToolCallContent
     return tc
 
 
-def _build_end_generation(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """end_semantic_model_generation: show file count."""
+def _build_publish_semantic_model(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """publish_semantic_model: show file count."""
     tc = make_base_content(action)
     if verbose:
         tc.args_lines = extract_args_markup(action)
@@ -1871,9 +1874,9 @@ def _build_end_generation(action: ActionHistory, verbose: bool) -> ToolCallConte
     return tc
 
 
-def _build_end_metric_generation(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """end_metric_generation: show success."""
-    return _build_simple_action(action, verbose, "Metric generated")
+def _build_publish_metrics(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """publish_metrics: show success."""
+    return _build_simple_action(action, verbose, "Metrics published")
 
 
 def _build_generate_sql_summary_id(action: ActionHistory, verbose: bool) -> ToolCallContent:
@@ -1910,8 +1913,8 @@ def _build_parse_dates(action: ActionHistory, verbose: bool) -> ToolCallContent:
     return tc
 
 
-def _build_analyze_relationships(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """analyze_table_relationships: show relationship count."""
+def _build_inspect_semantic_sources(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """inspect_semantic_sources: show combined table and relationship counts."""
     tc = make_base_content(action)
     if verbose:
         tc.args_lines = extract_args_markup(action)
@@ -1922,56 +1925,16 @@ def _build_analyze_relationships(action: ActionHistory, verbose: bool) -> ToolCa
         if data:
             result = data.get("result")
             if isinstance(result, dict):
+                tables = result.get("tables", [])
                 rels = result.get("relationships", [])
-                count = len(rels) if isinstance(rels, list) else 0
-                tc.compact_result = f"{count} relationships found"
+                table_count = len(tables) if isinstance(tables, list) else 0
+                rel_count = len(rels) if isinstance(rels, list) else 0
+                tc.compact_result = f"{table_count} tables, {rel_count} relationships"
     return tc
 
 
-def _build_get_multiple_ddl(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """get_multiple_tables_ddl: show DDL count, verbose highlights DDL."""
-    tc = make_base_content(action)
-    if verbose:
-        tc.args_lines = extract_args_markup(action)
-        if action.output:
-            data = parse_output_data(action.output)
-            if data:
-                result = data.get("result")
-                if isinstance(result, list):
-                    lines: List[str] = []
-                    for item in result:
-                        if isinstance(item, dict):
-                            table_name = item.get("table_name", "?")
-                            if "error" in item:
-                                lines.append(
-                                    f"[bold red]{_escape_markup(table_name)}: "
-                                    f"{_escape_markup(str(item['error']))}[/bold red]"
-                                )
-                            else:
-                                defn = item.get("definition", "")
-                                lines.append(f"[bold]{_escape_markup(table_name)}[/bold]:")
-                                if isinstance(defn, str):
-                                    for ddl_line in defn.split("\n")[:15]:
-                                        lines.append(f"  [bright_cyan]{_escape_markup(ddl_line)}[/bright_cyan]")
-                                    total = len(defn.split("\n"))
-                                    if total > 15:
-                                        lines.append(f"  [dim]... ({total - 15} more lines)[/dim]")
-                    tc.output_lines = lines
-                else:
-                    tc.output_lines = _format_result_only_markup(action.output)
-            else:
-                tc.output_lines = _format_result_only_markup(action.output)
-    else:
-        data = parse_output_data(action.output)
-        if data:
-            result = data.get("result")
-            if isinstance(result, list):
-                tc.compact_result = f"{len(result)} DDLs retrieved"
-    return tc
-
-
-def _build_analyze_columns(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """analyze_column_usage_patterns: show column count."""
+def _build_validate_semantic_key_candidates(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """validate_semantic_key_candidates: show batch key-check outcomes."""
     tc = make_base_content(action)
     if verbose:
         tc.args_lines = extract_args_markup(action)
@@ -1982,9 +1945,14 @@ def _build_analyze_columns(action: ActionHistory, verbose: bool) -> ToolCallCont
         if data:
             result = data.get("result")
             if isinstance(result, dict):
-                patterns = result.get("column_patterns", {})
-                count = len(patterns) if isinstance(patterns, dict) else 0
-                tc.compact_result = f"{count} columns analyzed"
+                validations = result.get("validations", [])
+                if isinstance(validations, list):
+                    verified = sum(
+                        1
+                        for validation in validations
+                        if isinstance(validation, dict) and validation.get("is_valid_logical_key") is True
+                    )
+                    tc.compact_result = f"{verified}/{len(validations)} logical keys verified"
     return tc
 
 
@@ -1997,33 +1965,6 @@ def _build_profile_semantic_model_evidence(action: ActionHistory, verbose: bool)
             tc.output_lines = _format_result_only_markup(action.output)
     else:
         tc.compact_result = _summary_from_registry(action, "profile_semantic_model_evidence")
-    return tc
-
-
-def _build_analyze_metric_candidates(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """analyze_metric_candidates_from_history: show mined metric candidate count."""
-    tc = make_base_content(action)
-    if verbose:
-        tc.args_lines = extract_args_markup(action)
-        if action.output:
-            tc.output_lines = _format_result_only_markup(action.output)
-    else:
-        data = parse_output_data(action.output)
-        if data:
-            result = data.get("result")
-            if isinstance(result, dict):
-                candidates = result.get("metric_candidates", [])
-                base_measures = result.get("base_measures", [])
-                recommendations = result.get("derived_datasource_recommendations", [])
-                candidate_count = len(candidates) if isinstance(candidates, list) else 0
-                measure_count = len(base_measures) if isinstance(base_measures, list) else 0
-                recommendation_count = len(recommendations) if isinstance(recommendations, list) else 0
-                candidate_noun = "candidate" if candidate_count == 1 else "candidates"
-                measure_noun = "measure" if measure_count == 1 else "measures"
-                tc.compact_result = f"{candidate_count} metric {candidate_noun}, {measure_count} base {measure_noun}"
-                if recommendation_count:
-                    ds_noun = "datasource" if recommendation_count == 1 else "datasources"
-                    tc.compact_result += f", {recommendation_count} derived {ds_noun}"
     return tc
 
 
@@ -2246,19 +2187,17 @@ class ToolCallContentBuilder:
         # Generation tools
         self._registry["check_semantic_object_exists"] = _build_check_exists
         self._registry["check_semantic_model_exists"] = _build_check_exists
-        self._registry["end_semantic_model_generation"] = _build_end_generation
-        self._registry["end_metric_generation"] = _build_end_metric_generation
+        self._registry["publish_semantic_model"] = _build_publish_semantic_model
+        self._registry["publish_metrics"] = _build_publish_metrics
         self._registry["generate_sql_summary_id"] = _build_generate_sql_summary_id
 
         # Date parsing tools
         self._registry["parse_temporal_expressions"] = _build_parse_dates
 
         # Semantic discovery tools
-        self._registry["analyze_table_relationships"] = _build_analyze_relationships
-        self._registry["get_multiple_tables_ddl"] = _build_get_multiple_ddl
-        self._registry["analyze_column_usage_patterns"] = _build_analyze_columns
+        self._registry["inspect_semantic_sources"] = _build_inspect_semantic_sources
+        self._registry["validate_semantic_key_candidates"] = _build_validate_semantic_key_candidates
         self._registry["profile_semantic_model_evidence"] = _build_profile_semantic_model_evidence
-        self._registry["analyze_metric_candidates_from_history"] = _build_analyze_metric_candidates
 
         # Skill tools
         self._registry["bash"] = _build_bash

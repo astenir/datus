@@ -51,6 +51,37 @@ class GetTableDetailData(BaseModel):
     table: TableDetailData
 
 
+class GetTablesColumnsInput(BaseModel):
+    """Batch table-columns input (autocomplete prefetch)."""
+
+    tables: list[str] = Field(
+        ...,
+        description="Full table names, e.g. ['db.schema.orders', 'db.schema.users']",
+    )
+
+
+class TableColumnBrief(BaseModel):
+    """Slim column shape for autocomplete — no default_value (unused there)."""
+
+    name: str = Field(..., description="Column name")
+    type: str = Field(..., description="Column data type")
+    nullable: bool = Field(..., description="Whether column is nullable")
+    pk: bool = Field(default=False, description="Whether column is primary key")
+
+
+class TableColumns(BaseModel):
+    """Columns for a single table."""
+
+    table: str = Field(..., description="Full table name as requested")
+    columns: list[TableColumnBrief] = Field(..., description="Column information")
+
+
+class GetTablesColumnsData(BaseModel):
+    """Batch table-columns result. Tables that fail to resolve are omitted."""
+
+    tables: list[TableColumns] = Field(..., description="Per-table columns")
+
+
 # ========== SemanticModel Models ==========
 
 
@@ -68,6 +99,7 @@ class SemanticModelInput(BaseModel):
     catalog: Optional[str] = Field(None, description="Current catalog context")
     database: Optional[str] = Field(None, description="Current database context")
     db_schema: Optional[str] = Field(None, description="Current schema context")
+    semantic_model_name: Optional[str] = Field(None, description="Semantic model owning a shared physical table")
 
 
 class ValidateSemanticModelData(BaseModel):

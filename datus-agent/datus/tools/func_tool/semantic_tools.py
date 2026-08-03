@@ -10,19 +10,25 @@ All public semantic tools require a successfully initialized semantic adapter.
 """
 
 import csv
+import hashlib
 import inspect
 import io
 import json
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
 
 from agents import Tool
+from pydantic import BaseModel
 
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.store import MetricRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.func_tool import semantic_query_time_downstream as query_time
-from datus.tools.func_tool.attribution_utils import DimensionAttributionUtil
+from datus.tools.func_tool.attribution_utils import (
+    AttributionValidationException,
+    DimensionAttributionUtil,
+)
 from datus.tools.func_tool.base import FuncToolListResult, FuncToolResult, normalize_null, trans_to_function_tool
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.semantic_tools.base import BaseSemanticAdapter
@@ -162,7 +168,49 @@ def _signature_accepts_parameter(parameters, name: str) -> bool:
     return name in parameters or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
 
 
-_TIME_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
+_TIME_GRANULARITY_ORDER = ("day", "week", "month", "quarter", "year")
+_TIME_GRANULARITIES = set(_TIME_GRANULARITY_ORDER)
+
+
+def extract_time_query_capabilities(raw_dimensions) -> Dict[str, Any]:
+    """Extract the metric-level time contract carried by ``get_dimensions``."""
+    candidates = []
+    for dimension in raw_dimensions or []:
+        if isinstance(dimension, dict):
+            name = dimension.get("name")
+            is_primary_time = dimension.get("is_primary_time")
+            raw_granularities = dimension.get("time_granularities")
+        else:
+            name = getattr(dimension, "name", None)
+            is_primary_time = getattr(dimension, "is_primary_time", None)
+            raw_granularities = getattr(dimension, "time_granularities", None)
+
+        granularities = {
+            str(granularity).strip().lower()
+            for granularity in _normalize_name_list(raw_granularities)
+            if str(granularity).strip().lower() in _TIME_GRANULARITIES
+        }
+        ordered_granularities = [granularity for granularity in _TIME_GRANULARITY_ORDER if granularity in granularities]
+        if name and (is_primary_time or ordered_granularities):
+            candidates.append(
+                (
+                    bool(is_primary_time),
+                    str(name),
+                    ordered_granularities,
+                )
+            )
+
+    if not candidates:
+        return {"time_dimension": None, "time_granularities": []}
+
+    _, time_dimension, time_granularities = next(
+        (candidate for candidate in candidates if candidate[0]),
+        candidates[0],
+    )
+    return {
+        "time_dimension": time_dimension,
+        "time_granularities": time_granularities,
+    }
 
 
 def _split_dimension_granularity(name: str) -> tuple[str, Optional[str]]:
@@ -239,6 +287,43 @@ def _validation_has_errors(issues: List[dict]) -> bool:
     return any(str(issue.get("severity") or "").lower() == "error" for issue in issues)
 
 
+class _CompactValidationIssue(BaseModel):
+    """Bounded validation issue returned by the semantic tool."""
+
+    severity: str
+    message: str
+    location: Any | None = None
+
+
+def _compact_validation_issues(
+    issues: List[dict],
+    *,
+    limit: int = 8,
+    message_limit: int = 600,
+) -> List[_CompactValidationIssue]:
+    """Keep validation tool output bounded while full details remain in logs."""
+    compact: List[_CompactValidationIssue] = []
+    for issue in issues[:limit]:
+        message = str(issue.get("message") or "").strip()
+        if len(message) > message_limit:
+            message = f"{message[:message_limit]}... [truncated]"
+        compact.append(
+            _CompactValidationIssue(
+                severity=str(issue.get("severity") or "error").lower(),
+                message=message,
+                location=issue.get("location"),
+            )
+        )
+    if len(issues) > limit:
+        compact.append(
+            _CompactValidationIssue(
+                severity="warning",
+                message=f"{len(issues) - limit} additional validation issue(s) omitted; see logs for details.",
+            )
+        )
+    return compact
+
+
 def _format_validation_error(issues: List[dict]) -> str:
     count = len(issues)
     if count == 0:
@@ -304,6 +389,7 @@ class SemanticTools:
         generation_evidence: Optional[GenerationEvidence] = None,
         runtime_db_context_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
         reference_date_provider: Optional[Callable[[], Optional[str]]] = None,
+        warehouse_dry_run_provider: Optional[Callable[[str], Mapping[str, Any]]] = None,
     ):
         """
         Initialize semantic function tool.
@@ -318,6 +404,8 @@ class SemanticTools:
                 context used to initialize the semantic adapter.
             reference_date_provider: Optional callback returning the YYYY-MM-DD date used to resolve relative
                 query time expressions. Defaults to the current local date.
+            warehouse_dry_run_provider: Optional host callback that validates
+                adapter-compiled SQL against the active warehouse.
         """
         self.agent_config = agent_config
         self.sub_agent_name = sub_agent_name
@@ -325,6 +413,7 @@ class SemanticTools:
         self.generation_evidence = generation_evidence
         self._runtime_db_context_provider = runtime_db_context_provider
         self._reference_date_provider = reference_date_provider
+        self._warehouse_dry_run_provider = warehouse_dry_run_provider
         self._runtime_db_context_static: Dict[str, str] = {}
         self._runtime_db_context_static_set = False
 
@@ -424,6 +513,29 @@ class SemanticTools:
         if resolved_adapter:
             self.adapter_type = resolved_adapter
         return resolved_adapter
+
+    def _semantic_model_artifact_evidence(self, semantic_model_name: str) -> Dict[str, str]:
+        """Return exact Ossie artifact identity for target-bound validation evidence."""
+        if str(self.adapter_type or "").strip().lower() != "osi" or not semantic_model_name:
+            return {}
+        try:
+            from datus.agent.node.semantic_authoring import discover_osi_semantic_models
+
+            matches = [
+                model
+                for model in discover_osi_semantic_models(self.agent_config)
+                if str(model.get("semantic_model_name") or "") == semantic_model_name
+            ]
+            if len(matches) != 1:
+                return {}
+            path = Path(str(matches[0]["absolute_path"])).expanduser().resolve(strict=True)
+            return {
+                "semantic_model_name": semantic_model_name,
+                "semantic_model_file": str(path),
+                "semantic_model_file_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        except (KeyError, OSError, RuntimeError):
+            return {}
 
     @staticmethod
     def _normalize_runtime_db_context(runtime_db_context: Optional[Mapping[str, Any]]) -> Dict[str, str]:
@@ -773,8 +885,12 @@ class SemanticTools:
                 their full schema (name, type, expr, ...); storage dimensions
                 fall back to a minimal {"name": ...} shape when only names are
                 stored.
-              - total, has_more, extra: dimensions isn't paginated, so total
-                equals len(items) and has_more is False.
+              - total, has_more: dimensions isn't paginated, so total equals
+                len(items) and has_more is False.
+              - extra.time_dimension: canonical metric time dimension, or None.
+              - extra.time_granularities: legal grains ordered finest to
+                coarsest; the first item is the default. Empty when the metric
+                has no discoverable time contract.
         """
         # Normalize null values from LLM
         path = _normalize_optional_path(path)
@@ -786,9 +902,18 @@ class SemanticTools:
         try:
             dimensions = _run_async(adapter.get_dimensions(metric_name=metric_name, path=path))
             items = _normalize_dimension_rows(dimensions)
+            extra = extract_time_query_capabilities(dimensions)
+            for item in items:
+                item.pop("is_primary_time", None)
+                item.pop("time_granularities", None)
             return FuncToolResult(
                 success=1,
-                result=FuncToolListResult(items=items, total=len(items), has_more=False).model_dump(),
+                result=FuncToolListResult(
+                    items=items,
+                    total=len(items),
+                    has_more=False,
+                    extra=extra,
+                ).model_dump(),
             )
 
         except Exception as e:
@@ -798,11 +923,33 @@ class SemanticTools:
                 error=f"Failed to get dimensions: {str(e)}",
             )
 
+    def _load_dimensions_by_metric(
+        self,
+        metrics: List[str],
+        path: Optional[List[str]],
+    ) -> Optional[Dict[str, List[dict]]]:
+        try:
+            return {
+                metric_name: _normalize_dimension_rows(
+                    _run_async(
+                        self.adapter.get_dimensions(
+                            metric_name=metric_name,
+                            path=path or None,
+                        )
+                    )
+                )
+                for metric_name in metrics
+            }
+        except Exception as e:
+            logger.debug(f"Skipping query_metrics metadata preflight: {e}")
+            return None
+
     def _preflight_query_dimensions(
         self,
         metrics: List[str],
         dimensions: List[str],
         path: Optional[List[str]],
+        dimensions_by_metric: Optional[Dict[str, List[dict]]] = None,
     ) -> Optional[FuncToolResult]:
         if not dimensions:
             return None
@@ -812,19 +959,15 @@ class SemanticTools:
         if not checked_dimensions:
             return None
 
-        dimensions_by_metric: Dict[str, List[dict]] = {}
-        dimension_names_by_metric: Dict[str, List[str]] = {}
-        try:
-            for metric_name in metrics:
-                raw_dimensions = _run_async(self.adapter.get_dimensions(metric_name=metric_name, path=path or None))
-                rows = _normalize_dimension_rows(raw_dimensions)
-                dimensions_by_metric[metric_name] = rows
-                dimension_names_by_metric[metric_name] = sorted(
-                    _dimension_names_by_lookup(rows).values(), key=str.lower
-                )
-        except Exception as e:
-            logger.debug(f"Skipping query_metrics dimension preflight: {e}")
+        dimensions_by_metric = (
+            dimensions_by_metric if dimensions_by_metric is not None else self._load_dimensions_by_metric(metrics, path)
+        )
+        if dimensions_by_metric is None:
             return None
+        dimension_names_by_metric = {
+            metric_name: sorted(_dimension_names_by_lookup(rows).values(), key=str.lower)
+            for metric_name, rows in dimensions_by_metric.items()
+        }
 
         invalid_dimensions = []
         for dimension in checked_dimensions:
@@ -887,6 +1030,88 @@ class SemanticTools:
             },
         )
 
+    @staticmethod
+    def _preflight_time_granularity(
+        metrics: List[str],
+        dimensions: List[str],
+        time_granularity: Optional[str],
+        dimensions_by_metric: Optional[Dict[str, List[dict]]],
+    ) -> Optional[FuncToolResult]:
+        requested_grain = str(time_granularity or "").strip().lower()
+        if dimensions_by_metric is None:
+            return None
+
+        capabilities_by_metric = {
+            metric_name: extract_time_query_capabilities(rows) for metric_name, rows in dimensions_by_metric.items()
+        }
+        known_capabilities = {
+            metric_name: capability
+            for metric_name, capability in capabilities_by_metric.items()
+            if capability["time_granularities"]
+        }
+        if not known_capabilities:
+            return None
+
+        if not requested_grain:
+            time_dimension_names = {
+                str(capability["time_dimension"]).lower()
+                for capability in known_capabilities.values()
+                if capability["time_dimension"]
+            }
+            for dimension in dimensions:
+                base_name, dimension_grain = _split_dimension_granularity(dimension.strip().lower())
+                if dimension_grain and (_is_metric_time_dimension(dimension) or base_name in time_dimension_names):
+                    requested_grain = dimension_grain
+                    break
+        if not requested_grain:
+            return None
+
+        unsupported_metrics = [
+            metric_name
+            for metric_name, capability in known_capabilities.items()
+            if requested_grain not in capability["time_granularities"]
+        ]
+        if not unsupported_metrics:
+            return None
+
+        common_granularities = [
+            grain
+            for grain in _TIME_GRANULARITY_ORDER
+            if all(grain in capability["time_granularities"] for capability in known_capabilities.values())
+        ]
+        suggested_grain = common_granularities[0] if common_granularities else None
+        details = "; ".join(
+            f"{metric}: {', '.join(capability['time_granularities'])}"
+            for metric, capability in known_capabilities.items()
+        )
+        suggested_retry = (
+            {
+                "metrics": metrics,
+                "time_granularity": suggested_grain,
+            }
+            if suggested_grain
+            else None
+        )
+        return FuncToolResult(
+            success=0,
+            error=(
+                "query_metrics time granularity preflight failed: "
+                f"`{requested_grain}` is not supported by "
+                f"{', '.join(unsupported_metrics)}. Supported granularities: "
+                f"{details}."
+            ),
+            result={
+                "error_type": "semantic_validation_error",
+                "code": "unsupported_time_granularity",
+                "metrics": metrics,
+                "requested_time_granularity": requested_grain,
+                "required_time_granularity": suggested_grain,
+                "time_granularities": common_granularities,
+                "time_capabilities_by_metric": capabilities_by_metric,
+                "suggested_retry": suggested_retry,
+            },
+        )
+
     def query_metrics(
         self,
         metrics: List[str],
@@ -919,13 +1144,10 @@ class SemanticTools:
             order_by: Optional list of columns to sort by. Use column name for ascending,
                       prefix with '-' for descending. Examples: ['metric_time__day'] for ascending,
                       ['-message_count'] for descending. Do NOT use 'asc'/'desc' keywords.
-            join_policy: Optional relationship handling policy for joined dimensions:
-                      'auto'/'match_only' keeps only facts that match requested joined dimensions;
-                      'fact_preserving' keeps unmatched facts;
-                      'dimension_preserving' keeps all dimension values;
-                      'unmatched_only' returns only unmatched facts.
-            zero_fill: Fill missing metric values with 0 when join_policy='dimension_preserving'.
-            dry_run: If True, only validate and return query plan
+            join_policy: Optional relationship handling policy for joined dimensions.
+            zero_fill: Fill missing metric values with 0 when supported by the adapter.
+            dry_run: If True, compile and return the query plan. Live OSI
+                backends also validate the compiled SQL with a warehouse dry-run.
 
         Returns:
             FuncToolResult with query results or explain plan
@@ -968,7 +1190,26 @@ class SemanticTools:
                 f"time=[{time_start},{time_end}], granularity={time_granularity}, where={where}, "
                 f"limit={limit}, join_policy={join_policy}, zero_fill={zero_fill}, dry_run={dry_run}"
             )
-            preflight_result = self._preflight_query_dimensions(metrics=metrics, dimensions=dimensions, path=path)
+            needs_dimension_metadata = (
+                bool(time_granularity)
+                or any(not _is_metric_time_dimension(dimension) for dimension in dimensions)
+                or any(_split_dimension_granularity(dimension)[1] for dimension in dimensions)
+            )
+            dimensions_by_metric = self._load_dimensions_by_metric(metrics, path) if needs_dimension_metadata else None
+            preflight_result = self._preflight_query_dimensions(
+                metrics=metrics,
+                dimensions=dimensions,
+                path=path,
+                dimensions_by_metric=dimensions_by_metric,
+            )
+            if preflight_result is not None:
+                return preflight_result
+            preflight_result = self._preflight_time_granularity(
+                metrics=metrics,
+                dimensions=dimensions,
+                time_granularity=time_granularity,
+                dimensions_by_metric=dimensions_by_metric,
+            )
             if preflight_result is not None:
                 return preflight_result
 
@@ -1008,7 +1249,6 @@ class SemanticTools:
                     success=0,
                     error="query_metrics join controls are not supported by the current semantic adapter.",
                 )
-
             result = _run_async(adapter.query_metrics(**adapter_query_kwargs))
 
             # Drop non-JSON-serializable metadata entries (MetricFlow puts a
@@ -1022,6 +1262,29 @@ class SemanticTools:
                     safe_metadata[k] = v
                 except (TypeError, ValueError):
                     continue
+            warehouse_error = None
+            if (
+                dry_run
+                and callable(self._warehouse_dry_run_provider)
+                and not (
+                    isinstance(safe_metadata.get("warehouse_dry_run"), dict)
+                    and safe_metadata["warehouse_dry_run"].get("status") == "success"
+                )
+            ):
+                sql = str(safe_metadata.get("sql") or "").strip()
+                if not sql:
+                    warehouse_evidence: Mapping[str, Any] = {
+                        "status": "failed",
+                        "error": "Semantic adapter dry-run did not return compiled SQL.",
+                    }
+                else:
+                    try:
+                        warehouse_evidence = self._warehouse_dry_run_provider(sql)
+                    except Exception as exc:
+                        warehouse_evidence = {"status": "failed", "error": str(exc)}
+                safe_metadata["warehouse_dry_run"] = dict(warehouse_evidence)
+                if warehouse_evidence.get("status") != "success":
+                    warehouse_error = str(warehouse_evidence.get("error") or "Warehouse EXPLAIN failed.")
             cache_key = None
             if not dry_run:
                 cache_key = self._cache_query_metrics_result(result.columns, result.data)
@@ -1042,7 +1305,8 @@ class SemanticTools:
             }
 
             tool_result = FuncToolResult(
-                success=1,
+                success=0 if warehouse_error else 1,
+                error=f"Warehouse dry-run failed: {warehouse_error}" if warehouse_error else None,
                 result=result_dict,
             )
             if dry_run and self.generation_evidence:
@@ -1075,6 +1339,7 @@ class SemanticTools:
     def validate_semantic(
         self,
         scope: Literal["all", "semantic_model"] = "all",
+        semantic_model_name: str = "",
         checks: Optional[List[str] | str] = None,
         baseline_artifact_json: str = "",
     ) -> FuncToolResult:
@@ -1090,6 +1355,8 @@ class SemanticTools:
                 including metrics. Use "semantic_model" when generating semantic
                 models before metric definitions exist; this still fails on real
                 semantic model errors but ignores the expected no-metrics issue.
+            semantic_model_name: Optional target model for scoped Ossie validation.
+                Required when a datasource contains multiple semantic models.
             checks: Optional adapter-specific validation checks. Adapters that do
                 not support named checks return an error when this is supplied.
             baseline_artifact_json: Optional JSON-encoded semantic artifact used
@@ -1099,6 +1366,7 @@ class SemanticTools:
             FuncToolResult with validation status and issues
         """
         scope = normalize_null(scope) or "all"
+        semantic_model_name = str(normalize_null(semantic_model_name) or "").strip()
         if scope not in ("all", "semantic_model"):
             return FuncToolResult(
                 success=0,
@@ -1141,6 +1409,16 @@ class SemanticTools:
                     validation_kwargs["scope"] = scope
                 elif scope != "all" and "validation_scope" in params:
                     validation_kwargs["validation_scope"] = scope
+                if semantic_model_name:
+                    if not _signature_accepts_parameter(params, "semantic_model_name"):
+                        return FuncToolResult(
+                            success=0,
+                            error=(
+                                "Targeted semantic-model validation is not supported by the current semantic adapter"
+                            ),
+                            result=None,
+                        )
+                    validation_kwargs["semantic_model_name"] = semantic_model_name
                 if checks_list is not None:
                     if not _signature_accepts_parameter(params, "checks"):
                         return FuncToolResult(
@@ -1183,10 +1461,15 @@ class SemanticTools:
 
             if issues_data:
                 logger.warning(
-                    "Semantic validation issues scope=%s valid=%s effective_valid=%s issues=%s ignored=%s",
+                    "Semantic validation issues scope=%s valid=%s effective_valid=%s issues=%d ignored=%d",
                     scope,
                     validation_result.valid,
                     effective_valid,
+                    len(effective_issues),
+                    len(ignored_issues),
+                )
+                logger.debug(
+                    "Full semantic validation issues=%s ignored=%s",
                     json.dumps(effective_issues, ensure_ascii=False),
                     json.dumps(ignored_issues, ensure_ascii=False),
                 )
@@ -1196,16 +1479,28 @@ class SemanticTools:
                 logger.info("Validation succeeded, reloading adapter to pick up new metrics...")
                 self._reload_adapter()
 
+            compact_issues = [
+                issue.model_dump(exclude_none=True) for issue in _compact_validation_issues(effective_issues)
+            ]
+            compact_ignored_issues = [
+                issue.model_dump(exclude_none=True) for issue in _compact_validation_issues(ignored_issues)
+            ]
+            result_payload = {
+                "valid": effective_valid,
+                "issues": compact_issues,
+                "scope": scope,
+                "checks": checks_list,
+                "ignored_issues": compact_ignored_issues,
+                "issue_count": len(effective_issues),
+                "ignored_issue_count": len(ignored_issues),
+            }
+            if effective_valid and semantic_model_name:
+                result_payload.update(self._semantic_model_artifact_evidence(semantic_model_name))
+
             tool_result = FuncToolResult(
                 success=1 if effective_valid else 0,
-                result={
-                    "valid": effective_valid,
-                    "issues": effective_issues,
-                    "scope": scope,
-                    "checks": checks_list,
-                    "ignored_issues": ignored_issues,
-                },
-                error=None if effective_valid else _format_validation_error(effective_issues),
+                result=result_payload,
+                error=None if effective_valid else _format_validation_error(compact_issues),
             )
             if self.generation_evidence:
                 self.generation_evidence.record_validation_result(tool_result)
@@ -1230,13 +1525,16 @@ class SemanticTools:
         anomaly_context: Optional[AnomalyContext] = None,
         max_selected_dimensions: int = 3,
         top_n_values: int = 10,
+        where: Optional[str] = None,
+        path: Optional[List[str]] = None,
+        max_dimension_values: int = 500,
     ) -> FuncToolResult:
         """
-        Unified attribution analysis for anomaly investigation.
+        Descriptive dimension analysis for metric changes.
 
-        Automatically ranks candidate dimensions by explanatory power and calculates
-        delta contributions for the most important dimensions. Perfect for LLM-driven
-        root cause analysis of metric anomalies.
+        Ranks candidate dimensions by change concentration and calculates delta
+        contributions for selected dimensions. Results describe where a metric change
+        is concentrated; they do not establish causation.
 
         Args:
             metric_name: Metric to analyze(from list_metrics/search_metrics)
@@ -1248,6 +1546,9 @@ class SemanticTools:
             anomaly_context: Optional anomaly detection context (AnomalyContext with rule and observed_change_pct)
             max_selected_dimensions: Maximum dimensions to select (default 3)
             top_n_values: Number of top dimension values to return (default 10)
+            where: Optional SQL boolean expression applied to every attribution query
+            path: Optional subject tree path for metric scoping
+            max_dimension_values: Maximum grouped values per dimension (hard-capped at 1000)
 
         Returns:
             FuncToolResult with:
@@ -1287,6 +1588,9 @@ class SemanticTools:
                     anomaly_context=anomaly_context_dict,
                     max_selected_dimensions=max_selected_dimensions,
                     top_n_values=top_n_values,
+                    where=where,
+                    path=path,
+                    max_dimension_values=max_dimension_values,
                 )
             )
 
@@ -1295,6 +1599,13 @@ class SemanticTools:
                 result=result.model_dump(),
             )
 
+        except AttributionValidationException as e:
+            logger.warning("Attribution result validation failed: %s", e.payload.message)
+            return FuncToolResult(
+                success=0,
+                error=e.payload.message,
+                result=e.payload.model_dump(),
+            )
         except Exception as e:
             logger.error(f"Error in attribution analysis: {e}")
             return FuncToolResult(

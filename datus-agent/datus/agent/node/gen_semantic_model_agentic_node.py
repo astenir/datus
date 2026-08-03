@@ -10,18 +10,24 @@ semantic model generation with support for filesystem tools, generation tools,
 database tools, hooks, and metricflow MCP server integration.
 """
 
-from typing import Any, Literal, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.stream_run_context import StreamRunContext
 from datus.cli.generation_hooks import GenerationHooks
 from datus.configuration.agent_config import AgentConfig
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.semantic_agentic_node_models import SemanticNodeInput, SemanticNodeResult
 from datus.tools.func_tool import DBFuncTool
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.func_tool.generation_tools import GenerationTools
 from datus.tools.func_tool.semantic_discovery_tools import SemanticDiscoveryTools
+from datus.tools.func_tool.sql_modeling_planner import (
+    SqlModelingPlan,
+    SqlModelingPlanTools,
+    inspect_planned_semantic_sources,
+)
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -97,9 +103,15 @@ class GenSemanticModelAgenticNode(AgenticNode):
         self.filesystem_func_tool: Optional[FilesystemFuncTool] = None
         self.generation_tools: Optional[GenerationTools] = None
         self.semantic_discovery_tools: Optional[SemanticDiscoveryTools] = None
+        from datus.tools.func_tool.osi_target_tools import OsiSemanticModelTargetState
+
+        self.osi_target_state = OsiSemanticModelTargetState()
+        self.osi_target_tools = None
         self.ask_user_tool = None
         self.hooks = None
         self.generation_evidence = GenerationEvidence()
+        self.sql_modeling_plan: Optional[SqlModelingPlan] = None
+        self.sql_modeling_tools: Optional[SqlModelingPlanTools] = None
         self.setup_tools()
 
         # Debug: log hooks status after setup
@@ -114,6 +126,16 @@ class GenSemanticModelAgenticNode(AgenticNode):
         """
         return self.NODE_NAME
 
+    async def execute_stream(
+        self, action_history_manager: Optional[ActionHistoryManager] = None
+    ) -> AsyncGenerator[ActionHistory, None]:
+        """Serialize semantic-model writes with metric authoring for this datasource."""
+        from datus.agent.node.semantic_authoring import semantic_authoring_guard
+
+        async with semantic_authoring_guard(self.agent_config):
+            async for action in super().execute_stream(action_history_manager):
+                yield action
+
     def setup_tools(self):
         """Setup tools for semantic model generation."""
         if not self.agent_config:
@@ -121,6 +143,8 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
         self.tools = []
 
+        self._setup_sql_modeling_tools()
+        self._setup_osi_target_tools()
         self._setup_db_tools()
         self._setup_semantic_discovery_tools()
         self._setup_semantic_tools()
@@ -134,6 +158,37 @@ class GenSemanticModelAgenticNode(AgenticNode):
         # Setup hooks (only in interactive mode)
         if self.execution_mode == "interactive":
             self._setup_hooks()
+
+    async def _before_stream(self, ctx: StreamRunContext) -> None:
+        """Reset request-local authoring state before the first model turn."""
+        await super()._before_stream(ctx)
+        self.generation_evidence.reset()
+        self.osi_target_state.reset()
+        self.sql_modeling_plan = None
+        if self.sql_modeling_tools is not None:
+            self.sql_modeling_tools.reset()
+
+    def _setup_sql_modeling_tools(self) -> None:
+        """Expose the single shared SQL preflight entry point."""
+        from datus.tools.func_tool import trans_to_function_tool
+
+        self.sql_modeling_tools = SqlModelingPlanTools(
+            agent_config=self.agent_config,
+            sub_agent_name=self.get_node_name(),
+            user_message_provider=lambda: str(getattr(self.input, "user_message", "") or ""),
+            generation_evidence=self.generation_evidence,
+            plan_consumer=self._accept_sql_modeling_plan,
+            semantic_source_inspector=self._inspect_planned_semantic_sources,
+        )
+        self.tools.append(trans_to_function_tool(self.sql_modeling_tools.prepare_sql_modeling_plan))
+
+    def _accept_sql_modeling_plan(self, plan: Optional[SqlModelingPlan]) -> None:
+        self.sql_modeling_plan = plan
+
+    def _inspect_planned_semantic_sources(self, plan: SqlModelingPlan) -> Dict[str, Any]:
+        """Batch-inspect physical SQL sources during preflight when possible."""
+        self.sql_modeling_plan = plan
+        return inspect_planned_semantic_sources(plan, self.semantic_discovery_tools)
 
     def _setup_db_tools(self):
         """Setup database tools."""
@@ -158,11 +213,25 @@ class GenSemanticModelAgenticNode(AgenticNode):
             self.semantic_discovery_tools = SemanticDiscoveryTools(
                 self.db_func_tool,
                 enable_semantic_model_profiler=self._semantic_sql_history_profiler_enabled(),
+                source_sql_provider=self._semantic_discovery_source_sql,
             )
             self.tools.extend(self.semantic_discovery_tools.available_tools())
             logger.debug("Added semantic discovery tools from SemanticDiscoveryTools")
         except Exception as e:
             logger.error(f"Failed to setup semantic discovery tools: {e}")
+
+    def _semantic_discovery_source_sql(self) -> List[Dict[str, Any]]:
+        """Expose exact request SQL captured by the shared preflight."""
+        if self.sql_modeling_plan is None:
+            return []
+        return [
+            {
+                "name": source.source_sql_name,
+                "question": source.question,
+                "sql": source.sql,
+            }
+            for source in self.sql_modeling_plan.source_queries
+        ]
 
     def _semantic_sql_history_profiler_enabled(self) -> bool:
         """Return true when the optional profiler skill is visible to this node."""
@@ -197,7 +266,9 @@ class GenSemanticModelAgenticNode(AgenticNode):
             )
 
             # Add all available tools from semantic func tool
-            semantic_tools = self.semantic_func_tool.available_tools()
+            semantic_tools = [
+                tool for tool in self.semantic_func_tool.available_tools() if tool.name == "validate_semantic"
+            ]
             self.tools.extend(semantic_tools)
 
             tool_names = [tool.name for tool in semantic_tools]
@@ -206,15 +277,83 @@ class GenSemanticModelAgenticNode(AgenticNode):
         except Exception as e:
             logger.error(f"Failed to setup semantic func tools: {e}")
 
+    def _ensure_bash_tool_in_tools(self) -> None:
+        """Keep Ossie authoring on the explicit filesystem-tool surface."""
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        if is_osi_authoring(self.agent_config):
+            return
+        super()._ensure_bash_tool_in_tools()
+
+    def _make_filesystem_tool(self, **kwargs):
+        """Use a structure-preserving dataset upsert surface for OSI authoring."""
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        if not is_osi_authoring(self.agent_config):
+            return super()._make_filesystem_tool(**kwargs)
+
+        from datus.configuration.inherited_memory_overrides import get_inherited_memory
+        from datus.tools.func_tool.metric_filesystem_tools import OsiSemanticModelFilesystemFuncTool
+
+        root_path = kwargs.pop("root_path", None) or self._resolve_workspace_root()
+        datus_home = kwargs.pop("datus_home", None)
+        if datus_home is None:
+            path_manager = getattr(self.agent_config, "path_manager", None)
+            if path_manager is not None:
+                try:
+                    datus_home = str(path_manager.datus_home)
+                except Exception:
+                    datus_home = None
+        strict = kwargs.pop("strict", None)
+        if strict is None:
+            strict = self._resolve_filesystem_strict()
+        current_node = kwargs.pop("current_node", None) or self.get_node_name()
+        inherited_memory_node = kwargs.pop("inherited_memory_node", None)
+        if inherited_memory_node is None:
+            inherited_memory_node = get_inherited_memory(current_node)
+        session_data_dir = kwargs.pop("session_data_dir", None) or self._resolve_session_data_dir()
+        mutation_callback = kwargs.pop(
+            "mutation_callback",
+            self.generation_evidence.record_artifact_mutation,
+        )
+        return OsiSemanticModelFilesystemFuncTool(
+            root_path=root_path,
+            current_node=current_node,
+            datus_home=datus_home,
+            strict=strict,
+            inherited_memory_node=inherited_memory_node,
+            session_data_dir=session_data_dir,
+            mutation_callback=mutation_callback,
+            generation_evidence=self.generation_evidence,
+            osi_target_state=self.osi_target_state,
+            **kwargs,
+        )
+
     def _setup_filesystem_tools(self):
         """Setup filesystem tools."""
         try:
-            self.filesystem_func_tool = self._make_filesystem_tool()
+            from datus.agent.node.semantic_authoring import is_osi_authoring
 
-            self.tools.extend(self.filesystem_func_tool.available_tools())
-            logger.debug("Added filesystem tools: read_file, write_file, edit_file, glob, grep")
+            filesystem_kwargs = {
+                "mutation_callback": self._record_semantic_model_mutation,
+            }
+            if is_osi_authoring(self.agent_config):
+                filesystem_kwargs["mutation_guard"] = self.osi_target_state.require_planned_path
+            self.filesystem_func_tool = self._make_filesystem_tool(**filesystem_kwargs)
+            filesystem_tools = self.filesystem_func_tool.available_tools()
+            filesystem_tools = [tool for tool in filesystem_tools if tool.name != "delete_file"]
+            self.tools.extend(filesystem_tools)
+            logger.debug("Added filesystem tools: %s", [tool.name for tool in filesystem_tools])
         except Exception as e:
             logger.error(f"Failed to setup filesystem tools: {e}")
+
+    def _record_semantic_model_mutation(self, path=None) -> None:
+        """Invalidate publish evidence and freeze an authored OSI plan."""
+        self.generation_evidence.record_artifact_mutation(path)
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        if is_osi_authoring(self.agent_config):
+            self.osi_target_state.record_planned_write()
 
     def _setup_generation_tools(self):
         """Setup generation tools."""
@@ -222,18 +361,37 @@ class GenSemanticModelAgenticNode(AgenticNode):
             from datus.agent.node.semantic_authoring import resolve_authoring_format
             from datus.tools.func_tool import trans_to_function_tool
 
+            authoring_format = resolve_authoring_format(self.agent_config)
             self.generation_tools = GenerationTools(
                 self.agent_config,
                 generation_evidence=self.generation_evidence,
-                authoring_format=resolve_authoring_format(self.agent_config),
+                authoring_format=authoring_format,
+                osi_target_state=self.osi_target_state,
+                sql_modeling_plan_required=self.sql_modeling_tools.request_contains_sql,
             )
 
-            self.tools.append(trans_to_function_tool(self.generation_tools.check_semantic_object_exists))
-            self.tools.append(trans_to_function_tool(self.generation_tools.end_semantic_model_generation))
-            logger.debug("Added tools: check_semantic_object_exists, end_semantic_model_generation")
+            if authoring_format != "osi":
+                self.tools.append(trans_to_function_tool(self.generation_tools.check_semantic_object_exists))
+            self.tools.append(trans_to_function_tool(self.generation_tools.publish_semantic_model))
+            logger.debug("Added semantic-model generation tools for authoring_format=%s", authoring_format)
 
         except Exception as e:
             logger.error(f"Failed to setup generation tools: {e}")
+
+    def _setup_osi_target_tools(self) -> None:
+        """Expose only semantic-model target planning on this node."""
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        if not is_osi_authoring(self.agent_config):
+            return
+        from datus.tools.func_tool import OsiSemanticModelTargetTools, trans_to_function_tool
+
+        self.osi_target_tools = OsiSemanticModelTargetTools(
+            self.agent_config,
+            target_state=self.osi_target_state,
+            generation_evidence=self.generation_evidence,
+        )
+        self.tools.append(trans_to_function_tool(self.osi_target_tools.plan_osi_semantic_model_target))
 
     def _setup_skill_func_tools(self) -> None:
         """Default the optional skill set from the active authoring format."""
@@ -306,15 +464,9 @@ class GenSemanticModelAgenticNode(AgenticNode):
         context["has_ask_user_tool"] = "ask_user" in self._exposed_tool_names()
         context.update(build_datasource_prompt_context(self.agent_config))
 
-        from datus.agent.node.semantic_authoring import (
-            default_osi_semantic_model_file,
-            default_osi_semantic_model_name,
-            resolve_authoring_format,
-        )
+        from datus.agent.node.semantic_authoring import resolve_authoring_format
 
         context["authoring_format"] = resolve_authoring_format(self.agent_config)
-        context["default_osi_semantic_model_name"] = default_osi_semantic_model_name(self.agent_config)
-        context["default_osi_semantic_model_file"] = default_osi_semantic_model_file(self.agent_config)
         context["osi_authoring_spec"] = ""
         if context["authoring_format"] == "osi":
             # The OSI core spec document ships with the adapter package so the
@@ -330,6 +482,28 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
         logger.debug(f"Prepared template context: {context}")
         return context
+
+    def _build_enhanced_message(
+        self,
+        user_input: SemanticNodeInput,
+        extra_enhanced_parts: Optional[List[str]] = None,
+    ) -> str:
+        """Add Ossie naming intent to this turn instead of the cached system prompt."""
+        from datus.agent.node.semantic_authoring import (
+            osi_semantic_model_turn_context,
+        )
+
+        parts = list(extra_enhanced_parts or [])
+        target_context = osi_semantic_model_turn_context(self.agent_config, user_input)
+        if target_context:
+            parts.append(target_context)
+        return super()._build_enhanced_message(user_input, parts)
+
+    def _system_prompt_snapshot_meta(self, prompt_version: Optional[str]) -> Dict[str, str]:
+        """Invalidate snapshots created before semantic targets became request-scoped."""
+        meta = super()._system_prompt_snapshot_meta(prompt_version)
+        meta["semantic_target_scope"] = "agent_bound_v2"
+        return meta
 
     def _get_system_prompt(
         self,
@@ -394,6 +568,9 @@ class GenSemanticModelAgenticNode(AgenticNode):
         return self._prepare_template_context(ctx.user_input)
 
     def _build_success_result(self, ctx: StreamRunContext) -> SemanticNodeResult:
+        sql_request = (
+            self.sql_modeling_tools.require_plan_for_sql_request() if self.sql_modeling_tools is not None else False
+        )
         response_content = ctx.response_content
         if not response_content and ctx.last_successful_output:
             raw_output = ctx.last_successful_output.get("raw_output", "")
@@ -405,6 +582,14 @@ class GenSemanticModelAgenticNode(AgenticNode):
         semantic_model_files, extracted_output = self._extract_semantic_model_and_output_from_response(
             {"content": response_content}
         )
+        target_state = getattr(self, "osi_target_state", None)
+        planned = target_state.planned if target_state is not None else None
+        if planned is not None:
+            semantic_model_files = [str(planned["semantic_model_file"])]
+        if sql_request and not semantic_model_files:
+            raise RuntimeError(
+                "SQL-backed semantic model generation must return the generated or reused semantic_model_files."
+            )
         if extracted_output:
             response_content = extracted_output
 
@@ -452,6 +637,12 @@ class GenSemanticModelAgenticNode(AgenticNode):
         db_schema=None,
     ) -> None:
         """Validate and publish semantic model artifacts without relying on one LLM tool call."""
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        if is_osi_authoring(self.agent_config):
+            self._finalize_osi_semantic_model_generation()
+            return
+
         if not semantic_model_files or self.generation_evidence.semantic_kb_sync_passed:
             return
 
@@ -467,26 +658,46 @@ class GenSemanticModelAgenticNode(AgenticNode):
                     f"validate_semantic failed before publishing semantic models: {self._tool_error(validation_result)}"
                 )
 
-        synced_files = []
-        failed_files = []
-        for semantic_model_file in semantic_model_files:
-            if self._save_to_db(
-                semantic_model_file,
-                catalog=catalog,
-                database=database,
-                db_schema=db_schema,
-            ):
-                synced_files.append(semantic_model_file)
-            else:
-                failed_files.append(semantic_model_file)
+        del catalog, database, db_schema
+        publish_result = self.generation_tools.publish_semantic_model(semantic_model_files)
+        if not self._tool_succeeded(publish_result):
+            raise RuntimeError(f"Semantic model KB sync failed: {self._tool_error(publish_result)}")
 
-        if failed_files:
-            raise RuntimeError(
-                "Semantic model generation produced file(s), but failed to sync to Knowledge Base: "
-                f"{', '.join(failed_files)}"
+    def _finalize_osi_semantic_model_generation(self) -> None:
+        """Run the same exact-target gate whether or not the LLM called the end tool."""
+        if not getattr(self, "generation_tools", None):
+            raise RuntimeError("OSI semantic model generation tools are unavailable.")
+
+        try:
+            semantic_model_file, resolved, model_name = self.generation_tools.resolve_planned_osi_semantic_target()
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        if self.generation_evidence.semantic_kb_sync_passed:
+            if self.generation_evidence.semantic_artifact_validation_passed(model_name, resolved):
+                return
+            self.generation_evidence.invalidate_artifact_evidence()
+
+        if not self.generation_evidence.semantic_artifact_validation_passed(model_name, resolved):
+            if not getattr(self, "semantic_func_tool", None):
+                raise RuntimeError(
+                    "Semantic model generation produced a planned OSI target, but validate_semantic is unavailable."
+                )
+            validation_result = self.semantic_func_tool.validate_semantic(
+                scope="semantic_model",
+                semantic_model_name=model_name,
             )
+            self.generation_evidence.record_validation_result(validation_result)
+            if not self._tool_succeeded(validation_result):
+                raise RuntimeError(
+                    f"validate_semantic failed before publishing semantic models: {self._tool_error(validation_result)}"
+                )
+            if not self.generation_evidence.record_semantic_artifact_validation(model_name, resolved):
+                raise RuntimeError("Cannot bind semantic validation evidence to the planned OSI artifact.")
 
-        logger.info(f"Auto-saved {len(synced_files)} semantic models to database")
+        publish_result = self.generation_tools.publish_semantic_model([semantic_model_file])
+        if not self._tool_succeeded(publish_result):
+            raise RuntimeError(f"OSI semantic model KB sync failed: {self._tool_error(publish_result)}")
 
     def _extract_semantic_model_and_output_from_response(self, output: dict) -> tuple[list[str], Optional[str]]:
         """
@@ -545,60 +756,3 @@ class GenSemanticModelAgenticNode(AgenticNode):
         except Exception as e:
             logger.error(f"Unexpected error extracting semantic_model_files: {e}", exc_info=True)
             return [], None
-
-    def _save_to_db(self, semantic_model_file: str, catalog=None, database=None, db_schema=None) -> bool:
-        """
-        Save generated semantic model to database (synchronous).
-
-        Args:
-            semantic_model_file: Name of the semantic model file (e.g., "orders.yaml")
-            catalog: Optional catalog override
-            database: Optional database override
-            db_schema: Optional schema override
-        """
-        try:
-            import os
-
-            from datus.cli.generation_hooks import resolve_kb_sandbox_path
-
-            full_path = resolve_kb_sandbox_path(semantic_model_file, "semantic", self.knowledge_base_dir)
-            if not full_path:
-                logger.warning(f"Semantic model file rejected by sandbox check: {semantic_model_file!r}")
-                return False
-
-            if not os.path.exists(full_path):
-                logger.warning(f"Semantic model file not found: {full_path}")
-                return False
-
-            from datus.agent.node.semantic_authoring import is_osi_authoring
-
-            if is_osi_authoring(self.agent_config):
-                if not self.generation_tools:
-                    logger.error("Generation tools unavailable for OSI semantic sync")
-                    return False
-                result = self.generation_tools.sync_osi_semantic_to_db(full_path)
-                if result.get("success"):
-                    self.generation_evidence.mark_kb_sync("semantic")
-                    logger.info(f"Successfully saved OSI semantic model to database: {result.get('message')}")
-                    return True
-                logger.error(f"Failed to save OSI semantic model to database: {result.get('error', 'unknown error')}")
-                return False
-
-            # Call static method to save to database
-            # Deduplication is handled inside _sync_semantic_to_db
-            result = GenerationHooks._sync_semantic_to_db(
-                full_path, self.agent_config, catalog=catalog, database=database, schema=db_schema
-            )
-
-            if result.get("success"):
-                self.generation_evidence.mark_kb_sync("semantic")
-                logger.info(f"Successfully saved to database: {result.get('message')}")
-                return True
-            else:
-                error = result.get("error", "Unknown error")
-                logger.error(f"Failed to save to database: {error}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error saving to database: {e}", exc_info=True)
-            raise

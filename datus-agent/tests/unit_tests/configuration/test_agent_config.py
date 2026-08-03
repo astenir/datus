@@ -36,7 +36,7 @@ from datus.configuration.agent_config import (
     load_model_config,
     resolve_env,
 )
-from datus.utils.exceptions import DatusException
+from datus.utils.exceptions import DatusException, ErrorCode
 
 pytestmark = pytest.mark.ci
 
@@ -1778,6 +1778,52 @@ class TestAgentConfigFilesystemStrict:
         cfg.override_by_args(filesystem_strict=None)
         assert cfg.filesystem_strict is True
 
+
+class TestAgentConfigFilesystemAllowlist:
+    """``agent.filesystem.allow_read``/``allow_write`` → ``filesystem_allowlist``.
+
+    The allowlist is what lets a strict deployment reach directories mounted
+    outside the project root (e.g. the Airflow DAGs folder) — it must survive
+    alongside ``strict`` in the same config section.
+    """
+
+    _make = TestAgentConfigFilesystemStrict._make
+
+    def test_default_is_empty(self, tmp_path):
+        cfg = self._make(tmp_path)
+        assert bool(cfg.filesystem_allowlist) is False
+        assert cfg.filesystem_allowlist.read == ()
+        assert cfg.filesystem_allowlist.write == ()
+
+    def test_parsed_alongside_strict(self, tmp_path):
+        dags = tmp_path / "dags"
+        cfg = self._make(tmp_path, filesystem={"strict": True, "allow_write": [str(dags)]})
+        assert cfg.filesystem_strict is True
+        assert cfg.filesystem_allowlist.write == (dags.resolve(),)
+
+    def test_read_and_write_kept_separate(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            filesystem={"allow_read": [str(tmp_path / "ro")], "allow_write": [str(tmp_path / "rw")]},
+        )
+        assert cfg.filesystem_allowlist.read == ((tmp_path / "ro").resolve(),)
+        assert cfg.filesystem_allowlist.write == ((tmp_path / "rw").resolve(),)
+
+    def test_setter_accepts_dict_and_none(self, tmp_path):
+        cfg = self._make(tmp_path)
+        cfg.filesystem_allowlist = {"allow_write": [str(tmp_path / "dags")]}
+        assert cfg.filesystem_allowlist.write == ((tmp_path / "dags").resolve(),)
+        cfg.filesystem_allowlist = None
+        assert bool(cfg.filesystem_allowlist) is False
+
+    def test_setter_accepts_allowlist_instance(self, tmp_path):
+        from datus.tools.func_tool.fs_path_policy import PathAllowlist
+
+        cfg = self._make(tmp_path)
+        allowlist = PathAllowlist.from_dict({"allow_read": [str(tmp_path / "shared")]})
+        cfg.filesystem_allowlist = allowlist
+        assert cfg.filesystem_allowlist is allowlist
+
     def test_override_by_args_missing_preserves_yaml(self, tmp_path):
         # override_by_args is also called without a filesystem_strict key
         # (e.g. in non-CLI code paths). That must not reset the flag.
@@ -1869,6 +1915,99 @@ class TestAgentConfigBashToolEnabled:
         assert cfg.bash_tool_enabled is False
         cfg.bash_tool_enabled = "true"
         assert cfg.bash_tool_enabled is True
+
+
+class TestAgentConfigBashAllowedPatterns:
+    """``bash_allowed_patterns`` restricts which commands the general-purpose
+    ``BashTool`` accepts. Sourced from ``agent.bash.allowed_patterns`` in YAML
+    and settable at runtime (the API surface sets ``["datus*"]`` for web
+    clients); default is ``["*"]`` — unrestricted at the execution layer.
+    """
+
+    _make = TestAgentConfigBashToolEnabled._make
+
+    def test_default_unrestricted(self, tmp_path):
+        cfg = self._make(tmp_path)
+        assert cfg.bash_allowed_patterns == ["*"]
+
+    def test_from_yaml_list(self, tmp_path):
+        cfg = self._make(tmp_path, bash={"allowed_patterns": ["datus*", "git status"]})
+        assert cfg.bash_allowed_patterns == ["datus*", "git status"]
+
+    def test_yaml_entries_stripped_and_blanks_dropped(self, tmp_path):
+        cfg = self._make(tmp_path, bash={"allowed_patterns": [" datus* ", "", "   "]})
+        assert cfg.bash_allowed_patterns == ["datus*"]
+
+    @pytest.mark.parametrize("bad_value", ["datus*", 42, {"a": 1}, [], [42, None]])
+    def test_malformed_yaml_falls_back_to_default(self, tmp_path, bad_value):
+        # A non-list value, an empty list, or a list without a single valid
+        # string entry must not silently hide the tool — fall back to the
+        # unrestricted default where the permission profile gates calls.
+        cfg = self._make(tmp_path, bash={"allowed_patterns": bad_value})
+        assert cfg.bash_allowed_patterns == ["*"]
+
+    def test_runtime_setter_overrides(self, tmp_path):
+        cfg = self._make(tmp_path)
+        cfg.bash_allowed_patterns = ["datus*"]
+        assert cfg.bash_allowed_patterns == ["datus*"]
+
+    def test_runtime_setter_rejects_malformed(self, tmp_path):
+        cfg = self._make(tmp_path)
+        cfg.bash_allowed_patterns = ["datus*"]
+        cfg.bash_allowed_patterns = None
+        assert cfg.bash_allowed_patterns == ["*"]
+
+
+class TestAgentConfigBashSandbox:
+    """``bash.sandbox`` parses into a shared, mutable ``SandboxSettings``
+    driving the OS-level sandbox around ``BashTool``. Default is disabled so
+    existing deployments see zero behavior change.
+    """
+
+    _make = TestAgentConfigBashToolEnabled._make
+
+    def test_default_disabled_with_empty_lists(self, tmp_path):
+        cfg = self._make(tmp_path)
+        assert cfg.bash_sandbox.enabled is False
+        assert cfg.bash_sandbox.allow_read == []
+        assert cfg.bash_sandbox.allow_write == []
+
+    def test_from_yaml_full_section(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            bash={"sandbox": {"enabled": True, "allow_read": ["/data"], "allow_write": ["/scratch"]}},
+        )
+        assert cfg.bash_sandbox.enabled is True
+        assert cfg.bash_sandbox.allow_read == ["/data"]
+        assert cfg.bash_sandbox.allow_write == ["/scratch"]
+        assert cfg.bash_sandbox.mode == "normal"
+        assert cfg.bash_sandbox.deny_network is False
+
+    def test_from_yaml_strict_tier(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            bash={"sandbox": {"enabled": True, "mode": "strict", "deny_network": True}},
+        )
+        assert cfg.bash_sandbox.is_strict is True
+        assert cfg.bash_sandbox.deny_network is True
+
+    @pytest.mark.parametrize("yaml_value", ["true", "1", "yes", "on", True])
+    def test_string_true_enables(self, tmp_path, yaml_value):
+        cfg = self._make(tmp_path, bash={"sandbox": {"enabled": yaml_value}})
+        assert cfg.bash_sandbox.enabled is True
+
+    def test_non_mapping_sandbox_section_defaults_disabled(self, tmp_path):
+        cfg = self._make(tmp_path, bash={"sandbox": "true"})
+        assert cfg.bash_sandbox.enabled is False
+
+    def test_settings_object_is_shared_and_mutable(self, tmp_path):
+        # /sandbox on|off mutates the object in place; BashTool holds the
+        # same reference, so identity across reads is the contract here.
+        cfg = self._make(tmp_path)
+        settings = cfg.bash_sandbox
+        settings.enabled = True
+        assert cfg.bash_sandbox is settings
+        assert cfg.bash_sandbox.enabled is True
 
 
 class TestAgentConfigTavilyApiKey:
@@ -2178,8 +2317,14 @@ class TestProviderConfigurationDispatch:
 
     def test_set_active_custom_rejects_unknown_name(self, tmp_path):
         cfg = self._make(tmp_path)
-        with pytest.raises(DatusException):
+        with pytest.raises(DatusException) as excinfo:
             cfg.set_active_custom("not-registered")
+
+        # Remote front-ends match on this error_type to recover a stale
+        # model selection, so keep both the code and the listing stable.
+        assert excinfo.value.code is ErrorCode.MODEL_NOT_CONFIGURED
+        assert "Unknown custom model `not-registered`" in str(excinfo.value)
+        assert "legacy" in str(excinfo.value)
 
     def test_set_provider_config_mutates_in_memory(self, tmp_path):
         cfg = self._make(tmp_path)
@@ -2615,6 +2760,161 @@ class TestPluginProfiles:
         assert cfg.get_plugin_profile("hello")["api_base_url"] == "p"
 
 
+class TestPluginActivation:
+    """Project-level activation accessors + ``set_plugin_activation``."""
+
+    def _make(self, tmp_path, active_plugins=None, plugins=None):
+        from datus.configuration.project_config import PluginActivation  # noqa: F401 (import kept local)
+
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            project_root=str(tmp_path),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            plugins=plugins or {},
+            active_plugins=active_plugins,
+            skip_init_dirs=True,
+        )
+
+    def test_section_absent_activates_everything(self, tmp_path):
+        cfg = self._make(tmp_path, active_plugins=None)
+        assert cfg.plugins_section_present() is False
+        assert cfg.active_plugin_names() is None  # no filter
+        assert cfg.plugin_active("anything") is True
+        assert cfg.active_plugin_profiles("anything") is None
+
+    def test_whitelist_gates_unlisted_plugins(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            active_plugins={"alpha": {"enabled": True}, "beta": {"enabled": False}},
+        )
+        assert cfg.plugins_section_present() is True
+        assert cfg.active_plugin_names() == {"alpha"}
+        assert cfg.plugin_active("alpha") is True
+        assert cfg.plugin_active("beta") is False
+        assert cfg.plugin_active("gamma") is False  # unlisted
+
+    def test_active_profiles_narrowing(self, tmp_path):
+        cfg = self._make(tmp_path, active_plugins={"alpha": {"enabled": True, "active_profile": ["prod"]}})
+        assert cfg.active_plugin_profiles("alpha") == ["prod"]
+        # Disabled / unlisted → empty list (inactive).
+        assert cfg.active_plugin_profiles("missing") == []
+
+    def test_master_switch_off_disables_all(self, tmp_path):
+        cfg = self._make(tmp_path, active_plugins={"alpha": {"enabled": True}})
+        cfg.plugins_enabled = False
+        assert cfg.active_plugin_names() == set()
+        assert cfg.plugin_active("alpha") is False
+
+    def test_get_plugin_profile_single_active_becomes_default(self, tmp_path):
+        cfg = AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            project_root=str(tmp_path),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            plugins={"hello": {"prod": {"api_base_url": "p"}, "staging": {"api_base_url": "s"}}},
+            active_plugins={"hello": {"enabled": True, "active_profile": ["staging"]}},
+            skip_init_dirs=True,
+        )
+        # A single active profile is the CLI default.
+        assert cfg.get_plugin_profile("hello")["api_base_url"] == "s"
+
+    def test_set_plugin_activation_seeds_and_persists(self, tmp_path, monkeypatch):
+        # Section absent → seeding pulls in all installed plugins so toggling
+        # one does not silently deactivate the rest.
+        class _EP:
+            def __init__(self, name):
+                self.name = name
+
+        monkeypatch.setattr(
+            "datus.plugins.registry.iter_plugin_entry_points",
+            lambda: [_EP("alpha"), _EP("beta")],
+        )
+        # Keep the managed-store scan hermetic (no dependence on ~/.datus).
+        monkeypatch.setattr("datus.plugins.store.iter_installed", lambda: [])
+        cfg = self._make(tmp_path, active_plugins=None)
+        cfg.set_plugin_activation("alpha", enabled=False)
+
+        from datus.configuration.project_config import load_project_override
+
+        override = load_project_override(cwd=str(tmp_path))
+        assert set(override.plugins) == {"alpha", "beta"}
+        assert override.plugins["alpha"].enabled is False
+        assert override.plugins["beta"].enabled is True
+        # In-memory state flipped to whitelist mode.
+        assert cfg.plugins_section_present() is True
+        assert cfg.plugin_active("beta") is True
+        assert cfg.plugin_active("alpha") is False
+
+    def test_set_plugin_activation_seed_includes_managed_store(self, tmp_path, monkeypatch):
+        # Entry-point discovery empty (e.g. a managed plugin dir not yet on
+        # sys.path) must NOT collapse the seed to a single-entry whitelist that
+        # deactivates every other installed plugin — the managed store is merged.
+        monkeypatch.setattr("datus.plugins.registry.iter_plugin_entry_points", lambda: [])
+        monkeypatch.setattr(
+            "datus.plugins.store.iter_installed",
+            lambda: [{"name": "airflow"}, {"name": "statsig"}],
+        )
+        cfg = self._make(tmp_path, active_plugins=None)
+        cfg.set_plugin_activation("airflow", enabled=False)
+
+        from datus.configuration.project_config import load_project_override
+
+        override = load_project_override(cwd=str(tmp_path))
+        assert set(override.plugins) == {"airflow", "statsig"}
+        assert override.plugins["airflow"].enabled is False
+        assert override.plugins["statsig"].enabled is True
+
+    def test_set_plugin_activation_profiles(self, tmp_path):
+        cfg = self._make(tmp_path, active_plugins={"alpha": {"enabled": True}})
+        cfg.set_plugin_activation("alpha", enabled=True, active_profiles=["prod", "dev"])
+        assert cfg.active_plugin_profiles("alpha") == ["prod", "dev"]
+        cfg.set_plugin_activation("alpha", enabled=True, clear_profiles=True)
+        assert cfg.active_plugin_profiles("alpha") is None
+
+    def test_save_and_delete_plugin_profile(self, tmp_path, monkeypatch):
+        # Route the global config writes through a ConfigurationManager backed
+        # by a temp agent.yml so the CRUD round-trips without touching ~/.datus.
+        import datus.configuration.agent_config_loader as loader
+
+        agent_yml = tmp_path / "agent.yml"
+        agent_yml.write_text("agent:\n  plugins: {}\n")
+        mgr = loader.ConfigurationManager(str(agent_yml))
+        monkeypatch.setattr(loader, "configuration_manager", lambda *a, **k: mgr)
+
+        cfg = self._make(tmp_path)
+        cfg.save_plugin_profile("hello", "prod", {"api_base_url": "http://h"})
+        assert cfg.plugin_services["hello"]["prod"]["api_base_url"] == "http://h"
+        assert mgr.get("plugins")["hello"]["prod"]["api_base_url"] == "http://h"
+
+        assert cfg.delete_plugin_profile("hello", "prod") is True
+        assert "hello" not in cfg.plugin_services
+        # Deleting a missing profile returns False.
+        assert cfg.delete_plugin_profile("hello", "prod") is False
+
+    def test_save_plugin_profile_raises_on_persist_failure(self, tmp_path, monkeypatch):
+        # A failed disk write must propagate (not silently update in-memory
+        # state that would vanish on restart).
+        import datus.configuration.agent_config_loader as loader
+        from datus.utils.exceptions import DatusException
+
+        class _FailingMgr:
+            def get(self, key, default=None):
+                return {}
+
+            def update_item(self, *args, **kwargs):
+                return False  # save failed
+
+        monkeypatch.setattr(loader, "configuration_manager", lambda *a, **k: _FailingMgr())
+        cfg = self._make(tmp_path)
+        with pytest.raises(DatusException):
+            cfg.save_plugin_profile("hello", "prod", {"api_base_url": "http://h"})
+        # In-memory plugin services were NOT mutated.
+        assert "hello" not in cfg.plugin_services
+
+
 class TestPluginsEnabledSwitch:
     """``agent.plugins_enabled`` master switch for the plugin system."""
 
@@ -2651,6 +2951,169 @@ class TestPluginsEnabledSwitch:
         # The whole ``agent.plugins`` section is ignored when disabled.
         assert cfg.plugin_services == {}
         assert cfg.get_plugin_profile("hello") == {}
+
+
+class TestConfigMutable:
+    """``config_mutable`` — read-only config mode for API/gateway surfaces."""
+
+    def _make(self, tmp_path, **extra):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            skip_init_dirs=True,
+            **extra,
+        )
+
+    def test_defaults_to_mutable(self, tmp_path):
+        assert self._make(tmp_path).config_mutable is True
+
+    @pytest.mark.parametrize("value", [False, "false", "no", "off", "0"])
+    def test_immutable_values(self, tmp_path, value):
+        assert self._make(tmp_path, config_mutable=value).config_mutable is False
+
+    def test_setter_coerces_to_bool(self, tmp_path):
+        cfg = self._make(tmp_path)
+        cfg.config_mutable = 0
+        assert cfg.config_mutable is False
+        cfg.config_mutable = "yes"
+        assert cfg.config_mutable is True
+
+    def test_deepcopy_isolates_the_clone(self, tmp_path):
+        import copy
+
+        cfg = self._make(tmp_path)
+        clone = copy.deepcopy(cfg)
+        clone.config_mutable = False
+        assert clone.config_mutable is False
+        assert cfg.config_mutable is True
+
+
+class TestPluginPathsConfig:
+    """``agent.plugin_paths`` — extra plugin-level directory mounts."""
+
+    def _make(self, tmp_path, **extra):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            skip_init_dirs=True,
+            **extra,
+        )
+
+    def test_defaults_to_empty(self, tmp_path):
+        assert self._make(tmp_path).plugin_paths == []
+
+    def test_keeps_string_entries_stripped(self, tmp_path):
+        cfg = self._make(tmp_path, plugin_paths=["/opt/plugins/foo", "  ~/dev/bar  ", "", "   ", 42, None])
+        assert cfg.plugin_paths == ["/opt/plugins/foo", "~/dev/bar"]
+
+    def test_non_list_value_ignored_with_warning(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            cfg = self._make(tmp_path, plugin_paths="/opt/plugins/foo")
+        assert cfg.plugin_paths == []
+        assert "plugin_paths must be a list" in caplog.text
+
+    def test_activates_request_plugin_paths_during_construction(self, tmp_path, monkeypatch):
+        """Direct AuthProvider construction must not depend on the YAML loader."""
+        calls = []
+
+        def activate(active_names, plugins_enabled=True, extra_paths=None):
+            calls.append((active_names, plugins_enabled, extra_paths))
+            return []
+
+        monkeypatch.setattr("datus.plugins.store.activate", activate)
+
+        self._make(
+            tmp_path,
+            plugin_paths=[" /srv/tenant/plugin "],
+            active_plugins={"tenant-plugin": {"enabled": True}},
+        )
+
+        assert calls == [({"tenant-plugin"}, True, ["/srv/tenant/plugin"])]
+
+
+class TestPluginStateSignature:
+    """``plugin_state_signature`` — the plugin half of the SaaS config fingerprint.
+
+    ``DatusService.compute_fingerprint`` hashes ``dataclasses.asdict`` plus this
+    snapshot; every plugin input lives in instance attributes that ``asdict``
+    cannot see, so these tests pin that each one reaches the payload.
+    """
+
+    def _make(self, tmp_path, **extra):
+        return AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            project_root=str(tmp_path),
+            target="mock",
+            models={"mock": {"type": "openai", "api_key": "k", "model": "m"}},
+            skip_init_dirs=True,
+            **extra,
+        )
+
+    def test_reports_config_side_plugin_state(self, tmp_path):
+        cfg = self._make(
+            tmp_path,
+            plugin_paths=["/srv/tenant/plugin"],
+            plugins={"hello": {"prod": {"api_base_url": "https://prod"}}},
+            active_plugins={"hello": {"enabled": True, "active_profile": ["prod"]}},
+        )
+
+        signature = cfg.plugin_state_signature()
+
+        assert signature["enabled"] is True
+        assert signature["section_present"] is True
+        assert signature["paths"] == ["/srv/tenant/plugin"]
+        assert signature["activation"] == {"hello": {"enabled": True, "active_profile": ["prod"]}}
+        assert signature["profiles"]["hello"]["prod"]["api_base_url"] == "https://prod"
+
+    def test_absent_section_reports_no_whitelist(self, tmp_path):
+        signature = self._make(tmp_path).plugin_state_signature()
+        assert signature["section_present"] is False
+        assert signature["activation"] == {}
+        assert signature["paths"] == []
+
+    def test_unpinned_plugin_keeps_active_profile_none(self, tmp_path):
+        """``None`` (all profiles) must stay distinct from ``[]`` (none pinned)."""
+        cfg = self._make(tmp_path, active_plugins={"hello": {"enabled": True}})
+        assert cfg.plugin_state_signature()["activation"] == {"hello": {"enabled": True, "active_profile": None}}
+
+    def test_master_switch_reported(self, tmp_path):
+        cfg = self._make(tmp_path, plugins_enabled=False)
+        assert cfg.plugin_state_signature()["enabled"] is False
+
+    def test_is_json_serializable(self, tmp_path):
+        """The host hashes it through ``json.dumps`` — no dataclass leaks."""
+        import json
+
+        cfg = self._make(
+            tmp_path,
+            plugin_paths=["/srv/tenant/plugin"],
+            plugins={"hello": {"prod": {"api_base_url": "https://prod"}}},
+            active_plugins={"hello": {"enabled": True, "active_profile": ["prod"]}},
+        )
+
+        assert json.loads(json.dumps(cfg.plugin_state_signature())) == cfg.plugin_state_signature()
+
+    def test_reads_no_filesystem_state(self, tmp_path):
+        """Runs on every API request — it must stay a pure in-memory read.
+
+        A managed-store scan here would cost I/O per request and buy nothing: the
+        rebuild it triggers reuses the same AgentConfig and the process keeps its
+        already-loaded manifests.
+        """
+        from datus.plugins import store
+
+        cfg = self._make(tmp_path, active_plugins={"hello": {"enabled": True}})
+        store.write_meta(cfg.path_manager.plugins_dir / "hello", {"name": "hello", "version": "1.0"})
+        before = cfg.plugin_state_signature()
+
+        store.write_meta(cfg.path_manager.plugins_dir / "hello", {"name": "hello", "version": "2.0"})
+
+        assert cfg.plugin_state_signature() == before
 
 
 class TestPromptManagerAttribute:

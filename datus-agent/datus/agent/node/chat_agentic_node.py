@@ -237,6 +237,7 @@ class ChatAgenticNode(AgenticNode):
                 active_profile=getattr(self.agent_config, "active_profile_name", None) or "normal",
                 plugin_bash_rules=getattr(self.agent_config, "plugin_bash_rules", None),
                 project_bash_allows=getattr(self.agent_config, "project_bash_allow", None),
+                project_sql_allows=getattr(self.agent_config, "project_sql_allow", None),
             )
             self.permission_manager.set_permission_callback(self._handle_permission_ask)
 
@@ -244,6 +245,8 @@ class ChatAgenticNode(AgenticNode):
             self.skill_manager = SkillManager(
                 config=skills_config,
                 permission_manager=self.permission_manager,
+                config_mutable=self._resolve_config_mutable(),
+                agent_config=self.agent_config,
             )
             self.skill_func_tool = SkillFuncTool(
                 manager=self.skill_manager,

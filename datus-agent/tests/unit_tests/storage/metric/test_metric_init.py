@@ -6,10 +6,13 @@
 
 from enum import Enum
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from datus.agent.node import semantic_authoring
+from datus.schemas.action_history import ActionStatus
+from datus.schemas.semantic_agentic_node_models import SourceQueryEvidence
 from datus.storage.metric.metric_init import (
     BIZ_NAME,
     DEFAULT_METRICS_BATCH_SIZE,
@@ -18,10 +21,30 @@ from datus.storage.metric.metric_init import (
     _extract_metric_artifact_ids,
     _generate_metrics_batch,
     _source_provenance_from_row,
+    _source_query_from_row,
     _sync_metric_provenance,
-    _unique_metric_catalog_by_name,
     init_semantic_yaml_metrics,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_osi_schema_validation(monkeypatch):
+    monkeypatch.setattr(semantic_authoring, "validate_osi_core_document", lambda document: None)
+
+
+def _source_query(sql: str, name: str = "sql_1", question: str = "") -> SourceQueryEvidence:
+    return SourceQueryEvidence(source_sql_name=name, sql=sql, question=question)
+
+
+def _report_semantic_target(action_callback, semantic_model_file: str) -> None:
+    action_callback(
+        SimpleNamespace(
+            status=ActionStatus.SUCCESS,
+            action_type="gen_semantic_model_response",
+            output={"semantic_models": [semantic_model_file]},
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # _action_status_value
@@ -130,7 +153,7 @@ class TestInitSemanticYamlMetrics:
         yaml_file.write_text("metrics:\n  - name: revenue\n")
         mock_config = MagicMock()
         mock_tools = MagicMock()
-        mock_tools._sync_osi_metric_to_db.return_value = {"success": True, "message": "synced"}
+        mock_tools.sync_osi_to_db.return_value = {"success": True, "message": "synced"}
 
         with (
             patch(
@@ -144,7 +167,11 @@ class TestInitSemanticYamlMetrics:
         assert success is True
         assert error == "synced"
         mock_cls.assert_called_once_with(agent_config=mock_config, authoring_format="osi")
-        mock_tools._sync_osi_metric_to_db.assert_called_once_with(str(yaml_file))
+        mock_tools.sync_osi_to_db.assert_called_once_with(
+            str(yaml_file),
+            include_semantic_objects=False,
+            include_metrics=True,
+        )
 
     def test_osi_existing_file_returns_sync_error(self, tmp_path):
         """OSI sync failures are surfaced as init failures."""
@@ -152,7 +179,7 @@ class TestInitSemanticYamlMetrics:
         yaml_file.write_text("metrics:\n  - name: revenue\n")
         mock_config = MagicMock()
         mock_tools = MagicMock()
-        mock_tools._sync_osi_metric_to_db.return_value = {"success": False, "error": "invalid osi metrics"}
+        mock_tools.sync_osi_to_db.return_value = {"success": False, "error": "invalid osi metrics"}
 
         with (
             patch(
@@ -249,7 +276,10 @@ class TestInitSuccessStoryMetricsAsync:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -300,7 +330,10 @@ class TestInitSuccessStoryMetricsAsync:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -344,7 +377,10 @@ class TestInitSuccessStoryMetricsAsync:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -395,7 +431,10 @@ class TestInitSuccessStoryMetricsAsync:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -541,7 +580,10 @@ class TestInitSuccessStoryMetricsAsyncOverwriteTruncate:
                 "datus.storage.metric.init_utils.exists_metrics",
                 MagicMock(return_value=set()),
             ) as mock_exists,
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -595,7 +637,10 @@ class TestInitSuccessStoryMetricsAsyncOverwriteTruncate:
                 "datus.storage.metric.init_utils.exists_metrics",
                 MagicMock(return_value=set()),
             ) as mock_exists,
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_prompt_manager),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
             patch("datus.storage.metric.metric_init.pd.read_csv") as mock_read_csv,
@@ -620,90 +665,245 @@ class TestInitSuccessStoryMetricsAsyncOverwriteTruncate:
 @pytest.mark.ci
 class TestEnsureSemanticModelsForMetrics:
     @pytest.mark.asyncio
+    async def test_osi_lets_semantic_agent_reuse_the_only_live_model(self, tmp_path):
+        model_dir = tmp_path / "subject" / "semantic_models" / "warehouse"
+        model_dir.mkdir(parents=True)
+        (model_dir / "orders.yml").write_text(
+            "semantic_model:\n"
+            "  - name: order_operations\n"
+            "    datasets:\n"
+            "      - name: orders\n"
+            "        source: analytics.fact_orders\n",
+            encoding="utf-8",
+        )
+        config = SimpleNamespace(
+            project_root=str(tmp_path),
+            current_datasource="warehouse",
+            resolve_semantic_adapter=lambda requested=None: "osi",
+        )
+
+        async def fake_init(*args, action_callback=None, **kwargs):
+            _report_semantic_target(
+                action_callback,
+                "subject/semantic_models/warehouse/orders.yml",
+            )
+            return True, ""
+
+        with patch(
+            "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
+            side_effect=fake_init,
+        ) as init_mock:
+            result = await _ensure_semantic_models_for_metrics(
+                config,
+                "success_story.csv",
+            )
+
+        assert result == (
+            True,
+            "",
+            {
+                "semantic_model_name": "order_operations",
+                "semantic_model_file": "subject/semantic_models/warehouse/orders.yml",
+            },
+        )
+        init_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_osi_generates_domain_semantic_model_once(self, tmp_path):
         from unittest.mock import patch
 
-        target_file = "subject/semantic_models/warehouse/warehouse.yml"
+        target_file = "subject/semantic_models/warehouse/orders_analytics.yml"
         target_path = tmp_path / target_file
         config = SimpleNamespace(
             project_root=str(tmp_path),
             current_datasource="warehouse",
             resolve_semantic_adapter=lambda requested=None: "osi",
         )
-        semantic_rag = MagicMock()
-        semantic_rag.get_size.return_value = 0
         action_callback = MagicMock()
         captured = {}
 
-        async def fake_init(agent_config, success_story, emit=None, build_mode="overwrite", action_callback=None):
+        async def fake_init(
+            agent_config,
+            success_story,
+            emit=None,
+            build_mode="overwrite",
+            action_callback=None,
+            require_exact_osi_target=False,
+        ):
             target_path.parent.mkdir(parents=True)
-            target_path.write_text("version: 0.2.0.dev0\nsemantic_model:\n  - name: warehouse\n", encoding="utf-8")
+            target_path.write_text(
+                "version: 0.2.0.dev0\n"
+                "semantic_model:\n"
+                "  - name: orders_analytics\n"
+                "    datasets:\n"
+                "      - name: orders\n"
+                "        source: orders\n",
+                encoding="utf-8",
+            )
             captured["build_mode"] = build_mode
+            captured["require_exact_osi_target"] = require_exact_osi_target
             captured["action_callback"] = action_callback
+            _report_semantic_target(action_callback, target_file)
             return True, ""
 
-        with (
-            patch("datus.storage.semantic_model.store.SemanticModelRAG", return_value=semantic_rag),
-            patch(
-                "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
-                side_effect=fake_init,
-            ) as init_mock,
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list") as extract_mock,
-            patch("datus.storage.metric.metric_init.ensure_semantic_models_exist") as ensure_mock,
-        ):
-            ok, error, created = await _ensure_semantic_models_for_metrics(
+        with patch(
+            "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
+            side_effect=fake_init,
+        ) as init_mock:
+            ok, error, target = await _ensure_semantic_models_for_metrics(
                 config,
                 "success_story.csv",
-                [{"sql": "SELECT COUNT(*) FROM orders", "question": "How many orders?"}],
-                ["SELECT COUNT(*) FROM orders"],
                 action_callback=action_callback,
             )
 
         assert ok is True
         assert error == ""
-        assert created == [target_file]
+        assert target == {
+            "semantic_model_name": "orders_analytics",
+            "semantic_model_file": target_file,
+        }
         init_mock.assert_called_once()
-        extract_mock.assert_not_called()
-        ensure_mock.assert_not_called()
         assert captured["build_mode"] == "incremental"
-        assert captured["action_callback"] is action_callback
+        assert captured["require_exact_osi_target"] is True
+        assert captured["action_callback"] is not action_callback
+        action_callback.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_metricflow_keeps_per_table_semantic_model_auto_create(self):
+    async def test_osi_accepts_generated_query_backed_model_for_join_source(self, tmp_path):
+        from unittest.mock import patch
+
+        target_file = "subject/semantic_models/warehouse/account_analytics.yml"
+        target_path = tmp_path / target_file
+        config = SimpleNamespace(
+            project_root=str(tmp_path),
+            current_datasource="warehouse",
+            current_db_config=lambda: SimpleNamespace(type="starrocks"),
+            resolve_semantic_adapter=lambda requested=None: "osi",
+        )
+
+        async def fake_init(
+            agent_config,
+            success_story,
+            emit=None,
+            build_mode="overwrite",
+            action_callback=None,
+            require_exact_osi_target=False,
+        ):
+            assert require_exact_osi_target is True
+            target_path.parent.mkdir(parents=True)
+            target_path.write_text(
+                "version: 0.2.0.dev0\n"
+                "semantic_model:\n"
+                "  - name: account_analytics\n"
+                "    datasets:\n"
+                "      - name: account_player_gameinfo\n"
+                "        source: |\n"
+                "          SELECT a.suserid, c.city_level\n"
+                "          FROM ac_manage.dim_mgamejp_account_allinfo_nf AS a\n"
+                "          JOIN ac_manage.dim_uf_player_gameinfo_mf AS c ON a.suserid = c.userid\n"
+                "        custom_extensions:\n"
+                "          - vendor_name: DATUS\n"
+                '            data: \'{"source_type":"query"}\'\n',
+                encoding="utf-8",
+            )
+            _report_semantic_target(action_callback, target_file)
+            return True, ""
+
+        with patch(
+            "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
+            side_effect=fake_init,
+        ) as init_mock:
+            ok, error, target = await _ensure_semantic_models_for_metrics(
+                config,
+                "success_story.csv",
+            )
+
+        assert ok is True
+        assert error == ""
+        assert target == {
+            "semantic_model_name": "account_analytics",
+            "semantic_model_file": target_file,
+        }
+        init_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_osi_propagates_exact_unchanged_model_selected_by_semantic_agent(self, tmp_path):
+        from unittest.mock import patch
+
+        model_dir = tmp_path / "subject" / "semantic_models" / "warehouse"
+        model_dir.mkdir(parents=True)
+        (model_dir / "orders.yml").write_text(
+            "version: 0.2.0.dev0\n"
+            "semantic_model:\n"
+            "  - name: orders\n"
+            "    datasets:\n"
+            "      - name: orders\n"
+            "        source: analytics.fact_orders\n",
+            encoding="utf-8",
+        )
+        (model_dir / "payments.yml").write_text(
+            "version: 0.2.0.dev0\n"
+            "semantic_model:\n"
+            "  - name: payments\n"
+            "    datasets:\n"
+            "      - name: payments\n"
+            "        source: finance.fact_payments\n",
+            encoding="utf-8",
+        )
+        config = SimpleNamespace(
+            project_root=str(tmp_path),
+            current_datasource="warehouse",
+            resolve_semantic_adapter=lambda requested=None: "osi",
+        )
+
+        async def fake_init(*args, action_callback=None, **kwargs):
+            _report_semantic_target(
+                action_callback,
+                "subject/semantic_models/warehouse/orders.yml",
+            )
+            return True, ""
+
+        with patch(
+            "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
+            side_effect=fake_init,
+        ) as init_mock:
+            ok, error, target = await _ensure_semantic_models_for_metrics(
+                config,
+                "success_story.csv",
+            )
+
+        assert ok is True
+        assert error == ""
+        assert target == {
+            "semantic_model_name": "orders",
+            "semantic_model_file": "subject/semantic_models/warehouse/orders.yml",
+        }
+        init_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_metricflow_uses_shared_semantic_agent_workflow(self):
         from unittest.mock import patch
 
         config = SimpleNamespace(
             resolve_semantic_adapter=lambda requested=None: "metricflow",
         )
-        records = [{"sql": "SELECT COUNT(*) FROM orders JOIN customers USING (customer_id)", "question": "Orders?"}]
-        sql_list = [records[0]["sql"]]
+        init_mock = AsyncMock(return_value=(True, ""))
 
-        async def fake_ensure(tables, agent_config, emit=None, sql_evidence_by_table=None):
-            assert tables == ["customers", "orders"]
-            assert sql_evidence_by_table == {"orders": records}
-            return True, "", tables
-
-        with (
-            patch(
-                "datus.storage.metric.metric_init.extract_tables_from_sql_list",
-                return_value=["customers", "orders"],
-            ),
-            patch(
-                "datus.storage.metric.metric_init.extract_table_sql_evidence",
-                return_value={"orders": records},
-            ),
-            patch("datus.storage.metric.metric_init.ensure_semantic_models_exist", side_effect=fake_ensure),
+        with patch(
+            "datus.storage.semantic_model.semantic_model_init.init_success_story_semantic_model_async",
+            init_mock,
         ):
-            ok, error, created = await _ensure_semantic_models_for_metrics(
+            ok, error, target = await _ensure_semantic_models_for_metrics(
                 config,
                 "success_story.csv",
-                records,
-                sql_list,
             )
 
         assert ok is True
         assert error == ""
-        assert created == ["customers", "orders"]
+        assert target is None
+        init_mock.assert_awaited_once()
+        assert init_mock.await_args.kwargs["build_mode"] == "incremental"
+        assert init_mock.await_args.kwargs["require_exact_osi_target"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +913,24 @@ class TestEnsureSemanticModelsForMetrics:
 
 @pytest.mark.ci
 class TestMetricProvenanceHelpers:
+    def test_source_query_from_row_keeps_sql_and_source_identity_without_context_ids(self):
+        result = _source_query_from_row(
+            {
+                "question": "Revenue?",
+                "sql": "SELECT SUM(amount) FROM orders",
+                "external_knowledge": "amount excludes tax",
+            },
+            2,
+            "/tmp/orders.csv",
+        )
+
+        assert isinstance(result, SourceQueryEvidence)
+        assert result.source_sql_name == "sql_3"
+        assert result.sql == "SELECT SUM(amount) FROM orders"
+        assert result.source_id == "orders.csv:2"
+        assert result.external_knowledge == ""
+        assert result.source_context_ids == []
+
     def test_source_provenance_from_row_reads_context_columns(self):
         row = {
             "source_context_id": "metric:seed:7; metric:task:21",
@@ -855,8 +1073,60 @@ class TestGenerateMetricsBatch:
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
         ):
             ok, err, result = await _generate_metrics_batch(
-                ["Query 1:\nQuestion: rev?\nSQL:\nSELECT 1"],
+                [_source_query("SELECT 1", question="rev?")],
                 0,
+                mock_config,
+                None,
+                None,
+                BatchEventHelper("test", None),
+                None,
+                semantic_model_target={
+                    "semantic_model_name": "orders_analytics",
+                    "semantic_model_file": "subject/semantic_models/warehouse/orders.yml",
+                },
+            )
+
+        assert ok is True
+        assert err == ""
+        assert result == {"metrics": ["revenue"]}
+        assert mock_node.input.semantic_model_name == "orders_analytics"
+        assert mock_node.input.semantic_model_file == "subject/semantic_models/warehouse/orders.yml"
+        assert "Analyze the following SQL queries" in mock_node.input.user_message
+        assert "SQL:\nSELECT 1" in mock_node.input.user_message
+
+    @pytest.mark.asyncio
+    async def test_batch_prompt_uses_request_local_query_indexes(self):
+        from unittest.mock import patch
+
+        from datus.schemas.action_history import ActionStatus
+        from datus.schemas.batch_events import BatchEventHelper
+
+        mock_node = MagicMock()
+
+        async def fake_stream(_ahm):
+            action = MagicMock()
+            action.status = ActionStatus.SUCCESS
+            action.action_type = "gen_metrics_response"
+            action.output = {"metrics": ["revenue"]}
+            action.messages = "ok"
+            yield action
+
+        mock_node.execute_stream = fake_stream
+        mock_config = MagicMock()
+        mock_config.current_db_config.return_value = MagicMock(catalog="", database="db", schema="")
+        mock_pm = MagicMock()
+        mock_pm.get_latest_version.return_value = "1.0"
+
+        with (
+            patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
+            patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
+        ):
+            ok, _, _ = await _generate_metrics_batch(
+                [
+                    _source_query("SELECT 6", name="sql_6", question="six?"),
+                    _source_query("SELECT 7", name="sql_7", question="seven?"),
+                ],
+                1,
                 mock_config,
                 None,
                 None,
@@ -865,8 +1135,9 @@ class TestGenerateMetricsBatch:
             )
 
         assert ok is True
-        assert err == ""
-        assert result == {"metrics": ["revenue"]}
+        assert "Query 1:\nQuestion: six?" in mock_node.input.user_message
+        assert "Query 2:\nQuestion: seven?" in mock_node.input.user_message
+        assert "Query 6:" not in mock_node.input.user_message
 
     @pytest.mark.asyncio
     async def test_success_captures_synced_metric_artifact_ids(self):
@@ -880,7 +1151,7 @@ class TestGenerateMetricsBatch:
         async def fake_stream(_ahm):
             tool_action = MagicMock()
             tool_action.status = ActionStatus.SUCCESS
-            tool_action.action_type = "end_metric_generation"
+            tool_action.action_type = "publish_metrics"
             tool_action.output = {"result": {"sync": {"metric_artifact_ids": ["metric:Sales.activity_count"]}}}
             tool_action.messages = "published"
             yield tool_action
@@ -904,7 +1175,7 @@ class TestGenerateMetricsBatch:
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
         ):
             ok, err, result = await _generate_metrics_batch(
-                ["Query 1:\nQuestion: rev?\nSQL:\nSELECT 1"],
+                [_source_query("SELECT 1", question="rev?")],
                 0,
                 mock_config,
                 None,
@@ -946,7 +1217,7 @@ class TestGenerateMetricsBatch:
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
         ):
             ok, err, result = await _generate_metrics_batch(
-                ["Query 1:\nQuestion: q?\nSQL:\nSELECT 1"],
+                [_source_query("SELECT 1", question="q?")],
                 0,
                 mock_config,
                 None,
@@ -988,7 +1259,7 @@ class TestGenerateMetricsBatch:
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
         ):
             ok, err, result = await _generate_metrics_batch(
-                ["Query 1:\nQuestion: q?\nSQL:\nSELECT 1"],
+                [_source_query("SELECT 1", question="q?")],
                 0,
                 mock_config,
                 None,
@@ -1025,7 +1296,7 @@ class TestGenerateMetricsBatch:
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", return_value=mock_node),
         ):
             ok, err, result = await _generate_metrics_batch(
-                ["Query 1:\nQuestion: q?\nSQL:\nSELECT 1"],
+                [_source_query("SELECT 1", question="q?")],
                 0,
                 mock_config,
                 None,
@@ -1103,7 +1374,10 @@ class TestBatchSplitting:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", MockNode),
             patch("datus.storage.metric.metric_init.pd.read_csv", return_value=pd.DataFrame(rows)),
@@ -1117,6 +1391,70 @@ class TestBatchSplitting:
         assert ok is True
         assert err == ""
         assert len(result["metrics"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_all_batches_reuse_file_level_semantic_model(self):
+        from unittest.mock import AsyncMock, patch
+
+        import pandas as pd
+
+        from datus.schemas.action_history import ActionStatus
+        from datus.storage.metric.metric_init import init_success_story_metrics_async
+
+        captured_inputs = []
+
+        class CapturingNode:
+            def __init__(self, *args, **kwargs):
+                self.input = None
+
+            async def execute_stream(self, _ahm):
+                captured_inputs.append(self.input)
+                action = MagicMock()
+                action.status = ActionStatus.SUCCESS
+                action.action_type = "gen_metrics_response"
+                action.output = {"metrics": ["revenue"]}
+                action.messages = "ok"
+                yield action
+
+        mock_config = MagicMock()
+        mock_config.project_name = "test"
+        mock_config.current_db_config.return_value = MagicMock(catalog="", database="db", schema="")
+        mock_pm = MagicMock()
+        mock_pm.get_latest_version.return_value = "1.0"
+        ensure = AsyncMock(
+            return_value=(
+                True,
+                "",
+                {
+                    "semantic_model_name": "orders_analytics",
+                    "semantic_model_file": "subject/semantic_models/warehouse/orders.yml",
+                },
+            )
+        )
+        rows = [{"question": f"q{i}", "sql": f"SELECT SUM(amount) FROM orders WHERE id = {i}"} for i in range(3)]
+
+        with (
+            patch("datus.storage.metric.store.MetricRAG", MagicMock()),
+            patch("datus.storage.metric.metric_init._ensure_semantic_models_for_metrics", ensure),
+            patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
+            patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", CapturingNode),
+            patch("datus.storage.metric.metric_init.pd.read_csv", return_value=pd.DataFrame(rows)),
+        ):
+            ok, err, _result = await init_success_story_metrics_async(
+                agent_config=mock_config,
+                success_story="orders.csv",
+                batch_size=2,
+            )
+
+        assert ok is True
+        assert err == ""
+        assert ensure.await_count == 1
+        assert ensure.await_args.args[:2] == (mock_config, "orders.csv")
+        assert [node_input.user_message.count("\nSQL:\n") for node_input in captured_inputs] == [2, 1]
+        assert {node_input.semantic_model_name for node_input in captured_inputs} == {"orders_analytics"}
+        assert {node_input.semantic_model_file for node_input in captured_inputs} == {
+            "subject/semantic_models/warehouse/orders.yml"
+        }
 
     @pytest.mark.asyncio
     async def test_partial_batch_failure_continues(self):
@@ -1139,7 +1477,10 @@ class TestBatchSplitting:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", MockNode),
             patch("datus.storage.metric.metric_init.pd.read_csv", return_value=pd.DataFrame(rows)),
@@ -1177,7 +1518,10 @@ class TestBatchSplitting:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", MockNode),
             patch("datus.storage.metric.metric_init.pd.read_csv", return_value=pd.DataFrame(rows)),
@@ -1211,7 +1555,10 @@ class TestBatchSplitting:
 
         with (
             patch("datus.storage.metric.store.MetricRAG", MagicMock()),
-            patch("datus.storage.metric.metric_init.extract_tables_from_sql_list", return_value=[]),
+            patch(
+                "datus.storage.metric.metric_init._ensure_semantic_models_for_metrics",
+                new=AsyncMock(return_value=(True, "", None)),
+            ),
             patch("datus.storage.metric.metric_init.get_prompt_manager", return_value=mock_pm),
             patch("datus.storage.metric.metric_init.GenMetricsAgenticNode", MockNode),
             patch(
@@ -1238,371 +1585,3 @@ class TestBatchSplitting:
         sig = inspect.signature(init_success_story_metrics)
         assert "batch_size" in sig.parameters
         assert sig.parameters["batch_size"].default == DEFAULT_METRICS_BATCH_SIZE
-
-
-class TestBatchHasNoMetricCandidates:
-    """Tests for _batch_has_no_metric_candidates early-skip logic."""
-
-    def test_returns_false_when_plan_unavailable(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        assert _batch_has_no_metric_candidates({}) is False
-        assert _batch_has_no_metric_candidates({"available": False}) is False
-        assert _batch_has_no_metric_candidates(None) is False
-
-    def test_returns_false_when_direct_candidates_exist(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "direct_metric_candidates": [{"name": "revenue"}],
-            "non_metric_evidence": [{"name": "detail_query"}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is False
-
-    def test_returns_false_when_derived_candidates_exist(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "derived_metric_candidates": [{"name": "mom_delta"}],
-            "non_metric_evidence": [{"name": "detail_query"}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is False
-
-    def test_returns_false_when_llm_review_candidates_exist(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "llm_review_candidates": [
-                {
-                    "name": "price_per_quantity",
-                    "candidate_classification": "llm_review_candidate",
-                    "equivalence": "lifted",
-                }
-            ],
-            "non_metric_evidence": [{"name": "detail_query"}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is False
-
-    def test_returns_true_when_only_non_metric_evidence(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "direct_metric_candidates": [],
-            "derived_metric_candidates": [],
-            "non_metric_evidence": [{"name": "row_number_query"}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is True
-
-    def test_returns_true_when_only_identity_references(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "identity_metric_references": [{"name": "activity_count"}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is True
-
-    def test_returns_true_when_only_derived_datasource_recommendations(self):
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {
-            "available": True,
-            "derived_datasource_recommendations": [{"sql_query": "SELECT ..."}],
-        }
-        assert _batch_has_no_metric_candidates(plan) is True
-
-    def test_returns_false_when_no_evidence_at_all(self):
-        """Available plan with zero candidates AND zero evidence should NOT skip."""
-        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
-
-        plan = {"available": True}
-        assert _batch_has_no_metric_candidates(plan) is False
-
-
-@pytest.mark.ci
-class TestMetricCatalogHelpers:
-    def test_unique_metric_catalog_by_name(self):
-        unique, ambiguous = _unique_metric_catalog_by_name(
-            [
-                "not-dict",
-                {"name": "activity_count"},
-                {"name": "activity_count"},
-                {"name": "order_count"},
-            ]
-        )
-        assert unique == {"order_count": {"name": "order_count"}}
-        assert ambiguous == {"activity_count"}
-
-
-@pytest.mark.ci
-class TestSourceNames:
-    """Tests for _source_names helper."""
-
-    def test_empty_value_returns_empty_set(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names("") == set()
-        assert _source_names(None) == set()
-        assert _source_names([]) == set()
-
-    def test_list_of_strings(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names(["sql_1", "sql_2"]) == {"sql_1", "sql_2"}
-
-    def test_tuple_of_strings(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names(("sql_1", "sql_2")) == {"sql_1", "sql_2"}
-
-    def test_set_of_strings(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names({"sql_1"}) == {"sql_1"}
-
-    def test_comma_separated_string(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names("sql_1, sql_2") == {"sql_1", "sql_2"}
-
-    def test_single_string(self):
-        from datus.storage.metric.metric_init import _source_names
-
-        assert _source_names("sql_1") == {"sql_1"}
-
-
-@pytest.mark.ci
-class TestSourceScopedItems:
-    """Tests for _source_scoped_items helper."""
-
-    def test_non_list_returns_empty(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        assert _source_scoped_items(None, {"sql_1"}) == []
-        assert _source_scoped_items("not_a_list", {"sql_1"}) == []
-
-    def test_non_dict_items_skipped(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        assert _source_scoped_items(["not_dict", 42], {"sql_1"}) == []
-
-    def test_item_without_source_always_included(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        item = {"name": "m1"}
-        result = _source_scoped_items([item], {"sql_1"})
-        assert item in result
-
-    def test_item_with_matching_source_included(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        item = {"name": "m1", "source_sql_name": "sql_1"}
-        result = _source_scoped_items([item], {"sql_1"})
-        assert item in result
-
-    def test_item_with_non_matching_source_excluded(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        item = {"name": "m1", "source_sql_name": "sql_99"}
-        result = _source_scoped_items([item], {"sql_1"})
-        assert result == []
-
-    def test_uses_source_key_as_fallback(self):
-        from datus.storage.metric.metric_init import _source_scoped_items
-
-        item = {"name": "m1", "source": "sql_1"}
-        result = _source_scoped_items([item], {"sql_1"})
-        assert item in result
-
-
-@pytest.mark.ci
-class TestNormalizedScalar:
-    """Tests for _normalized_scalar helper."""
-
-    def test_strips_and_lowercases(self):
-        from datus.storage.metric.metric_init import _normalized_scalar
-
-        assert _normalized_scalar("  MeasureProxy  ") == "measureproxy"
-
-    def test_none_returns_empty(self):
-        from datus.storage.metric.metric_init import _normalized_scalar
-
-        assert _normalized_scalar(None) == ""
-
-    def test_empty_string(self):
-        from datus.storage.metric.metric_init import _normalized_scalar
-
-        assert _normalized_scalar("") == ""
-
-
-@pytest.mark.ci
-class TestNormalizedMetricType:
-    """Tests for _normalized_metric_type helper."""
-
-    def test_simple_mapped_to_measure_proxy(self):
-        from datus.storage.metric.metric_init import _normalized_metric_type
-
-        assert _normalized_metric_type("simple") == "measure_proxy"
-
-    def test_other_types_unchanged(self):
-        from datus.storage.metric.metric_init import _normalized_metric_type
-
-        assert _normalized_metric_type("ratio") == "ratio"
-        assert _normalized_metric_type("derived") == "derived"
-
-    def test_none_returns_empty(self):
-        from datus.storage.metric.metric_init import _normalized_metric_type
-
-        assert _normalized_metric_type(None) == ""
-
-
-@pytest.mark.ci
-class TestNormalizedMeasureNames:
-    """Tests for _normalized_measure_names helper."""
-
-    def test_non_list_returns_empty(self):
-        from datus.storage.metric.metric_init import _normalized_measure_names
-
-        assert _normalized_measure_names(None) == set()
-        assert _normalized_measure_names("not_a_list") == set()
-
-    def test_list_of_strings(self):
-        from datus.storage.metric.metric_init import _normalized_measure_names
-
-        assert _normalized_measure_names(["Revenue", "Cost"]) == {"revenue", "cost"}
-
-    def test_list_of_dicts_with_name_key(self):
-        from datus.storage.metric.metric_init import _normalized_measure_names
-
-        result = _normalized_measure_names([{"name": "Revenue"}, {"name": "Cost"}])
-        assert result == {"revenue", "cost"}
-
-    def test_list_of_dicts_with_measure_key(self):
-        from datus.storage.metric.metric_init import _normalized_measure_names
-
-        result = _normalized_measure_names([{"measure": "Revenue"}])
-        assert result == {"revenue"}
-
-    def test_ignores_non_string_non_dict_items(self):
-        from datus.storage.metric.metric_init import _normalized_measure_names
-
-        result = _normalized_measure_names([42, None, "revenue"])
-        assert result == {"revenue"}
-
-
-@pytest.mark.ci
-class TestCandidateHasDefinitionEvidence:
-    """Tests for _candidate_has_definition_evidence helper."""
-
-    def test_empty_candidate_returns_false(self):
-        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
-
-        assert _candidate_has_definition_evidence({}) is False
-
-    def test_candidate_with_metric_type(self):
-        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
-
-        assert _candidate_has_definition_evidence({"metric_type": "measure_proxy"}) is True
-
-    def test_candidate_with_semantic_model(self):
-        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
-
-        assert _candidate_has_definition_evidence({"semantic_model": "orders"}) is True
-
-    def test_candidate_with_base_measures(self):
-        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
-
-        assert _candidate_has_definition_evidence({"base_measures": ["order_count"]}) is True
-
-    def test_candidate_with_referenced_metrics(self):
-        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
-
-        assert _candidate_has_definition_evidence({"referenced_metrics": ["revenue"]}) is True
-
-
-@pytest.mark.ci
-class TestCandidateMatchesExistingMetric:
-    """Tests for _candidate_matches_existing_metric helper."""
-
-    def test_no_definition_evidence_returns_false(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        assert _candidate_matches_existing_metric({}, {"name": "revenue", "type": "measure_proxy"}) is False
-
-    def test_matching_type_and_measures(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        candidate = {"metric_type": "measure_proxy", "base_measures": ["revenue_total"]}
-        existing = {"type": "measure_proxy", "base_measures": ["revenue_total"]}
-        assert _candidate_matches_existing_metric(candidate, existing) is True
-
-    def test_mismatched_metric_type_returns_false(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        candidate = {"metric_type": "ratio", "base_measures": ["a", "b"]}
-        existing = {"type": "measure_proxy", "base_measures": ["a"]}
-        assert _candidate_matches_existing_metric(candidate, existing) is False
-
-    def test_mismatched_semantic_model_returns_false(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        candidate = {"metric_type": "measure_proxy", "semantic_model_name": "orders"}
-        existing = {"type": "measure_proxy", "semantic_model_name": "customers"}
-        assert _candidate_matches_existing_metric(candidate, existing) is False
-
-    def test_mismatched_base_measures_returns_false(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        candidate = {"metric_type": "measure_proxy", "base_measures": ["revenue"]}
-        existing = {"type": "measure_proxy", "base_measures": ["cost"]}
-        assert _candidate_matches_existing_metric(candidate, existing) is False
-
-    def test_simple_type_normalized_to_measure_proxy(self):
-        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
-
-        candidate = {"metric_type": "simple", "base_measures": ["revenue"]}
-        existing = {"type": "measure_proxy", "base_measures": ["revenue"]}
-        assert _candidate_matches_existing_metric(candidate, existing) is True
-
-
-@pytest.mark.ci
-class TestAllCandidateMetricsSatisfied:
-    """Tests for _all_candidate_metrics_satisfied helper."""
-
-    def test_empty_candidates_returns_false(self):
-        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
-
-        assert _all_candidate_metrics_satisfied({}, []) is False
-
-    def test_candidate_not_in_existing_returns_false(self):
-        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
-
-        plan = {"direct_metric_candidates": [{"name": "new_metric", "metric_type": "measure_proxy"}]}
-        assert _all_candidate_metrics_satisfied(plan, []) is False
-
-    def test_all_candidates_satisfied(self):
-        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
-
-        plan = {
-            "direct_metric_candidates": [
-                {"name": "revenue_total", "metric_type": "measure_proxy", "base_measures": ["revenue"]}
-            ]
-        }
-        existing = [{"name": "revenue_total", "type": "measure_proxy", "base_measures": ["revenue"]}]
-        assert _all_candidate_metrics_satisfied(plan, existing) is True
-
-    def test_one_unsatisfied_returns_false(self):
-        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
-
-        plan = {
-            "direct_metric_candidates": [
-                {"name": "revenue_total", "metric_type": "measure_proxy", "base_measures": ["revenue"]},
-                {"name": "new_metric", "metric_type": "measure_proxy", "base_measures": ["something"]},
-            ]
-        }
-        existing = [{"name": "revenue_total", "type": "measure_proxy", "base_measures": ["revenue"]}]
-        assert _all_candidate_metrics_satisfied(plan, existing) is False

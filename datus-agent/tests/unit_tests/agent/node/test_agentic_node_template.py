@@ -131,6 +131,9 @@ class FakeAgenticNode(AgenticNode):
     def _compose_hooks(self, extra=None):
         return extra
 
+    def _ensure_lazy_tools_mounted(self) -> None:
+        """Keep this template-method fake independent of tool construction."""
+
     def _format_execution_error(self, exc: BaseException) -> str:
         return f"err[{type(exc).__name__}]: {exc}"
 

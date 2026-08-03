@@ -8,9 +8,9 @@ These tests pin the wording produced by every registered formatter so a
 future formatter regression is caught before it reaches the CLI compact
 line or the SSE ``shortDesc`` payload.
 
-Contract: every non-filesystem summary must be ≤ ``SUMMARY_TEXT_MAX_CHARS``
-(19) characters; filesystem tools (``read_file``, ``write_file``,
-``edit_file``, ``glob``, ``grep``) bypass the clip and return verbatim.
+Contract: summaries are normally ≤ ``SUMMARY_TEXT_MAX_CHARS`` (19)
+characters. Tools whose compact summaries require complete identifiers,
+including filesystem tools and attribution analysis, bypass the clip.
 """
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ from typing import Any
 import pytest
 
 from datus.schemas.tool_summary import (
-    FS_TOOLS_NO_CLIP,
     INPUT_SUMMARY_MAX_CHARS,
     SUMMARY_TEXT_MAX_CHARS,
+    SUMMARY_TOOLS_NO_CLIP,
     TOOL_INPUT_SUMMARY_REGISTRY,
     TOOL_SUMMARY_REGISTRY,
     ToolSummaryRegistry,
@@ -236,18 +236,22 @@ class TestPublicHelpers:
         assert summarize_tool_execution(output, "list_scheduler_jobs", {"limit": 20}) == "1 job"
 
     def test_input_registry_covers_all_declared_input_and_hybrid_tools(self):
-        # This count deliberately excludes the ten output-first names. It pins
+        # This count deliberately excludes output-first names. It pins
         # the explicit allow-list so new generic string guessing cannot replace
         # per-tool review.
         assert len(TOOL_INPUT_SUMMARY_REGISTRY.names()) == 98
         assert set(TOOL_SUMMARY_REGISTRY.names()) - set(TOOL_INPUT_SUMMARY_REGISTRY.names()) == {
             "generate_sql_summary_id",
             "get_current_date",
+            "inspect_semantic_sources",
             "list_bi_databases",
             "list_scheduler_connections",
             "list_scheduler_jobs",
             "list_subject_tree",
+            "publish_metrics",
+            "publish_semantic_model",
             "todo_list",
+            "validate_semantic_key_candidates",
         }
 
     def test_detect_tool_failure_real_functoolresult_contract(self):
@@ -611,9 +615,17 @@ class TestSemanticFormatters:
     def test_attribution_analyze(self):
         out = _summarize(
             "attribution_analyze",
-            {"success": 1, "result": {"dimension_ranking": list(range(8)), "selected_dimensions": list(range(3))}},
+            {
+                "success": 1,
+                "result": {
+                    "dimension_ranking": list(range(8)),
+                    "selected_dimensions": ["region", "platform", "channel"],
+                    "warnings": [{"code": "UNEQUAL_WINDOWS"}],
+                },
+            },
         )
-        assert out == "sel 3/8 dims"
+        assert out == "selected region,platform,channel; warnings UNEQUAL_WINDOWS"
+        assert len(out) > SUMMARY_TEXT_MAX_CHARS
 
 
 class TestGenerationFormatters:
@@ -631,16 +643,16 @@ class TestGenerationFormatters:
         )
         assert out == "metric not found"
 
-    def test_end_semantic_model_generation(self):
+    def test_publish_semantic_model(self):
         out = _summarize(
-            "end_semantic_model_generation",
+            "publish_semantic_model",
             {"success": 1, "result": {"semantic_model_files": ["a.yml", "b.yml"]}},
         )
         assert out == "2 semantic files"
 
-    def test_end_metric_generation(self):
+    def test_publish_metrics(self):
         out = _summarize(
-            "end_metric_generation",
+            "publish_metrics",
             {"success": 1, "result": {"metric_file": "m.yml", "sync": {"success": True}}},
         )
         assert out == "metric synced"
@@ -649,35 +661,33 @@ class TestGenerationFormatters:
         out = _summarize("generate_sql_summary_id", {"success": 1, "result": "abc12345"})
         assert out == "id: abc12345"
 
-    def test_analyze_table_relationships_falls_back_to_summary_when_no_count(self):
-        # ``relationships=[]`` is empty, so the formatter falls back to
-        # the inline ``summary`` field, which is then clipped at exit.
+    def test_inspect_semantic_sources(self):
         out = _summarize(
-            "analyze_table_relationships",
-            {"success": 1, "result": {"relationships": [], "summary": "Found 4 relationships across 3 tables"}},
-        )
-        assert out == "Found 4 relationsh…"
-        assert len(out) == SUMMARY_TEXT_MAX_CHARS
-
-    def test_get_multiple_tables_ddl(self):
-        out = _summarize(
-            "get_multiple_tables_ddl",
-            {"success": 1, "result": [{"table_name": "a"}, {"table_name": "b"}]},
-        )
-        assert out == "DDL of 2 tables"
-
-    def test_analyze_metric_candidates_from_history(self):
-        out = _summarize(
-            "analyze_metric_candidates_from_history",
+            "inspect_semantic_sources",
             {
                 "success": 1,
                 "result": {
-                    "metric_candidates": [{"name": "paid_arppu"}, {"name": "gross_margin_rate"}],
-                    "base_measures": [{"name": "paid_amount"}],
+                    "tables": [{"table_name": "a"}, {"table_name": "b"}],
+                    "relationships": [{}],
                 },
             },
         )
-        assert out == "2 metric cands"
+        assert out == "2 tables, 1 rels"
+
+    def test_validate_semantic_key_candidates(self):
+        out = _summarize(
+            "validate_semantic_key_candidates",
+            {
+                "success": 1,
+                "result": {
+                    "validations": [
+                        {"is_valid_logical_key": True},
+                        {"is_valid_logical_key": False},
+                    ]
+                },
+            },
+        )
+        assert out == "1/2 keys verified"
 
     def test_profile_semantic_model_evidence(self):
         out = _summarize(
@@ -691,19 +701,6 @@ class TestGenerationFormatters:
             },
         )
         assert out == "2 tables profiled…"
-
-    def test_analyze_metric_candidates_from_history_with_derived_datasource(self):
-        out = _summarize(
-            "analyze_metric_candidates_from_history",
-            {
-                "success": 1,
-                "result": {
-                    "metric_candidates": [{"name": "time_count"}],
-                    "query_classification": "metric_plus_derived_datasource",
-                },
-            },
-        )
-        assert out == "1 metric cand + da…"
 
 
 class TestSchedulerFormatters:
@@ -1103,21 +1100,20 @@ def test_failure_path_uniform(tool: str):
         ("list_databases", ["mydb"], "1 db"),
         # Semantic fallbacks
         ("validate_semantic", {"valid": False, "issues": []}, "invalid"),
-        ("attribution_analyze", {"selected_dimensions": [1]}, "sel 1 dim"),
+        ("attribution_analyze", {"selected_dimensions": ["region"]}, "selected region"),
         ("query_metrics", {"columns": ["a", "b"]}, "2 cols"),
         ("query_metrics", {"data": {"original_rows": 7}}, "7 rows"),
         # Generation fallbacks
         ("check_semantic_object_exists", {"exists": True}, "object exists"),
         ("check_semantic_model_exists", {"exists": True}, "table exists"),
         ("check_semantic_model_exists", {"exists": False}, "table not found"),
-        ("end_metric_generation", {"metric_file": "m.yml"}, "metric generated"),
-        ("analyze_table_relationships", {"relationships": [{}, {}, {}]}, "3 rels"),
+        ("publish_metrics", {"metric_file": "m.yml"}, "metric generated"),
+        ("inspect_semantic_sources", {"tables": [{}, {}], "relationships": [{}, {}, {}]}, "2 tables, 3 rels"),
         (
-            "analyze_column_usage_patterns",
-            {"summary": "Analyzed 5 columns from 10 SQLs"},
-            "Analyzed 5 columns…",
+            "validate_semantic_key_candidates",
+            {"validations": [{"is_valid_logical_key": True}, {"is_valid_logical_key": False}]},
+            "1/2 keys verified",
         ),
-        ("analyze_column_usage_patterns", {"column_patterns": {"a": {}, "b": {}}}, "2 cols analyzed"),
         (
             "profile_semantic_model_evidence",
             {"data_profiled": False, "tables": {"orders": {}}},
@@ -1221,20 +1217,18 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
     ("get_dimensions", {"items": [{"name": "d"} for _ in range(50)], "total": 9999}),
     ("query_metrics", {"columns": ["x"] * 50, "data": {"original_rows": 99999}}),
     ("validate_semantic", {"valid": False, "issues": list(range(999))}),
-    ("attribution_analyze", {"dimension_ranking": list(range(99)), "selected_dimensions": list(range(99))}),
     ("search_metrics", [{}] * 99),
     ("search_reference_sql", [{}] * 99),
     ("search_semantic_objects", [{}] * 99),
     # generation
     ("check_semantic_object_exists", {"exists": True, "kind": "long_kind_name"}),
     ("check_semantic_model_exists", {"exists": False}),
-    ("end_semantic_model_generation", {"semantic_model_files": ["a"] * 99}),
-    ("end_metric_generation", {"sync": {"success": True}}),
+    ("publish_semantic_model", {"semantic_model_files": ["a"] * 99}),
+    ("publish_metrics", {"sync": {"success": True}}),
     ("generate_sql_summary_id", "very_long_summary_id_12345"),
-    ("analyze_table_relationships", {"relationships": [{}] * 99, "summary": "x" * 100}),
-    ("analyze_column_usage_patterns", {"column_patterns": {str(i): {} for i in range(99)}}),
+    ("inspect_semantic_sources", {"tables": [{}] * 99, "relationships": [{}] * 99}),
+    ("validate_semantic_key_candidates", {"validations": [{"is_valid_logical_key": True}] * 99}),
     ("profile_semantic_model_evidence", {"data_profiled": True, "tables": {str(i): {} for i in range(99)}}),
-    ("get_multiple_tables_ddl", [{}] * 99),
     # scheduler
     ("submit_sql_job", {"job_id": "very_long_job_id_here"}),
     ("submit_sparksql_job", {"job_id": "very_long_spark_id_here"}),
@@ -1286,9 +1280,9 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
 
 @pytest.mark.parametrize("tool, result", _LENGTH_CONTRACT_SAMPLES)
 def test_summary_length_contract_under_20(tool: str, result: Any):
-    """Every non-fs tool summary must be ≤ SUMMARY_TEXT_MAX_CHARS (19) characters."""
+    """Every normally clipped tool summary must be at most 19 characters."""
     out = TOOL_SUMMARY_REGISTRY.summarize_dict({"success": 1, "result": result}, tool)
-    assert tool not in FS_TOOLS_NO_CLIP, "fs tools are not part of this contract"
+    assert tool not in SUMMARY_TOOLS_NO_CLIP, "unclipped tools are not part of this contract"
     assert len(out) <= SUMMARY_TEXT_MAX_CHARS, f"{tool}: {out!r} ({len(out)} chars)"
 
 

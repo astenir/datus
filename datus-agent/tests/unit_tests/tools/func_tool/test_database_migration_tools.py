@@ -36,6 +36,7 @@ def _build_tool_with_connector(connector: Mock) -> DBFuncTool:
     tool._primary_connector = connector
     tool._db_manager = None
     tool._default_database = "default"
+    tool.read_only = False
     return tool
 
 

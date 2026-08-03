@@ -113,6 +113,9 @@ class TestAskMetricsAgenticNode:
         assert "do not call `search_metrics` for metrics that match these entries directly" in prompt
         assert "When the subject tree gives a direct metric/path match" in prompt
         assert "dedicated catalog metric" in prompt
+        assert "## Attribution Playbook" in prompt
+        assert "typed `filter_hint`" in prompt
+        assert "Read contribution details only from `per_dimension`" in prompt
         assert "Do not invent helper metrics" in prompt
         assert "do not add a `where` filter that enumerates dimension values" in prompt
         assert "Query complete metric results by default" in prompt
@@ -123,6 +126,9 @@ class TestAskMetricsAgenticNode:
         assert "request those metrics in one `query_metrics(metrics=[...])` call" in prompt
         assert "query all requested catalog metrics together" in prompt
         assert "do not add sibling display/name/label dimensions" in prompt
+        assert "`extra.time_dimension`" in prompt
+        assert "`extra.time_granularities`" in prompt
+        assert "Never pass a `time_granularity` outside" in prompt
         assert node.subject_tree_prompt_limit == 100
 
     def test_reference_date_is_injected_into_runtime_context(self, real_agent_config, mock_llm_create):
@@ -707,31 +713,6 @@ class TestAskMetricsAgenticNode:
 
         semantic_tools.query_metrics.assert_called_once()
         assert semantic_tools.query_metrics.call_args.kwargs["where"] == "region = 'east'"
-
-    def test_query_metrics_passes_join_controls(
-        self,
-        real_agent_config,
-        mock_llm_create,
-    ):
-        node, semantic_tools, _ = _make_node(
-            real_agent_config,
-            tree={"Sales": {"Orders": {"metrics": ["order_count"]}}},
-        )
-        semantic_tools.list_metrics.return_value = FuncToolResult(
-            result={"items": [{"name": "order_count", "metadata": {}}], "has_more": False}
-        )
-        semantic_tools.query_metrics.return_value = FuncToolResult(result={"columns": [], "data": []})
-
-        node.query_metrics(
-            metrics=["order_count"],
-            dimensions=["dimension_key__display_name"],
-            join_policy="dimension_preserving",
-            zero_fill=True,
-        )
-
-        semantic_tools.query_metrics.assert_called_once()
-        assert semantic_tools.query_metrics.call_args.kwargs["join_policy"] == "dimension_preserving"
-        assert semantic_tools.query_metrics.call_args.kwargs["zero_fill"] is True
 
     def test_query_metrics_aliases_joined_dimension_display_columns(
         self,

@@ -11,7 +11,12 @@ import pytest
 
 from datus.cli.execution_state import InteractionBroker
 from datus.tools.permission import permission_hooks as permission_hooks_module
-from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
+from datus.tools.permission.permission_config import (
+    PermissionConfig,
+    PermissionLevel,
+    PermissionRule,
+    SqlStatementRules,
+)
 from datus.tools.permission.permission_hooks import (
     CompositeHooks,
     FilesystemPolicy,
@@ -19,6 +24,7 @@ from datus.tools.permission.permission_hooks import (
     PermissionHooks,
 )
 from datus.tools.permission.permission_manager import PermissionManager
+from datus.tools.permission.profiles import get_profile
 from datus.tools.registry.tool_registry import ToolRegistry
 
 
@@ -620,7 +626,7 @@ class TestFilesystemZoneBranch:
     path so approval never leaks across targets.
     """
 
-    def _build(self, broker, tmp_path, rules=None, *, strict=False):
+    def _build(self, broker, tmp_path, rules=None, *, strict=False, allowlist=None):
         registry = ToolRegistry()
         fs_tool = MagicMock()
         fs_tool.name = "read_file"
@@ -638,9 +644,65 @@ class TestFilesystemZoneBranch:
             permission_manager=manager,
             node_name="chat",
             tool_registry=registry,
-            fs_policy=FilesystemPolicy(root_path=project, current_node="chat", strict=strict),
+            fs_policy=FilesystemPolicy(
+                root_path=project,
+                current_node="chat",
+                strict=strict,
+                allowlist=allowlist,
+            ),
         )
         return hooks, manager, project
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_root_bypasses_ask(self, mock_broker, tmp_path):
+        """A configured ``allow_write`` root must not prompt.
+
+        The tool classifies it as WHITELIST and writes happily; if the hook
+        still treated it as EXTERNAL, an interactive deployment would prompt on
+        every DAG file and a non-interactive one would raise.
+        """
+        from datus.tools.func_tool.fs_path_policy import PathAllowlist
+
+        dags = tmp_path / "dags"
+        dags.mkdir()
+        (dags / "job.py").write_text("x")
+        hooks, _, _ = self._build(
+            mock_broker,
+            tmp_path,
+            allowlist=PathAllowlist.from_dict({"allow_write": [str(dags)]}),
+        )
+        mock_broker.request = AsyncMock(return_value="n")
+
+        ctx = MagicMock()
+        ctx.tool_arguments = f'{{"path": "{dags / "job.py"}"}}'
+        tool = MagicMock()
+        tool.name = "read_file"
+
+        await hooks.on_tool_start(ctx, MagicMock(), tool)
+        mock_broker.request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_path_outside_allowlist_still_asks(self, mock_broker, tmp_path):
+        from datus.tools.func_tool.fs_path_policy import PathAllowlist
+
+        dags = tmp_path / "dags"
+        dags.mkdir()
+        hooks, _, _ = self._build(
+            mock_broker,
+            tmp_path,
+            allowlist=PathAllowlist.from_dict({"allow_write": [str(dags)]}),
+        )
+        mock_broker.request = AsyncMock(return_value="a")
+
+        target = tmp_path / "elsewhere.md"
+        target.write_text("x")
+        ctx = MagicMock()
+        ctx.tool_arguments = f'{{"path": "{target}"}}'
+        tool = MagicMock()
+        tool.name = "read_file"
+
+        await hooks.on_tool_start(ctx, MagicMock(), tool)
+        assert mock_broker.request.await_count == 1
 
     @pytest.mark.asyncio
     async def test_internal_bypasses_ask_rule(self, mock_broker, tmp_path):
@@ -1039,7 +1101,10 @@ class TestFilesystemZoneProfileMatrix:
         silently regress to bypass for that tool.
         """
         from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
-        from datus.tools.func_tool.metric_filesystem_tools import MetricFilesystemFuncTool
+        from datus.tools.func_tool.metric_filesystem_tools import (
+            MetricFilesystemFuncTool,
+            OsiSemanticModelFilesystemFuncTool,
+        )
 
         fs_tool = FilesystemFuncTool(root_path="/tmp")
         tool_names = {t.name for t in fs_tool.available_tools()}
@@ -1049,18 +1114,30 @@ class TestFilesystemZoneProfileMatrix:
             authoring_format="osi",
         )
         osi_metric_tool_names = {t.name for t in osi_metric_tool.available_tools()}
+        osi_semantic_tool = OsiSemanticModelFilesystemFuncTool(
+            root_path="/tmp",
+            current_node="gen_semantic_model",
+        )
+        osi_semantic_tool_names = {t.name for t in osi_semantic_tool.available_tools()}
         # Every tool the filesystem surface advertises as a mutation must be
         # declared as a write, so the normal-profile INTERNAL gate doesn't
         # silently bypass it. Read-only tools (``read_file`` / ``glob`` /
         # ``grep``) stay out — they have their own gate path.
-        write_names = {"write_file", "edit_file", "delete_file", "upsert_osi_metrics"}
+        write_names = {
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "upsert_osi_metrics",
+            "upsert_osi_datasets",
+        }
         # The hook's declared write-set must equal the writes these tools expose,
         # not a strict subset. Both directions matter:
         #   - subset breaks the matrix (writes get silently bypassed)
         #   - superset means we ASK on a tool name that doesn't exist
         assert write_names == PermissionHooks._FILESYSTEM_WRITE_TOOLS
-        assert write_names - {"upsert_osi_metrics"} <= tool_names
+        assert write_names - {"upsert_osi_metrics", "upsert_osi_datasets"} <= tool_names
         assert "upsert_osi_metrics" in osi_metric_tool_names
+        assert "upsert_osi_datasets" in osi_semantic_tool_names
 
 
 class TestNonInteractiveMode:
@@ -1618,6 +1695,28 @@ class TestExecuteSqlPermission:
         return t
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("profile", ["normal", "auto"])
+    @pytest.mark.parametrize("non_interactive", [False, True])
+    async def test_malformed_arguments_defer_to_tool_recovery_without_prompt(
+        self,
+        mock_broker,
+        profile,
+        non_interactive,
+    ):
+        """Malformed calls reach the no-execute recovery path in every default mode."""
+        hooks = self._make_hooks(
+            mock_broker,
+            get_profile(profile),
+            non_interactive=non_interactive,
+        )
+        context = MagicMock()
+        context.tool_arguments = '{"sql":"SELECT 1","min_rows":,"max_rows":}'
+
+        await hooks.on_tool_start(context, MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_read_auto_allows_under_normal_default_ask(self, mock_broker):
         """A SELECT auto-allows even when the profile default is ASK — no prompt."""
         config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
@@ -1774,6 +1873,313 @@ class TestExecuteSqlPermission:
         assert mock_broker.request.await_count == 3
 
 
+class TestExecuteSqlClassRules:
+    """Statement-class gating for ``execute_sql`` when ``sql_statements`` rules are present."""
+
+    def _make_hooks(
+        self,
+        mock_broker,
+        config,
+        non_interactive=False,
+        project_root=None,
+        project_sql_allows=None,
+        config_mutable=True,
+    ):
+        registry = ToolRegistry()
+        tool_mock = MagicMock()
+        tool_mock.name = "execute_sql"
+        registry.register_tools("db_tools", [tool_mock])
+        manager = PermissionManager(global_config=config, project_sql_allows=project_sql_allows)
+        return PermissionHooks(
+            broker=mock_broker,
+            permission_manager=manager,
+            node_name="chat",
+            tool_registry=registry,
+            non_interactive=non_interactive,
+            project_root=project_root,
+            config_mutable=config_mutable,
+        )
+
+    @staticmethod
+    def _normal_config(**rule_overrides):
+        return PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[],
+            sql_statements=SqlStatementRules(**rule_overrides),
+        )
+
+    @staticmethod
+    def _auto_config():
+        return PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[],
+            sql_statements=SqlStatementRules(write=PermissionLevel.ALLOW),
+        )
+
+    @staticmethod
+    def _ctx(sql):
+        import json
+
+        ctx = MagicMock()
+        ctx.tool_arguments = json.dumps({"sql": sql})
+        return ctx
+
+    @staticmethod
+    def _tool():
+        t = MagicMock()
+        t.name = "execute_sql"
+        return t
+
+    @pytest.mark.asyncio
+    async def test_normal_read_auto_allows(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._normal_config())
+
+        await hooks.on_tool_start(self._ctx("SELECT * FROM users"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "INSERT INTO t VALUES (1)",
+            "CREATE TABLE t (id INT)",
+            "UPDATE t SET a = 1",
+            "DROP TABLE t",
+        ],
+    )
+    async def test_normal_write_and_destructive_prompt(self, mock_broker, sql):
+        hooks = self._make_hooks(mock_broker, self._normal_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx(sql), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "INSERT INTO t VALUES (1)",
+            "CREATE TABLE t (id INT)",
+            "COMMENT ON TABLE t IS 'x'",
+            "USE analytics",
+        ],
+    )
+    async def test_auto_non_destructive_writes_auto_allow(self, mock_broker, sql):
+        """Under auto's ruleset (write=ALLOW), non-destructive writes never prompt."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+
+        await hooks.on_tool_start(self._ctx(sql), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "UPDATE t SET a = 1",
+            "DELETE FROM t",
+            "DROP TABLE t",
+            "TRUNCATE TABLE t",
+            "ALTER TABLE t ADD COLUMN b INT",
+            "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = 1",
+        ],
+    )
+    async def test_auto_destructive_still_prompts(self, mock_broker, sql):
+        """Destructive statements prompt under auto despite write=ALLOW."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx(sql), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_unknown_prompts(self, mock_broker):
+        """Unparseable SQL stays ASK under auto (fail safe), despite write=ALLOW."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("FROBNICATE THE WIDGETS"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_class_deny_raises_without_prompt(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._normal_config(destructive=PermissionLevel.DENY))
+
+        with pytest.raises(PermissionDeniedException, match="sql_statements"):
+            await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_bucket_is_per_kind_not_per_class(self, mock_broker):
+        """Approving DROP for the session must not cover TRUNCATE (same class)."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["a"]])
+
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 1
+
+        # Same kind: served from the session cache.
+        await hooks.on_tool_start(self._ctx("DROP TABLE u"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 1
+
+        # Different kind in the same (destructive) class: prompts again.
+        await hooks.on_tool_start(self._ctx("TRUNCATE TABLE t"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_project_grant_bypasses_prompt(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._auto_config(), project_sql_allows=["drop"])
+
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_project_grant_is_exact_kind(self, mock_broker):
+        """A ``drop`` grant must not cover TRUNCATE (or any other kind)."""
+        hooks = self._make_hooks(mock_broker, self._auto_config(), project_sql_allows=["drop"])
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("TRUNCATE TABLE t"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_project_choice_persists_and_covers_session(self, mock_broker, tmp_path):
+        hooks = self._make_hooks(mock_broker, self._auto_config(), project_root=str(tmp_path))
+        mock_broker.request = AsyncMock(return_value=[["p"]])
+
+        await hooks.on_tool_start(self._ctx("DELETE FROM t"), MagicMock(), self._tool())
+
+        config_file = tmp_path / ".datus" / "config.yml"
+        assert config_file.exists()
+        import yaml
+
+        assert yaml.safe_load(config_file.read_text())["sql_allow"] == ["delete"]
+
+        # Later same-kind calls this session skip the prompt.
+        await hooks.on_tool_start(self._ctx("DELETE FROM u"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_project_choice_not_offered_for_unknown(self, mock_broker):
+        """The prompt for unparseable SQL must not include the project choice."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("FROBNICATE THE WIDGETS"), MagicMock(), self._tool())
+
+        event = mock_broker.request.await_args.args[0][0]
+        assert "p" not in event.choices
+        assert set(event.choices) == {"y", "a", "n"}
+
+    @pytest.mark.asyncio
+    async def test_project_choice_offered_for_destructive(self, mock_broker):
+        """Destructive kinds DO offer the project choice (user decision)."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+        event = mock_broker.request.await_args.args[0][0]
+        assert event.choices["p"] == "Allow 'drop' (project)"
+
+    @pytest.mark.asyncio
+    async def test_project_choice_not_offered_when_config_is_immutable(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._auto_config(), config_mutable=False)
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+        event = mock_broker.request.await_args.args[0][0]
+        assert set(event.choices) == {"y", "a", "n"}
+
+    @pytest.mark.asyncio
+    async def test_rejection_raises(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["n"]])
+
+        with pytest.raises(PermissionDeniedException, match="User rejected"):
+            await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+    @pytest.mark.asyncio
+    async def test_non_interactive_destructive_raises_without_prompt(self, mock_broker):
+        hooks = self._make_hooks(mock_broker, self._auto_config(), non_interactive=True)
+
+        with pytest.raises(PermissionDeniedException):
+            await hooks.on_tool_start(self._ctx("DELETE FROM t"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_interactive_auto_write_allowed(self, mock_broker):
+        """Workflow flows under auto rules run non-destructive writes silently."""
+        hooks = self._make_hooks(mock_broker, self._auto_config(), non_interactive=True)
+
+        await hooks.on_tool_start(self._ctx("INSERT INTO t VALUES (1)"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sql_file_with_drop_prompts_as_destructive(self, mock_broker, tmp_path):
+        """A .sql file is resolved so a DROP inside prompts even under auto."""
+        sql_dir = tmp_path / "sql"
+        sql_dir.mkdir()
+        (sql_dir / "cleanup.sql").write_text("DROP TABLE staging")
+        hooks = self._make_hooks(mock_broker, self._auto_config(), project_root=str(tmp_path))
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("sql/cleanup.sql"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+        event = mock_broker.request.await_args.args[0][0]
+        assert "drop" in event.content
+
+    @pytest.mark.asyncio
+    async def test_explicit_allow_rule_bypasses_class_rules(self, mock_broker):
+        """A user ``db_tools/execute_sql: allow`` rule remains the escape hatch."""
+        config = PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[PermissionRule(tool="db_tools", pattern="execute_sql", permission=PermissionLevel.ALLOW)],
+            sql_statements=SqlStatementRules(destructive=PermissionLevel.DENY),
+        )
+        hooks = self._make_hooks(mock_broker, config)
+
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_deny_rule_beats_class_allow(self, mock_broker):
+        """A coarse DENY rule blocks even reads regardless of class rules."""
+        config = PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[PermissionRule(tool="db_tools", pattern="execute_sql", permission=PermissionLevel.DENY)],
+            sql_statements=SqlStatementRules(),
+        )
+        hooks = self._make_hooks(mock_broker, config)
+
+        with pytest.raises(PermissionDeniedException):
+            await hooks.on_tool_start(self._ctx("SELECT 1"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_replace_prompts_as_destructive_under_auto(self, mock_broker):
+        """REPLACE INTO deletes matched rows first — it must not ride write=ALLOW."""
+        hooks = self._make_hooks(mock_broker, self._auto_config())
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("REPLACE INTO t VALUES (1)"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+
 class TestFormatToolArgsMarkdown:
     """Unit tests for the ``_format_tool_args_markdown`` rendering helper.
 
@@ -1899,6 +2305,7 @@ class TestBashCommandPermission:
         rules=None,
         non_interactive=False,
         project_root=None,
+        config_mutable=True,
         bash_classifier=None,
         default=PermissionLevel.ASK,
     ):
@@ -1923,6 +2330,7 @@ class TestBashCommandPermission:
             tool_registry=registry,
             non_interactive=non_interactive,
             project_root=project_root,
+            config_mutable=config_mutable,
             bash_classifier=bash_classifier,
         )
         return hooks, manager
@@ -2074,6 +2482,20 @@ class TestBashCommandPermission:
 
         event = mock_broker.request.await_args.args[0][0]
         assert "p" in event.choices
+
+    @pytest.mark.asyncio
+    async def test_unmatched_command_omits_project_choice_when_config_is_immutable(self, mock_broker):
+        hooks, _ = self._make_hooks(
+            mock_broker,
+            bash_commands={"allow": ["git log:*"]},
+            config_mutable=False,
+        )
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("cargo build"), MagicMock(), self._tool())
+
+        event = mock_broker.request.await_args.args[0][0]
+        assert set(event.choices) == {"y", "a", "n"}
 
     @pytest.mark.asyncio
     async def test_classifier_high_confidence_allow_skips_prompt(self, mock_broker):

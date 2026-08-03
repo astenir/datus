@@ -15,6 +15,7 @@ import yaml
 from datus.configuration.project_config import (
     ALLOWED_KEYS,
     PROJECT_CONFIG_REL,
+    PluginActivation,
     ProjectOverride,
     load_project_override,
     project_config_path,
@@ -112,6 +113,35 @@ class TestLoadProjectOverride:
             result = load_project_override(str(tmp_path))
         assert result.reasoning_effort is None
 
+    @pytest.mark.parametrize(
+        "raw_value,expected",
+        [(True, True), (False, False), ("true", True), ("off", False), ("1", True), ("no", False)],
+    )
+    def test_parse_sandbox_field(self, tmp_path, raw_value, expected):
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"sandbox": raw_value}))
+        result = load_project_override(str(tmp_path))
+        assert result.sandbox is expected
+
+    @pytest.mark.parametrize("mode", ["strict", "normal", "STRICT", " Normal "])
+    def test_parse_sandbox_mode_strings(self, tmp_path, mode):
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"sandbox": mode}))
+        result = load_project_override(str(tmp_path))
+        assert result.sandbox == mode.strip().lower()
+
+    @pytest.mark.parametrize("bad_value", ["yess", "strick", 3, ["true"], {"enabled": True}])
+    def test_invalid_sandbox_dropped_with_warning(self, tmp_path, caplog, bad_value):
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"sandbox": bad_value}))
+        with caplog.at_level(logging.WARNING):
+            result = load_project_override(str(tmp_path))
+        assert result.sandbox is None
+        assert "sandbox" in " ".join(r.message for r in caplog.records)
+
     def test_unknown_keys_warn_and_drop(self, tmp_path, caplog):
         path = tmp_path / PROJECT_CONFIG_REL
         path.parent.mkdir(parents=True)
@@ -204,6 +234,25 @@ class TestSaveProjectOverride:
         loaded = load_project_override(str(tmp_path))
         assert loaded.target == "new"
 
+    @pytest.mark.parametrize("value", [True, False])
+    def test_sandbox_round_trips_including_false(self, tmp_path, value):
+        # ``sandbox: false`` (force-off) must survive save/load — a naive
+        # truthiness filter would drop it and lose the override.
+        save_project_override(ProjectOverride(sandbox=value), cwd=str(tmp_path))
+        loaded = load_project_override(str(tmp_path))
+        assert loaded.sandbox is value
+
+    @pytest.mark.parametrize("value", ["strict", "normal"])
+    def test_sandbox_mode_string_round_trips(self, tmp_path, value):
+        save_project_override(ProjectOverride(sandbox=value), cwd=str(tmp_path))
+        loaded = load_project_override(str(tmp_path))
+        assert loaded.sandbox == value
+
+    def test_sandbox_none_omitted_from_yaml(self, tmp_path):
+        written = save_project_override(ProjectOverride(target="x"), cwd=str(tmp_path))
+        loaded = yaml.safe_load(written.read_text())
+        assert "sandbox" not in loaded
+
 
 class TestAllowedKeys:
     def test_whitelist_contains_expected_keys(self):
@@ -219,6 +268,8 @@ class TestAllowedKeys:
                 "language",
                 "reasoning_effort",
                 "bash_allow",
+                "sql_allow",
+                "sandbox",
             }
         )
 
@@ -239,11 +290,16 @@ class TestProjectOverrideDataclass:
             ("project_name", "z"),
             ("language", "zh"),
             ("reasoning_effort", "high"),
+            ("sandbox", True),
         ],
     )
     def test_is_not_empty_when_any_set(self, field, value):
         override = ProjectOverride(**{field: value})
         assert not override.is_empty()
+
+    def test_is_not_empty_when_sandbox_false(self):
+        # ``sandbox: false`` is a meaningful force-off override, not "unset".
+        assert not ProjectOverride(sandbox=False).is_empty()
 
 
 class TestServiceDefaultFields:
@@ -327,6 +383,97 @@ class TestServiceDefaultFields:
         loaded = yaml.safe_load(written.read_text())
         assert "dashboard" in loaded
         assert "scheduler" not in loaded
+
+
+class TestSqlAllow:
+    """Project-level sql_allow parsing and text-level appending."""
+
+    def _write(self, tmp_path, content: str):
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return path
+
+    def test_parse_sql_allow_list_normalizes_case(self, tmp_path):
+        self._write(tmp_path, yaml.safe_dump({"sql_allow": ["INSERT", "drop"]}))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["insert", "drop"]
+
+    def test_non_list_sql_allow_dropped(self, tmp_path):
+        self._write(tmp_path, yaml.safe_dump({"sql_allow": "insert"}))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow is None
+
+    def test_non_string_entries_dropped(self, tmp_path):
+        self._write(tmp_path, yaml.safe_dump({"sql_allow": ["insert", 42, ""]}))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["insert"]
+
+    def test_sql_allow_round_trips_through_save(self, tmp_path):
+        save_project_override(ProjectOverride(sql_allow=["delete"]), cwd=str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["delete"]
+
+    def test_is_empty_false_when_sql_allow_set(self):
+        assert not ProjectOverride(sql_allow=["drop"]).is_empty()
+
+    def test_append_creates_file(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+
+        append_project_sql_allow("insert", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["insert"]
+
+    def test_append_normalizes_kind(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+
+        append_project_sql_allow("  DROP ", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["drop"]
+
+    def test_append_to_file_without_key_preserves_content(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+
+        self._write(tmp_path, "# my project config\nproject_name: proj_a\n")
+        append_project_sql_allow("delete", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["delete"]
+        assert result.project_name == "proj_a"
+        assert "# my project config" in (tmp_path / PROJECT_CONFIG_REL).read_text()
+
+    def test_append_to_existing_key_preserves_entries(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+
+        self._write(tmp_path, '# header comment\nsql_allow:\n  - "insert"\nproject_name: proj_a\n')
+        append_project_sql_allow("drop", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert sorted(result.sql_allow) == ["drop", "insert"]
+        assert "# header comment" in (tmp_path / PROJECT_CONFIG_REL).read_text()
+
+    def test_append_is_idempotent(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+
+        append_project_sql_allow("drop", str(tmp_path))
+        append_project_sql_allow("drop", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.sql_allow == ["drop"]
+
+    def test_append_empty_kind_raises(self, tmp_path):
+        from datus.configuration.project_config import append_project_sql_allow
+        from datus.utils.exceptions import DatusException
+
+        with pytest.raises(DatusException):
+            append_project_sql_allow("   ", str(tmp_path))
+
+    def test_append_coexists_with_bash_allow(self, tmp_path):
+        """sql_allow and bash_allow edits must not clobber each other."""
+        from datus.configuration.project_config import append_project_bash_allow, append_project_sql_allow
+
+        append_project_bash_allow("make:*", str(tmp_path))
+        append_project_sql_allow("drop", str(tmp_path))
+        result = load_project_override(str(tmp_path))
+        assert result.bash_allow == ["make:*"]
+        assert result.sql_allow == ["drop"]
 
 
 class TestBashAllow:
@@ -416,34 +563,88 @@ class TestBashAllow:
         assert result.project_name == "proj_a"
 
 
-class TestPluginsPin:
-    """``plugins:`` maps a plugin name to the profile ``datus <plugin>`` uses."""
+class TestPluginsActivation:
+    """``plugins:`` declares per-plugin activation (enabled + active_profile)."""
 
-    def test_load_plugins_mapping(self, tmp_path):
+    def test_load_full_shape(self, tmp_path):
         path = tmp_path / PROJECT_CONFIG_REL
         path.parent.mkdir(parents=True)
-        path.write_text(yaml.safe_dump({"plugins": {"hello": "prod", "dagster": "dev"}}))
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "plugins": {
+                        "hello": {"enabled": True, "active_profile": ["prod", "staging"]},
+                        "dagster": {"enabled": False},
+                    }
+                }
+            )
+        )
         result = load_project_override(str(tmp_path))
-        assert result.plugins == {"hello": "prod", "dagster": "dev"}
+        assert result.plugins == {
+            "hello": PluginActivation(enabled=True, active_profile=["prod", "staging"]),
+            "dagster": PluginActivation(enabled=False, active_profile=None),
+        }
         assert not result.is_empty()
 
-    def test_non_mapping_dropped(self, tmp_path):
+    def test_string_shorthand_is_single_active_profile(self, tmp_path):
+        """A bare ``name: profile`` reads as enabled with one active profile
+        (backward-compatible with the old string pin)."""
         path = tmp_path / PROJECT_CONFIG_REL
         path.parent.mkdir(parents=True)
-        path.write_text(yaml.safe_dump({"plugins": "hello"}))
+        path.write_text(yaml.safe_dump({"plugins": {"hello": "prod"}}))
+        result = load_project_override(str(tmp_path))
+        assert result.plugins == {"hello": PluginActivation(enabled=True, active_profile=["prod"])}
+
+    def test_absent_section_is_none(self, tmp_path):
+        """No ``plugins:`` key → ``None`` (activate everything)."""
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"project_name": "p"}))
         assert load_project_override(str(tmp_path)).plugins is None
 
-    def test_non_string_profile_dropped(self, tmp_path):
+    def test_present_empty_section_is_empty_mapping(self, tmp_path):
+        """A present-but-empty ``plugins: {}`` stays a mapping (deactivate all),
+        distinct from an absent key."""
         path = tmp_path / PROJECT_CONFIG_REL
         path.parent.mkdir(parents=True)
-        path.write_text(yaml.safe_dump({"plugins": {"hello": "prod", "bad": 123}}))
-        assert load_project_override(str(tmp_path)).plugins == {"hello": "prod"}
+        path.write_text(yaml.safe_dump({"plugins": {}}))
+        assert load_project_override(str(tmp_path)).plugins == {}
 
-    def test_plugins_save_round_trip(self, tmp_path):
-        save_project_override(ProjectOverride(plugins={"hello": "staging"}), cwd=str(tmp_path))
+    def test_non_mapping_top_level_fails_closed(self, tmp_path):
+        # A present-but-malformed ``plugins`` value must fail closed to an empty
+        # whitelist (deactivate all), NOT to None ("activate everything") — a
+        # typo can never silently re-enable every installed plugin surface.
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"plugins": 123}))
+        assert load_project_override(str(tmp_path)).plugins == {}
+
+    def test_bool_shorthand_is_enabled_flag(self, tmp_path):
+        path = tmp_path / PROJECT_CONFIG_REL
+        path.parent.mkdir(parents=True)
+        path.write_text(yaml.safe_dump({"plugins": {"hello": False}}))
+        assert load_project_override(str(tmp_path)).plugins == {"hello": PluginActivation(enabled=False)}
+
+    def test_save_round_trip(self, tmp_path):
+        override = ProjectOverride(
+            plugins={
+                "hello": PluginActivation(enabled=True, active_profile=["staging"]),
+                "world": PluginActivation(enabled=False),
+            }
+        )
+        save_project_override(override, cwd=str(tmp_path))
+        # active_profile omitted when None; enabled always written.
+        raw = yaml.safe_load((tmp_path / PROJECT_CONFIG_REL).read_text())
+        assert raw["plugins"] == {
+            "hello": {"enabled": True, "active_profile": ["staging"]},
+            "world": {"enabled": False},
+        }
         result = load_project_override(str(tmp_path))
-        assert result.plugins == {"hello": "staging"}
-        assert not result.is_empty()
+        assert result.plugins == override.plugins
+
+    def test_save_present_empty_round_trip(self, tmp_path):
+        save_project_override(ProjectOverride(plugins={}), cwd=str(tmp_path))
+        assert load_project_override(str(tmp_path)).plugins == {}
 
     def test_save_round_trips_bash_allow(self, tmp_path):
         override = ProjectOverride(bash_allow=["make:*"])

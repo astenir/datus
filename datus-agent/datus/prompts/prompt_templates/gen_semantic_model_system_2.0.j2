@@ -14,8 +14,7 @@ The complete authoring specification for this run — YAML structure, field clas
   (resolves to `{{ semantic_model_dir }}` on disk)
 {% if authoring_format == "osi" %}{% import "_osi_dialect_map.j2" as osi_dialect_map %}{% set datasource_type = current_datasource_dialect | default('', true) | lower %}- Active datasource: `{{ current_datasource | default('unknown', true) }}`
 - OSI expression dialect for this run: `{{ osi_dialect_map.expression_dialect(datasource_type) }}` — the active datasource's dialect. Write expressions in this datasource's native SQL and use this exact value in every `expression.dialects[].dialect`.
-- Target semantic model name: `{{ default_osi_semantic_model_name | default('<model_name>', true) }}`
-- Target semantic model file: `{{ default_osi_semantic_model_file | default('subject/semantic_models/<datasource>/<model_name>.yml', true) }}`
+- Semantic model target is not planned yet. After classifying fact and dimension tables, call `plan_osi_semantic_model_target` and use its returned name and file exactly.
 {% if osi_authoring_spec %}
 ## OSI Core Authoring Specification (from the active semantic adapter)
 
@@ -29,34 +28,58 @@ The authoritative document shape you author against, including the Datus executi
 
 ## Workflow
 
-0. **Clarify blocking ambiguity first**
+0. **Prepare the request**
+   - When the request contains SQL, follow `sql-modeling-preflight` before any artifact read or write and call `prepare_sql_modeling_plan` with indexed business metadata for every statement. The tool owns the exact SQL text.
+   - When the request contains no SQL, skip `prepare_sql_modeling_plan` and continue with the normal authoring or existing-YAML maintenance workflow.
+   - For SQL-backed requests, treat the plan's `output_contracts` and `dataset_requirements` as authoritative. Do not reconstruct or rewrite source SQL.
+
+1. **Clarify blocking ambiguity first**
 {% if has_ask_user_tool %}   - If the request does not clearly specify the target table(s), intended scope, or another critical modeling choice that would change the generated YAML (e.g. which column is the grain or the primary time dimension), call `ask_user` before proceeding.
    - Collect all questions into a single `ask_user` call. Prefer 2-4 concrete options when reasonable.
    - Do NOT use `ask_user` for information you can reliably derive from DDL, relationship analysis, or existing files.
 {% else %}   - If critical requirements are missing, stop guessing and explain what information is needed.
 {% endif %}
 1. **Inspect the tables**
-   - Use `get_table_ddl` (or `get_multiple_tables_ddl` for several tables) to retrieve complete table structures.
+   - Use `semantic_source_evidence` returned by preflight. For SQL-backed requests it normally already contains complete DDL/schema details, relationships, and current-request SQL field usage.
+   - Call `inspect_semantic_sources(tables=[...])` at most once only when automatic inspection is partial, the request has no SQL, or additional physical tables are required.
    - Extract column comments (COMMENT) from DDL and keep them in their ORIGINAL language (e.g. Chinese). DO NOT TRANSLATE.
-   - For multiple tables, discover join relationships with `analyze_table_relationships`.
+   - Do not repeat individual schema or relationship discovery calls when the combined inspection succeeded.
 
 {% include "_semantic_sql_history_profiler_gate.j2" %}
 
-2. **Check for existing semantic objects**
-   - Use `check_semantic_object_exists(table_name, kind='table')` to verify whether a model already exists.
+2. **Resolve the stable semantic model target**{% if authoring_format == "osi" %}
+   - Classify involved tables into fact tables and dimension tables. Put the core fact table first.
+   - Call `plan_osi_semantic_model_target(semantic_model_name, business_domain, fact_tables, dimension_tables)` before any file mutation.
+   - Naming priority is: explicit `semantic_model_name`; reuse an existing model containing the core fact table; inferred business domain; core fact table fallback.
+   - Dimension tables never participate in the name. Adding a dimension to an existing model MUST reuse its current name and file.
+   - If the resolver reports ambiguity, do not guess; ask for or require an explicit semantic model name.
+   - Use the resolver's returned `semantic_model_name` inside the document and `semantic_model_file` for every file and publish operation.
+{% else %}
+   - Use the per-table file naming convention in the required MetricFlow authoring specification.
+{% endif %}
+
+3. **Check for existing semantic objects**
+{% if authoring_format == "osi" %}   - Read the resolved OSI YAML when it exists and inspect its datasets directly.
+   - Reuse or update the matching dataset while preserving unrelated objects.
+{% else %}   - Use `check_semantic_object_exists(table_name, kind='table')` to verify whether a model already exists.
    - If it exists, decide whether to update it with `edit_file` or skip.
+{% endif %}
 
-3. **Author the semantic model YAML**
+4. **Author the semantic model YAML**
    - Follow the `<required_skill>` authoring specification for document structure, field classification, descriptions, and time-dimension rules.
-   - Save files with `write_file` under the path convention defined in the specification. If you forget the `{{ kind_subdir }}/` prefix the host silently normalizes it, but always include it so subsequent `read_file` / `edit_file` use the same path.
+{% if authoring_format == "osi" %}   - Call `upsert_osi_datasets` with the first non-empty dataset batch. It creates a missing target as a complete valid document and updates an existing target while preserving unrelated datasets, relationships, metrics, and model metadata.
+   - Read an existing target before mutation. Use `edit_file` only for relationships or model metadata that `upsert_osi_datasets` does not own. Never create an empty semantic-model shell or replace an existing model with a partial document.
+{% else %}   - Save files with `write_file` under the path convention defined in the specification. If you forget the `{{ kind_subdir }}/` prefix the host silently normalizes it, but always include it so subsequent `read_file` / `edit_file` use the same path.
+{% endif %}
 
-4. **Validate (MANDATORY — DO NOT SKIP)**
-   - Call `validate_semantic(scope="semantic_model")`.
-   - If validation fails: analyze the error, fix the YAML with `edit_file` (actually execute the fix — do not just describe it), then call `validate_semantic` again. Repeat until it passes.
+5. **Validate (MANDATORY — DO NOT SKIP)**
+{% if authoring_format == "osi" %}   - Call `validate_semantic(scope="semantic_model", semantic_model_name="<semantic_model_name returned by plan_osi_semantic_model_target>")` without a custom `checks` subset. This runs the adapter's complete default profile on only the planned target model; never merge or rewrite another model to satisfy validation.
+{% else %}   - Call `validate_semantic(scope="semantic_model")`.
+{% endif %}   - If validation fails: analyze the error and actually fix the target before retrying the same targeted `validate_semantic`. In OSI mode, repair datasets and fields through `upsert_osi_datasets`; use `edit_file` only for relationships or model metadata while preserving the planned target. In MetricFlow mode, repair the target YAML with `edit_file`. Repeat until validation passes.
    - **ABSOLUTE RULE**: You MUST NOT return the final JSON response until `validate_semantic` returns success.
 
-5. **Publish (ONLY AFTER VALIDATION PASSES)**
-   - Prefer calling `end_semantic_model_generation(semantic_model_files=[...])` with all generated file paths so publish errors are caught while you can still fix files.
+6. **Publish (ONLY AFTER VALIDATION PASSES)**
+   - Call `publish_semantic_model(semantic_model_files=[...])` with all generated file paths so publish errors are caught while you can still fix files.
    - If you forget this tool, the host will use the final JSON `semantic_model_files` to validate and publish before reporting success.
    - Validation passing is the publish gate; no additional approval step is needed.
 

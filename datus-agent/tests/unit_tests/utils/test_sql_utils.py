@@ -6,6 +6,7 @@ from datus.tools.db_tools import connector_registry
 from datus.utils.constants import DBType, SQLType
 from datus.utils.json_utils import llm_result2json
 from datus.utils.sql_utils import (
+    _WIDEST_FIELD_ORDER,
     _fallback_sql_type,
     _first_statement,
     _is_escaped,
@@ -20,14 +21,22 @@ from datus.utils.sql_utils import (
     parse_dialect,
     parse_metadata_from_ddl,
     parse_read_dialect,
+    parse_sql_statement_kind,
     parse_sql_type,
     parse_table_name_parts,
     parse_table_names_parts,
     read_workspace_sql_file,
     strip_sql_comments,
+    table_name_field_order,
 )
 
-_CONNECTOR_REGISTRY_SNAPSHOT_ATTRS = ("_capabilities", "_uri_builders", "_context_resolvers")
+_CONNECTOR_REGISTRY_SNAPSHOT_ATTRS = (
+    "_connectors",
+    "_metadata",
+    "_capabilities",
+    "_uri_builders",
+    "_context_resolvers",
+)
 
 
 def _snapshot_connector_registry():
@@ -613,6 +622,24 @@ def test_extract_table_names():
         assert set(extract_table_names(sql_two_part, dialect=dialect, ignore_empty=True)) == {"foo.bar"}
 
 
+def test_extract_table_names_adapter_hook_honors_ignore_empty(monkeypatch):
+    monkeypatch.setattr(
+        connector_registry,
+        "get_parser_dialect",
+        lambda dialect: "hive" if dialect == "flexdb" else None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        connector_registry,
+        "get_identifier_parser",
+        lambda dialect: (lambda identifier: identifier) if dialect == "flexdb" else None,
+        raising=False,
+    )
+
+    assert extract_table_names("SELECT * FROM orders", dialect="flexdb") == ["..orders"]
+    assert extract_table_names("SELECT * FROM orders", dialect="flexdb", ignore_empty=True) == ["orders"]
+
+
 def test_parse_full_tables():
     table_meta = parse_table_name_parts("test.abc", dialect=DBType.DUCKDB)
     assert table_meta["schema_name"] == "test"
@@ -722,7 +749,7 @@ def test_parse_sql_type_with():
                      vplayerid,
                      sum(roundcnt) roundcnt,
                      sum(roundtime) roundtime
-              from dws_jordass_mode_roundrecord_di
+              from sample_activity_daily
               where ((dtstatdate between '20240326' and '20240409')
                   or (dtstatdate between '20240528' and '20240611'))
                 and mode in (401,402,403,101,102,103,603)
@@ -752,7 +779,7 @@ def test_parse_sql_type_with():
                ) a
                    left join (
               select dtstatdate,vplayerid
-              from dws_jordass_login_di
+              from sample_login_daily
               where ((dtstatdate between '20240326' and '20240404')
                   or (dtstatdate between '20240528' and '20240606'))
                 and platid =255
@@ -761,7 +788,7 @@ def test_parse_sql_type_with():
                              on a.vplayerid = b1.vplayerid and date_add(a.dtstatdate,1) = b1.dtstatdate
                    left join (
               select dtstatdate,vplayerid
-              from dws_jordass_login_di
+              from sample_login_daily
               where ((dtstatdate between '20240326' and '20240409') or (dtstatdate between '20240528' and '20240611'))
                 and platid =255
               group by dtstatdate,vplayerid
@@ -1062,6 +1089,15 @@ class TestParseReadDialect:
     def test_whitespace_trimmed(self):
         assert parse_read_dialect("  postgres  ") == "postgres"
 
+    def test_adapter_registered_parser_dialect(self, monkeypatch):
+        monkeypatch.setattr(
+            connector_registry,
+            "get_parser_dialect",
+            lambda dialect: "hive" if dialect == "flexdb" else None,
+            raising=False,
+        )
+        assert parse_read_dialect("flexdb") == "hive"
+
 
 # ---------------------------------------------------------------------------
 # parse_dialect
@@ -1072,6 +1108,15 @@ class TestParseDialect:
     def test_postgres(self):
         assert parse_dialect("postgres") == "postgres"
         assert parse_dialect("postgresql") == "postgres"
+
+    def test_adapter_registered_parser_dialect(self, monkeypatch):
+        monkeypatch.setattr(
+            connector_registry,
+            "get_parser_dialect",
+            lambda dialect: "hive" if dialect == "flexdb" else None,
+            raising=False,
+        )
+        assert parse_dialect("flexdb") == "hive"
 
     def test_tsql(self):
         assert parse_dialect("mssql") == "tsql"
@@ -1454,6 +1499,49 @@ class TestParseTableNamePartsExtended:
         result = parse_table_name_parts("extra.catalog.db.schema.table", dialect="snowflake")
         assert result["table_name"] == "table"
 
+    def test_adapter_identifier_parser_handles_flexible_namespaces(self, monkeypatch):
+        def parser(identifier):
+            parts = identifier.split(".")
+            return {
+                "catalog_name": "",
+                "database_name": parts[0] if len(parts) > 1 else "",
+                "schema_name": parts[1] if len(parts) == 3 else "",
+                "table_name": parts[-1],
+            }
+
+        connector_registry.register_handlers("flexdb", capabilities={"database", "schema"})
+        monkeypatch.setattr(
+            connector_registry,
+            "get_parser_dialect",
+            lambda dialect: "hive" if dialect == "flexdb" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            connector_registry,
+            "get_identifier_parser",
+            lambda dialect: parser if dialect == "flexdb" else None,
+            raising=False,
+        )
+
+        assert parse_table_name_parts("project_a.orders", "flexdb") == {
+            "catalog_name": "",
+            "database_name": "project_a",
+            "schema_name": "",
+            "table_name": "orders",
+        }
+        assert parse_table_name_parts("project_a.analytics.orders", "flexdb")["schema_name"] == "analytics"
+
+    def test_adapter_identifier_parser_must_return_complete_contract(self, monkeypatch):
+        monkeypatch.setattr(
+            connector_registry,
+            "get_identifier_parser",
+            lambda dialect: (lambda identifier: {"table_name": identifier}) if dialect == "flexdb" else None,
+            raising=False,
+        )
+
+        with pytest.raises(ValueError, match="must return"):
+            parse_table_name_parts("orders", "flexdb")
+
     def test_unknown_dialect_fallback(self):
         # Unknown dialect falls through to default behavior
         result = parse_table_name_parts("a.b.c.d", dialect="unknown_dialect_xyz")
@@ -1619,3 +1707,147 @@ class TestReadWorkspaceSqlFile:
     def test_missing_file_raises_file_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             read_workspace_sql_file("sql/missing.sql", str(tmp_path))
+
+
+class TestParseSqlStatementKind:
+    """Fine-grained statement kinds for the execute_sql permission gate."""
+
+    @pytest.mark.parametrize(
+        "sql,expected",
+        [
+            # Kinds identical to parse_sql_type values.
+            ("SELECT * FROM t", "select"),
+            ("WITH cte AS (SELECT 1) SELECT * FROM cte", "select"),
+            ("VALUES (1), (2)", "select"),
+            ("SHOW TABLES", "metadata"),
+            ("DESCRIBE t", "metadata"),
+            ("EXPLAIN SELECT 1", "explain"),
+            ("INSERT INTO t VALUES (1)", "insert"),
+            ("UPDATE t SET a = 1", "update"),
+            ("DELETE FROM t WHERE id = 1", "delete"),
+            ("MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = 1", "merge"),
+            ("USE analytics", "context_set"),
+            ("SET search_path = public", "context_set"),
+            # DDL refined by leading keyword.
+            ("CREATE TABLE t (id INT)", "create"),
+            ("CREATE OR REPLACE VIEW v AS SELECT 1", "create"),
+            ("CREATE TABLE t AS SELECT * FROM s", "create"),
+            ("ALTER TABLE t ADD COLUMN b INT", "alter"),
+            ("DROP TABLE t", "drop"),
+            ("DROP VIEW IF EXISTS v", "drop"),
+            ("TRUNCATE TABLE t", "truncate"),
+            # Benign DDL stays in the coarse ddl bucket.
+            ("COMMENT ON TABLE t IS 'x'", "ddl"),
+            ("GRANT SELECT ON t TO alice", "ddl"),
+            ("ANALYZE t", "ddl"),
+            # sqlglot models VACUUM as a generic Command → CONTENT_SET; a
+            # benign maintenance command in the write class is acceptable.
+            ("VACUUM", "context_set"),
+        ],
+    )
+    def test_kind_classification(self, sql, expected):
+        assert parse_sql_statement_kind(sql, "duckdb") == expected
+
+    def test_rename_counts_as_alter(self):
+        assert parse_sql_statement_kind("RENAME TABLE t TO u", "mysql") == "alter"
+
+    def test_replace_into_is_its_own_kind(self):
+        """REPLACE deletes matched rows before inserting — must not be 'insert'."""
+        assert parse_sql_statement_kind("REPLACE INTO t VALUES (1)", "mysql") == "replace"
+
+    def test_cte_fronted_insert_is_insert(self):
+        """A WITH-fronted INSERT classifies by the real statement, not 'WITH'."""
+        assert parse_sql_statement_kind("WITH src AS (SELECT 1 AS a) INSERT INTO t SELECT * FROM src", "") == "insert"
+
+    def test_multi_statement_classifies_first_only(self):
+        """First-statement semantics: the tool layer's multi-statement
+        rejection is the backstop for trailing statements."""
+        assert parse_sql_statement_kind("SELECT 1; DROP TABLE t", "") == "select"
+
+    def test_leading_comment_ignored(self):
+        assert parse_sql_statement_kind("-- cleanup\nDROP TABLE t", "") == "drop"
+
+    def test_empty_and_garbage_fall_to_unknown(self):
+        assert parse_sql_statement_kind("", "") == "unknown"
+        assert parse_sql_statement_kind("   ", "") == "unknown"
+        assert parse_sql_statement_kind("FROBNICATE THE WIDGETS", "") == "unknown"
+
+    def test_no_dialect_works_for_common_statements(self):
+        """The permission hook has no dialect; the fallback must still split."""
+        assert parse_sql_statement_kind("DROP TABLE t", "") == "drop"
+        assert parse_sql_statement_kind("TRUNCATE TABLE t", "") == "truncate"
+        assert parse_sql_statement_kind("SELECT 1", "") == "select"
+
+    def test_case_insensitive_keywords(self):
+        assert parse_sql_statement_kind("drop table t", "") == "drop"
+        assert parse_sql_statement_kind("Truncate Table t", "") == "truncate"
+
+
+class TestTableNameFieldOrder:
+    """``table_name_field_order`` is the shape contract shared by the parser and
+    by every caller that *emits* a dotted identifier (scope tokens, metadata
+    identifiers)."""
+
+    def test_mysql_has_no_schema_level(self):
+        assert table_name_field_order("mysql") == ["database_name", "table_name"]
+
+    def test_starrocks_puts_catalog_first(self):
+        assert table_name_field_order("starrocks") == ["catalog_name", "database_name", "table_name"]
+
+    def test_postgres_family_resolves_through_parse_dialect(self):
+        """``postgresql`` maps to the ``postgres`` parser dialect; capabilities
+        must still resolve or the order silently degrades to the widest shape."""
+        assert table_name_field_order("postgresql") == ["database_name", "schema_name", "table_name"]
+
+    def test_sqlite_is_two_segments(self):
+        assert table_name_field_order(DBType.SQLITE) == ["database_name", "table_name"]
+
+    def test_duckdb_keeps_its_schema_level(self):
+        assert table_name_field_order(DBType.DUCKDB) == ["database_name", "schema_name", "table_name"]
+
+    def test_capability_less_dialect_falls_back_to_widest_shape(self):
+        """A dialect that declares no namespaces (adapter absent) must not
+        collapse to a bare table name — a qualified prefix has to land in a
+        namespace field so callers keep the segments they were given."""
+        assert table_name_field_order("frobnicate") == [
+            "catalog_name",
+            "database_name",
+            "schema_name",
+            "table_name",
+        ]
+
+    def test_blank_dialect_is_accepted(self):
+        assert table_name_field_order("") == list(_WIDEST_FIELD_ORDER)
+
+    @pytest.mark.parametrize(
+        "dialect",
+        ["mysql", "starrocks", "postgresql", "snowflake", DBType.SQLITE, DBType.DUCKDB, "frobnicate"],
+    )
+    def test_parse_right_aligns_onto_the_declared_order(self, dialect):
+        """Cross-component contract: a token built with one segment per field
+        parses back with every literal in the field it was emitted for. This is
+        what keeps emitted scope tokens matchable."""
+        order = table_name_field_order(dialect)
+        token = ".".join(field.removesuffix("_name") for field in order)
+
+        parsed = parse_table_name_parts(token, dialect=dialect)
+
+        assert parsed == {
+            "catalog_name": "catalog" if "catalog_name" in order else "",
+            "database_name": "database" if "database_name" in order else "",
+            "schema_name": "schema" if "schema_name" in order else "",
+            "table_name": "table",
+        }
+
+    @pytest.mark.parametrize("dialect", ["mysql", "starrocks", "postgresql", DBType.DUCKDB])
+    def test_short_token_right_aligns_and_leaves_the_leading_field_empty(self, dialect):
+        """The failure mode the order exists to prevent: one segment short and
+        every literal shifts left by a field."""
+        order = table_name_field_order(dialect)
+
+        parsed = parse_table_name_parts("x.*", dialect=dialect)
+
+        assert parsed[order[-2]] == "x"
+        assert parsed["table_name"] == "*"
+        for field in order[:-2]:
+            assert parsed[field] == ""

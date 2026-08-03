@@ -4,6 +4,8 @@
 
 """Unit tests for datus.tools.func_tool.generation_evidence."""
 
+import pytest
+
 from datus.tools.func_tool.generation_evidence import (
     GenerationEvidence,
     _deduplicate_preserve_order,
@@ -13,6 +15,7 @@ from datus.tools.func_tool.generation_evidence import (
     _result_success,
     _sql_contains_base_expr_text,
 )
+from datus.utils.exceptions import DatusException, ErrorCode
 
 
 class TestResultSuccess:
@@ -130,14 +133,18 @@ class TestGenerationEvidence:
         assert ev.validation_passed is False
         assert ev.metric_dry_run_passed is False
         assert ev.kb_sync_passed is False
-        assert ev.storage_revision == 0
 
     def test_kb_sync_passed_when_any_kind_set(self):
         ev = GenerationEvidence()
-        ev.mark_kb_sync("metric")
+        ev.mark_kb_sync("metric", ["revenue"])
         assert ev.kb_sync_passed is True
         assert ev.metric_kb_sync_passed is True
-        assert ev.storage_revision == 1
+        assert ev.has_metric_kb_sync(["revenue"])
+        assert not ev.has_metric_kb_sync(["revenue", "orders"])
+        assert not ev.has_metric_kb_sync()
+
+        ev.mark_kb_sync("metric", ["orders"])
+        assert ev.has_metric_kb_sync(["revenue", "orders"])
 
     def test_kb_sync_semantic(self):
         ev = GenerationEvidence()
@@ -148,6 +155,115 @@ class TestGenerationEvidence:
         ev = GenerationEvidence()
         ev.mark_kb_sync()
         assert ev.generic_kb_sync_passed is True
+
+    def test_reset_clears_all_request_evidence_without_replacing_object(self, tmp_path):
+        artifact = tmp_path / "sales.yml"
+        artifact.write_text("semantic_model: sales\n", encoding="utf-8")
+        ev = GenerationEvidence(
+            validation_passed=True,
+            metric_dry_run_passed=True,
+            metric_dry_run_metrics={"revenue"},
+            metric_dry_run_queries=[{"metrics": ["revenue"]}],
+            metric_sqls={"revenue": "select 1"},
+            metric_queryability_contracts=[{"dimension_hints": ["country"]}],
+            metric_aliases={"rev": "revenue"},
+            required_metric_output_ids=["sales:output"],
+            required_query_backed_sql={"query_dataset:sales": "SELECT * FROM sales"},
+            query_backed_dataset_bindings={
+                "query_dataset:sales": {
+                    "semantic_model_file": str(artifact.resolve()),
+                    "dataset_name": "daily_sales",
+                }
+            },
+            semantic_kb_sync_passed=True,
+            metric_kb_sync_passed=True,
+            metric_kb_sync_metrics={"revenue"},
+            generic_kb_sync_passed=True,
+        )
+        ev.record_semantic_artifact_validation("sales", artifact)
+
+        ev.reset()
+
+        assert ev == GenerationEvidence()
+
+    def test_artifact_mutation_invalidates_publish_evidence_but_keeps_request_contracts(self, tmp_path):
+        artifact = tmp_path / "sales.yml"
+        artifact.write_text("semantic_model: sales\n", encoding="utf-8")
+        ev = GenerationEvidence(
+            validation_passed=True,
+            metric_dry_run_passed=True,
+            metric_dry_run_metrics={"revenue"},
+            metric_dry_run_queries=[{"metrics": ["revenue"]}],
+            metric_sqls={"revenue": "select 1"},
+            metric_queryability_contracts=[{"dimension_hints": ["country"]}],
+            metric_aliases={"rev": "revenue"},
+            required_metric_output_ids=["sales:output"],
+            required_query_backed_sql={"query_dataset:sales": "SELECT * FROM sales"},
+            query_backed_dataset_bindings={
+                "query_dataset:sales": {
+                    "semantic_model_file": str(artifact.resolve()),
+                    "dataset_name": "daily_sales",
+                }
+            },
+            semantic_kb_sync_passed=True,
+            metric_kb_sync_passed=True,
+            metric_kb_sync_metrics={"revenue"},
+        )
+        ev.record_semantic_artifact_validation("sales", artifact)
+
+        ev.invalidate_artifact_evidence()
+
+        assert ev.validation_passed is False
+        assert ev.metric_dry_run_passed is False
+        assert ev.metric_dry_run_metrics == set()
+        assert ev.metric_dry_run_queries == []
+        assert ev.metric_sqls == {}
+        assert ev.validated_semantic_artifacts == {}
+        assert ev.kb_sync_passed is False
+        assert ev.metric_kb_sync_metrics == set()
+        assert ev.metric_queryability_contracts == [{"dimension_hints": ["country"]}]
+        assert ev.metric_aliases == {"rev": "revenue"}
+        assert ev.required_metric_output_ids == ["sales:output"]
+        assert ev.required_query_backed_sql == {"query_dataset:sales": "SELECT * FROM sales"}
+        assert ev.query_backed_dataset_bindings["query_dataset:sales"]["dataset_name"] == "daily_sales"
+
+    def test_records_query_backed_sql_by_requirement_identity(self):
+        ev = GenerationEvidence()
+
+        ev.set_required_query_backed_datasets(
+            [
+                {"requirement_id": "query_dataset:daily_sales", "sql": "SELECT * FROM daily_sales"},
+                {"requirement_id": "query_dataset:empty", "sql": ""},
+            ]
+        )
+
+        assert ev.required_query_backed_sql == {"query_dataset:daily_sales": "SELECT * FROM daily_sales"}
+
+    def test_query_backed_dataset_binding_is_stable_within_request(self, tmp_path):
+        ev = GenerationEvidence()
+
+        ev.bind_query_backed_dataset(
+            "query_dataset:daily_sales",
+            semantic_model_file=tmp_path / "sales.yml",
+            dataset_name="daily_sales",
+        )
+        ev.bind_query_backed_dataset(
+            "query_dataset:daily_sales",
+            semantic_model_file=tmp_path / "sales.yml",
+            dataset_name="daily_sales",
+        )
+
+        assert ev.query_backed_dataset_binding("query_dataset:daily_sales") == {
+            "semantic_model_file": str((tmp_path / "sales.yml").resolve()),
+            "dataset_name": "daily_sales",
+        }
+        with pytest.raises(DatusException, match="already bound") as exc_info:
+            ev.bind_query_backed_dataset(
+                "query_dataset:daily_sales",
+                semantic_model_file=tmp_path / "sales.yml",
+                dataset_name="daily_sales_v2",
+            )
+        assert exc_info.value.code is ErrorCode.TOOL_INVALID_INPUT
 
     def test_record_validation_result_success(self):
         ev = GenerationEvidence()
@@ -163,6 +279,48 @@ class TestGenerationEvidence:
         ev = GenerationEvidence()
         ev.record_validation_result({"success": 0, "result": {"valid": True}})
         assert ev.validation_passed is False
+
+    def test_semantic_validation_is_bound_to_model_and_file_content(self, tmp_path):
+        artifact = tmp_path / "sales.yml"
+        artifact.write_text("semantic_model: sales\n", encoding="utf-8")
+        ev = GenerationEvidence()
+        ev.record_validation_result(
+            {
+                "success": 1,
+                "result": {
+                    "valid": True,
+                    "semantic_model_name": "sales",
+                    "semantic_model_file": str(artifact),
+                },
+            }
+        )
+
+        assert ev.semantic_artifact_validation_passed("sales", artifact)
+        assert not ev.semantic_artifact_validation_passed("finance", artifact)
+
+        artifact.write_text("semantic_model: changed\n", encoding="utf-8")
+
+        assert not ev.semantic_artifact_validation_passed("sales", artifact)
+
+    def test_explicit_validation_checks_do_not_satisfy_publish_gate(self, tmp_path):
+        artifact = tmp_path / "sales.yml"
+        artifact.write_text("semantic_model: sales\n", encoding="utf-8")
+        ev = GenerationEvidence()
+
+        ev.record_validation_result(
+            {
+                "success": 1,
+                "result": {
+                    "valid": True,
+                    "checks": ["authoring_quality"],
+                    "semantic_model_name": "sales",
+                    "semantic_model_file": str(artifact),
+                },
+            }
+        )
+
+        assert ev.validation_passed is False
+        assert not ev.semantic_artifact_validation_passed("sales", artifact)
 
     def test_record_metric_dry_run_success(self):
         ev = GenerationEvidence()
@@ -241,6 +399,52 @@ class TestGenerationEvidence:
         assert "revenue_total" in hints
         alias_rewrites = ev.metric_queryability_contracts[0].get("metric_alias_rewrites", {})
         assert alias_rewrites.get("rev_alias") == "revenue_total"
+
+    def test_output_binding_prevents_english_metric_name_from_bypassing_dimensions(self):
+        output_id = "sql_1:statement_1:output_2:iusernum"
+        ev = GenerationEvidence()
+        ev.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "dimension_hints": ["week_start"],
+                    "metric_hints": ["iusernum"],
+                    "metric_output_ids": [output_id],
+                }
+            ]
+        )
+        ev.bind_metric_output_names([{"output_id": output_id, "metric_name": "first_week_retained_users"}])
+        ev.record_metric_dry_run(
+            ["first_week_retained_users"],
+            {"success": 1, "result": {"metadata": {}}},
+        )
+
+        contract = ev.metric_queryability_contracts[0]
+        assert contract["source_metric_hints"] == ["iusernum"]
+        assert contract["metric_hints"] == ["first_week_retained_users"]
+        assert ev.has_required_queryability_dry_runs(["first_week_retained_users"]) is False
+
+    def test_output_binding_accepts_renamed_metric_with_required_dimensions(self):
+        output_id = "sql_1:statement_1:output_2:iusernum"
+        ev = GenerationEvidence()
+        ev.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "dimension_hints": ["week_start"],
+                    "metric_hints": ["iusernum"],
+                    "metric_output_ids": [output_id],
+                }
+            ]
+        )
+        ev.bind_metric_output_names([{"output_id": output_id, "metric_name": "first_week_retained_users"}])
+        ev.record_metric_dry_run(
+            ["first_week_retained_users"],
+            {"success": 1, "result": {"metadata": {}}},
+            dimensions=["week_start"],
+        )
+
+        assert ev.has_required_queryability_dry_runs(["first_week_retained_users"]) is True
 
     def test_has_required_queryability_dry_runs_no_contracts(self):
         ev = GenerationEvidence()

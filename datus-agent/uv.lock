@@ -723,7 +723,7 @@ wheels = [
 
 [[package]]
 name = "datus-agent"
-version = "0.3.8"
+version = "0.3.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -743,7 +743,9 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastembed" },
     { name = "httpx", extra = ["socks"] },
+    { name = "jinja2" },
     { name = "json-repair" },
+    { name = "jsonschema" },
     { name = "lancedb" },
     { name = "litellm" },
     { name = "lxml" },
@@ -803,6 +805,7 @@ ci = [
     { name = "datus-metricflow" },
     { name = "datus-oceanbase-oracle" },
     { name = "datus-semantic-metricflow" },
+    { name = "datus-semantic-osi" },
     { name = "datus-storage-postgresql" },
 ]
 dev = [
@@ -854,12 +857,14 @@ requires-dist = [
     { name = "datus-storage-oceanbase-mysql", marker = "extra == 'storage-oceanbase-mysql'", editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" },
     { name = "datus-storage-postgresql", marker = "extra == 'enterprise-intranet'", editable = "../datus-storage-adapters/datus-storage-postgresql" },
     { name = "defusedxml", specifier = ">=0.7.1" },
-    { name = "duckdb", specifier = ">=1.5.2,<2.0.0" },
+    { name = "duckdb", specifier = "==1.5.2" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "fastapi", specifier = ">=0.104.0,<1.0" },
     { name = "fastembed", specifier = "==0.4.2" },
     { name = "httpx", extras = ["socks"], specifier = "==0.27.2" },
+    { name = "jinja2", specifier = ">=3.1,<4" },
     { name = "json-repair", specifier = ">=0.47.6" },
+    { name = "jsonschema", specifier = ">=4.17,<5" },
     { name = "lancedb", specifier = "==0.34.0" },
     { name = "litellm", specifier = ">=1.67.4.post1,<2" },
     { name = "lxml", specifier = ">=5.0.0" },
@@ -900,6 +905,7 @@ ci = [
     { name = "datus-metricflow", editable = "../metricflow" },
     { name = "datus-oceanbase-oracle", editable = "../datus-db-adapters/datus-oceanbase-oracle" },
     { name = "datus-semantic-metricflow", editable = "../datus-semantic-adapter/datus-semantic-metricflow" },
+    { name = "datus-semantic-osi", editable = "../datus-semantic-adapter/datus-semantic-osi" },
     { name = "datus-storage-postgresql", editable = "../datus-storage-adapters/datus-storage-postgresql" },
 ]
 dev = [
@@ -940,7 +946,7 @@ wheels = [
 
 [[package]]
 name = "datus-db-core"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "../datus-db-adapters/datus-db-core" }
 dependencies = [
     { name = "pydantic" },
@@ -1052,7 +1058,7 @@ provides-extras = ["bigquery", "databricks", "dbt-bigquery", "dbt-postgres", "db
 
 [[package]]
 name = "datus-mysql"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "../datus-db-adapters/datus-mysql" }
 dependencies = [
     { name = "cryptography" },
@@ -1113,7 +1119,7 @@ requires-dist = [
 
 [[package]]
 name = "datus-postgresql"
-version = "0.1.6"
+version = "0.1.8"
 source = { editable = "../datus-db-adapters/datus-postgresql" }
 dependencies = [
     { name = "datus-db-core" },
@@ -1144,7 +1150,7 @@ wheels = [
 
 [[package]]
 name = "datus-semantic-core"
-version = "0.2.1"
+version = "0.2.3"
 source = { editable = "../datus-semantic-adapter/datus-semantic-core" }
 dependencies = [
     { name = "pydantic" },
@@ -1163,7 +1169,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "datus-semantic-metricflow"
-version = "0.2.10"
+version = "0.2.12"
 source = { editable = "../datus-semantic-adapter/datus-semantic-metricflow" }
 dependencies = [
     { name = "datus-metricflow", extra = ["snowflake"] },
@@ -1184,8 +1190,34 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [[package]]
+name = "datus-semantic-osi"
+version = "0.1.5"
+source = { editable = "../datus-semantic-adapter/datus-semantic-osi" }
+dependencies = [
+    { name = "datus-semantic-core" },
+    { name = "jsonschema" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "sqlglot" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-semantic-core", editable = "../datus-semantic-adapter/datus-semantic-core" },
+    { name = "datus-semantic-metricflow", marker = "extra == 'metricflow'", editable = "../datus-semantic-adapter/datus-semantic-metricflow" },
+    { name = "jsonschema", specifier = ">=4.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "sqlglot", specifier = ">=26.12.0,<31" },
+]
+provides-extras = ["metricflow", "dev"]
+
+[[package]]
 name = "datus-sqlalchemy"
-version = "0.1.6"
+version = "0.1.8"
 source = { editable = "../datus-db-adapters/datus-sqlalchemy" }
 dependencies = [
     { name = "datus-db-core" },

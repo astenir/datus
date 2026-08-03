@@ -24,6 +24,7 @@ Design principle: NO mock except LLM.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -100,12 +101,195 @@ class TestGenSemanticModelAgenticNodeInit:
 
         # Generation tools
         assert "check_semantic_object_exists" in tool_names
-        assert "end_semantic_model_generation" in tool_names
+        assert "publish_semantic_model" in tool_names
 
         # SemanticDiscoveryTools should be present; the profiler tool is
         # registered by default (the optional skill is in the default set).
         assert isinstance(node.semantic_discovery_tools, SemanticDiscoveryTools)
         assert "profile_semantic_model_evidence" in tool_names
+        assert "inspect_semantic_sources" in tool_names
+        assert "validate_semantic_key_candidates" in tool_names
+
+    def test_osi_semantic_model_uses_dataset_upsert_for_create(self, real_agent_config, mock_llm_create):
+        """Ossie authoring creates valid models through the narrow dataset upsert."""
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+
+        _set_global_semantic_adapter(real_agent_config, "osi")
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(user_message="Generate an Ossie semantic model")
+
+        node._get_system_prompt(template_context=node._prepare_template_context(node.input))
+        tool_names = {tool.name for tool in node.tools}
+
+        assert {
+            "read_file",
+            "edit_file",
+            "upsert_osi_datasets",
+            "glob",
+            "grep",
+            "plan_osi_semantic_model_target",
+        }.issubset(tool_names)
+        assert {"write_file", "delete_file", "upsert_osi_metrics", "bash"}.isdisjoint(tool_names)
+        assert "publish_semantic_model" in tool_names
+        node._populate_tool_registry()
+        assert node.tool_registry.get("plan_osi_semantic_model_target") == "semantic_tools"
+
+    @pytest.mark.asyncio
+    async def test_before_stream_resets_request_state_without_replacing_shared_evidence(
+        self, real_agent_config, mock_llm_create
+    ):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.agent.node.stream_run_context import StreamRunContext
+
+        _set_global_semantic_adapter(real_agent_config, "osi")
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(user_message="Generate an OSI semantic model")
+        node.osi_target_state.select(
+            {
+                "semantic_model_name": "old_model",
+                "semantic_model_file": "subject/semantic_models/warehouse/old.yml",
+                "absolute_path": "/tmp/old.yml",
+            },
+            mode="planned",
+        )
+        node.generation_evidence.validation_passed = True
+        node.generation_evidence.semantic_kb_sync_passed = True
+        evidence = node.generation_evidence
+        ctx = StreamRunContext(user_input=node.input, action_history_manager=ActionHistoryManager())
+
+        await node._before_stream(ctx)
+
+        assert node.osi_target_state.planned is None
+        assert node.generation_evidence is evidence
+        assert node.generation_evidence == type(evidence)()
+        assert node.generation_tools.generation_evidence is evidence
+        assert node.semantic_func_tool.generation_evidence is evidence
+
+    @pytest.mark.asyncio
+    async def test_before_stream_only_resets_request_local_sql_plan(
+        self,
+        real_agent_config,
+        mock_llm_create,
+    ):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.agent.node.stream_run_context import StreamRunContext
+
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(
+            user_message=(
+                "Generate a semantic model for:\n"
+                "WITH base AS (SELECT * FROM orders) SELECT COUNT(*) AS orders FROM base"
+            )
+        )
+        ctx = StreamRunContext(user_input=node.input, action_history_manager=ActionHistoryManager())
+
+        await node._before_stream(ctx)
+
+        assert node.sql_modeling_plan is None
+        assert node.generation_evidence.sql_modeling_plan_status == "pending"
+        assert "prepare_sql_modeling_plan" in {tool.name for tool in node.tools}
+
+    def test_sql_result_cannot_bypass_preflight(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.agent.node.stream_run_context import StreamRunContext
+        from datus.utils.exceptions import DatusException
+
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(user_message="SELECT COUNT(*) AS order_count FROM orders")
+        ctx = StreamRunContext(user_input=node.input, action_history_manager=ActionHistoryManager())
+        ctx.response_content = "not json"
+
+        with pytest.raises(DatusException, match="prepare_sql_modeling_plan"):
+            node._build_success_result(ctx)
+
+    def test_sql_result_requires_semantic_model_files(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.agent.node.stream_run_context import StreamRunContext
+
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(user_message="SELECT COUNT(*) AS order_count FROM orders")
+        node.generation_evidence.set_sql_modeling_plan("ready", "source")
+        ctx = StreamRunContext(user_input=node.input, action_history_manager=ActionHistoryManager())
+        ctx.response_content = "not json"
+
+        with pytest.raises(RuntimeError, match="semantic_model_files"):
+            node._build_success_result(ctx)
+
+    @pytest.mark.parametrize(
+        ("adapter", "required_text", "forbidden_text"),
+        [
+            ("osi", "osi-semantic-authoring", "metricflow-semantic-authoring"),
+            ("metricflow", "metricflow-semantic-authoring", "osi-semantic-authoring"),
+        ],
+    )
+    def test_required_skills_combine_preflight_with_format_specific_authoring(
+        self,
+        real_agent_config,
+        mock_llm_create,
+        adapter,
+        required_text,
+        forbidden_text,
+    ):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+
+        _set_global_semantic_adapter(real_agent_config, adapter)
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.input = SemanticNodeInput(user_message="Generate a semantic model")
+
+        required_skills = node._get_required_skills()
+
+        assert required_skills[0] == "sql-modeling-preflight"
+        assert required_text in required_skills
+        assert forbidden_text not in required_skills
+
+    def test_osi_filesystem_mutations_require_and_preserve_the_planned_target(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+
+        _set_global_semantic_adapter(real_agent_config, "osi")
+        node = GenSemanticModelAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        datasource = real_agent_config.current_datasource
+        target = f"subject/semantic_models/{datasource}/orders.yml"
+        sibling = f"subject/semantic_models/{datasource}/customers.yml"
+        content = (
+            "version: 0.2.0.dev0\n"
+            "semantic_model:\n"
+            "  - name: orders\n"
+            "    datasets:\n"
+            "      - name: orders\n"
+            "        source: orders\n"
+        )
+
+        unplanned = node.filesystem_func_tool.write_file(target, content)
+        assert not unplanned.success
+        assert "Plan the OSI semantic-model target" in unplanned.error
+
+        plan = node.osi_target_tools.plan_osi_semantic_model_target(semantic_model_name="orders")
+        assert plan.success == 1
+        wrong_target = node.filesystem_func_tool.write_file(sibling, content.replace("orders", "customers"))
+        assert not wrong_target.success
+        assert "authoring is planned for" in wrong_target.error
+
+        node.generation_evidence.validation_passed = True
+        node.generation_evidence.semantic_kb_sync_passed = True
+        written = node.filesystem_func_tool.write_file(target, content)
+        edited = node.filesystem_func_tool.edit_file(
+            target,
+            "source: orders",
+            "source: analytics.orders",
+        )
+
+        assert written.success == 1
+        assert edited.success == 1
+        assert node.generation_evidence.validation_passed is False
+        assert node.generation_evidence.semantic_kb_sync_passed is False
+
+        replan = node.osi_target_tools.plan_osi_semantic_model_target(semantic_model_name="customers")
+        assert not replan.success
+        assert "cannot change after authoring started" in replan.error
+        assert node.osi_target_state.planned["semantic_model_name"] == "orders"
+        assert node.osi_target_state.last_error_code == "semantic_model_target_invalid"
+        with pytest.raises(ValueError, match="unresolved after a failed replan"):
+            node.generation_tools.resolve_planned_osi_semantic_target()
 
     def test_semantic_sql_history_profiler_tool_opt_out(self, real_agent_config, mock_llm_create):
         """An explicit empty skills entry removes the profiler tool."""
@@ -510,6 +694,28 @@ class TestPrepareTemplateContext:
 
         assert "test_tool" in context["native_tools"]
 
+    def test_osi_target_is_in_request_context_not_system_template(self, real_agent_config, mock_llm_create):
+        _set_global_semantic_adapter(real_agent_config, "osi")
+        node = _make_node(real_agent_config, mock_llm_create)
+        user_input = SemanticNodeInput(
+            user_message="Generate a semantic model",
+            semantic_model_name="Executive Sales",
+            business_domain="commerce",
+            fact_tables=["main.orders"],
+            dimension_tables=["main.customers"],
+        )
+
+        context = node._prepare_template_context(user_input)
+
+        assert "osi_target_resolved" not in context
+        assert "requested_semantic_model_name" not in context
+        enhanced = node._build_enhanced_message(user_input)
+        assert "Requested semantic model name: `Executive Sales`" in enhanced
+        assert "executive_sales.yml" not in enhanced
+        assert "only the tool result binds the target" in enhanced
+        assert "main.orders" in enhanced
+        assert "main.customers" in enhanced
+
 
 class TestGetSystemPrompt:
     def test_osi_authoring_uses_shared_template_with_osi_context(self, real_agent_config, mock_llm_create):
@@ -618,6 +824,62 @@ class TestExecutionModeGenSemanticModel:
 
 
 class TestExecuteStreamGenSemanticModelError:
+    def test_osi_finalizer_revalidates_when_evidence_targets_another_model(self, tmp_path):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+        from datus.tools.func_tool.generation_evidence import GenerationEvidence
+
+        sales_file = tmp_path / "sales.yml"
+        finance_file = tmp_path / "finance.yml"
+        sales_file.write_text("semantic_model: sales\n", encoding="utf-8")
+        finance_file.write_text("semantic_model: finance\n", encoding="utf-8")
+
+        node = GenSemanticModelAgenticNode.__new__(GenSemanticModelAgenticNode)
+        node.agent_config = SimpleNamespace(resolve_semantic_adapter=lambda requested=None: "osi")
+        node.generation_evidence = GenerationEvidence(validation_passed=True)
+        node.generation_evidence.record_semantic_artifact_validation("sales", sales_file)
+        node.generation_tools = MagicMock()
+        node.generation_tools.resolve_planned_osi_semantic_target.return_value = (
+            "subject/semantic_models/warehouse/finance.yml",
+            str(finance_file),
+            "finance",
+        )
+        node.generation_tools.publish_semantic_model.return_value = FuncToolResult(
+            result={"semantic_model_files": ["subject/semantic_models/warehouse/finance.yml"]}
+        )
+        node.semantic_func_tool = MagicMock()
+        node.semantic_func_tool.validate_semantic.return_value = FuncToolResult(result={"valid": True, "issues": []})
+
+        node._finalize_semantic_model_generation(["finance.yml"])
+
+        node.semantic_func_tool.validate_semantic.assert_called_once_with(
+            scope="semantic_model",
+            semantic_model_name="finance",
+        )
+        node.generation_tools.publish_semantic_model.assert_called_once_with(
+            ["subject/semantic_models/warehouse/finance.yml"]
+        )
+        assert node.generation_evidence.semantic_artifact_validation_passed("finance", finance_file)
+
+    def test_osi_finalizer_rejects_unplanned_final_json_fallback(self):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.tools.func_tool.generation_evidence import GenerationEvidence
+
+        node = GenSemanticModelAgenticNode.__new__(GenSemanticModelAgenticNode)
+        node.agent_config = SimpleNamespace(resolve_semantic_adapter=lambda requested=None: "osi")
+        node.generation_evidence = GenerationEvidence()
+        node.generation_tools = MagicMock()
+        node.generation_tools.resolve_planned_osi_semantic_target.side_effect = ValueError(
+            "Plan the OSI semantic-model name and file before publishing."
+        )
+        node.semantic_func_tool = MagicMock()
+
+        with pytest.raises(RuntimeError, match="Plan the OSI semantic-model"):
+            node._finalize_semantic_model_generation(["subject/semantic_models/warehouse/rogue.yml"])
+
+        node.semantic_func_tool.validate_semantic.assert_not_called()
+        node.generation_tools.publish_semantic_model.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_execute_stream_error_yields_error_action(self, real_agent_config, mock_llm_create):
         """When model raises a generic exception, execute_stream yields error action."""
@@ -791,101 +1053,6 @@ class TestExecuteStreamGenSemanticModelError:
         assert "my_catalog" in prompt
         assert "california_schools" in prompt
         assert "main" in prompt
-
-
-# ---------------------------------------------------------------------------
-# TestSaveToDb (error path)
-# ---------------------------------------------------------------------------
-
-
-class TestSaveToDb:
-    def test_save_to_db_skips_nonexistent_file(self, real_agent_config, mock_llm_create, tmp_path):
-        node = _make_node(real_agent_config, mock_llm_create)
-        node.semantic_model_dir = str(tmp_path)
-
-        with patch(
-            "datus.agent.node.gen_semantic_model_agentic_node.GenerationHooks._sync_semantic_to_db"
-        ) as sync_mock:
-            assert node._save_to_db("nonexistent_model.yml") is False
-        sync_mock.assert_not_called()
-
-    def test_save_to_db_skips_empty_filename(self, real_agent_config, mock_llm_create, tmp_path):
-        node = _make_node(real_agent_config, mock_llm_create)
-        node.semantic_model_dir = str(tmp_path)
-
-        with patch(
-            "datus.agent.node.gen_semantic_model_agentic_node.GenerationHooks._sync_semantic_to_db"
-        ) as sync_mock:
-            assert node._save_to_db("") is False
-        sync_mock.assert_not_called()
-
-    def test_save_to_db_rejects_out_of_sandbox_absolute_path(self, real_agent_config, mock_llm_create, tmp_path):
-        """A fabricated absolute path outside the semantic-model sandbox must
-        be refused so _save_to_db never syncs an arbitrary on-disk file."""
-        from unittest.mock import patch
-
-        node = _make_node(real_agent_config, mock_llm_create)
-        # Create a file outside the KB to prove the node won't touch it even if it exists.
-        outside = tmp_path / "outside" / "malicious.yaml"
-        outside.parent.mkdir(parents=True)
-        outside.write_text("x: y\n")
-
-        with patch("datus.cli.generation_hooks.GenerationHooks._sync_semantic_to_db") as sync_mock:
-            node._save_to_db(str(outside))
-            sync_mock.assert_not_called()
-
-    def test_save_to_db_rejects_cross_datasource_prefix(self, real_agent_config, mock_llm_create):
-        """LLM-emitted cross-datasource prefix must be refused so a node can't
-        overwrite another datasource's KB via a fabricated final JSON."""
-        from unittest.mock import patch
-
-        node = _make_node(real_agent_config, mock_llm_create)
-        with patch("datus.cli.generation_hooks.GenerationHooks._sync_semantic_to_db") as sync_mock:
-            node._save_to_db("semantic_models/other_db/orders.yml")
-            sync_mock.assert_not_called()
-
-    def test_osi_save_to_db_uses_generation_tools_sync(self, real_agent_config, mock_llm_create):
-        _set_global_semantic_adapter(real_agent_config, "osi")
-        node = _make_node(real_agent_config, mock_llm_create)
-        datasource = real_agent_config.current_datasource
-        semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
-        semantic_dir.mkdir(parents=True, exist_ok=True)
-        semantic_file = semantic_dir / "orders.yml"
-        semantic_file.write_text("version: 0.2.0.dev0\nsemantic_model: []\n", encoding="utf-8")
-        node.generation_tools.sync_osi_semantic_to_db = MagicMock(return_value={"success": True, "message": "synced"})
-
-        assert node._save_to_db(f"subject/semantic_models/{datasource}/orders.yml") is True
-
-        node.generation_tools.sync_osi_semantic_to_db.assert_called_once_with(str(semantic_file))
-        assert node.generation_evidence.semantic_kb_sync_passed is True
-
-    def test_osi_save_to_db_fails_without_generation_tools(self, real_agent_config, mock_llm_create):
-        _set_global_semantic_adapter(real_agent_config, "osi")
-        node = _make_node(real_agent_config, mock_llm_create)
-        datasource = real_agent_config.current_datasource
-        semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
-        semantic_dir.mkdir(parents=True, exist_ok=True)
-        (semantic_dir / "orders.yml").write_text("version: 0.2.0.dev0\nsemantic_model: []\n", encoding="utf-8")
-        node.generation_tools = None
-
-        assert node._save_to_db(f"subject/semantic_models/{datasource}/orders.yml") is False
-
-    def test_osi_save_to_db_reports_sync_failure(self, real_agent_config, mock_llm_create):
-        _set_global_semantic_adapter(real_agent_config, "osi")
-        node = _make_node(real_agent_config, mock_llm_create)
-        datasource = real_agent_config.current_datasource
-        semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
-        semantic_dir.mkdir(parents=True, exist_ok=True)
-        semantic_file = semantic_dir / "orders.yml"
-        semantic_file.write_text("version: 0.2.0.dev0\nsemantic_model: []\n", encoding="utf-8")
-        node.generation_tools.sync_osi_semantic_to_db = MagicMock(
-            return_value={"success": False, "error": "sync failed"}
-        )
-
-        assert node._save_to_db(f"subject/semantic_models/{datasource}/orders.yml") is False
-
-        node.generation_tools.sync_osi_semantic_to_db.assert_called_once_with(str(semantic_file))
-        assert node.generation_evidence.semantic_kb_sync_passed is False
 
 
 class TestGenSemanticModelFilesystemRootPath:

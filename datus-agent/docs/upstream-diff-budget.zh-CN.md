@@ -4,41 +4,51 @@
 
 ## 当前基线
 
-基线采样日期：2026-07-27
+基线采样日期：2026-08-03
 
-说明：这是完成正式 `v0.3.8` release 合并、企业权限回归修复、真实企业 auth/catalog/SQL smoke、公开文档恢复、第九轮测试迁移、第八轮模型契约归位、差异护栏、MCP/Report/Success Story service 归位、Dashboard service list/render 与 query SQL authorization adapter 归位、CLI connector/task owner、Chat task runtime、Chat request config/terminal sidecar runtime、应用 route projection/legacy gate、Artifact edit-session 过渡兼容清理、SubAgent 委派企业策略与 sidecar runtime、SessionManager scope/sidecar/async store/shared message parser、TokenUsage running snapshot persistence adapter、enterprise request-context policy、Enterprise auth loader policy、Visual Artifact access/locked-edit policy 与 locked-edit auto-validation adapter、DBFuncTool datasource-grant scope 与 SQL source 判定、AgenticNode permission/session/MCP runtime helper、Interactive node downstream adapter、Runtime prompt template resolver、Datasource-file project override adapter、Artifact filesystem ACL scope、Filesystem enterprise scope policy、Semantic query-time normalizer、Schema metadata sample-row normalizer、Embedding-store read selection adapter、Embedding-store storage-key adapter、Embedding-store backend repair adapter、OpenAI-compatible embedding request adapter、SSE response/error payload normalizer、Artifact HTML bundle helper、MCPManager config/runtime adapter、Model MCP connection options、Artifact creation ACL、Success Story migration CLI、CLIService/ChatService/deps/ChatTaskManager/Chat routes/feedback/Artifact tools/Database service/OpenAI/Claude stream/Dashboard renderer/Storage read path/KB cancellation 下游测试拆分、ChatService history/session、history-only SSE converter、stream cancellation 安全 wrapper 与 Success Story route 测试归位，以及 KB/Config/Report/Dashboard/Success Story/Models/Legacy Agent/Database/MCP/Table/CLI route 归位后的采样结果。`v0.3.8` 使用上游 annotated tag 的 release tree；下游仍保留企业平台、OceanBase/PG stores、本地联调和独立测试等长期差异。
+说明：这是正式 `v0.3.9` release tree、数据库适配器和语义适配器协同升级完成后的采样结果。上游 Plugin、CLI 三输入模式、Bash 沙箱、细粒度 SQL 权限、Semantic Adapter 指标读写、多 OSI 模型、TUI 复制、即时中断和 DuckDB 修复均已合入；下游继续保留企业认证/授权、请求级配置投影、数据库强制只读、会话与任务所有权、Artifact ACL、用户 workspace 隔离、审计和企业 Web Chat 禁用 Bash 等长期边界。
 
 对比口径：
 
 ```bash
 cd /home/astenir/Code/work/datus
-git diff --shortstat v0.3.8 HEAD:datus-agent
-git diff --name-status -M v0.3.8 HEAD:datus-agent
+git diff --shortstat v0.3.9 HEAD:datus-agent
+git diff --name-status -M v0.3.9 HEAD:datus-agent
 ```
 
 当前结果：
 
 ```text
-361 files changed, 81086 insertions(+), 3593 deletions(-)
+397 files changed, 85446 insertions(+), 2409 deletions(-)
 261 added
-96 modified
-4 deleted
+134 modified
+2 deleted
 ```
 
 修改的上游既有文件按类型拆分：
 
 ```text
-68 production/package files
-24 tests
+88 production/package files
+42 tests
 0 docs
 4 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 109 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。本轮按这套目录规则重新核对全量清单，并修正了根级 `CLAUDE.md` 及新增文件的历史分类误差。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 109 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。与旧 `v0.3.8` 快照相比，modified 数量增加主要是因为 `v0.3.9` 扩大了上游原文件集合和共享契约，不能直接解释为新增了同等数量的下游业务改动。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-08-03：升级到正式 v0.3.9
+
+处理方式：在隔离分支上以正式 `v0.3.9` tag tree 合入 `datus-agent`，同步相邻数据库和语义适配器源码，并重新解析 monorepo editable source。升级保留上游 Plugin 体系、CLI 对话/SQL/Bash 输入模式、系统级 Bash 沙箱、`execute_sql` 细粒度权限、Semantic Adapter 原生指标读写、多 OSI 模型隔离、TUI 全界面复制、`Escape` 即时中断和 DuckDB 1.5.2 修复。依赖边界更新为 `datus-db-core>=0.1.5`、`datus-semantic-core>=0.2.3`、`datus-semantic-metricflow>=0.2.12` 和 `datus-semantic-osi>=0.1.5`，CI/企业内网 extra 均指向相邻 workspace 的实际版本。
+
+下游边界：企业请求仍按 Authenticate → Build Context → Authorize → Project Config → Execute → Audit 执行；共享 `DatusService.agent_config` 不承载用户态授权，datasource/config 继续按请求 clone；企业 DB tool 构造与迁移工具暴露继续强制只读；session/task owner、Artifact ACL、用户 workspace 隔离和审计保持 fail closed。上游 CLI Bash 与 sandbox 能力仅进入本地 CLI 契约，企业 Web Chat 仍在请求级配置中禁用 Bash，未因上游 `auto` SQL 权限放宽企业写入边界。
+
+差异治理：allowlist 基线改为 `v0.3.9`，登记 134 个仍修改的上游文件；新增交叉文件按 core hook、upstreamable fix 和 test-only 分类。差异报告器改用 Git common dir 读取对象，使隔离 worktree 中也能解析 release tag 并完成真实门禁。当前差异为 397 个文件（新增 261、修改 134、删除 2），其中 modified 分类为 production/package 88、tests 42、docs 0、config/meta 4。相较初次合并结果新增的 3 个 modified，分别是 StarRocks 无可选适配器环境下的稳定标识符形状修复，以及对应 v0.3.9 template/migration 测试契约更新。
+
+验证：`datus-agent` 的 `uv lock --check` 与全依赖组 locked sync 通过，全量 Ruff 通过；完整离线单元套件为 `18821 passed, 21 skipped, 1 xfailed`，其中升级后最初暴露的 25 项契约回归已按 v0.3.9 的 lazy tool、Chat insert、Dashboard enforced-read、KB datasource、Agent `execute_sql`、migration read-only 和 StarRocks 标识符形状逐项修复。会话、Chat task、企业路由矩阵、请求级数据源投影、数据库工具、语义工具和历史恢复的早期聚焦组合为 `1258` 项；语义适配器 workspace 更新锁文件后为 `404 passed`。差异报告器含 linked-worktree 回归 `6 passed`，真实 `--base v0.3.9 --check` 返回 `allowlist: ok (134 modified files)`。完整 `pytest` 还包含会访问真实 DeepSeek、Anthropic、BIRD 和外部 BI 服务的集成测试；本次因无有效外部凭据或数据集未将其作为离线门禁，也不宣称这些真实模型集成已通过。
 
 ### 2026-07-27：管理分页、Chat 输入兼容与合并前真实验收
 
@@ -1266,15 +1276,15 @@ ci/harness/upstream-modified-allowlist.yml
 报告器使用隔离临时 index 构造当前 `datus-agent` 工作树，不会修改真实 Git index。日常收敛后运行：
 
 ```bash
-uv run python ci/harness/report_upstream_diff.py --base v0.3.8 --check
+uv run python ci/harness/report_upstream_diff.py --base v0.3.9 --check
 ```
 
 准备升级新 release 时，同时提供新上游 tag，报告器会列出“当前下游 modified”与“新上游 changed”的交集：
 
 ```bash
 uv run python ci/harness/report_upstream_diff.py \
-  --base v0.3.8 \
-  --target v0.3.9 \
+  --base v0.3.9 \
+  --target <next-release-tag> \
   --check
 ```
 
@@ -1285,9 +1295,9 @@ uv run python ci/harness/report_upstream_diff.py \
 1. 从 monorepo 根目录刷新上游对比：
 
    ```bash
-   git diff --shortstat v0.3.8 HEAD:datus-agent
-   git diff --name-status -M v0.3.8 HEAD:datus-agent
-   git diff --name-status -M v0.3.8 HEAD:datus-agent | awk '$1=="M"{print $2}'
+   git diff --shortstat v0.3.9 HEAD:datus-agent
+   git diff --name-status -M v0.3.9 HEAD:datus-agent
+   git diff --name-status -M v0.3.9 HEAD:datus-agent | awk '$1=="M"{print $2}'
    ```
 
 2. 对新增或仍保留的上游原文件修改标注分类：核心 hook、迁移候选、上游化候选、文档/示例、测试。

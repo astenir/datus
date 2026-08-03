@@ -36,8 +36,12 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, ClassVar, Dict, Generic, 
 
 from pydantic import BaseModel
 
-from datus.agent.node.agentic_node import AgenticNode
-from datus.agent.node.visual_artifact._visual_artifact_finalize import FINALIZE_STAGE_TEXT, run_finalize_analysis
+from datus.agent.node.agentic_node import AgenticNode, _resolve_language_name
+from datus.agent.node.visual_artifact._visual_artifact_finalize import (
+    FINALIZE_STAGE_TEXT,
+    narrative_outputs_present,
+    run_finalize_analysis,
+)
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
@@ -109,6 +113,15 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
     #: metric-discovery tools the LLM can't actually call, so the model
     #: silently falls back to deriving SQL from raw table DDL.
     DEFAULT_TOOLS: ClassVar[str] = "semantic_tools.*, db_tools.*, context_search_tools.*"
+
+    #: No sub-agent delegation. The visual-artifact nodes own the full semantic
+    #: layer (``list_metrics`` / ``query_metrics``) plus db + context-search
+    #: tools, so there is nothing to gain from delegating. Crucially, ``explore``
+    #: (the base ``AgenticNode`` default) lacks the semantic-layer tools, so a
+    #: ``task(type="explore")`` metric-discovery detour silently degrades into
+    #: raw-table exploration — exactly the metrics-first regression we want to
+    #: prevent. Disabling the ``task`` tool here keeps metric derivation in-node.
+    DEFAULT_SUBAGENTS: ClassVar[str] = ""
 
     # ── Construction ──────────────────────────────────────────────────────
 
@@ -438,6 +451,12 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         return self._finalize_system_prompt(base_prompt)
 
     def _build_enhanced_message(self, user_input: InputT) -> str:
+        """Enrich the user message with catalog/db/schema + @-referenced context.
+
+        Visual-artifact nodes keep a focused override (they don't run the base
+        plan-mode flow); @Table/@Metric/@Sql/@Knowledge references are rendered
+        through the shared :meth:`AgenticNode._render_at_context_parts`.
+        """
         parts: List[str] = []
         catalog = getattr(user_input, "catalog", None)
         database = getattr(user_input, "database", None)
@@ -451,11 +470,41 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if db_schema:
             parts.append(f"Schema: {db_schema}")
 
+        parts.extend(self._render_at_context_parts(user_input))
+
         if parts:
             return build_structured_content("\n".join(parts), user_message)
         return user_message
 
     # ── Finalize stage ────────────────────────────────────────────────────
+
+    def _artifact_dir(self, artifact_slug: str) -> Path:
+        """Absolute on-disk directory for ``artifact_slug``."""
+        return Path(self.agent_config.project_root).resolve() / self.ARTIFACT_ROOT_DIR_NAME / artifact_slug
+
+    def _finalize_language_directive(self) -> Optional[str]:
+        """The configured response-language section, or ``None`` when unpinned.
+
+        finalize is an independent LLM call with no system prompt, so the
+        directive every agentic node gets injected has to travel into the
+        finalize prompt explicitly. Reuses the same rendered template rather
+        than a second copy of the wording.
+
+        ``_inject_response_language`` swallows a template-render failure and
+        returns the prompt untouched, which here would read as "no language
+        pinned" and hand finalize the infer-from-the-user's-prompts branch —
+        wrong whenever the operator pinned a language the user does not write
+        in. Fall back to a minimal directive built from the same code/name pair
+        so a pinned language always survives.
+        """
+        language_raw = getattr(self.agent_config, "language", None)
+        if not language_raw or not str(language_raw).strip():
+            return None
+        directive = self._inject_response_language("").strip()
+        if directive:
+            return directive
+        language_code = str(language_raw).strip()
+        return f"# Response Language\n- Use: {_resolve_language_name(language_code)} ({language_code})"
 
     def _run_finalize(
         self,
@@ -480,8 +529,7 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         the data is unchanged; the deterministic aggregations still run.
         """
         try:
-            project_root = Path(self.agent_config.project_root).resolve()
-            artifact_dir = project_root / self.ARTIFACT_ROOT_DIR_NAME / artifact_slug
+            artifact_dir = self._artifact_dir(artifact_slug)
             queries_dir = artifact_dir / "queries"
             analysis_dir = artifact_dir / "analysis"
             return run_finalize_analysis(
@@ -492,6 +540,7 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
                 analysis_dir=analysis_dir,
                 actions=actions,
                 skip_narrative=skip_narrative,
+                language_directive=self._finalize_language_directive(),
                 # ``db_func_tool`` is wired by ``setup_tools`` early in
                 # the run. Passing it through enables the finalize-time
                 # ``key_tables_schema.json`` bake (describe_table snapshot
@@ -861,7 +910,12 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         # Render-only edit (no query saved this run): skip the finalize LLM
         # stage and its per-stage progress bubbles — the only work left is the
         # deterministic schema/key_tables refresh, which needs no narration.
-        skip_narrative = not ctx.extras.get("artifact_data_changed", True)
+        # Only legitimate when a prior finalize left narrative files to reuse;
+        # otherwise (first generation whose queries landed in an earlier turn)
+        # skipping would strand the artifact without chips.
+        skip_narrative = not ctx.extras.get("artifact_data_changed", True) and narrative_outputs_present(
+            self._artifact_dir(slug) / "analysis", artifact_kind=self.ARTIFACT_KIND
+        )
 
         progress_queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
