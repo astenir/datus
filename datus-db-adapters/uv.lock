@@ -8,8 +8,11 @@ members = [
     "datus-clickzetta",
     "datus-db-adapters",
     "datus-db-core",
+    "datus-doris",
     "datus-greenplum",
     "datus-hive",
+    "datus-hologres",
+    "datus-maxcompute",
     "datus-mysql",
     "datus-oceanbase-oracle",
     "datus-oracle",
@@ -597,7 +600,7 @@ wheels = [
 
 [[package]]
 name = "datus-clickhouse"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "datus-clickhouse" }
 dependencies = [
     { name = "clickhouse-sqlalchemy" },
@@ -614,7 +617,7 @@ requires-dist = [
 
 [[package]]
 name = "datus-clickzetta"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "datus-clickzetta" }
 dependencies = [
     { name = "clickzetta-connector-python" },
@@ -664,7 +667,7 @@ dev = [
 
 [[package]]
 name = "datus-db-core"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "datus-db-core" }
 dependencies = [
     { name = "pydantic" },
@@ -678,8 +681,38 @@ requires-dist = [
 ]
 
 [[package]]
+name = "datus-doris"
+version = "0.1.0"
+source = { editable = "datus-doris" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "datus-mysql" },
+    { name = "datus-sqlalchemy" },
+    { name = "pydantic" },
+    { name = "pymysql" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "datus-db-core" },
+    { name = "datus-mysql", editable = "datus-mysql" },
+    { name = "datus-sqlalchemy", editable = "datus-sqlalchemy" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pymysql", specifier = ">=1.1.1" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
+]
+provides-extras = ["test"]
+
+[[package]]
 name = "datus-greenplum"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "datus-greenplum" }
 dependencies = [
     { name = "datus-db-core" },
@@ -700,7 +733,7 @@ requires-dist = [
 
 [[package]]
 name = "datus-hive"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "datus-hive" }
 dependencies = [
     { name = "datus-db-core" },
@@ -724,8 +757,46 @@ requires-dist = [
 ]
 
 [[package]]
+name = "datus-hologres"
+version = "0.1.0"
+source = { editable = "datus-hologres" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "datus-postgresql" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "datus-db-core" },
+    { name = "datus-postgresql", editable = "datus-postgresql" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+]
+
+[[package]]
+name = "datus-maxcompute"
+version = "0.1.0"
+source = { editable = "datus-maxcompute" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pyodps" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "datus-db-core" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pyarrow", specifier = ">=10.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pyodps", specifier = ">=0.13.0" },
+]
+
+[[package]]
 name = "datus-mysql"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "datus-mysql" }
 dependencies = [
     { name = "cryptography" },
@@ -786,7 +857,7 @@ requires-dist = [
 
 [[package]]
 name = "datus-postgresql"
-version = "0.1.6"
+version = "0.1.8"
 source = { editable = "datus-postgresql" }
 dependencies = [
     { name = "datus-db-core" },
@@ -805,10 +876,12 @@ requires-dist = [
 
 [[package]]
 name = "datus-redshift"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "datus-redshift" }
 dependencies = [
     { name = "datus-db-core" },
+    { name = "pandas" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "redshift-connector" },
 ]
@@ -822,6 +895,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "datus-db-core", editable = "datus-db-core" },
+    { name = "pandas", specifier = ">=2.1.4" },
+    { name = "pyarrow", specifier = ">=14.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
@@ -831,7 +906,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "datus-snowflake"
-version = "0.1.6"
+version = "0.1.8"
 source = { editable = "datus-snowflake" }
 dependencies = [
     { name = "cryptography" },
@@ -863,7 +938,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "datus-spark"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "datus-spark" }
 dependencies = [
     { name = "datus-db-core" },
@@ -897,7 +972,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "datus-sqlalchemy"
-version = "0.1.6"
+version = "0.1.8"
 source = { editable = "datus-sqlalchemy" }
 dependencies = [
     { name = "datus-db-core" },
@@ -916,7 +991,7 @@ requires-dist = [
 
 [[package]]
 name = "datus-starrocks"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "datus-starrocks" }
 dependencies = [
     { name = "datus-db-core" },
@@ -942,7 +1017,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "datus-trino"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "datus-trino" }
 dependencies = [
     { name = "datus-db-core" },
@@ -1749,6 +1824,42 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c9/bc/1c6a92f385940f727daeecf3bacaf186e03875dff57197801046c583bcf0/pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33", size = 49021, upload-time = "2026-05-19T08:26:22.302Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/bd/2534e130295c8cfd4f0a2e31623baab7502278f1e97bcfe61db75656a77f/pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0", size = 45716, upload-time = "2026-05-19T08:26:20.974Z" },
+]
+
+[[package]]
+name = "pyodps"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4f/cd/f5d7dce9fd4b65f800ee0c62ae01cbb9dd659059fd291d9081b362982b8a/pyodps-0.13.0.tar.gz", hash = "sha256:a1ab2433f0de87d5c9a7cdb7f99687e772be54e82ce2100a89e4b3e5b32b723f", size = 1129721, upload-time = "2026-06-10T03:21:36.966Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/02/674a9592ee4f9cb01e677c934b976a0d1f9231f2c6d427e9e819588446b8/pyodps-0.13.0-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:d1d47dd12ca7b836d09f54e5bffe849b7574a9d0950c2e22e9dfc89679fca154", size = 2245932, upload-time = "2026-06-10T03:20:20.162Z" },
+    { url = "https://files.pythonhosted.org/packages/99/48/7ef2004f8de0d34188fe11f317120842523d38fe07358168c05625b96683/pyodps-0.13.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:22e61926da63ec82172ac0b78448a59e5bc4aa58da71432fc8c3fce31e9f3a5a", size = 2195651, upload-time = "2026-06-10T03:13:57.069Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/12/6dd7bb5be434d211482c1b5fc2a82f4fc45cbcfaadfd60508db5ad69dce9/pyodps-0.13.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:de322a5c1e6fddb3c2c4d1e9ad45f29e71696229046d4da717b256943198be6e", size = 7002151, upload-time = "2026-06-10T05:46:45.213Z" },
+    { url = "https://files.pythonhosted.org/packages/07/c5/a9d5dcca46ac02b045ea13520b6c1c8a252173c8af5c68ff2ae0b43d8ba6/pyodps-0.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5d7d5d1fba4240e41fde6735b9657fb14cb4c684c2aa0a7267b3ea4b43823270", size = 7110011, upload-time = "2026-06-10T03:21:22.064Z" },
+    { url = "https://files.pythonhosted.org/packages/68/fd/cd6896d77ac5de7012b82f4f430537ffd4b5ec8addaf8af01f5518444028/pyodps-0.13.0-cp312-cp312-win32.whl", hash = "sha256:fac7410bd9ad55b7f8c3d28e8001b81a6e576f5c40738656e70fdacef0fc4a8c", size = 1954413, upload-time = "2026-06-10T03:22:48.818Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/68/003c5cf61d465d06b84242a0e8633303fb7045b941b8a12eff9df6f6bf79/pyodps-0.13.0-cp312-cp312-win_amd64.whl", hash = "sha256:58e98b99040a6ba33e07de8b2be9c192c2f1ff441aca17d0351d44561e12f063", size = 2067510, upload-time = "2026-06-10T03:22:49.991Z" },
+    { url = "https://files.pythonhosted.org/packages/93/95/45ceaa58bbb3939db64d351fead5aeaebd84ae8b1b036e73550b26d36047/pyodps-0.13.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:f7109aaaac1ca70bbffe701d9a6e41a17712ab6eb407596f6d0a6a52f4647608", size = 2106657, upload-time = "2026-06-10T03:20:21.589Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/6e/d0db1001375736858a8ee919efcf3fa286c006b5d09f6f1362cf8ddc14ce/pyodps-0.13.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:72e4f9de4770653b48519efe75e69e4cfefda20edce5c1d2114d77bb9072d8b5", size = 2069007, upload-time = "2026-06-10T03:13:58.377Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/1d/ea33ad6f84ba67fc31941cd8a293c0f5132481373a7a020c6b45919f4f7a/pyodps-0.13.0-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a5816684fb74816c72944fd2e5d5eb00e759c5add63f74e938b07d108aa0be0f", size = 6641705, upload-time = "2026-06-10T05:46:47.059Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/15/6658a60f57ef0a8472203e0ccb1c1b7b838e88ecf5ee11a6fa2c426c323c/pyodps-0.13.0-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bd52835542e4bfd8b76e6480911303e38a8d32f7ae75e6c8011edad37b72ec2e", size = 6723816, upload-time = "2026-06-10T03:21:24.012Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/24/323a10b0f17c9fadceb5dfa00d5c74c194803d64d871746b0fbad0e54495/pyodps-0.13.0-cp313-cp313-win32.whl", hash = "sha256:0e312bb3eb68daebd4fdd3c4deb6f4ec551e4927d32ded4c3d8fa5849baf6f12", size = 1872486, upload-time = "2026-06-10T03:22:51.121Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/14/c8932d7c8be013dfa0b998214c375062aa016de4a0fbbc63cc8e1ec25569/pyodps-0.13.0-cp313-cp313-win_amd64.whl", hash = "sha256:9b04827dc5fcca5d12b7b922040430d67e89d96025075323cfdbcb64c74f3036", size = 1972031, upload-time = "2026-06-10T03:22:52.508Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/36/6cd91248179b19989b3e4dfe7b382356e2695abbb6c22a803df11bf7d5da/pyodps-0.13.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:d265e4c1f7160e0d460a408845b682453e5c5e30b9e32dab889e9cb35430c78c", size = 2115675, upload-time = "2026-06-10T03:20:23.737Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/d5/88fd5dfb6a30c4b0633fd95c0984aaccbbffc8012e04b4a3d4654566f4ce/pyodps-0.13.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:6d82bbd4289002e43f64fb87cf4c3ec2f3415e78085eb11e0a7d33af79dc6057", size = 2081610, upload-time = "2026-06-10T03:13:59.568Z" },
+    { url = "https://files.pythonhosted.org/packages/26/da/d29a1753e85c10298afb45e8b7f4f0485f80eb09f62e485d44e06ab46d50/pyodps-0.13.0-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:da819c5f171d0fdf12791e1e88332bf64038d2f2505b29a0ace7b94f6a43b484", size = 6627734, upload-time = "2026-06-10T05:46:48.424Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/cc/eab914514261c702306601bbc12847b6dca704615de9bdfca50448c8de4b/pyodps-0.13.0-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c3a6b0924e836f029a8cf6899b4fce44d59293280000a55453449a8ea7c669a3", size = 6668135, upload-time = "2026-06-10T03:21:27.078Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/f1/2b2ce4a56cf83bf48805e075b8c472487de7e41806ac7b3a02f619fa5571/pyodps-0.13.0-cp314-cp314-win32.whl", hash = "sha256:2429a21c99a495da088eb9fb550a18e638f3ab1e0fbcb159d02cca2d15c899b1", size = 1888202, upload-time = "2026-06-10T03:22:53.626Z" },
+    { url = "https://files.pythonhosted.org/packages/41/66/60dc3d0e497c6683b1cfaf6873434079f232840348d4e6b3760c14908ed3/pyodps-0.13.0-cp314-cp314-win_amd64.whl", hash = "sha256:36d2392313eb62c323e70315cc79e976a1aa7a95fcfd5312c3658ff985f17db6", size = 1992567, upload-time = "2026-06-10T03:22:54.88Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/63/422318d94d128db7c7ac1aad5442d562dd3d216bcbad57ff59187b8af85c/pyodps-0.13.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:b4d630996b6782a3af7871c95c61f8c40af8540aacac693548fc7ff330ec0940", size = 2152460, upload-time = "2026-06-10T03:20:25.009Z" },
+    { url = "https://files.pythonhosted.org/packages/51/61/87a04fcaab5693a20a3f43967c9363c191b98031ed3ac961658174282c71/pyodps-0.13.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:50d508fd2cea7daa62b6d38d05ad50586c44a876796c26c6187bbf55abe4f463", size = 2127291, upload-time = "2026-06-10T03:14:00.921Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/43/3e51b8e89924f32187e25f96244dcb1fffcc0158c567e8682e66b0c710c0/pyodps-0.13.0-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:11483be6723907d9f66b6e2a723dab139d969d31daf3bec8b20edb331e5caeea", size = 7201020, upload-time = "2026-06-10T05:46:49.97Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/d2/82cada06bf238375695ff7c43b88104ad652265138de2fa7deb1ce5f9590/pyodps-0.13.0-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:751c0197296cdbfad8fce3496ef816d5658815f9bd2bb91a2f55bac7a8e25723", size = 6835510, upload-time = "2026-06-10T03:21:29.464Z" },
+    { url = "https://files.pythonhosted.org/packages/74/f9/a9c6ca37fba8d989b144bf4b5f75c23b1dd93fe95d10810ad7845badb318/pyodps-0.13.0-cp314-cp314t-win32.whl", hash = "sha256:91c70be138f8e4107795ccd5940c1af563264e5c7470c938f50c87a97da57ea7", size = 1997172, upload-time = "2026-06-10T03:22:56.264Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/54/537f63c8ccf8c28bc58f2f2dd5f737de5c975f4a9bcce374c8d6e9258d38/pyodps-0.13.0-cp314-cp314t-win_amd64.whl", hash = "sha256:2ae7b1c98a42916862064562305b650240129c4715b647bcb878d0913ae0abd3", size = 2138772, upload-time = "2026-06-10T03:22:57.499Z" },
 ]
 
 [[package]]

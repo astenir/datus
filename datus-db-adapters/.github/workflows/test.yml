@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,6 +59,13 @@ jobs:
           else
             ci/run-unit-tests.sh
           fi
+
+      - name: Run release tooling tests
+        run: |
+          uv run --no-project --isolated \
+            --with packaging \
+            --with pytest \
+            python -m pytest ci/tests --verbose
 
   integration-tests:
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
