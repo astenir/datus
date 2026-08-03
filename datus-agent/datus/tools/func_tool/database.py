@@ -14,15 +14,17 @@ from fnmatch import fnmatchcase
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 from agents import Tool
-from datus_db_core import BaseSqlConnector, connector_registry
+from datus_db_core import BaseSqlConnector
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
+from datus.schemas.node_models import ExecuteSQLResult
 from datus.storage.kb_retrieval import metadata_fts_enabled
 from datus.storage.schema_metadata import create_metadata_rag
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
+from datus.tools.db_tools.capabilities import get_effective_capabilities, supports_namespace
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.tools.func_tool.sql_scope_downstream import (
@@ -35,6 +37,7 @@ from datus.utils.constants import DBType, SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
+from datus.utils.sql_utils import parse_dialect, parse_table_name_parts
 from datus_enterprise.services.database_tool_scope import DatabaseToolScopePolicy
 
 logger = get_logger(__name__)
@@ -434,12 +437,13 @@ class DBFuncTool:
     def _determine_field_order(self) -> Sequence[str]:
         dialect = getattr(self._primary_connector, "dialect", "") or ""
         dialect_name = str(dialect).lower()
+        capabilities = get_effective_capabilities(self._primary_connector, dialect)
         fields: List[str] = []
-        if connector_registry.support_catalog(dialect):
+        if "catalog" in capabilities:
             fields.append("catalog")
-        if connector_registry.support_database(dialect) or dialect == DBType.SQLITE:
+        if "database" in capabilities or dialect == DBType.SQLITE:
             fields.append("database")
-        if connector_registry.support_schema(dialect) or dialect_name in _FALLBACK_SCHEMA_DIALECTS:
+        if "schema" in capabilities or dialect_name in _FALLBACK_SCHEMA_DIALECTS:
             fields.append("schema")
         fields.append("table")
         return fields
@@ -499,22 +503,16 @@ class DBFuncTool:
         token = (token or "").strip()
         if not token:
             return None
-        parts = [self._normalize_identifier_part(part) for part in token.split(".") if part.strip()]
-        if not parts:
+        dialect = getattr(self._primary_connector, "dialect", "") or ""
+        parsed = parse_table_name_parts(token, dialect)
+        if not parsed.get("table_name"):
             return None
-        # Align parts from right to left (table is always rightmost)
-        # e.g., for "public.wb_health_population" with field_order ["database", "schema", "table"]:
-        #   - parts = ["public", "wb_health_population"]
-        #   - align from right: schema="public", table="wb_health_population"
-        # When parts > fields, keep only the rightmost num_fields parts
-        values: Dict[str, str] = {field: "" for field in self._field_order}
-        num_fields = len(self._field_order)
-        trimmed_parts = parts[-num_fields:]
-        start_field_idx = max(0, num_fields - len(trimmed_parts))
-        for i, part in enumerate(trimmed_parts):
-            field_idx = start_field_idx + i
-            if field_idx < num_fields:
-                values[self._field_order[field_idx]] = part
+        values = {
+            "catalog": parsed.get("catalog_name", ""),
+            "database": parsed.get("database_name", ""),
+            "schema": parsed.get("schema_name", ""),
+            "table": parsed.get("table_name", ""),
+        }
         return ScopedTablePattern(raw=token, **values)
 
     def _get_semantic_model(
@@ -735,7 +733,10 @@ class DBFuncTool:
         return normalized.strip("`\"'[]")
 
     def _default_field_value(
-        self, field: str, explicit: Optional[str], connector: Optional[BaseSqlConnector] = None
+        self,
+        field: str,
+        explicit: Optional[str],
+        connector: Optional[BaseSqlConnector] = None,
     ) -> str:
         if field not in self._field_order:
             return ""
@@ -748,9 +749,9 @@ class DBFuncTool:
             "schema": "schema_name",
         }
         fallback_attr = fallback_attr_map.get(field)
-        default_connector = connector or self.connector
-        if fallback_attr and hasattr(default_connector, fallback_attr):
-            return self._normalize_identifier_part(getattr(default_connector, fallback_attr))
+        source_connector = connector or self.connector
+        if fallback_attr and hasattr(source_connector, fallback_attr):
+            return self._normalize_identifier_part(getattr(source_connector, fallback_attr))
         return ""
 
     def _dialect_for_datasource(self, datasource: Optional[str] = "") -> str:
@@ -771,9 +772,17 @@ class DBFuncTool:
         database_value = self._normalize_identifier_part(database)
         schema_value = self._normalize_identifier_part(schema)
 
-        dialect = self._dialect_for_datasource(datasource)
-        if not connector_registry.support_catalog(dialect):
-            if catalog_value and not database_value and connector_registry.support_database(dialect):
+        try:
+            connector = self._get_connector(datasource)
+        except Exception:
+            connector = self.connector
+        dialect = getattr(connector, "dialect", "") or ""
+        if not supports_namespace("catalog", connector=connector, dialect=dialect):
+            if (
+                catalog_value
+                and not database_value
+                and supports_namespace("database", connector=connector, dialect=dialect)
+            ):
                 database_value = catalog_value
             catalog_value = ""
 
@@ -787,21 +796,23 @@ class DBFuncTool:
         schema: Optional[str] = "",
         connector: Optional[BaseSqlConnector] = None,
     ) -> TableCoordinate:
+        routed_connector = connector or self.connector
         coordinate = TableCoordinate(
-            catalog=self._default_field_value("catalog", catalog, connector),
-            database=self._default_field_value("database", database, connector),
-            schema=self._default_field_value("schema", schema, connector),
+            catalog=self._default_field_value("catalog", catalog, routed_connector),
+            database=self._default_field_value("database", database, routed_connector),
+            schema=self._default_field_value("schema", schema, routed_connector),
             table=self._normalize_identifier_part(raw_name),
         )
-        parts = [self._normalize_identifier_part(part) for part in raw_name.split(".") if part.strip()]
-        if parts:
-            coordinate.table = parts[-1]
-            idx = len(parts) - 2
-            for field in reversed(self._field_order[:-1]):
-                if idx < 0:
-                    break
-                setattr(coordinate, field, parts[idx])
-                idx -= 1
+        dialect = getattr(routed_connector, "dialect", "") or ""
+        parsed = parse_table_name_parts(raw_name, dialect)
+        for field, parsed_field in (
+            ("catalog", "catalog_name"),
+            ("database", "database_name"),
+            ("schema", "schema_name"),
+            ("table", "table_name"),
+        ):
+            if parsed.get(parsed_field):
+                setattr(coordinate, field, self._normalize_identifier_part(parsed[parsed_field]))
         return coordinate
 
     def _table_matches_scope(
@@ -936,29 +947,56 @@ class DBFuncTool:
             return []
         from datus.utils.sql_utils import extract_table_names
 
-        active_connector = connector or self._primary_connector
-        dialect = getattr(active_connector, "dialect", "") or ""
+        routed_connector = connector or self._primary_connector
+        dialect = getattr(routed_connector, "dialect", "") or ""
         table_names = extract_table_names(sql, dialect=dialect, ignore_empty=True)
         table_names.extend(name for name in supplemental_table_names(sql) if name not in table_names)
         if not table_names:
             return []  # can't parse → allow (SHOW/DESCRIBE/EXPLAIN have no tables)
         out_of_scope: List[str] = []
         for name in table_names:
-            coordinate = self._build_table_coordinate(raw_name=name, connector=active_connector)
+            coordinate = self._build_table_coordinate(raw_name=name, connector=routed_connector)
             if not self._table_matches_scope(coordinate):
                 out_of_scope.append(name)
         return out_of_scope
 
+    # Public methods that belong to the tool-plumbing framework rather than the
+    # agent-facing tool surface. ``to_function_tool`` converts a bound method into
+    # a Tool; ``available_tools`` assembles the runtime list. Neither is a tool
+    # itself. Mirrors ``FilesystemFuncTool._BASE_TOOL_FRAMEWORK_METHODS``.
+    _FRAMEWORK_METHODS: frozenset = frozenset({"available_tools", "to_function_tool"})
+
+    # Internal statement-dispatch targets of the unified ``execute_sql`` entry
+    # point. ``execute_sql`` detects the statement type and routes to these by
+    # hand (SELECT -> read_query, DML -> execute_write, DDL/other -> execute_ddl),
+    # so they are never @mcp_tool()-decorated and never mounted as tools. They
+    # stay public because callers across modules (semantic_discovery_tools,
+    # reference_template_tools) and the connectors share the vocabulary, but they
+    # must not leak into the agent tool surface (VALID_TOOL_METHODS / the saas
+    # editor catalog) or the permission registry.
+    _INTERNAL_SQL_METHODS: frozenset = frozenset(
+        {
+            "read_query",
+            "execute_read_enforced",
+            "guard_estimated_rows",
+            "execute_write",
+            "execute_ddl",
+            "get_table_ddl",
+        }
+    )
+
     @staticmethod
     def all_tools_name() -> List[str]:
+        # Agent-facing tool surface: every public tool method, including the ones
+        # gen_job mounts directly (``transfer_query_result``, migration wrappers)
+        # that never carry an @mcp_tool() decorator. Framework plumbing and the
+        # internal execute_sql dispatch helpers are filtered out. Feeds both
+        # VALID_TOOL_METHODS and the permission registry
+        # (AgenticNode._populate_tool_registry).
         from datus.utils.class_utils import get_public_instance_methods
 
-        result = []
-        for name in get_public_instance_methods(DBFuncTool).keys():
-            if name == "available_tools":
-                continue
-            result.append(name)
-        return result
+        excluded = DBFuncTool._FRAMEWORK_METHODS | DBFuncTool._INTERNAL_SQL_METHODS
+        return [name for name in get_public_instance_methods(DBFuncTool).keys() if name not in excluded]
 
     @staticmethod
     def _dialect_name(value: Any) -> str:
@@ -990,9 +1028,19 @@ class DBFuncTool:
                 dialects.add(normalized)
         return dialects
 
+    def _configured_supports(self, namespace: str) -> bool:
+        primary_dialect = self._dialect_name(getattr(self.connector, "dialect", ""))
+        if namespace in get_effective_capabilities(self.connector, primary_dialect):
+            return True
+        return any(
+            namespace in get_effective_capabilities(dialect=dialect)
+            for dialect in self._configured_tool_dialects()
+            if dialect != primary_dialect
+        )
+
     def _excluded_tool_params(self) -> set[str]:
         excluded: set[str] = set()
-        if not any(connector_registry.support_catalog(dialect) for dialect in self._configured_tool_dialects()):
+        if not self._configured_supports("catalog"):
             excluded.add("catalog")
         return excluded
 
@@ -1002,17 +1050,16 @@ class DBFuncTool:
     def available_tools(self) -> List[Tool]:
         bound_tools = []
         methods_to_convert: List[Callable] = [self.list_tables, self.describe_table]
-        configured_dialects = self._configured_tool_dialects()
 
         if self.has_schema:
             methods_to_convert.append(self.search_table)
 
         methods_to_convert.append(self.execute_sql)
 
-        if any(connector_registry.support_database(dialect) for dialect in configured_dialects):
+        if self._configured_supports("database"):
             bound_tools.append(self.to_function_tool(self.list_databases))
 
-        if any(connector_registry.support_schema(dialect) for dialect in configured_dialects):
+        if self._configured_supports("schema"):
             bound_tools.append(self.to_function_tool(self.list_schemas))
 
         for bound_method in methods_to_convert:
@@ -1592,23 +1639,100 @@ class DBFuncTool:
                 return validation_error
 
             logger.info("read_query", sql_type=sql_type.value, datasource=datasource or "default")
-            effective_datasource = self._resolve_effective_datasource(datasource)
-            sql = self._enforce_sql_policy(
+            result_format = "arrow" if connector.dialect == "snowflake" else "list"
+            result = self.execute_read_enforced(
                 sql,
-                datasource=effective_datasource,
-                dialect=connector.dialect,
+                connector,
+                datasource=datasource,
+                result_format=result_format,
             )
-            validation_error, _ = self._validate_read_sql(sql, connector)
-            if validation_error:
-                return validation_error
-            result = connector.execute_query(sql, result_format="arrow" if connector.dialect == "snowflake" else "list")
             if result.success:
-                data = result.sql_return
-                return FuncToolResult(result=self.compressor.compress(data))
-            else:
-                return FuncToolResult(success=0, error=result.error)
+                return FuncToolResult(result=self.compressor.compress(result.sql_return))
+            return FuncToolResult(success=0, error=result.error)
         except Exception as e:
             return FuncToolResult(success=0, error=str(e))
+
+    def execute_read_enforced(
+        self,
+        sql: str,
+        connector: BaseSqlConnector,
+        *,
+        datasource: Optional[str] = "",
+        result_format: str = "list",
+    ) -> ExecuteSQLResult:
+        """Run a read-only query through the shared read guardrails.
+
+        Single enforcement path for every read that hits the DB directly: the
+        LLM ``read_query`` path plus the report/dashboard artifact save paths
+        and dashboard view-time re-execution. Rejects multi-statement input and
+        applies the configured SQL policy (row caps / rewrites / denials) before
+        the statement reaches the engine, then returns the connector's raw
+        ``ExecuteSQLResult`` so callers keep control over row post-processing.
+        Without this, artifact query execution bypassed ``_enforce_sql_policy``
+        and could hand the engine an unbounded statement (e.g. a cross-join
+        cartesian product that OOM-killed the DB backend).
+        """
+        validation_error, _ = self._validate_read_sql(sql, connector)
+        if validation_error:
+            return ExecuteSQLResult(success=False, error=validation_error.error, sql_query=sql)
+        effective_datasource = self._resolve_effective_datasource(datasource)
+        try:
+            enforced_sql = self._enforce_sql_policy(sql, datasource=effective_datasource, dialect=connector.dialect)
+        except DatusException as exc:
+            return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql)
+        if enforced_sql != sql:
+            # A policy rewrite (e.g. an injected LIMIT) must still be a single
+            # read-only statement — re-validate so it can't smuggle in DML/DDL.
+            validation_error, _ = self._validate_read_sql(enforced_sql, connector)
+            if validation_error:
+                return ExecuteSQLResult(success=False, error=validation_error.error, sql_query=enforced_sql)
+        return connector.execute_query(enforced_sql, result_format=result_format)
+
+    def guard_estimated_rows(
+        self,
+        sql: str,
+        connector: BaseSqlConnector,
+    ) -> Optional[FuncToolResult]:
+        """Reject a query whose EXPLAIN row estimate exceeds ``MAX_ESTIMATED_ROWS``.
+
+        Runs ``EXPLAIN <sql>`` (planning only — the statement never executes),
+        parses the optimizer's cardinality estimate, and returns a failure
+        ``FuncToolResult`` (with an actionable rewrite message for the LLM) when
+        it blows past the ceiling. Returns ``None`` to let the query proceed.
+
+        Fail-open: EXPLAIN being unsupported / erroring / unparseable all yield
+        ``None`` — the guard only ever blocks on a *confident* oversize estimate,
+        never on its own inability to measure.
+        """
+        from datus.tools.sql_guard import MAX_ESTIMATED_ROWS, build_oversize_message, estimate_rows_from_explain
+
+        # Reject multi-statement / non-read input before it reaches the engine
+        # inside ``EXPLAIN <sql>``. Callers only prefix-check with
+        # ``_looks_like_select``, which passes ``SELECT 1; DROP TABLE t`` — and a
+        # driver that splits statements would run the DROP as part of the EXPLAIN.
+        validation_error, _ = self._validate_read_sql(sql, connector)
+        if validation_error:
+            return validation_error
+
+        try:
+            explain_result = connector.execute_query(f"EXPLAIN {sql}", result_format="list")
+        except Exception as exc:
+            logger.debug("sql_guard EXPLAIN failed; allowing query", error=str(exc), dialect=connector.dialect)
+            return None
+        if not getattr(explain_result, "success", False):
+            return None
+
+        estimated = estimate_rows_from_explain(connector.dialect, explain_result.sql_return or [])
+        if estimated is None or estimated <= MAX_ESTIMATED_ROWS:
+            return None
+
+        logger.warning(
+            "sql_guard rejected oversized query",
+            estimated_rows=estimated,
+            threshold=MAX_ESTIMATED_ROWS,
+            dialect=connector.dialect,
+        )
+        return FuncToolResult(success=0, error=build_oversize_message(estimated, MAX_ESTIMATED_ROWS))
 
     def _resolve_effective_datasource(self, datasource: Optional[str]) -> str:
         effective_datasource = datasource or self._default_datasource
@@ -2041,7 +2165,7 @@ class DBFuncTool:
 
     @staticmethod
     def _identifier_quote_char(dialect: str) -> str:
-        backtick_dialects = ("mysql", "starrocks", "hive", "spark", "bigquery", "clickhouse")
+        backtick_dialects = ("mysql", "starrocks", "doris", "hive", "spark", "bigquery", "clickhouse")
         return "`" if dialect in backtick_dialects else '"'
 
     @classmethod
@@ -2075,7 +2199,7 @@ class DBFuncTool:
 
         from pandas.api import types as pd_types
 
-        dialect = str(dialect or "").lower()
+        dialect = parse_dialect(str(dialect or "")).lower()
 
         def choose(default: str, *, sqlite: str = "", postgres: str = "", duckdb: str = "") -> str:
             if dialect == DBType.SQLITE:

@@ -60,6 +60,17 @@ def test_collect_worktree_diff_includes_added_modified_and_deleted(git_repo: Pat
     assert _git(git_repo, "diff", "--cached", "--name-only") == ""
 
 
+def test_collect_worktree_diff_resolves_base_from_common_object_directory(git_repo: Path, tmp_path: Path):
+    worktree = tmp_path / "linked-worktree"
+    _git(git_repo, "worktree", "add", "--detach", str(worktree), "v1")
+    (worktree / "changed.txt").write_text("after\n", encoding="utf-8")
+
+    result = report_upstream_diff.collect_worktree_diff(worktree, "v1")
+
+    assert result.status_counts == {"M": 1}
+    assert result.modified_paths == {"changed.txt"}
+
+
 def test_build_report_calculates_modified_overlap():
     downstream = report_upstream_diff.DiffResult(
         entries=(

@@ -18,7 +18,16 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
-from datus.api.models.table_models import ColumnInfo, GetTableDetailData, TableDetailData
+from datus.api.models.table_models import (
+    ColumnInfo,
+    GetTableDetailData,
+    GetTablesColumnsData,
+    GetTablesColumnsInput,
+    TableColumnBrief,
+    TableColumns,
+    TableDetailData,
+)
+from datus.api.routes.table_routes import get_table_detail, get_tables_columns
 from datus.api.service import create_app
 from datus.tools.db_tools import connector_registry
 from datus_enterprise.api import table_routes
@@ -379,6 +388,7 @@ def test_semantic_model_routes_allow_catalog_when_sql_access_is_disabled(monkeyp
         catalog=None,
         database=None,
         db_schema=None,
+        semantic_model_name=None,
     )
     svc.datasource.save_semantic_model.assert_awaited_once()
     svc.datasource.validate_semantic_model.assert_awaited_once()
@@ -565,3 +575,37 @@ def test_semantic_model_invalid_body_does_not_resolve_datus_service(monkeypatch,
         response = client.post(path, json=[])
 
     assert response.status_code == 422
+
+
+class TestGetTableDetail:
+    @pytest.mark.asyncio
+    async def test_delegates_to_service(self):
+        svc = MagicMock()
+        svc.datasource.get_table_schema.return_value = Result(success=True)
+
+        result = await get_table_detail(svc, table="db.public.orders")
+
+        assert result.success is True
+        svc.datasource.get_table_schema.assert_called_once_with("db.public.orders")
+
+
+class TestGetTablesColumns:
+    @pytest.mark.asyncio
+    async def test_delegates_to_service_with_tables(self):
+        svc = MagicMock()
+        data = GetTablesColumnsData(
+            tables=[
+                TableColumns(
+                    table="db.public.orders",
+                    columns=[TableColumnBrief(name="id", type="INT", nullable=False)],
+                )
+            ]
+        )
+        svc.datasource.get_tables_columns.return_value = Result(success=True, data=data)
+
+        request = GetTablesColumnsInput(tables=["db.public.orders", "db.public.users"])
+        result = await get_tables_columns(request, svc)
+
+        assert result.success is True
+        assert [t.table for t in result.data.tables] == ["db.public.orders"]
+        svc.datasource.get_tables_columns.assert_called_once_with(["db.public.orders", "db.public.users"])

@@ -78,7 +78,7 @@ agent:
 
 ## Monorepo 数据库适配器
 
-上游 `v0.3.8` 的公开 README 保留当时的 adapter 列表。当前 monorepo 还维护和联调下列独立包：
+上游 `v0.3.9` 的公开 README 保留当时的 adapter 列表。当前 monorepo 还维护和联调下列独立包：
 
 | 数据库 | 类型 | 包 |
 | --- | --- | --- |

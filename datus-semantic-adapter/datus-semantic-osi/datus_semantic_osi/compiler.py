@@ -25,6 +25,7 @@ from datus_semantic_osi.ir import (
     Aggregation,
     DatasetIR,
     FieldIR,
+    IdentifierComponentIR,
     IdentifierIR,
     MeasureIR,
     MetricInputIR,
@@ -269,23 +270,50 @@ def _compile_dataset(ds: OSIDataset) -> DatasetIR:
             )
         )
 
+    field_expr = {field.name: field.expr for field in fields}
+
+    def identifier(columns: list[str], identifier_type: str, name: str) -> IdentifierIR:
+        if len(columns) == 1:
+            column = columns[0]
+            return IdentifierIR(
+                name=name,
+                type=identifier_type,
+                expr=field_expr.get(column, column),
+            )
+        return IdentifierIR(
+            name=name,
+            type=identifier_type,
+            components=[
+                IdentifierComponentIR(
+                    name=f"{name}_key_{index}",
+                    expr=field_expr.get(column, column),
+                )
+                for index, column in enumerate(columns, start=1)
+            ],
+        )
+
+    primary_columns: list[str] = []
     if ds.primary_key:
-        keys = (
+        primary_columns = (
             [ds.primary_key]
             if isinstance(ds.primary_key, str)
             else list(ds.primary_key)
         )
-        for key in keys:
-            identifiers.append(IdentifierIR(name=key, type="primary", expr=key))
+        primary_name = (
+            primary_columns[0] if len(primary_columns) == 1 else f"{ds.name}_key"
+        )
+        identifiers.append(identifier(primary_columns, "primary", primary_name))
 
     identifier_names = {i.name for i in identifiers}
-    for key in ds.unique_keys:
-        # Composite unique keys have no single-identifier representation in the
-        # backend; they are kept on the authoring side only.
-        if len(key) != 1 or key[0] in identifier_names:
+    for index, key in enumerate(ds.unique_keys, start=1):
+        columns = list(key)
+        if not columns or columns == primary_columns:
             continue
-        identifiers.append(IdentifierIR(name=key[0], type="unique", expr=key[0]))
-        identifier_names.add(key[0])
+        name = columns[0] if len(columns) == 1 else f"{ds.name}_unique_key_{index}"
+        if name in identifier_names:
+            continue
+        identifiers.append(identifier(columns, "unique", name))
+        identifier_names.add(name)
 
     return DatasetIR(
         name=ds.name,
@@ -333,7 +361,9 @@ def _validate_metric_metadata(metric: OSIMetric) -> dict[str, object]:
     return dict(metric.metadata)
 
 
-def _compile_metric(metric: OSIMetric, *, dialect: str = DEFAULT_SQLGLOT_DIALECT) -> MetricIR:
+def _compile_metric(
+    metric: OSIMetric, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
+) -> MetricIR:
     kind = (metric.kind or "").lower()
 
     if metric.period_over_period is not None:
@@ -402,7 +432,9 @@ def _compile_metric(metric: OSIMetric, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
             denominator=metric.denominator,
         )
     elif metric.expression:
-        metric_ir = compile_metric_expression(metric.name, metric.expression, dialect=dialect)
+        metric_ir = compile_metric_expression(
+            metric.name, metric.expression, dialect=dialect
+        )
     else:
         raise OSIValidationError(
             "needs either an `expression` or explicit ratio numerator/denominator.",
@@ -504,6 +536,19 @@ def _resolve_qualified_columns(
     return updated, inferred
 
 
+def _dataset_key_sets(dataset: OSIDataset) -> list[tuple[str, ...]]:
+    keys: list[tuple[str, ...]] = []
+    if dataset.primary_key:
+        primary = (
+            [dataset.primary_key]
+            if isinstance(dataset.primary_key, str)
+            else list(dataset.primary_key)
+        )
+        keys.append(tuple(primary))
+    keys.extend(tuple(key) for key in dataset.unique_keys if key)
+    return keys
+
+
 def _infer_relationship_type(rel, datasets_by_name: dict) -> str:
     """Upgrade the default many_to_one to one_to_one when the from-side key is unique."""
     if rel.type != "many_to_one":
@@ -511,27 +556,42 @@ def _infer_relationship_type(rel, datasets_by_name: dict) -> str:
     ds = datasets_by_name.get(rel.from_dataset)
     if ds is None:
         return rel.type
-    primary = (
-        [ds.primary_key] if isinstance(ds.primary_key, str) else list(ds.primary_key or [])
-    )
-    unique_columns = {key[0] for key in ds.unique_keys if len(key) == 1}
-    if primary == [rel.from_identifier] or rel.from_identifier in unique_columns:
+    if tuple(rel.from_columns) in _dataset_key_sets(ds):
         return "one_to_one"
     return rel.type
 
 
-def compile_document(doc: OSIDocument, *, dialect: str = DEFAULT_SQLGLOT_DIALECT) -> SemanticModelIR:
+def _validate_relationship_target_key(rel, datasets_by_name: dict) -> None:
+    target = datasets_by_name.get(rel.to_dataset)
+    if target is None:
+        return
+    target_columns = tuple(rel.to_columns)
+    if target_columns not in _dataset_key_sets(target):
+        raise OSIValidationError(
+            f"relationship `{rel.name}` targets columns {list(target_columns)} on "
+            f"dataset `{rel.to_dataset}`, but they are not declared as that "
+            "dataset's `primary_key` or one of its `unique_keys`.",
+            hint="Declare the complete target key after verifying it is unique; "
+            "do not join to only a subset of a composite key.",
+        )
+
+
+def compile_document(
+    doc: OSIDocument, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
+) -> SemanticModelIR:
     """Compile a parsed OSI authoring document into a SemanticModelIR."""
     datasets = [_compile_dataset(ds) for ds in doc.datasets]
     datasets_by_name = {ds.name: ds for ds in doc.datasets}
+    for rel in doc.relationships:
+        _validate_relationship_target_key(rel, datasets_by_name)
     relationships = [
         RelationshipIR(
             name=rel.name,
             type=_infer_relationship_type(rel, datasets_by_name),
             from_dataset=rel.from_dataset,
-            from_identifier=rel.from_identifier,
+            from_columns=list(rel.from_columns),
             to_dataset=rel.to_dataset,
-            to_identifier=rel.to_identifier,
+            to_columns=list(rel.to_columns),
         )
         for rel in doc.relationships
     ]
@@ -539,7 +599,9 @@ def compile_document(doc: OSIDocument, *, dialect: str = DEFAULT_SQLGLOT_DIALECT
     dataset_names = {ds.name for ds in doc.datasets}
     metrics = []
     for m in doc.metrics:
-        m, inferred_dataset = _resolve_qualified_columns(m, dataset_names, dialect=dialect)
+        m, inferred_dataset = _resolve_qualified_columns(
+            m, dataset_names, dialect=dialect
+        )
         metric_ir = _compile_metric(m, dialect=dialect)
         if not metric_ir.dataset and inferred_dataset:
             metric_ir.dataset = inferred_dataset

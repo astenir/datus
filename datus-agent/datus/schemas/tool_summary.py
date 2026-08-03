@@ -16,6 +16,8 @@ and are bounded separately from the compact result registry.
 All non-filesystem result summaries are clipped to ``SUMMARY_TEXT_MAX_CHARS``
 characters at the result-registry exit; filesystem tools (``read_file``,
 ``write_file``, ``edit_file``, ``glob``, ``grep``) bypass that result clip.
+Tools whose compact contract requires complete identifiers, including
+filesystem tools and ``attribution_analyze``, bypass the result clip.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ HYBRID_INPUT_RESULT_TOOLS = frozenset(
         "validate_skill",
     }
 )
+SUMMARY_TOOLS_NO_CLIP = FS_TOOLS_NO_CLIP | frozenset({"attribution_analyze"})
 
 
 # ── Generic helpers (public API) ────────────────────────────────────────
@@ -668,13 +671,12 @@ def _list_count(value: Any, singular: str, plural: str) -> str:
 def _clip_short(text: str, tool_name: str = "", limit: int = SUMMARY_TEXT_MAX_CHARS) -> str:
     """Final-stage clip applied at registry exit.
 
-    Filesystem tools (``read_file``, ``write_file``, ``edit_file``,
-    ``delete_file``, ``glob``, ``grep``) are exempt — their summaries are
-    returned verbatim because users want full path / count visibility there.
+    Tools in ``SUMMARY_TOOLS_NO_CLIP`` are exempt because their summaries carry
+    identifiers that must remain complete.
     """
     if not isinstance(text, str):
         return text
-    if tool_name in FS_TOOLS_NO_CLIP:
+    if tool_name in SUMMARY_TOOLS_NO_CLIP:
         return text
     if len(text) <= limit:
         return text
@@ -1034,14 +1036,20 @@ def _fmt_validate_semantic(result: Any) -> str:
 
 def _fmt_attribution_analyze(result: Any) -> str:
     if isinstance(result, dict):
-        ranking = result.get("dimension_ranking") or []
         selected = result.get("selected_dimensions") or []
-        n_sel = len(selected) if isinstance(selected, list) else 0
-        n_rank = len(ranking) if isinstance(ranking, list) else 0
-        if n_sel and n_rank:
-            return f"sel {n_sel}/{n_rank} dims"
-        if n_sel:
-            return f"sel {n_sel} dim" if n_sel == 1 else f"sel {n_sel} dims"
+        warnings = result.get("warnings") or []
+        summary_parts = []
+        if isinstance(selected, list) and selected:
+            summary_parts.append(f"selected {','.join(str(dimension) for dimension in selected)}")
+        warning_codes = []
+        if isinstance(warnings, list):
+            for warning in warnings:
+                code = warning.get("code") if isinstance(warning, dict) else None
+                if isinstance(code, str) and code and code not in warning_codes:
+                    warning_codes.append(code)
+        if warning_codes:
+            summary_parts.append(f"warnings {','.join(warning_codes)}")
+        return "; ".join(summary_parts)
     return ""
 
 
@@ -1085,7 +1093,7 @@ def _fmt_check_semantic_model_exists(result: Any) -> str:
     return ""
 
 
-def _fmt_end_semantic_model_generation(result: Any) -> str:
+def _fmt_publish_semantic_model(result: Any) -> str:
     if isinstance(result, dict):
         files = result.get("semantic_model_files")
         if isinstance(files, list):
@@ -1094,7 +1102,7 @@ def _fmt_end_semantic_model_generation(result: Any) -> str:
     return ""
 
 
-def _fmt_end_metric_generation(result: Any) -> str:
+def _fmt_publish_metrics(result: Any) -> str:
     if isinstance(result, dict):
         sync = result.get("sync") or {}
         if isinstance(sync, dict) and sync.get("success"):
@@ -1110,26 +1118,28 @@ def _fmt_generate_sql_summary_id(result: Any) -> str:
     return ""
 
 
-def _fmt_analyze_table_relationships(result: Any) -> str:
+def _fmt_inspect_semantic_sources(result: Any) -> str:
     if isinstance(result, dict):
+        tables = result.get("tables")
         relationships = result.get("relationships")
-        if isinstance(relationships, list) and relationships:
-            n = len(relationships)
-            return f"{n} rel" if n == 1 else f"{n} rels"
+        if isinstance(tables, list) and isinstance(relationships, list):
+            return f"{len(tables)} tables, {len(relationships)} rels"
         summary = result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
-        if isinstance(relationships, list):
-            return "0 rels"
     return ""
 
 
-def _fmt_analyze_column_usage_patterns(result: Any) -> str:
+def _fmt_validate_semantic_key_candidates(result: Any) -> str:
     if isinstance(result, dict):
-        patterns = result.get("column_patterns")
-        if isinstance(patterns, dict) and patterns:
-            n = len(patterns)
-            return f"{n} col analyzed" if n == 1 else f"{n} cols analyzed"
+        validations = result.get("validations")
+        if isinstance(validations, list):
+            verified = sum(
+                1
+                for validation in validations
+                if isinstance(validation, dict) and validation.get("is_valid_logical_key") is True
+            )
+            return f"{verified}/{len(validations)} keys verified"
         summary = result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
@@ -1143,28 +1153,6 @@ def _fmt_profile_semantic_model_evidence(result: Any) -> str:
             n = len(tables)
             suffix = " + data" if result.get("data_profiled") else ""
             return (f"{n} table profiled" if n == 1 else f"{n} tables profiled") + suffix
-        summary = result.get("summary")
-        if isinstance(summary, str) and summary:
-            return summary
-    return ""
-
-
-def _fmt_get_multiple_tables_ddl(result: Any) -> str:
-    if isinstance(result, list):
-        n = len(result)
-        return f"DDL of {n} table" if n == 1 else f"DDL of {n} tables"
-    return ""
-
-
-def _fmt_analyze_metric_candidates_from_history(result: Any) -> str:
-    if isinstance(result, dict):
-        candidates = result.get("metric_candidates")
-        if isinstance(candidates, list):
-            n = len(candidates)
-            suffix = ""
-            if result.get("query_classification") == "metric_plus_derived_datasource":
-                suffix = " + datasource"
-            return (f"{n} metric cand" if n == 1 else f"{n} metric cands") + suffix
         summary = result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
@@ -1648,8 +1636,8 @@ class ToolSummaryRegistry:
     per-tool formatters are invoked only when the payload indicates
     success and the unwrapped ``result`` is non-empty.
 
-    The registry exit applies :func:`_clip_short` so every non-filesystem
-    summary is bounded to ``SUMMARY_TEXT_MAX_CHARS`` characters.
+    The registry exit applies :func:`_clip_short`; tools outside
+    ``SUMMARY_TOOLS_NO_CLIP`` are bounded to ``SUMMARY_TEXT_MAX_CHARS``.
     """
 
     def __init__(self) -> None:
@@ -1756,14 +1744,12 @@ def _register_builtins(registry: ToolSummaryRegistry) -> None:
         # Generation / semantic discovery
         "check_semantic_object_exists": _fmt_check_semantic_object_exists,
         "check_semantic_model_exists": _fmt_check_semantic_model_exists,
-        "end_semantic_model_generation": _fmt_end_semantic_model_generation,
-        "end_metric_generation": _fmt_end_metric_generation,
+        "publish_semantic_model": _fmt_publish_semantic_model,
+        "publish_metrics": _fmt_publish_metrics,
         "generate_sql_summary_id": _fmt_generate_sql_summary_id,
-        "analyze_table_relationships": _fmt_analyze_table_relationships,
-        "analyze_column_usage_patterns": _fmt_analyze_column_usage_patterns,
+        "inspect_semantic_sources": _fmt_inspect_semantic_sources,
+        "validate_semantic_key_candidates": _fmt_validate_semantic_key_candidates,
         "profile_semantic_model_evidence": _fmt_profile_semantic_model_evidence,
-        "analyze_metric_candidates_from_history": _fmt_analyze_metric_candidates_from_history,
-        "get_multiple_tables_ddl": _fmt_get_multiple_tables_ddl,
         # Scheduler tools
         "submit_sql_job": _fmt_submit_sql_job,
         "submit_sparksql_job": _fmt_submit_sparksql_job,

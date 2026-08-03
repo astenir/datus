@@ -44,7 +44,16 @@ class _FieldSig:
 
 
 _CATEGORICAL_TYPES = {"categorical", "string", "str", "text", "varchar", "char"}
-_NUMERIC_TYPES = {"numeric", "number", "int", "integer", "bigint", "float", "double", "decimal"}
+_NUMERIC_TYPES = {
+    "numeric",
+    "number",
+    "int",
+    "integer",
+    "bigint",
+    "float",
+    "double",
+    "decimal",
+}
 
 
 def _norm_identifier(value: object) -> str:
@@ -105,7 +114,9 @@ def _field_conflict(existing: _FieldSig, incoming: _FieldSig) -> Optional[str]:
     if existing.expr and incoming.expr and existing.expr != incoming.expr:
         return f"field `{incoming.name}` maps to both `{existing.expr}` and `{incoming.expr}`"
     if existing.type != incoming.type:
-        return f"field `{incoming.name}` is both `{existing.type}` and `{incoming.type}`"
+        return (
+            f"field `{incoming.name}` is both `{existing.type}` and `{incoming.type}`"
+        )
     if (
         existing.granularity
         and incoming.granularity
@@ -205,7 +216,9 @@ def _merge_into(canonical: OSIDataset, duplicate: OSIDataset) -> List[str]:
     return errors
 
 
-def _rewrite_relationships(doc: OSIDocument, aliases: Dict[str, str], actions: List[str]) -> None:
+def _rewrite_relationships(
+    doc: OSIDocument, aliases: Dict[str, str], actions: List[str]
+) -> None:
     rewritten = []
     seen = set()
     for rel in doc.relationships:
@@ -222,12 +235,14 @@ def _rewrite_relationships(doc: OSIDocument, aliases: Dict[str, str], actions: L
             rel.name,
             rel.type,
             rel.from_dataset,
-            rel.from_identifier,
+            tuple(rel.from_columns),
             rel.to_dataset,
-            rel.to_identifier,
+            tuple(rel.to_columns),
         )
         if key in seen:
-            actions.append(f"Dropped duplicate relationship `{rel.name}` after dataset normalization.")
+            actions.append(
+                f"Dropped duplicate relationship `{rel.name}` after dataset normalization."
+            )
             continue
         seen.add(key)
         if old_from != rel.from_dataset or old_to != rel.to_dataset:
@@ -239,7 +254,9 @@ def _rewrite_relationships(doc: OSIDocument, aliases: Dict[str, str], actions: L
     doc.relationships = rewritten
 
 
-def _rewrite_metrics(doc: OSIDocument, aliases: Dict[str, str], actions: List[str]) -> None:
+def _rewrite_metrics(
+    doc: OSIDocument, aliases: Dict[str, str], actions: List[str]
+) -> None:
     for metric in doc.metrics:
         if metric.dataset in aliases:
             old = metric.dataset
@@ -263,7 +280,9 @@ def normalize_document(doc: OSIDocument) -> NormalizationResult:
     canonical_updates: Dict[int, OSIDataset] = {}
 
     for table, indexes in groups.items():
-        canonical_idx = max(indexes, key=lambda i: _dataset_score(i, normalized.datasets[i]))
+        canonical_idx = max(
+            indexes, key=lambda i: _dataset_score(i, normalized.datasets[i])
+        )
         candidate = normalized.datasets[canonical_idx].model_copy(deep=True)
         group_errors: List[str] = []
         group_aliases: Dict[str, str] = {}
@@ -298,7 +317,9 @@ def normalize_document(doc: OSIDocument) -> NormalizationResult:
         _rewrite_metrics(normalized, result.dataset_aliases, result.actions)
         _rewrite_relationships(normalized, result.dataset_aliases, result.actions)
         normalized.datasets = [
-            ds for idx, ds in enumerate(normalized.datasets) if idx not in remove_indexes
+            ds
+            for idx, ds in enumerate(normalized.datasets)
+            if idx not in remove_indexes
         ]
         result.warnings.append(
             "Normalized duplicate physical-table dataset aliases to canonical dataset names."

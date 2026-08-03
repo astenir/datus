@@ -45,6 +45,8 @@ from datus.schemas.gen_visual_report_models import (
     extract_query_slug,
 )
 from datus.tools.func_tool._artifact_filesystem_base import ArtifactFilesystemFuncTool
+from datus.tools.func_tool._jsx_hooks_lint import format_hook_order_issues
+from datus.tools.func_tool._visual_artifact_cards import scan_render_cards
 from datus.tools.func_tool._visual_artifact_helpers import (
     append_intent_section,
     coerce_uses_arg,
@@ -797,8 +799,21 @@ class ReportArtifactTools:
 
         ds_label = datasource or getattr(self._db_func_tool, "_default_datasource", "") or "default"
 
+        # Pre-flight EXPLAIN row-count guard: reject a runaway query (e.g. a
+        # cross-join cartesian product) from its optimizer estimate before it
+        # executes and OOMs the DB backend. Fail-open when unmeasurable.
+        oversize = self._db_func_tool.guard_estimated_rows(sql, connector)
+        if oversize is not None:
+            return oversize
+
         try:
-            execute_result = connector.execute_query(sql, result_format="list")
+            # Route through the shared enforced-read path so SQL policy
+            # (row caps / rewrites / denials) and multi-statement rejection
+            # apply here too — a bare connector.execute_query would let an
+            # unbounded statement reach the engine and OOM the DB backend.
+            execute_result = self._db_func_tool.execute_read_enforced(
+                sql, connector, datasource=datasource, result_format="list"
+            )
         except Exception as exc:
             logger.exception("save_query execute_query crashed", extra={"name": name})
             return FuncToolResult(success=0, error=f"Query execution failed: {exc}")
@@ -937,6 +952,11 @@ class ReportArtifactTools:
             ``@datus/web-artifact``), OR
           - a relative path that resolves to a file under ``render/``.
         * No file escapes ``render/`` via ``../`` import.
+        * No ``use*()`` hook call sits below a ``return`` in the same function
+          — the Rules-of-Hooks violation that renders as a blank artifact.
+        * Every ``<ChartCard>`` / ``<BlockHandle>`` declares its required
+          props, and their ids share one globally-unique namespace (see
+          ``_visual_artifact_cards``).
 
         Returns:
             FuncToolResult.result on success::
@@ -947,6 +967,9 @@ class ReportArtifactTools:
                     "app_jsx_path": "reports/<id>/render/app.jsx",
                     "render_files": ["render/app.jsx", "render/kpi-banner.jsx", ...],
                     "query_refs": ["queries/foo", "queries/bar"],
+                    "cards": [
+                        {"chart_id": "revenue_trend", "jsx_path": "render/trend.jsx", "kind": "chart"},
+                    ],
                     "warnings": ["render/legacy.jsx is unreachable from app.jsx"],
                 }
 
@@ -1030,8 +1053,20 @@ class ReportArtifactTools:
             }
 
         module_keys: Set[str] = set(modules.keys())
-        issues: List[str] = []
-        query_refs: Set[str] = set()
+
+        # <ChartCard> / <BlockHandle> audit — shared with the dashboard
+        # validator so the two kinds can't drift on id shape, uniqueness
+        # or the kind enum. Reports carry the same card primitives, and a
+        # duplicated id breaks the same way: two blocks pin an identical
+        # chip and the second silently de-dupes away.
+        cards = scan_render_cards(
+            modules,
+            query_exists=lambda slug: (self.queries_dir / f"{slug}.json").is_file(),
+            missing_query_hint="a query not produced via save_query",
+        )
+        issues: List[str] = list(cards.issues)
+        card_warnings: List[str] = list(cards.warnings)
+        query_refs: Set[str] = set(cards.query_refs)
 
         for key, mod in modules.items():
             source = mod["source"]
@@ -1074,6 +1109,9 @@ class ReportArtifactTools:
                     f"{sorted(ALLOWED_BARE_MODULES)} or relative paths under render/ are allowed."
                 )
 
+            # ---- Rules of Hooks: no hook call below an early return
+            issues.extend(format_hook_order_issues(mod["rel"], source))
+
         if not _DEFAULT_EXPORT_RE.search(modules["app"]["source"]):
             issues.append(
                 "render/app.jsx must include an `export default` (the renderer mounts the "
@@ -1099,7 +1137,7 @@ class ReportArtifactTools:
             reachable.add(k)
             stack.extend(modules[k]["imports"])
         unreferenced = sorted(modules.keys() - reachable)
-        warnings = [
+        warnings = card_warnings + [
             f"render/{modules[k]['rel']} is not imported by render/app.jsx (directly or transitively)"
             for k in unreferenced
         ]
@@ -1112,6 +1150,7 @@ class ReportArtifactTools:
                 "manifest_path": manifest_path.relative_to(self._project_root).as_posix(),
                 "render_files": [f"render/{modules[k]['rel']}" for k in sorted(modules.keys())],
                 "query_refs": sorted(query_refs),
+                "cards": cards.registry(),
                 "warnings": warnings,
             }
         )

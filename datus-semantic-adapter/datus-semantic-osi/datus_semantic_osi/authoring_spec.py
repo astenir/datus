@@ -34,12 +34,19 @@ _SUBSET_NOTES = """\
 # 1. Expression dialect: every `expression.dialects[].dialect` must be
 #    `{dialect}` (the active datasource's dialect); other dialects are not
 #    executed in this deployment.
-# 2. Relationships: `from_columns` / `to_columns` support exactly one column
-#    each. Composite join keys are rejected with a validation error.
-# 3. One element name maps to one element type (key / time / dimension)
+# 2. Relationships: `from_columns` / `to_columns` support one or more ordered
+#    columns. Composite joins require the same number of columns on both sides,
+#    and `to_columns` must exactly match the target dataset's `primary_key` or
+#    one complete entry in `unique_keys`. The OSI core relationship `name` is
+#    the stable joined-dimension path prefix.
+# 3. Keys inferred from data or historical SQL are candidates only. Verify
+#    uniqueness and non-nullness over the full table before declaring them in
+#    `unique_keys`; reserve `primary_key` for a key established by source
+#    metadata or an explicit data contract.
+# 4. One element name maps to one element type (key / time / dimension)
 #    model-wide after compilation; the validator reports conflicts with the
 #    structural fix.
-# 4. Datus execution hints the spec has no core field for go into
+# 5. Datus execution hints the spec has no core field for go into
 #    `custom_extensions: [{{vendor_name: DATUS, data: '<JSON>'}}]`:
 #    field `time_granularity`; dataset `source_type: "query"`; metric
 #    `time_dimension`, `window`, `grain_to_date`, `offset_window`,

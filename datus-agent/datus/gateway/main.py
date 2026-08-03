@@ -25,6 +25,7 @@ from typing import Optional, Tuple
 
 from datus import __version__
 from datus.utils.loggings import configure_logging, get_logger
+from datus.utils.multiprocessing_utils import configure_multiprocessing_start_method
 
 logger = get_logger(__name__)
 
@@ -104,6 +105,10 @@ def _run_gateway(args: argparse.Namespace) -> None:
     # file access. Force filesystem strict mode so nodes reject EXTERNAL
     # paths instead of hanging on a prompt.
     agent_config.filesystem_strict = True
+    # IM users must never be guided to edit the server's config file:
+    # hide/refuse setup skills and use the read-only plugin prompt preamble.
+    # (ChatTaskManager.start_chat re-asserts this on its per-request clone.)
+    agent_config.config_mutable = False
 
     try:
         am = agent_config.active_model()
@@ -264,11 +269,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Main entry point for starting the Datus Gateway."""
-    if hasattr(multiprocessing, "set_start_method"):
-        try:
-            multiprocessing.set_start_method("spawn", force=True)
-        except RuntimeError:
-            pass
+    configure_multiprocessing_start_method()
 
     parser = _build_parser()
     args = parser.parse_args()

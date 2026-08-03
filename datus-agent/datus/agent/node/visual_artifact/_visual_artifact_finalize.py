@@ -107,6 +107,7 @@ def build_finalize_prompt(
     action_history_hints: List[Dict[str, Any]],
     existing_insights: Optional[List[Dict[str, Any]]],
     existing_suggested_questions: Optional[List[Dict[str, Any]]],
+    language_directive: Optional[str] = None,
 ) -> str:
     """Compose the single-shot finalize prompt.
 
@@ -114,6 +115,13 @@ def build_finalize_prompt(
     chatty: the LLM has to emit one strict JSON object matching
     :class:`FinalizeAnalysisOutput`, so we want every constraint visible
     in one place.
+
+    ``language_directive`` is the rendered ``response_language`` section
+    when ``agent_config.language`` pins one. finalize is an independent
+    LLM call with no system prompt, so the directive every agentic node
+    gets injected has to be restated here or the model answers an
+    English prompt in English — regardless of the language the user (and
+    therefore the artifact) actually uses.
     """
     is_dashboard = artifact_kind == "dashboard"
     sections: List[str] = []
@@ -194,6 +202,26 @@ def build_finalize_prompt(
         "output. The schema rejects quick questions with no grounding, and a "
         "post-validation check warns when the distribution drifts off-target."
     )
+
+    sections.append("## OUTPUT LANGUAGE")
+    audience_note = (
+        "This applies to `insights[].title`, `insights[].summary` and "
+        "`suggested_questions[].question` — they are shown to the user verbatim "
+        "(the questions become clickable chips beside the artifact). Everything "
+        "machine-read stays exactly as specified above: `insights[].id` and the "
+        "query slugs in `evidence_queries` / `related_queries`, the `kind` "
+        "values, and every JSON key."
+    )
+    if language_directive:
+        sections.append(f"{language_directive}\n\n{audience_note}")
+    else:
+        sections.append(
+            "Write the user-facing strings in the SAME language the user wrote "
+            "the prompts in RAW USER PROMPTS below — Chinese prompts get Chinese "
+            "questions, Japanese prompts get Japanese questions. Do NOT switch "
+            "to English just because these instructions are in English; the "
+            f"artifact itself is authored in the user's language.\n\n{audience_note}"
+        )
 
     sections.append("## RAW USER PROMPTS (intent.md)")
     sections.append(intent_md.strip() or "(empty)")
@@ -395,6 +423,22 @@ def load_existing_finalize_output(
             return None
 
     return _load("insights.json"), _load("suggested_questions.json")
+
+
+def narrative_outputs_present(analysis_dir: Path, *, artifact_kind: str) -> bool:
+    """True when a prior finalize's LLM-authored files are on disk.
+
+    ``skip_narrative`` means "reuse what's already there". With nothing to
+    reuse — a first generation split across turns (queries saved in an
+    earlier run, ``validate_render`` landing in a later render-only one), or
+    a prior finalize whose LLM call failed and cleaned up after itself — the
+    skip would strand the artifact without chips permanently, so callers
+    upgrade to a full finalize instead.
+    """
+    if not (analysis_dir / "suggested_questions.json").is_file():
+        return False
+    # Dashboards never write insights.json — insights are report-only.
+    return artifact_kind != "report" or (analysis_dir / "insights.json").is_file()
 
 
 def parse_finalize_output(raw: Any, *, artifact_kind: str) -> FinalizeAnalysisOutput:
@@ -1188,6 +1232,7 @@ def run_finalize_analysis(
     db_func_tool: Optional[Any] = None,
     on_progress: Optional[Callable[[int], None]] = None,
     skip_narrative: bool = False,
+    language_directive: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Top-level orchestrator. Returns a result dict::
 
@@ -1237,11 +1282,23 @@ def run_finalize_analysis(
     ``suggested_questions.json`` are left in place (NOT deleted — they're
     still valid), and the deterministic aggregations below still run so the
     ask_* consultant's indices stay fresh. The result carries
-    ``skipped_narrative: True`` and ``ok: True``.
+    ``skipped_narrative: True`` and ``ok: True``. The skip is ignored when
+    there is nothing on disk to reuse (see
+    :func:`narrative_outputs_present`) — a full finalize runs instead.
     """
     warnings: List[str] = []
     output: Optional[FinalizeAnalysisOutput] = None
     llm_error: Optional[str] = None
+
+    if skip_narrative and not narrative_outputs_present(analysis_dir, artifact_kind=artifact_kind):
+        # Nothing on disk to preserve — honouring the skip would leave this
+        # artifact without insights / suggested questions for good. Callers
+        # pre-check the same way (so the progress bubbles are wired up); this
+        # is the belt-and-suspenders side for direct callers.
+        logger.info(
+            "Narrative skip requested for %s but prior outputs are missing; running the LLM stage.", analysis_dir
+        )
+        skip_narrative = False
 
     if not skip_narrative:
         intent_md = load_intent_md(analysis_dir)
@@ -1258,6 +1315,7 @@ def run_finalize_analysis(
             action_history_hints=action_hints,
             existing_insights=existing_insights,
             existing_suggested_questions=existing_sq,
+            language_directive=language_directive,
         )
 
         if on_progress is not None:

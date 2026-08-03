@@ -1,7 +1,7 @@
 # Modified upstream-owned files intentionally retained against the base release.
 # Update this file only after reviewing the behavior, tests, and removal condition.
 schema_version: 1
-base_ref: v0.3.8
+base_ref: v0.3.9
 category_notes:
   core-hook: Stable registration, request-context, projection, or policy extension point.
   move-to-enterprise: Route or service change to review for relocation behind a downstream provider.
@@ -13,6 +13,7 @@ categories:
     - datus/agent/node/agentic_node.py
     - datus/agent/node/ask_metrics_agentic_node.py
     - datus/agent/node/feedback_agentic_node.py
+    - datus/agent/node/gen_job_agentic_node.py
     - datus/agent/node/gen_metrics_agentic_node.py
     - datus/agent/node/gen_sql_agentic_node.py
     - datus/agent/node/node_factory.py
@@ -61,8 +62,11 @@ categories:
     - datus/api/main.py
     - datus/api/services/action_sse_converter.py
     - datus/api/services/agent_service.py
+    - datus/api/models/table_models.py
     - datus/api/services/explorer_service.py
     - datus/cli/sub_agent_wizard.py
+    - datus/cli/action_display/tool_content.py
+    - datus/cli/execution_state.py
     - datus/main.py
     - datus/models/claude_model.py
     - datus/models/codex_model.py
@@ -71,6 +75,7 @@ categories:
     - datus/prompts/prompt_manager.py
     - datus/prompts/prompt_templates/gen_visual_dashboard_system_1.0.j2
     - datus/prompts/prompt_templates/gen_visual_report_system_1.0.j2
+    - datus/schemas/tool_summary.py
     - datus/storage/base.py
     - datus/storage/embedding_models.py
     - datus/storage/embedding_openai.py
@@ -80,6 +85,7 @@ categories:
     - datus/tools/func_tool/dashboard_artifact_tools.py
     - datus/tools/func_tool/database.py
     - datus/tools/func_tool/orchestrator_tools.py
+    - datus/tools/func_tool/plan_tools.py
     - datus/tools/func_tool/report_artifact_tools.py
     - datus/tools/func_tool/semantic_tools.py
     - datus/tools/func_tool/session_search_tool.py
@@ -90,6 +96,7 @@ categories:
     - datus/tools/proxy/proxy_tool.py
     - datus/tools/proxy/tool_result_channel.py
     - datus/utils/csv_utils.py
+    - datus/utils/sql_utils.py
   docs-config-meta:
     - BUILD.md
     - CLAUDE.md
@@ -102,14 +109,19 @@ categories:
     - tests/integration/conftest.py
     - tests/integration/tools/test_func_tools_db.py
     - tests/unit_tests/agent/node/test_agentic_node_sysprompt_cache.py
+    - tests/unit_tests/agent/node/test_agentic_node_template.py
     - tests/unit_tests/agent/node/test_ask_artifact_agentic_node.py
+    - tests/unit_tests/agent/node/test_chat_agentic_node.py
     - tests/unit_tests/agent/node/test_dashboard_html_renderer.py
     - tests/unit_tests/agent/node/test_explore_agentic_node.py
+    - tests/unit_tests/agent/node/test_gen_job_agentic_node.py
     - tests/unit_tests/agent/node/test_report_html_renderer.py
     - tests/unit_tests/agent/node/test_tool_category_maps.py
     - tests/unit_tests/api/hooks/test_chat_hooks.py
     - tests/unit_tests/api/routes/test_chat_routes.py
     - tests/unit_tests/api/routes/test_chat_routes_feedback.py
+    - tests/unit_tests/api/routes/test_table_routes.py
+    - tests/unit_tests/api/services/test_action_sse_converter.py
     - tests/unit_tests/api/services/test_agent_service.py
     - tests/unit_tests/api/services/test_chat_service.py
     - tests/unit_tests/api/services/test_chat_task_manager.py
@@ -121,12 +133,18 @@ categories:
     - tests/unit_tests/api/test_api_endpoints.py
     - tests/unit_tests/api/test_deps.py
     - tests/unit_tests/api/test_service.py
+    - tests/unit_tests/cli/test_execution_state.py
     - tests/unit_tests/configuration/test_configuration_load.py
     - tests/unit_tests/models/test_builtin_web_tools.py
     - tests/unit_tests/models/test_claude_model.py
     - tests/unit_tests/models/test_openai_compatible_stream_order.py
+    - tests/unit_tests/models/test_session_manager.py
+    - tests/unit_tests/schemas/test_tool_summary.py
     - tests/unit_tests/storage/test_base.py
     - tests/unit_tests/tools/func_tool/test_dashboard_artifact_tools.py
+    - tests/unit_tests/tools/func_tool/test_database.py
+    - tests/unit_tests/tools/func_tool/test_database_migration_tools.py
+    - tests/unit_tests/tools/func_tool/test_plan_tools.py
     - tests/unit_tests/tools/func_tool/test_report_artifact_tools.py
     - tests/unit_tests/tools/permission/test_profiles.py
     - tests/unit_tests/utils/test_compress_utils.py

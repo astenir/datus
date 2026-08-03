@@ -4,11 +4,12 @@
 
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
-import asyncio
+import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from openai.types.responses import ResponseFunctionToolCall
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.node_type import NodeType
@@ -78,6 +79,60 @@ class TestAvailableTools:
         assert "type" in schema["properties"]
         assert "prompt" in schema["properties"]
         assert set(schema["required"]) == {"type", "prompt", "description"}
+
+    @pytest.mark.asyncio
+    async def test_repairs_arguments_for_replay_without_executing(self, task_tool):
+        tool = task_tool.available_tools()[0]
+        task_tool.task = AsyncMock(return_value=FuncToolResult(result={"session_id": "child-1"}))
+        raw_args = '{"type":"gen_sql","prompt":"show sales","description":"sales query",}'
+        raw_tool_call = ResponseFunctionToolCall(
+            arguments=raw_args,
+            call_id="call_task",
+            name="task",
+            type="function_call",
+        )
+        tool_ctx = SimpleNamespace(
+            tool_call_id="call_task",
+            tool_arguments=raw_args,
+            tool_call=raw_tool_call,
+        )
+
+        result = await tool.on_invoke_tool(tool_ctx, raw_args)
+
+        assert result["success"] == 0
+        assert "not executed" in result["error"]
+        task_tool.task.assert_not_awaited()
+        assert json.loads(tool_ctx.tool_arguments)["prompt"] == "show sales"
+        assert json.loads(raw_tool_call.arguments)["description"] == "sales query"
+
+        retry_args = json.dumps(
+            {
+                "type": "gen_sql",
+                "prompt": "show sales",
+                "description": "sales query",
+            }
+        )
+        retry_tool_call = ResponseFunctionToolCall(
+            arguments=retry_args,
+            call_id="call_task_retry",
+            name="task",
+            type="function_call",
+        )
+        retry_ctx = SimpleNamespace(
+            tool_call_id="call_task_retry",
+            tool_arguments=retry_args,
+            tool_call=retry_tool_call,
+        )
+
+        retry_result = await tool.on_invoke_tool(retry_ctx, retry_args)
+
+        assert retry_result["success"] == 1
+        task_tool.task.assert_awaited_once_with(
+            call_id="call_task_retry",
+            type="gen_sql",
+            prompt="show sales",
+            description="sales query",
+        )
 
 
 # ── _get_available_types ───────────────────────────────────────────
@@ -192,6 +247,92 @@ class TestGetAvailableTypes:
         types = tool._get_available_types()
         assert "gen_sql" not in types
         assert "explore" in types
+
+
+# ── _inherit_pending_input_queue ───────────────────────────────────
+
+
+class TestInheritPendingInputQueue:
+    @pytest.mark.asyncio
+    async def test_execute_node_wires_the_queue_into_the_sub_agent(self, task_tool, tmp_path):
+        """The call site, against a real node rather than a stand-in.
+
+        The unit tests below pin the helper's own logic; this one pins that
+        ``_execute_node`` actually calls it, and that ``pending_input_queue`` is
+        the attribute a real ``AgenticNode`` exposes — a stub object would agree
+        with any name we happened to pick.
+        """
+        from datus.cli.execution_state import PendingInputQueue
+
+        # ``_resolve_workspace_root`` reads ``project_root``; without a real
+        # path the node's filesystem tools fail to set up and log a traceback.
+        task_tool.agent_config.project_root = str(tmp_path)
+        task_tool.agent_config.workspace_root = str(tmp_path)
+        queue = PendingInputQueue()
+        task_tool.set_parent_node(SimpleNamespace(pending_input_queue=queue, proxy_tool_patterns=None, session_id=None))
+
+        created = {}
+
+        def _create_and_mute(subagent_type, session_id=None):
+            node = task_tool._create_builtin_node(subagent_type, session_id=session_id)
+
+            async def _no_actions(*_args, **_kwargs):
+                return
+                yield  # pragma: no cover — makes this an async generator
+
+            node.execute_stream_with_interactions = _no_actions
+            created["node"] = node
+            return node
+
+        task_tool._create_node = _create_and_mute
+
+        await task_tool._execute_node("gen_visual_report", "build a revenue report")
+
+        assert created["node"].pending_input_queue is queue
+
+    def test_shares_the_parents_queue_by_reference(self, task_tool):
+        from datus.cli.execution_state import PendingInputQueue
+
+        queue = PendingInputQueue()
+        task_tool.set_parent_node(SimpleNamespace(pending_input_queue=queue))
+        node = SimpleNamespace(pending_input_queue=None)
+
+        task_tool._inherit_pending_input_queue(node)
+
+        # Reference, not a copy — an insert pushed after the sub-agent started
+        # must be visible to the loop that is actually running.
+        assert node.pending_input_queue is queue
+        queue.push("the chart throws on render")
+        assert node.pending_input_queue.drain() == ["the chart throws on render"]
+
+    def test_drain_by_the_subagent_leaves_nothing_for_the_parent(self, task_tool):
+        from datus.cli.execution_state import PendingInputQueue
+
+        queue = PendingInputQueue()
+        task_tool.set_parent_node(SimpleNamespace(pending_input_queue=queue))
+        node = SimpleNamespace(pending_input_queue=None)
+        task_tool._inherit_pending_input_queue(node)
+
+        queue.push("fix it")
+        assert node.pending_input_queue.drain() == ["fix it"]
+        assert queue.drain() == []
+
+    def test_no_parent_leaves_the_node_untouched(self, task_tool):
+        node = SimpleNamespace(pending_input_queue=None)
+        task_tool._inherit_pending_input_queue(node)
+        assert node.pending_input_queue is None
+
+    def test_parent_without_a_queue_leaves_the_node_untouched(self, task_tool):
+        task_tool.set_parent_node(SimpleNamespace(pending_input_queue=None))
+        node = SimpleNamespace(pending_input_queue=None)
+        task_tool._inherit_pending_input_queue(node)
+        assert node.pending_input_queue is None
+
+    def test_parent_missing_the_attribute_is_tolerated(self, task_tool):
+        task_tool.set_parent_node(SimpleNamespace())
+        node = SimpleNamespace(pending_input_queue=None)
+        task_tool._inherit_pending_input_queue(node)
+        assert node.pending_input_queue is None
 
 
 # ── _resolve_node_type ─────────────────────────────────────────────
@@ -635,6 +776,33 @@ class TestConvertToFuncResult:
         assert result.success == 1
         assert result.result["response"] == "Some content"
 
+    def test_gen_metrics_failure_preserves_blocker_contract(self, task_tool):
+        output = {
+            "success": False,
+            "error": "Multiple semantic models remain plausible.",
+            "status": "blocked",
+            "blocker_code": "semantic_model_selection_required",
+            "response": "Choose the intended semantic model.",
+            "semantic_models": [],
+            "tokens_used": 73,
+        }
+
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_metrics_session_blocked01",
+        )
+
+        assert result.success == 0
+        assert result.error == "Multiple semantic models remain plausible."
+        assert result.result == {
+            "status": "blocked",
+            "blocker_code": "semantic_model_selection_required",
+            "response": "Choose the intended semantic model.",
+            "semantic_models": [],
+            "tokens_used": 73,
+            "session_id": "gen_metrics_session_blocked01",
+        }
+
     def test_markdown_report_result(self, task_tool):
         output = {"response": "Metric answer", "markdown_report": "## Metric answer", "tokens_used": 25}
 
@@ -783,53 +951,24 @@ class TestSubAgentTaskAcceptance:
 @pytest.mark.ci
 class TestTaskExecution:
     @pytest.mark.asyncio
-    async def test_osi_gen_metrics_requires_existing_semantic_model(self, task_tool, tmp_path):
+    async def test_osi_gen_metrics_starts_without_host_target_precondition(self, task_tool, tmp_path):
         task_tool.agent_config.resolve_semantic_adapter.return_value = "osi"
+        task_tool.agent_config.current_datasource = "test_db"
         task_tool.agent_config.path_manager = SimpleNamespace(project_root=tmp_path)
+        prompt = "Create order metrics. The semantic model is at subject/semantic_models/test_db/orders.yml."
+        expected = FuncToolResult(result={"response": "gen_metrics started"})
 
-        with patch(
-            "datus.agent.node.semantic_authoring.default_osi_semantic_model_file",
-            return_value="subject/semantic_models/test_db/sales.yml",
-        ):
-            with patch.object(task_tool, "_execute_node") as execute_node:
-                result = await task_tool.task(type="gen_metrics", prompt="Generate revenue")
+        with patch.object(task_tool, "_execute_node", return_value=expected) as execute_node:
+            result = await task_tool.task(type="gen_metrics", prompt=prompt)
 
-        assert result.success == 0
-        assert result.result["code"] == "semantic_model_required"
-        assert result.result["required_subagent"] == "gen_semantic_model"
-        assert result.result["retry_subagent"] == "gen_metrics"
-        execute_node.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_semantic_authoring_tasks_are_serialized_across_tool_instances(
-        self, task_tool, monkeypatch, tmp_path
-    ):
-        active = 0
-        max_active = 0
-        task_tool.agent_config.path_manager = SimpleNamespace(project_root=tmp_path)
-        metrics_tool = SubAgentTaskTool(agent_config=task_tool.agent_config)
-
-        async def fake_execute(subagent_type, prompt, **kwargs):
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return FuncToolResult(result={"subagent_type": subagent_type})
-
-        monkeypatch.setattr(task_tool, "_execute_node", fake_execute)
-        monkeypatch.setattr(task_tool, "_osi_metric_precondition", lambda: None)
-        monkeypatch.setattr(metrics_tool, "_execute_node", fake_execute)
-        monkeypatch.setattr(metrics_tool, "_osi_metric_precondition", lambda: None)
-
-        semantic_result, metrics_result = await asyncio.gather(
-            task_tool.task(type="gen_semantic_model", prompt="Generate the sales model"),
-            metrics_tool.task(type="gen_metrics", prompt="Generate revenue"),
+        assert result is expected
+        execute_node.assert_awaited_once_with(
+            "gen_metrics",
+            prompt,
+            description="",
+            call_id=None,
+            session_id=None,
         )
-
-        assert semantic_result.success == 1
-        assert metrics_result.success == 1
-        assert max_active == 1
 
     @pytest.mark.asyncio
     async def test_execute_gen_sql_success(self, task_tool):
@@ -1662,6 +1801,24 @@ class TestBuildNodeInputBuiltIn:
         assert result.user_message == "orders table"
         assert result.database is None
 
+    def test_semantic_model_node_receives_raw_task_and_inherited_at_context(self, task_tool):
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.schemas.node_models import ReferenceSql
+        from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
+
+        parent = MagicMock()
+        parent.input = SemanticNodeInput(
+            user_message="Generate metrics",
+            reference_sql=[ReferenceSql(name="example", sql="SELECT SUM(amount) FROM finance.payments")],
+        )
+        task_tool.set_parent_node(parent)
+
+        mock_node = Mock(spec=GenSemanticModelAgenticNode)
+        result = task_tool._build_node_input(mock_node, "Create the prerequisite model")
+
+        assert result.user_message == "Create the prerequisite model"
+        assert result.reference_sql == parent.input.reference_sql
+
     def test_metrics_node_input(self, task_tool):
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
         from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
@@ -1759,6 +1916,21 @@ class TestConvertToFuncResultBuiltIn:
         result = task_tool._convert_to_func_result(output)
         assert result.success == 1
         assert result.result["semantic_models"] == []
+
+    def test_gen_metrics_success_preserves_outcome(self, task_tool):
+        output = {
+            "response": "The request is not a metric.",
+            "semantic_models": [],
+            "tokens_used": 100,
+            "status": "skipped",
+            "skip_reason": "not_a_metric",
+        }
+
+        result = task_tool._convert_to_func_result(output)
+
+        assert result.success == 1
+        assert result.result["status"] == "skipped"
+        assert result.result["skip_reason"] == "not_a_metric"
 
     def test_sql_summary_file_result(self, task_tool):
         output = {

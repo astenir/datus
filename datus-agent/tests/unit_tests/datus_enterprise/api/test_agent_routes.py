@@ -574,7 +574,7 @@ def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
                 "name": "Sales SQL",
                 "node_class": "gen_sql",
                 "status": "published",
-                "tools": ["db_tools.read_query"],
+                "tools": ["db_tools.execute_sql"],
                 "acl": {"visibility": "enterprise"},
             },
         )

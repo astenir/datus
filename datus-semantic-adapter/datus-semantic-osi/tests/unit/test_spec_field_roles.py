@@ -11,7 +11,10 @@ used for grouping, and numeric columns that only back metric aggregations.
 import yaml
 
 from datus_semantic_osi.compiler import compile_document
-from datus_semantic_osi.metricflow_backend import lower_to_metricflow, lowered_element_types
+from datus_semantic_osi.metricflow_backend import (
+    lower_to_metricflow,
+    lowered_element_types,
+)
 from datus_semantic_osi.profile import parse_osi_model as parse_osi
 from datus_semantic_osi.profile import to_core_schema_document
 from datus_semantic_osi.validator import (
@@ -30,7 +33,9 @@ def _field(name, *, dimension=None, hints=None):
     if hints:
         import json
 
-        entry["custom_extensions"] = [{"vendor_name": "DATUS", "data": json.dumps(hints)}]
+        entry["custom_extensions"] = [
+            {"vendor_name": "DATUS", "data": json.dumps(hints)}
+        ]
     return entry
 
 
@@ -45,7 +50,9 @@ def _core_doc(datasets, metrics=None, relationships=None):
 
 def _snapshot_dataset(name="loan_quality", primary_key=None, extra_fields=None):
     fields = [
-        _field("etl_dt", dimension={"is_time": True}, hints={"time_granularity": "month"}),
+        _field(
+            "etl_dt", dimension={"is_time": True}, hints={"time_granularity": "month"}
+        ),
         _field("org_name", dimension={"is_time": False}),
         _field("loan_balance"),  # plain row-level field: no dimension block
     ]
@@ -56,12 +63,19 @@ def _snapshot_dataset(name="loan_quality", primary_key=None, extra_fields=None):
     return ds
 
 
-def _sum_metric(name="loan_balance_total", dataset="loan_quality", column="loan_balance"):
+def _sum_metric(
+    name="loan_balance_total", dataset="loan_quality", column="loan_balance"
+):
     return {
         "name": name,
-        "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": f"SUM({column})"}]},
+        "expression": {
+            "dialects": [{"dialect": "ANSI_SQL", "expression": f"SUM({column})"}]
+        },
         "custom_extensions": [
-            {"vendor_name": "DATUS", "data": f'{{"dataset": "{dataset}", "time_dimension": "etl_dt"}}'}
+            {
+                "vendor_name": "DATUS",
+                "data": f'{{"dataset": "{dataset}", "time_dimension": "etl_dt"}}',
+            }
         ],
     }
 
@@ -77,7 +91,9 @@ class TestDimensionBlockOptIn:
 
     def test_legacy_type_hint_still_marks_a_dimension(self):
         # Old authoring carried `{"type": ...}` hints instead of dimension blocks.
-        ds = _snapshot_dataset(extra_fields=[_field("legacy_code", hints={"type": "categorical"})])
+        ds = _snapshot_dataset(
+            extra_fields=[_field("legacy_code", hints={"type": "categorical"})]
+        )
         model = compile_document(parse_osi(_core_doc([ds])))
         fields = {f.name: f for f in model.datasets[0].fields}
         assert fields["legacy_code"].is_dimension is True
@@ -109,8 +125,17 @@ class TestUniqueKeys:
         idents = {i.name: i.type for i in model.datasets[0].identifiers}
         assert idents["org_no"] == "primary"
         assert idents["org_code"] == "unique"
-        # composite unique keys have no single-identifier representation
-        assert "etl_dt" not in idents
+        assert idents["loan_quality_unique_key_2"] == "unique"
+        composite = next(
+            i
+            for i in model.datasets[0].identifiers
+            if i.name == "loan_quality_unique_key_2"
+        )
+        assert [part.name for part in composite.components] == [
+            "loan_quality_unique_key_2_key_1",
+            "loan_quality_unique_key_2_key_2",
+        ]
+        assert [part.expr for part in composite.components] == ["etl_dt", "org_no"]
 
     def test_unique_keys_survive_core_round_trip(self):
         ds = _snapshot_dataset()
@@ -129,21 +154,27 @@ class TestSnapshotIdentifierAutoResolution:
         ds["fields"].append(_field("org_no", dimension={"is_time": False}))
         return compile_document(parse_osi(_core_doc([ds], metrics=[_sum_metric()])))
 
-    def test_time_dimension_wins_over_unjoined_pk_component(self):
+    def test_composite_primary_key_keeps_time_dimension_and_key_components(self):
         art = lower_to_metricflow(self._snapshot_model())
         ds = art.data_source_docs[0]["data_source"]
-        ident_names = {i["name"] for i in ds.get("identifiers", [])}
-        assert "etl_dt" not in ident_names, "time-dimension PK component must be auto-dropped"
-        assert "org_no" in ident_names
+        identifiers = {i["name"]: i for i in ds.get("identifiers", [])}
+        assert set(identifiers) == {"loan_quality_key"}
+        assert [
+            part["name"] for part in identifiers["loan_quality_key"]["identifiers"]
+        ] == [
+            "loan_quality_key_key_1",
+            "loan_quality_key_key_2",
+        ]
         time_dims = [d for d in ds["dimensions"] if d["name"] == "etl_dt"]
         assert time_dims and time_dims[0]["type"] == "time"
         assert time_dims[0]["type_params"]["is_primary"] is True
+        assert any(d["name"] == "org_no" for d in ds["dimensions"])
 
     def test_validate_ir_reports_no_conflict_for_snapshot_shape(self):
         issues = validate_ir(self._snapshot_model())
         assert issues == []
 
-    def test_joined_time_key_is_kept_as_identifier(self):
+    def test_joined_time_key_uses_relationship_name_and_keeps_time_dimension(self):
         fact = _snapshot_dataset(name="fact", primary_key=["etl_dt", "org_no"])
         fact["fields"].append(_field("org_no", dimension={"is_time": False}))
         dim_ds = {
@@ -159,16 +190,19 @@ class TestSnapshotIdentifierAutoResolution:
             "from_columns": ["etl_dt"],
             "to_columns": ["etl_dt"],
         }
-        model = compile_document(parse_osi(_core_doc([fact, dim_ds], relationships=[rel])))
+        model = compile_document(
+            parse_osi(_core_doc([fact, dim_ds], relationships=[rel]))
+        )
         art = lower_to_metricflow(model)
         calendar = next(
-            d["data_source"] for d in art.data_source_docs if d["data_source"]["name"] == "calendar"
+            d["data_source"]
+            for d in art.data_source_docs
+            if d["data_source"]["name"] == "calendar"
         )
         ident_names = {i["name"] for i in calendar.get("identifiers", [])}
-        assert "etl_dt" in ident_names, "join target key must not be auto-dropped"
-        # and the colliding dimension is shadowed by the existing rule
+        assert ident_names == {"fact_to_calendar"}
         dim_names = {d["name"] for d in calendar.get("dimensions", [])}
-        assert "etl_dt" not in dim_names
+        assert "etl_dt" in dim_names
 
     def test_dataset_without_any_identifier_lowers_cleanly(self):
         doc = parse_osi(_core_doc([_snapshot_dataset()], metrics=[_sum_metric()]))
@@ -190,23 +224,39 @@ class TestStructuralValidation:
         assert "Fix structurally" in issues[0]
         assert "dimension:" in issues[0]
 
-    def test_relationship_lowering_failure_surfaces_as_issue_not_exception(self):
-        # Two relationships lower to the same foreign identifier name with
-        # different expressions; validate_ir must report it, not raise.
+    def test_relationship_names_disambiguate_lowering(self):
+        # Equal physical target-key names do not collide because each native
+        # relationship name becomes its own MetricFlow identifier.
         fact = _snapshot_dataset(name="fact")
         fact["fields"].extend(
-            [_field("a_id", dimension={"is_time": False}), _field("b_id", dimension={"is_time": False})]
+            [
+                _field("a_id", dimension={"is_time": False}),
+                _field("b_id", dimension={"is_time": False}),
+            ]
         )
         dim_a = {"name": "dim_a", "source": "dm.a", "primary_key": ["id"], "fields": []}
         dim_b = {"name": "dim_b", "source": "dm.b", "primary_key": ["id"], "fields": []}
         rels = [
-            {"name": "f2a", "from": "fact", "to": "dim_a", "from_columns": ["a_id"], "to_columns": ["id"]},
-            {"name": "f2b", "from": "fact", "to": "dim_b", "from_columns": ["b_id"], "to_columns": ["id"]},
+            {
+                "name": "f2a",
+                "from": "fact",
+                "to": "dim_a",
+                "from_columns": ["a_id"],
+                "to_columns": ["id"],
+            },
+            {
+                "name": "f2b",
+                "from": "fact",
+                "to": "dim_b",
+                "from_columns": ["b_id"],
+                "to_columns": ["id"],
+            },
         ]
-        model = compile_document(parse_osi(_core_doc([fact, dim_a, dim_b], relationships=rels)))
+        model = compile_document(
+            parse_osi(_core_doc([fact, dim_a, dim_b], relationships=rels))
+        )
         issues = validate_ir(model)
-        assert issues, "expected the duplicate foreign identifier to be reported"
-        assert any("duplicate foreign identifier" in issue for issue in issues)
+        assert issues == []
 
     def test_lowered_element_types_mirrors_lowering(self):
         ds = _snapshot_dataset(primary_key=["etl_dt", "org_no"])
@@ -214,7 +264,8 @@ class TestStructuralValidation:
         model = compile_document(parse_osi(_core_doc([ds])))
         types = lowered_element_types(model)
         assert types["etl_dt"] == {"time"}
-        assert types["org_no"] == {"identifier"}
+        assert types["org_no"] == {"dimension"}
+        assert types["loan_quality_key"] == {"identifier"}
         assert "loan_balance" not in types
 
 
@@ -227,7 +278,9 @@ class TestQualifiedColumnResolution:
         deposits["fields"] = [_field("dep_bal")]
         metric = {
             "name": "loan_total",
-            "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": metric_expr}]},
+            "expression": {
+                "dialects": [{"dialect": "ANSI_SQL", "expression": metric_expr}]
+            },
         }
         return parse_osi(_core_doc([loans, deposits], metrics=[metric]))
 
@@ -256,21 +309,36 @@ class TestQualifiedColumnResolution:
         deposits["fields"] = [_field("dep_bal")]
         metric = {
             "name": "loan_total",
-            "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(loans.loan_balance)"}]},
-            "custom_extensions": [{"vendor_name": "DATUS", "data": '{"dataset": "deposits"}'}],
+            "expression": {
+                "dialects": [
+                    {"dialect": "ANSI_SQL", "expression": "SUM(loans.loan_balance)"}
+                ]
+            },
+            "custom_extensions": [
+                {"vendor_name": "DATUS", "data": '{"dataset": "deposits"}'}
+            ],
         }
         doc = parse_osi(_core_doc([loans, deposits], metrics=[metric]))
-        with pytest.raises(OSIValidationError, match="qualifies\\s+columns with dataset `loans`"):
+        with pytest.raises(
+            OSIValidationError, match="qualifies\\s+columns with dataset `loans`"
+        ):
             compile_document(doc)
 
     def test_qualifier_stripping_applies_to_single_dataset_models_too(self):
         metric = {
             "name": "loan_total",
             "expression": {
-                "dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(loan_quality.loan_balance)"}]
+                "dialects": [
+                    {
+                        "dialect": "ANSI_SQL",
+                        "expression": "SUM(loan_quality.loan_balance)",
+                    }
+                ]
             },
         }
-        model = compile_document(parse_osi(_core_doc([_snapshot_dataset()], metrics=[metric])))
+        model = compile_document(
+            parse_osi(_core_doc([_snapshot_dataset()], metrics=[metric]))
+        )
         assert model.metrics[0].measures[0].expr == "loan_balance"
 
 
@@ -295,7 +363,9 @@ class TestRelationshipTypeInference:
             "from_columns": ["order_id"],
             "to_columns": ["order_id"],
         }
-        model = compile_document(parse_osi(_core_doc([profile, orders], relationships=[rel])))
+        model = compile_document(
+            parse_osi(_core_doc([profile, orders], relationships=[rel]))
+        )
         assert model.relationships[0].type == "one_to_one"
 
     def test_non_unique_from_side_key_stays_many_to_one(self):
@@ -314,7 +384,9 @@ class TestRelationshipTypeInference:
             "from_columns": ["org_no"],
             "to_columns": ["org_no"],
         }
-        model = compile_document(parse_osi(_core_doc([fact, dim_ds], relationships=[rel])))
+        model = compile_document(
+            parse_osi(_core_doc([fact, dim_ds], relationships=[rel]))
+        )
         assert model.relationships[0].type == "many_to_one"
 
 
@@ -334,7 +406,8 @@ class TestAuthoringSpecText:
         assert "grouping, filtering, and metric expressions" in text
         assert "unique_keys" in text
         assert "Datus execution subset notes" in text
-        assert "exactly one column" in text
+        assert "Composite joins require" in text
+        assert "Verify" in text
 
 
 class TestMeasureAsDimensionWarning:
@@ -351,5 +424,7 @@ class TestMeasureAsDimensionWarning:
         assert "dimension" in warnings[0]
 
     def test_silent_when_aggregated_column_is_a_plain_field(self):
-        model = compile_document(parse_osi(_core_doc([_snapshot_dataset()], metrics=[_sum_metric()])))
+        model = compile_document(
+            parse_osi(_core_doc([_snapshot_dataset()], metrics=[_sum_metric()]))
+        )
         assert detect_measure_columns_modeled_as_dimensions(model) == []

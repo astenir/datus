@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
+
+from datus.utils.exceptions import DatusException, ErrorCode
 
 
 def _result_success(result: Any) -> bool:
@@ -42,9 +46,9 @@ def _metadata_from_result(result: Any) -> Dict[str, Any]:
 class GenerationEvidence:
     """Minimal runtime state for generation publish gates.
 
-    The evidence is scoped to one node run and intentionally does not track
-    file hashes or dirty state. The generation flow assumes files are not edited
-    after successful validation / dry-run before publish.
+    Evidence is scoped to one node run. Exact semantic validation is tied to
+    artifact bytes, and every successful authoring mutation invalidates prior
+    validation, dry-run, and sync evidence.
     """
 
     validation_passed: bool = False
@@ -54,10 +58,88 @@ class GenerationEvidence:
     metric_sqls: Dict[str, str] = field(default_factory=dict)
     metric_queryability_contracts: List[Dict[str, Any]] = field(default_factory=list)
     metric_aliases: Dict[str, str] = field(default_factory=dict)
+    required_metric_output_ids: List[str] = field(default_factory=list)
+    required_query_backed_sql: Dict[str, str] = field(default_factory=dict)
+    query_backed_dataset_bindings: Dict[str, Dict[str, str]] = field(default_factory=dict)
     semantic_kb_sync_passed: bool = False
     metric_kb_sync_passed: bool = False
+    metric_kb_sync_metrics: Set[str] = field(default_factory=set)
     generic_kb_sync_passed: bool = False
-    storage_revision: int = 0
+    validated_semantic_artifacts: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    sql_modeling_plan_status: str = "pending"
+    sql_modeling_plan_fingerprint: str = ""
+    mutated_artifact_paths: Set[str] = field(default_factory=set)
+
+    def reset(self) -> None:
+        """Clear evidence before reusing a node for another request."""
+        self.invalidate_artifact_evidence()
+        self.metric_queryability_contracts.clear()
+        self.metric_aliases.clear()
+        self.required_metric_output_ids.clear()
+        self.required_query_backed_sql.clear()
+        self.query_backed_dataset_bindings.clear()
+        self.sql_modeling_plan_status = "pending"
+        self.sql_modeling_plan_fingerprint = ""
+        self.mutated_artifact_paths.clear()
+
+    def record_artifact_mutation(self, path: str | Path | None = None) -> None:
+        """Invalidate stale gates and remember the exact artifact that changed."""
+        self.invalidate_artifact_evidence()
+        if path is None:
+            return
+        try:
+            normalized = str(Path(path).expanduser().resolve(strict=False))
+        except (OSError, RuntimeError):
+            normalized = str(path)
+        if normalized:
+            self.mutated_artifact_paths.add(normalized)
+
+    def semantic_model_mutations(self, metric_file: str | Path = "") -> List[str]:
+        """Return mutated YAML artifacts other than the metric collection."""
+        metric_path = ""
+        if metric_file:
+            try:
+                metric_path = str(Path(metric_file).expanduser().resolve(strict=False))
+            except (OSError, RuntimeError):
+                metric_path = str(metric_file)
+        return sorted(
+            path
+            for path in self.mutated_artifact_paths
+            if path != metric_path and "/metrics/" not in path.replace("\\", "/")
+        )
+
+    def set_sql_modeling_plan(self, status: str, source_fingerprint: str = "") -> None:
+        """Record the request-local SQL preflight result."""
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status not in {"ready", "unresolved"}:
+            raise DatusException(
+                ErrorCode.TOOL_INVALID_INPUT,
+                message=f"Unsupported SQL modeling plan status: {status!r}",
+            )
+        self.sql_modeling_plan_status = normalized_status
+        self.sql_modeling_plan_fingerprint = str(source_fingerprint or "").strip()
+
+    def require_sql_modeling_plan(self) -> None:
+        """Reject authoring publication before the shared preflight completes."""
+        if self.sql_modeling_plan_status == "ready":
+            return
+        raise DatusException(
+            ErrorCode.TOOL_INVALID_INPUT,
+            message="prepare_sql_modeling_plan must complete before publishing generated semantic artifacts.",
+        )
+
+    def invalidate_artifact_evidence(self) -> None:
+        """Discard validation, dry-run, and sync evidence after a file mutation."""
+        self.validation_passed = False
+        self.metric_dry_run_passed = False
+        self.metric_dry_run_metrics.clear()
+        self.metric_dry_run_queries.clear()
+        self.metric_sqls.clear()
+        self.semantic_kb_sync_passed = False
+        self.metric_kb_sync_passed = False
+        self.metric_kb_sync_metrics.clear()
+        self.generic_kb_sync_passed = False
+        self.validated_semantic_artifacts.clear()
 
     @property
     def kb_sync_passed(self) -> bool:
@@ -66,8 +148,57 @@ class GenerationEvidence:
     def record_validation_result(self, result: Any) -> None:
         payload = _result_payload(result)
         valid = isinstance(payload, dict) and payload.get("valid") is True
-        if _result_success(result) and valid:
+        # Explicit adapter checks are diagnostic subsets. Only the adapter's
+        # canonical default profile may satisfy a generation publish gate.
+        canonical_profile = isinstance(payload, dict) and payload.get("checks") is None
+        if _result_success(result) and valid and canonical_profile:
             self.validation_passed = True
+            semantic_model_name = str(payload.get("semantic_model_name") or "").strip()
+            semantic_model_file = str(payload.get("semantic_model_file") or "").strip()
+            semantic_model_file_sha256 = str(payload.get("semantic_model_file_sha256") or "").strip()
+            if semantic_model_name and semantic_model_file:
+                self.record_semantic_artifact_validation(
+                    semantic_model_name,
+                    semantic_model_file,
+                    expected_sha256=semantic_model_file_sha256,
+                )
+
+    @staticmethod
+    def _semantic_artifact_state(path: str | Path) -> Optional[Dict[str, str]]:
+        try:
+            resolved = Path(path).expanduser().resolve(strict=True)
+            if not resolved.is_file():
+                return None
+            return {
+                "path": str(resolved),
+                "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+            }
+        except (OSError, RuntimeError):
+            return None
+
+    def record_semantic_artifact_validation(
+        self,
+        semantic_model_name: str,
+        path: str | Path,
+        *,
+        expected_sha256: str = "",
+    ) -> bool:
+        """Bind successful validation to one model and the exact file content."""
+        model_name = str(semantic_model_name or "").strip()
+        state = self._semantic_artifact_state(path)
+        if not model_name or state is None:
+            return False
+        if expected_sha256 and state["sha256"] != expected_sha256:
+            return False
+        self.validated_semantic_artifacts[model_name] = state
+        return True
+
+    def semantic_artifact_validation_passed(self, semantic_model_name: str, path: str | Path) -> bool:
+        """Return whether the current artifact bytes match recorded validation evidence."""
+        model_name = str(semantic_model_name or "").strip()
+        expected = self.validated_semantic_artifacts.get(model_name)
+        current = self._semantic_artifact_state(path)
+        return expected is not None and current is not None and expected == current
 
     def set_metric_queryability_contracts(
         self,
@@ -96,6 +227,101 @@ class GenerationEvidence:
             if alias_rewrites:
                 normalized_contract["metric_alias_rewrites"] = alias_rewrites
             self.metric_queryability_contracts.append(normalized_contract)
+
+    def set_required_metric_outputs(self, requirements: Optional[Iterable[Dict[str, Any]]]) -> None:
+        """Record the request-local output identities that must be published."""
+        output_ids: List[str] = []
+        seen: Set[str] = set()
+        for requirement in requirements or []:
+            if not isinstance(requirement, dict):
+                continue
+            output_id = str(requirement.get("output_id") or "").strip()
+            if not output_id or output_id in seen:
+                continue
+            seen.add(output_id)
+            output_ids.append(output_id)
+        self.required_metric_output_ids = output_ids
+
+    def set_required_query_backed_datasets(self, requirements: Optional[Iterable[Dict[str, Any]]]) -> None:
+        """Record exact SQL required to exist as authored query-backed datasets."""
+        required: Dict[str, str] = {}
+        for index, requirement in enumerate(requirements or [], 1):
+            if not isinstance(requirement, dict):
+                continue
+            requirement_id = str(requirement.get("requirement_id") or f"query_dataset_{index}").strip()
+            sql = str(requirement.get("sql") or "")
+            if requirement_id and sql.strip():
+                required[requirement_id] = sql
+        self.required_query_backed_sql = required
+
+    def query_backed_sql(self, requirement_id: str) -> str:
+        """Resolve exact request-local SQL for one query-backed requirement."""
+        return self.required_query_backed_sql.get(str(requirement_id or "").strip(), "")
+
+    def query_backed_dataset_binding(self, requirement_id: str) -> Dict[str, str]:
+        """Return the request-local dataset identity already chosen for a requirement."""
+        return dict(
+            self.query_backed_dataset_bindings.get(
+                str(requirement_id or "").strip(),
+                {},
+            )
+        )
+
+    def bind_query_backed_dataset(
+        self,
+        requirement_id: str,
+        *,
+        semantic_model_file: str | Path,
+        dataset_name: str,
+    ) -> None:
+        """Keep one query-backed requirement on one dataset throughout a request."""
+        normalized_id = str(requirement_id or "").strip()
+        normalized_name = str(dataset_name or "").strip()
+        normalized_file = str(Path(semantic_model_file).expanduser().resolve(strict=False))
+        if not normalized_id or not normalized_name:
+            raise DatusException(
+                ErrorCode.TOOL_INVALID_INPUT,
+                message="requirement_id and dataset_name are required",
+            )
+
+        candidate = {
+            "semantic_model_file": normalized_file,
+            "dataset_name": normalized_name,
+        }
+        existing = self.query_backed_dataset_bindings.get(normalized_id)
+        if existing is not None and existing != candidate:
+            raise DatusException(
+                ErrorCode.TOOL_INVALID_INPUT,
+                message=(
+                    f"Query-backed requirement {normalized_id!r} is already bound to dataset "
+                    f"{existing['dataset_name']!r}."
+                ),
+            )
+        self.query_backed_dataset_bindings[normalized_id] = candidate
+
+    def bind_metric_output_names(self, bindings: Optional[Iterable[Dict[str, Any]]]) -> None:
+        """Rewrite queryability contracts from SQL aliases to final published metric names."""
+        names_by_output_id: Dict[str, str] = {}
+        for binding in bindings or []:
+            if not isinstance(binding, dict):
+                continue
+            output_id = str(binding.get("output_id") or "").strip()
+            metric_name = str(binding.get("metric_name") or "").strip()
+            if output_id and metric_name:
+                names_by_output_id[output_id] = metric_name
+
+        for contract in self.metric_queryability_contracts:
+            output_ids = [
+                str(output_id).strip()
+                for output_id in contract.get("metric_output_ids") or []
+                if str(output_id).strip()
+            ]
+            if not output_ids or any(output_id not in names_by_output_id for output_id in output_ids):
+                continue
+            final_names = _deduplicate_preserve_order([names_by_output_id[output_id] for output_id in output_ids])
+            contract.setdefault("source_metric_hints", list(contract.get("metric_hints") or []))
+            contract["metric_hints"] = final_names
+            contract["metric_output_bindings"] = {output_id: names_by_output_id[output_id] for output_id in output_ids}
 
     def record_metric_dry_run(
         self,
@@ -221,14 +447,20 @@ class GenerationEvidence:
             return False
         return True
 
-    def mark_kb_sync(self, kind: str = "") -> None:
+    def has_metric_kb_sync(self, metric_names: Optional[Iterable[str]] = None) -> bool:
+        names = {str(name).strip() for name in (metric_names or []) if str(name).strip()}
+        if not names:
+            return False
+        return self.metric_kb_sync_passed and names.issubset(self.metric_kb_sync_metrics)
+
+    def mark_kb_sync(self, kind: str = "", metric_names: Optional[Iterable[str]] = None) -> None:
         if kind == "metric":
             self.metric_kb_sync_passed = True
+            self.metric_kb_sync_metrics.update(str(name).strip() for name in (metric_names or []) if str(name).strip())
         elif kind == "semantic":
             self.semantic_kb_sync_passed = True
         else:
             self.generic_kb_sync_passed = True
-        self.storage_revision += 1
 
 
 _GENERIC_DIMENSION_TOKENS = {"id", "key", "name", "dim", "dimension", "value"}

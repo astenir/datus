@@ -22,13 +22,15 @@ import signal
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from agents import Tool
 
+from datus.tools.func_tool import bash_sandbox
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
-from datus.tools.permission.bash_rules import split_pipeline
+from datus.tools.permission.bash_rules import contains_shell_metachars, split_pipeline
 from datus.utils.loggings import get_logger
 from datus.utils.tool_archive import build_archived_marker, make_single_line_preview
 
@@ -47,6 +49,20 @@ MAX_OUTPUT_SIZE = 50000
 BASH_ARCHIVE_THRESHOLD = 8000
 # Single-line preview length carried inline in the archive marker.
 BASH_ARCHIVE_PREVIEW_CHARS = 1000
+
+
+@dataclass(frozen=True)
+class BashExecutionContext:
+    """Per-invocation subprocess overrides produced after permission checks.
+
+    ``command`` is the internal command actually handed to Bash; callers and
+    logs continue to use the original command.  ``env`` is merged only into
+    this child process, never into process-global ``os.environ``.
+    """
+
+    command: str
+    env: Dict[str, str]
+    sandbox_read_dirs: List[str]
 
 
 class BashTool:
@@ -94,6 +110,9 @@ class BashTool:
         extra_env: Optional[Dict[str, str]] = None,
         identity: Optional[str] = None,
         output_dir_provider: Optional[Callable[[], Optional[Path]]] = None,
+        sandbox_settings: Optional[bash_sandbox.SandboxSettings] = None,
+        sandbox_read_dirs: Optional[List[str]] = None,
+        execution_context_provider: Optional[Callable[[str], Optional[BashExecutionContext]]] = None,
     ):
         """Initialize the bash tool.
 
@@ -114,6 +133,17 @@ class BashTool:
                 returns ``None``), output is captured in memory and truncated
                 at :data:`MAX_OUTPUT_SIZE` — the general-purpose fallback used
                 by MCP / standalone callers and tests.
+            sandbox_settings: Optional OS-sandbox settings SHARED with
+                ``AgentConfig`` — ``enabled`` is re-read on every call so
+                ``/sandbox on|off`` takes effect immediately. ``None`` means
+                the sandbox machinery is never engaged (legacy behavior).
+            sandbox_read_dirs: Extra read-only roots for the sandbox policy
+                beyond the built-in defaults (e.g. the datus home so skills
+                and templates stay readable).
+            execution_context_provider: Optional request-scoped callback run
+                after the original command passes pattern/permission checks.
+                It may return an internal command, child-only environment
+                values and validated per-call sandbox read roots.
         """
         self.workspace_root = Path(workspace_root).resolve()
         self.allowed_patterns = list(allowed_patterns) if allowed_patterns else []
@@ -121,6 +151,9 @@ class BashTool:
         self.extra_env = dict(extra_env) if extra_env else {}
         self.identity = identity
         self._output_dir_provider = output_dir_provider
+        self.sandbox_settings = sandbox_settings
+        self.sandbox_read_dirs = list(sandbox_read_dirs) if sandbox_read_dirs else []
+        self.execution_context_provider = execution_context_provider
         # Monotonic per-instance counter zero-padded into archive filenames so a
         # directory listing sorts in command-invocation order. Paired with a
         # per-instance random token so a recreated/resumed BashTool (which
@@ -183,23 +216,68 @@ class BashTool:
                 error=f"Command not allowed. Allowed patterns: {', '.join(self.allowed_patterns) or '(none)'}",
             )
 
+        sandbox_active = self._sandbox_active()
+        if sandbox_active and not bash_sandbox.is_available():
+            # Fail closed: with the sandbox switched on, running unprotected
+            # would silently drop the guarantee the user asked for.
+            logger.warning("Sandbox enabled but unavailable (identity=%s); command rejected", self.identity)
+            return FuncToolResult(
+                success=0,
+                error=(
+                    "Sandbox is enabled but no OS sandbox mechanism is available: "
+                    f"{bash_sandbox.unavailable_reason()}. The command was NOT executed. "
+                    "Install the missing mechanism or disable the sandbox (/sandbox off)."
+                ),
+            )
+
+        execution_context: Optional[BashExecutionContext] = None
+        if self.execution_context_provider is not None:
+            try:
+                execution_context = self.execution_context_provider(command)
+            except ValueError as exc:
+                return FuncToolResult(success=0, error=str(exc))
+            except Exception as exc:  # pragma: no cover - defensive provider boundary
+                logger.error("Failed to prepare command runtime context (identity=%s): %s", self.identity, exc)
+                return FuncToolResult(success=0, error="Failed to prepare command runtime context")
+
         effective_timeout = self._resolve_timeout(timeout)
+        spawn_command = execution_context.command if execution_context is not None else command
+        invocation_env = execution_context.env if execution_context is not None else None
+        runtime_read_dirs = execution_context.sandbox_read_dirs if execution_context is not None else []
 
         try:
-            argv = self._build_spawn_argv(command)
+            argv = self._build_spawn_argv(spawn_command)
         except ValueError as e:
             return FuncToolResult(success=0, error=f"Invalid command syntax: {e}")
 
         logger.info("Executing command (identity=%s, timeout=%ss): %s", self.identity, effective_timeout, command)
         output_dir = self._resolve_output_dir()
+        if sandbox_active:
+            policy = bash_sandbox.build_policy(
+                self.sandbox_settings,
+                workspace_root=self.workspace_root,
+                dynamic_write_dirs=[output_dir] if output_dir else [],
+                extra_read_dirs=self.sandbox_read_dirs,
+                runtime_read_dirs=runtime_read_dirs,
+            )
+            try:
+                argv = bash_sandbox.wrap_argv(argv, policy)
+            except bash_sandbox.SandboxUnavailableError as e:
+                return FuncToolResult(success=0, error=f"Sandbox wrapping failed; command NOT executed: {e}")
         try:
             if output_dir is not None:
                 # Preferred path: stream the child's output straight to disk so
                 # a huge output never buffers in memory; decide by file size
                 # afterwards. Timeout is handled inside so the partial file is
                 # still surfaced.
-                return self._execute_with_redirect(argv, command, output_dir, effective_timeout)
-            return self._execute_in_memory(argv, effective_timeout)
+                return self._execute_with_redirect(
+                    argv,
+                    command,
+                    output_dir,
+                    effective_timeout,
+                    invocation_env=invocation_env,
+                )
+            return self._execute_in_memory(argv, effective_timeout, invocation_env=invocation_env)
         except subprocess.TimeoutExpired:
             logger.error("Command timed out (identity=%s): %s", self.identity, command)
             return FuncToolResult(success=0, error=f"Command timed out after {effective_timeout} seconds")
@@ -228,15 +306,20 @@ class BashTool:
             cls._bash_path_resolved = True
         return cls._bash_path_cache
 
+    @staticmethod
+    def _resolve_python() -> Optional[str]:
+        executable = sys.executable or shutil.which("python3")
+        return os.path.realpath(executable) if executable else None
+
     def _shell_prefix(self) -> str:
         """Hardening prefix prepended to every ``bash -c`` command.
 
         - ``shopt -u extglob``: disable extended globs so a malicious filename
           can't expand into something unexpected after permission validation
           (mirrors Claude Code's bashProvider hardening).
-        - ``python`` shim: shadow ``python`` with the interpreter datus runs
-          under, preserving the legacy ``argv[0]=='python' -> sys.executable``
-          rewrite for environments where only ``python3`` exists.
+        - ``python`` shim: shadow ``python`` with the resolved interpreter
+          datus runs under, preserving the legacy ``argv[0]=='python'``
+          rewrite while avoiding virtualenv symlink paths hidden by a sandbox.
 
         NOTE: intentionally NO ``set -o pipefail`` — bash's default takes the
         LAST stage's exit code, matching Claude Code. pipefail would flag the
@@ -246,7 +329,7 @@ class BashTool:
         parts = [
             "shopt -u extglob 2>/dev/null || true",
         ]
-        py = sys.executable or shutil.which("python3")
+        py = self._resolve_python()
         if py:
             parts.append(f'python() {{ {shlex.quote(py)} "$@"; }}')
         return "; ".join(parts) + "; "
@@ -266,7 +349,7 @@ class BashTool:
         # Legacy fallback: no shell interpretation.
         argv = shlex.split(command)
         if argv and argv[0] == "python":
-            argv[0] = sys.executable or shutil.which("python3") or "python3"
+            argv[0] = self._resolve_python() or "python3"
         return argv
 
     def _resolve_output_dir(self) -> Optional[Path]:
@@ -292,7 +375,14 @@ class BashTool:
             return None
         return path
 
-    def _execute_with_redirect(self, argv: List[str], command: str, output_dir: Path, timeout: int) -> FuncToolResult:
+    def _execute_with_redirect(
+        self,
+        argv: List[str],
+        command: str,
+        output_dir: Path,
+        timeout: int,
+        invocation_env: Optional[Dict[str, str]] = None,
+    ) -> FuncToolResult:
         """Run the command with stdout/stderr redirected to a file on disk.
 
         stderr is merged into the stdout file (``stderr=STDOUT``) so interleaved
@@ -319,7 +409,7 @@ class BashTool:
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                env=self._get_safe_env(),
+                env=self._get_safe_env(invocation_env),
                 # New session/process group so a timeout can kill the whole
                 # pipeline (all stages), not just the bash launcher.
                 start_new_session=(os.name == "posix"),
@@ -384,7 +474,12 @@ class BashTool:
         except OSError:  # pragma: no cover - best effort cleanup
             pass
 
-    def _execute_in_memory(self, argv: List[str], timeout: int) -> FuncToolResult:
+    def _execute_in_memory(
+        self,
+        argv: List[str],
+        timeout: int,
+        invocation_env: Optional[Dict[str, str]] = None,
+    ) -> FuncToolResult:
         """Fallback path (no offload dir): capture output in memory + truncate."""
         proc = subprocess.Popen(
             argv,
@@ -393,7 +488,7 @@ class BashTool:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self._get_safe_env(),
+            env=self._get_safe_env(invocation_env),
             # Detach the child from the agent's stdin. Without this the child
             # inherits datus's terminal stdin and any command that reads it
             # (``cat``, ``read``, ``python`` awaiting input, an interactive
@@ -477,15 +572,24 @@ class BashTool:
 
         A segment containing non-pipe shell metacharacters (chaining, command
         substitution, redirection) is rejected — the whitelist speaks about
-        one command, not a compound expression.
+        one command, not a compound expression. The check runs on the RAW
+        segment string (same regex as the permission safety ceiling), so
+        unspaced forms (``datus x;rm y``, ``datus $(rm y)``) and quoted
+        metacharacters are rejected alike: commands run through a real shell
+        where quoting-aware per-token inspection cannot be made safe.
         """
+        if contains_shell_metachars(segment):
+            return False
         try:
             parts = shlex.split(segment)
         except ValueError:
             return False
         if not parts:
             return False
-        if any(tok in ("&&", "||", ";", "|", "&", "`", "$(", ">", "<") for tok in parts):
+        # Belt-and-suspenders for the one metacharacter the raw check skips:
+        # a stray top-level ``|`` token can't appear (split_pipeline consumed
+        # them), but keep rejecting it in case a caller bypasses the split.
+        if any(tok in ("|", "&&", "||", ";", "&", "`", "$(", ">", "<") for tok in parts):
             return False
         base_cmd = parts[0]
         return any(self._matches_pattern(segment, base_cmd, pattern) for pattern in self.allowed_patterns)
@@ -527,15 +631,30 @@ class BashTool:
 
         return False
 
-    def _get_safe_env(self) -> dict:
+    def _sandbox_active(self) -> bool:
+        return self.sandbox_settings is not None and self.sandbox_settings.enabled
+
+    def _get_safe_env(self, invocation_env: Optional[Dict[str, str]] = None) -> dict:
         """Build the environment for command execution.
 
         Starts from ``os.environ`` and overlays ``self.extra_env`` so callers
         can inject context-specific variables (Skill name/dir, request ID, ...).
+
+        With the sandbox in strict mode the base environment is reduced to
+        :data:`bash_sandbox.STRICT_ENV_ALLOWLIST` — the OS sandbox cannot
+        stop a command from reading its own inherited environment, so
+        process-wide secrets (LLM API keys, DB passwords) must never enter
+        it in a multi-tenant deployment. ``extra_env`` still applies: it is
+        the caller's deliberate, per-tool injection.
         """
-        env = os.environ.copy()
+        if self._sandbox_active() and self.sandbox_settings.is_strict:
+            env = bash_sandbox.strict_env(os.environ)
+        else:
+            env = os.environ.copy()
         if self.extra_env:
             env.update(self.extra_env)
+        if invocation_env:
+            env.update(invocation_env)
         return env
 
     def available_tools(self) -> List[Tool]:
@@ -544,8 +663,18 @@ class BashTool:
         Returns an empty list when no patterns are configured, so callers
         that opt out of bash execution simply omit the tool. Callers that
         want an "unrestricted" tool (gated only by ``PermissionManager``)
-        should pass ``allowed_patterns=["*"]``.
+        should pass ``allowed_patterns=["*"]``. A restrictive whitelist is
+        surfaced in the tool description so the model doesn't waste turns
+        probing disallowed commands.
         """
         if not self.allowed_patterns:
             return []
-        return [trans_to_function_tool(self.bash)]
+        tool = trans_to_function_tool(self.bash)
+        if "*" not in self.allowed_patterns:
+            tool.description = (
+                f"{tool.description}\n\nRestricted mode: only commands matching these patterns "
+                f"are allowed: {', '.join(self.allowed_patterns)}. Any other command "
+                f"(including pipelines mixing in other commands, chaining, command "
+                f"substitution or redirection) is rejected."
+            )
+        return [tool]

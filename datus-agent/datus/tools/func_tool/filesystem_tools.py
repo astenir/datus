@@ -2,10 +2,11 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import inspect
 import os
 import re
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Callable, Iterator, List, Optional
 
 from agents import Tool
 from wcmatch import glob as wc_glob
@@ -13,9 +14,11 @@ from wcmatch import glob as wc_glob
 from datus.tools import BaseTool
 from datus.tools.func_tool import FuncToolResult
 from datus.tools.func_tool.fs_path_policy import (
+    PathAllowlist,
     PathZone,
     ResolvedPath,
     classify_path,
+    strict_mode_rejection_message,
     whitelist_anchors,
 )
 from datus.utils.loggings import get_logger
@@ -82,6 +85,9 @@ class FilesystemFuncTool(BaseTool):
         session_data_dir: Optional[str] = None,
         protect_artifact_paths: bool = False,
         global_skills_read_only: bool = False,
+        path_allowlist: Optional[PathAllowlist] = None,
+        mutation_callback: Optional[Callable[..., None]] = None,
+        mutation_guard: Optional[Callable[[Path], None]] = None,
         **kwargs,
     ):
         """
@@ -107,6 +113,12 @@ class FilesystemFuncTool(BaseTool):
                 remains readable but cannot be written, edited, or deleted by
                 this tool. Project/user workspace skills keep their normal
                 write policy.
+            path_allowlist: Operator-configured roots outside the project root
+                (``agent.filesystem.allow_read`` / ``allow_write``) that count
+                as WHITELIST rather than EXTERNAL. This is how a deployment
+                grants access to a shared directory mounted next to the
+                workspace — e.g. an Airflow DAGs folder — without turning
+                ``strict`` off.
         """
         super().__init__(**kwargs)
         self.root_path = root_path or os.getcwd()
@@ -118,6 +130,34 @@ class FilesystemFuncTool(BaseTool):
         self._session_data_dir = Path(session_data_dir).expanduser().resolve(strict=False) if session_data_dir else None
         self._protect_artifact_paths = protect_artifact_paths
         self._global_skills_read_only = global_skills_read_only
+        self._path_allowlist = path_allowlist
+        self._mutation_callback = mutation_callback
+        self._mutation_guard = mutation_guard
+
+    def _notify_mutation(self, path: Optional[Path] = None) -> None:
+        callback = self._mutation_callback
+        if callback is None:
+            return
+        try:
+            signature = inspect.signature(callback)
+        except (TypeError, ValueError):
+            callback(path)
+            return
+        try:
+            signature.bind(path)
+        except TypeError:
+            callback()
+        else:
+            callback(path)
+
+    def _mutation_guard_error(self, path: Path) -> Optional[FuncToolResult]:
+        if self._mutation_guard is None:
+            return None
+        try:
+            self._mutation_guard(path)
+        except Exception as exc:
+            return FuncToolResult(success=0, error=str(exc))
+        return None
 
     @property
     def strict(self) -> bool:
@@ -173,6 +213,7 @@ class FilesystemFuncTool(BaseTool):
             current_node=self._current_node,
             datus_home=self._datus_home,
             session_data_dir=self._session_data_dir,
+            allowlist=self._path_allowlist,
         )
         return artifact_scope.apply_global_skills_read_only(
             resolved,
@@ -201,13 +242,18 @@ class FilesystemFuncTool(BaseTool):
 
         Unlike ``_not_found``, this is explicit: the caller **asked** for a
         path outside the workspace, so hiding the rejection would be
-        confusing. The error message names the path so the LLM can fix it
-        on the next turn. Used by the API / gateway surfaces that have no
-        interactive broker to prompt the user.
+        confusing. The error message names both the path and the roots that
+        *are* reachable so the LLM can retarget on the next turn. Used by the
+        API / gateway surfaces that have no interactive broker to prompt the
+        user.
         """
         return FuncToolResult(
             success=0,
-            error=f"Path outside workspace is not allowed in strict mode: {resolved.display}",
+            error=strict_mode_rejection_message(
+                resolved.display,
+                root_path=self._root_resolved,
+                allowlist=self._path_allowlist,
+            ),
         )
 
     def _artifact_protection_active(self) -> bool:
@@ -365,10 +411,14 @@ class FilesystemFuncTool(BaseTool):
             # must be able to emit any text artifact (shell/infra/scala/etc.).
             # Zone, read-only and strict-external gating above still apply.
             target_path = resolved.resolved
+            guard_error = self._mutation_guard_error(target_path)
+            if guard_error is not None:
+                return guard_error
 
             try:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(content, encoding="utf-8")
+                self._notify_mutation(target_path)
                 return FuncToolResult(result=f"File written successfully: {resolved.display}")
             except PermissionError:
                 return FuncToolResult(success=0, error=f"Permission denied: {resolved.display}")
@@ -409,6 +459,9 @@ class FilesystemFuncTool(BaseTool):
                 return self._read_only_reject(resolved)
 
             target_path = resolved.resolved
+            guard_error = self._mutation_guard_error(target_path)
+            if guard_error is not None:
+                return guard_error
             if not target_path.exists():
                 return FuncToolResult(success=0, error=f"File not found: {resolved.display}")
             if target_path.is_dir():
@@ -427,6 +480,7 @@ class FilesystemFuncTool(BaseTool):
 
             try:
                 target_path.unlink()
+                self._notify_mutation(target_path)
                 return FuncToolResult(result=f"File deleted successfully: {resolved.display}")
             except PermissionError:
                 return FuncToolResult(success=0, error=f"Permission denied: {resolved.display}")
@@ -467,6 +521,9 @@ class FilesystemFuncTool(BaseTool):
                 return self._read_only_reject(resolved)
 
             target_path = resolved.resolved
+            guard_error = self._mutation_guard_error(target_path)
+            if guard_error is not None:
+                return guard_error
             if not target_path.exists():
                 return FuncToolResult(success=0, error=f"File not found: {resolved.display}")
 
@@ -483,6 +540,7 @@ class FilesystemFuncTool(BaseTool):
                     return FuncToolResult(success=0, error=error)
 
                 target_path.write_text(new_content, encoding="utf-8")
+                self._notify_mutation(target_path)
                 return FuncToolResult(result=f"File edited successfully: {resolved.display}")
             except UnicodeDecodeError:
                 return FuncToolResult(success=0, error=f"Cannot edit binary file: {resolved.display}")
@@ -573,6 +631,7 @@ class FilesystemFuncTool(BaseTool):
             current_node=self._current_node,
             datus_home=self._datus_home,
             session_data_dir=self._session_data_dir,
+            allowlist=self._path_allowlist,
         )
 
         def has_whitelisted_descendant(directory: Path) -> bool:
@@ -639,6 +698,7 @@ class FilesystemFuncTool(BaseTool):
                                 current_node=self._current_node,
                                 datus_home=self._datus_home,
                                 session_data_dir=self._session_data_dir,
+                                allowlist=self._path_allowlist,
                             )
                             if self._is_protected_artifact_path(item_resolved_path):
                                 continue
@@ -908,6 +968,7 @@ def filesystem_function_tools(
     current_node: Optional[str] = None,
     strict: bool = False,
     session_data_dir: Optional[str] = None,
+    path_allowlist: Optional[PathAllowlist] = None,
 ) -> List[Tool]:
     """Get filesystem function tools"""
     return FilesystemFuncTool(
@@ -915,4 +976,5 @@ def filesystem_function_tools(
         current_node=current_node,
         strict=strict,
         session_data_dir=session_data_dir,
+        path_allowlist=path_allowlist,
     ).available_tools()

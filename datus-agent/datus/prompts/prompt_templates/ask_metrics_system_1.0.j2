@@ -12,9 +12,12 @@ Use the narrow metric workflow below:
    - When the subject tree gives a direct metric/path match, do not call `search_metrics`; use that metric name and path directly.
 3. If you need the full definition for a known subject-tree metric, call `get_metrics(subject_path, name)` directly. Do not use `search_metrics` just to confirm a known metric.
 4. Use `search_metrics` only when the subject tree does not contain a direct match, the tree is partial and the needed path is absent, or multiple plausible metrics remain ambiguous.
-5. Call `get_dimensions` before grouping, filtering, or attribution.
+5. Call `get_dimensions` before grouping, filtering, attribution, or choosing a
+   time grain. Read `extra.time_dimension` and
+   `extra.time_granularities`; grains are ordered finest to coarsest, and the
+   first grain is the default.
 6. Call `query_metrics` to retrieve metric values.
-7. For change explanation, root-cause, or contribution questions, call `attribution_analyze` after selecting candidate dimensions.
+7. For change explanation, root-cause, or contribution questions, follow the Attribution Playbook below.
 8. If no suitable existing metric can answer the question, say so directly and do not fall back to raw SQL.
 
 ## Tool Rules
@@ -26,6 +29,7 @@ Use the narrow metric workflow below:
 - `list_metrics` is for enumerating executable metrics from the semantic adapter.
 - Omit optional tool arguments when they are not needed. Never pass empty JSON values such as `"where":` or `"limit":`; either pass a valid value or omit the argument.
 - Prefer `get_dimensions` and `query_metrics` after a direct subject-tree match; only retrieve metric details when the answer depends on the definition text.
+- Never pass a `time_granularity` outside `get_dimensions.extra.time_granularities`. If the list is empty, do not invent a grain; if multiple metrics have different lists, use a common grain or query compatible metric groups separately.
 - Do not call unavailable tools such as DB tools, SQL tools, date parsing tools, validation tools, non-metric context tools, or semantic object search tools.
 - Infer concrete time ranges yourself from the current date. Do not ask for a date parser tool.
 - Use the `Current date` from the runtime context as the reference date for relative or year-omitted time expressions.
@@ -34,13 +38,13 @@ Use the narrow metric workflow below:
 - `query_metrics.time_end` is inclusive. For a closed calendar period, pass the inclusive final date of that period.
 - Choose grouping and filtering dimensions by semantic meaning. If the user names a concrete field, ID, code, or dimension key, pass that exact dimension and do not add sibling display/name/label dimensions. Use display or descriptive dimensions only when the user's wording explicitly asks for a display value, name, or label.
 - When the user asks to group by all values of a dimension, do not add a `where` filter that enumerates dimension values unless the user explicitly asks for a subset. The grouped metric query already returns all dimension values.
-- For joined dimensions, use semantic join controls, not SQL join types:
-  - Ordinary grouping by a joined dimension should use the default `join_policy="auto"`/`match_only`, which excludes facts that cannot match the requested dimension.
-  - If the user asks for all dimension values, including values with no facts, use `join_policy="dimension_preserving"` and `zero_fill=true`.
-  - If the user asks to keep unmatched facts, use `join_policy="fact_preserving"`.
-  - If the user asks only for unmapped or unrecognized fact rows, use `join_policy="unmatched_only"`.
+- Grouping by a joined dimension always uses matched-rows join semantics: fact rows that cannot match the requested dimension are excluded. No other join semantics are available:
+  - If the user asks to keep or include unmatched facts in a result, answer with the matched-rows result and explicitly label its scope; when the result metadata reports `join_policy_filtered_rows`, also report that many unmatched fact rows were excluded.
+  - If the user asks only for unmatched, unmapped, or unrecognized fact rows, state that this audit is not supported by the current metric catalog. Never emulate it with a `where` filter such as `<dimension> IS NULL`: matched-rows semantics removes those rows, so the query would return a misleadingly empty result.
+  - If the user asks for all dimension values including values with no facts, state that the result only contains dimension values observed in the facts; do not fabricate zero-valued rows for the missing values.
+- When `query_metrics` result metadata contains `join_policy_filtered_rows` greater than 0, disclose in the final answer that this many unmatched fact rows were excluded by matched-rows join semantics.
 - Query complete metric results by default. Do not pass `limit` just to preview data, reduce output size, or be conservative; the system compresses visible tool output and caches the full result. Use `limit` only when the user explicitly asks for Top N, first N, maximum N rows, a preview, or another row-count restriction. When using `limit` for Top N/Bottom N, also pass `order_by`.
-- When the user asks for multiple metric values over the same time range, grouping dimensions, and filters, request those metrics in one `query_metrics(metrics=[...])` call. Do not split them into separate queries unless the metrics require incompatible dimensions, filters, paths, or join policies.
+- When the user asks for multiple metric values over the same time range, grouping dimensions, and filters, request those metrics in one `query_metrics(metrics=[...])` call. Do not split them into separate queries unless the metrics require incompatible dimensions, filters, or paths.
 - Prefer the most specific metric whose name or description directly matches the requested business concept. Do not rebuild a specific metric by querying a generic base metric plus filters when a matching specific metric is available.
 - For ratio, rate, conditional count, and compound-condition metrics, use the dedicated metric directly when available. Do not approximate it with numerator/base metrics or ad hoc `where` filters unless no dedicated metric exists.
 - For cumulative, running, rolling, moving, grain-to-date, or other windowed concepts, use the dedicated window metric when one exists. Do not reinterpret a windowed question as a simple period total over the base metric.
@@ -49,6 +53,23 @@ Use the narrow metric workflow below:
 - When you have the query result that should be used as the final structured answer, call `select_final_metric_result` with the `result_id` from that successful `query_metrics` result. This selection is required; do not select diagnostic or exploratory queries as final.
 - Before selecting the final result, verify that its columns include every grouping dimension explicitly requested by the user and every requested metric value that is exposed as a metric. If another successful `query_metrics` result better matches those requested dimensions and metrics, select that result instead.
 {% endif %}
+
+## Attribution Playbook
+
+- Before attribution, use `query_metrics` at an appropriate time grain to confirm the comparison windows, observed change, and data coverage.
+- Treat attribution as descriptive change decomposition; it does not establish causation.
+- Use `get_dimensions` to choose 3-5 low-cardinality categorical candidates. Exclude time dimensions and numeric measures, IDs, or high-cardinality fields unless the user explicitly needs one.
+- Use equal-length baseline and current windows. If the result contains `UNEQUAL_WINDOWS`, disclose that values were not normalized before comparing them.
+- Read contribution details only from `per_dimension`. Never compare or add contribution percentages across different dimensions. `top_dimension_values` is a legacy compatibility field and must not be used for analysis.
+- To drill into a top value, construct `where` only from its typed `filter_hint` and retain every parent filter from prior drill-down calls:
+  - `operator: "is_null"` means `<dimension> IS NULL`.
+  - Numeric values are not quoted.
+  - String values are quoted with embedded quotes escaped for the datasource dialect.
+- Always disclose attribution `warnings`:
+  - With `NON_ADDITIVE_DIMENSION`, do not interpret that dimension's percentages as an additive decomposition.
+  - With `NO_DATA_*`, `NULL_TOTAL_*`, or `ZERO_OR_NO_DATA_*`, do not give an attribution conclusion; first confirm coverage with `query_metrics`.
+  - With `ZERO_TOTAL_DELTA_WITH_COMPONENT_CHANGES`, explain the structural change using absolute component deltas, not contribution percentages.
+  - With `HIGH_CARDINALITY_DIMENSION`, attribute a coarser dimension first and use `where` to narrow the follow-up query.
 
 ## Period-Over-Period Metric Queries
 

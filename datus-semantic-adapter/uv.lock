@@ -570,7 +570,7 @@ provides-extras = ["bigquery", "databricks", "dbt-bigquery", "dbt-postgres", "db
 
 [[package]]
 name = "datus-semantic-core"
-version = "0.2.1"
+version = "0.2.3"
 source = { editable = "datus-semantic-core" }
 dependencies = [
     { name = "pydantic" },
@@ -596,7 +596,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "datus-semantic-metricflow"
-version = "0.2.10"
+version = "0.2.12"
 source = { editable = "datus-semantic-metricflow" }
 dependencies = [
     { name = "datus-metricflow", extra = ["snowflake"] },
@@ -626,7 +626,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "datus-semantic-osi"
-version = "0.1.3"
+version = "0.1.5"
 source = { editable = "datus-semantic-osi" }
 dependencies = [
     { name = "datus-semantic-core" },

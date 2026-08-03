@@ -112,7 +112,7 @@ def collect_ref_diff(repo_root: Path, base_ref: str, target_ref: str) -> DiffRes
 
 
 def collect_worktree_diff(repo_root: Path, base_ref: str) -> DiffResult:
-    git_dir = Path(run_git(repo_root, "rev-parse", "--absolute-git-dir"))
+    git_common_dir = Path(run_git(repo_root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     with tempfile.TemporaryDirectory(prefix="datus-upstream-diff-") as temp_dir_text:
         temp_dir = Path(temp_dir_text)
         object_dir = temp_dir / "objects"
@@ -123,7 +123,7 @@ def collect_worktree_diff(repo_root: Path, base_ref: str) -> DiffResult:
                 "GIT_INDEX_FILE": str(temp_dir / "index"),
                 "GIT_WORK_TREE": str(repo_root),
                 "GIT_OBJECT_DIRECTORY": str(object_dir),
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_dir / "objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_common_dir / "objects"),
             }
         )
         run_git(repo_root, "read-tree", base_ref, env=env)

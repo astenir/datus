@@ -13,13 +13,9 @@ tools, template rendering, and action history.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import uuid
-import weakref
 from contextlib import nullcontext
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
@@ -36,7 +32,8 @@ from datus.schemas.action_history import (
     ActionStatus,
 )
 from datus.schemas.agent_models import ScopedContext, SubAgentConfig
-from datus.tools.func_tool.base import FuncToolResult
+from datus.schemas.at_context import apply_at_context
+from datus.tools.func_tool.base import FuncToolResult, parse_tool_args, write_back_tool_args
 from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.loggings import get_logger
 from datus.utils.memory_loader import resolve_memory_node
@@ -48,8 +45,6 @@ if TYPE_CHECKING:
     from datus.schemas.base import BaseInput
 
 logger = get_logger(__name__)
-
-_SEMANTIC_AUTHORING_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
@@ -84,10 +79,12 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "sample data, date context\n"
         "    Prompt example: 'Explore schema for tables related to sales: "
         "list tables, describe columns, sample 10 rows'\n"
-        "  * Knowledge: business metrics, reference SQL patterns, "
-        "domain knowledge, semantic objects\n"
-        "    Prompt example: 'Search knowledge base for sales-related metrics, "
-        "reference SQL, and business rules'\n"
+        "  * Knowledge: look up *definitions* and reference material in the "
+        "knowledge base — metric definitions, reference SQL patterns, domain "
+        "rules, semantic objects. Definition/context lookup only; it does not "
+        "compute metric values or produce an analytical deliverable.\n"
+        "    Prompt example: 'Search knowledge base for the definitions of "
+        "sales-related metrics, reference SQL, and business rules'\n"
         "  * File: workspace SQL files, documentation, configuration files\n"
         "    Prompt example: 'Browse workspace for SQL files and documentation "
         "related to sales'\n"
@@ -118,6 +115,11 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "for a *report* with charts/tables, a dashboard, or any answer that benefits "
         "from persisted SQL + rendered visualisations (the artifact is consumed by "
         "Datus-CLI HTML export and Datus-SaaS dynamic iframe renderer). "
+        "When the user wants a report driven by existing or defined metrics / KPIs "
+        "(names specific metrics, or asks for it to be 'based on metrics / 基于指标'), "
+        "this subagent is the right owner: it holds the semantic-layer tools "
+        "(list_metrics / query_metrics) and dry-runs the canonical metric SQL as the "
+        "build baseline. "
         "Prompt: provide the analytical question and any context (time range, scope, "
         "metrics of interest); the agent will discover data, save queries via save_query, "
         "write_file the render/*.jsx components, then finalize with validate_render. "
@@ -133,7 +135,13 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "filter values and executes it live against the bound datasource. "
         "Use this whenever the user asks for an interactive dashboard with filters "
         "(date range, region, segment, etc.) that should re-query data on demand, "
-        "instead of a one-shot pre-baked report. The subagent picks a fresh slug "
+        "instead of a one-shot pre-baked report. "
+        "When the user wants the dashboard driven by existing or defined metrics / KPIs "
+        "(names specific metrics, or asks for it to be 'based on metrics / 基于指标'), "
+        "this subagent is the right owner: it holds the semantic-layer tools "
+        "(list_metrics / query_metrics) and dry-runs the canonical metric SQL as the "
+        "build baseline. "
+        "The subagent picks a fresh slug "
         "via start_new_dashboard (or reuses one via bind_existing_dashboard), "
         "persists each query via save_query_template, write_file's the render/*.jsx "
         "components, then finalizes with validate_render. "
@@ -304,10 +312,13 @@ class SubAgentTaskTool:
         }
 
         async def _invoke(_tool_ctx, args_str) -> dict:
-            try:
-                args = json.loads(args_str) if isinstance(args_str, str) else dict(args_str or {})
-            except (TypeError, json.JSONDecodeError):
-                return FuncToolResult(success=0, error="Invalid JSON arguments for task tool").model_dump()
+            args, canonical_json, error = parse_tool_args(
+                args_str,
+                tool_name="task",
+            )
+            write_back_tool_args(_tool_ctx, canonical_json)
+            if error:
+                return FuncToolResult(success=0, error=error).model_dump()
             # Resolve parent call_id from SDK ToolContext for action linking
             call_id = getattr(_tool_ctx, "tool_call_id", None) if _tool_ctx else None
             result = await self.task(call_id=call_id, **args)
@@ -342,79 +353,12 @@ class SubAgentTaskTool:
             return FuncToolResult(success=0, error="Missing required parameter: prompt")
 
         try:
-            normalized_type = type.strip().strip("\"'") if isinstance(type, str) else type
-            semantic_types = {"gen_semantic_model", "gen_metrics"}
-            if normalized_type in semantic_types and normalized_type in self._get_available_types():
-                lock = self._semantic_authoring_lock()
-                async with lock:
-                    if normalized_type == "gen_metrics":
-                        precondition = self._osi_metric_precondition()
-                        if precondition is not None:
-                            return precondition
-                    return await self._execute_node(
-                        normalized_type,
-                        prompt,
-                        description=description,
-                        call_id=call_id,
-                        session_id=session_id,
-                    )
-
             return await self._execute_node(
                 type, prompt, description=description, call_id=call_id, session_id=session_id
             )
         except Exception as e:
             logger.error(f"Task tool execution error (type={type}): {e}")
             return FuncToolResult(success=0, error=f"Task execution failed: {str(e)}")
-
-    def _semantic_authoring_lock_key(self) -> str:
-        """Serialize semantic authoring tasks for one project datasource."""
-        path_manager = getattr(self.agent_config, "path_manager", None)
-        project_root = getattr(path_manager, "project_root", "")
-        datasource = str(getattr(self.agent_config, "current_datasource", "") or "default")
-        try:
-            project_key = str(Path(project_root).expanduser().resolve(strict=False))
-        except TypeError:
-            project_key = str(project_root)
-        return f"{project_key}:{datasource}"
-
-    def _semantic_authoring_lock(self) -> asyncio.Lock:
-        """Return the event-loop shared lock for one project datasource."""
-        loop = asyncio.get_running_loop()
-        loop_locks = _SEMANTIC_AUTHORING_LOCKS.setdefault(loop, {})
-        return loop_locks.setdefault(self._semantic_authoring_lock_key(), asyncio.Lock())
-
-    def _osi_metric_precondition(self) -> Optional[FuncToolResult]:
-        """Require the OSI domain model before starting the metric subagent."""
-        from datus.agent.node.semantic_authoring import (
-            default_osi_semantic_model_file,
-            is_osi_authoring,
-        )
-
-        if not is_osi_authoring(self.agent_config):
-            return None
-
-        path_manager = getattr(self.agent_config, "path_manager", None)
-        project_root = getattr(path_manager, "project_root", None)
-        if project_root is None:
-            return None
-
-        target = Path(project_root) / default_osi_semantic_model_file(self.agent_config)
-        if target.is_file():
-            return None
-
-        return FuncToolResult(
-            success=0,
-            error=(
-                "OSI semantic model is required before metric generation. "
-                "Run gen_semantic_model first, wait for it to finish, then retry gen_metrics."
-            ),
-            result={
-                "code": "semantic_model_required",
-                "required_subagent": "gen_semantic_model",
-                "semantic_model_file": str(target),
-                "retry_subagent": "gen_metrics",
-            },
-        )
 
     # ── node creation ─────────────────────────────────────────────────
 
@@ -737,6 +681,35 @@ class SubAgentTaskTool:
                     if hasattr(h, "broker"):
                         h.broker = broker
 
+    def _inherit_pending_input_queue(self, node: "AgenticNode") -> None:
+        """Share the parent's pending-input queue with a sub-agent node.
+
+        ``call_model_input_filter`` drains the queue on the node that owns it,
+        once per LLM turn. Without this the queue stays with the parent while a
+        sub-agent holds the floor, so a mid-run insert — "the chart you just
+        wrote throws on render, fix it" — only reaches the model after the
+        sub-agent has already returned and delivered its broken artifact.
+
+        The queue is thread-safe and :meth:`PendingInputQueue.drain` empties it,
+        so parent and sub-agent holding one shared reference can never
+        double-deliver an item; whichever loop reaches its next turn first
+        consumes it.
+
+        Two consequences of that "first turn wins" rule, both accepted:
+
+        * Sharing is not scoped to artifact fixes. Any mid-run insert — even one
+          aimed at the parent ("stop, try another angle") — is consumed by a
+          sub-agent that happens to be holding the floor. Steering the loop that
+          is actually running is the intended reading of a mid-run message, and
+          the parent still sees the text on its own next turn via the session.
+        * With several sub-agents started in one parent turn, which of them
+          picks the item up is not deterministic. Still strictly better than the
+          old behaviour, where the item always waited out the full round trip.
+        """
+        parent_queue = getattr(self._parent_node, "pending_input_queue", None)
+        if parent_queue is not None:
+            node.pending_input_queue = parent_queue
+
     # ── execution via execute_stream ───────────────────────────────────
 
     async def _execute_node(
@@ -877,6 +850,8 @@ class SubAgentTaskTool:
             # avoid dual-consuming the same broker.fetch() stream.
             if self._interaction_broker is not None:
                 self._inject_broker(node, self._interaction_broker)
+
+            self._inherit_pending_input_queue(node)
 
             # Propagate proxy tool config from parent node so sub-agent tools are
             # also proxied.  Uses the parent's tool_channel so stdin dispatch can
@@ -1102,7 +1077,47 @@ class SubAgentTaskTool:
                     tools.extend(ask_user_tool.available_tools())
 
     def _build_node_input(self, node, prompt: str, db_ctx: Optional[Dict[str, Optional[str]]] = None):
-        """Build the appropriate input object for the given node.
+        """Build the subagent input and attach inherited DB + @-context.
+
+        Delegates type dispatch to :meth:`_build_typed_subagent_input`, then
+        threads the parent node's resolved @-context (schemas / metrics /
+        reference_sql / external_knowledge) through the single
+        :func:`apply_at_context` choke point, so a ``task()``-spawned subagent
+        sees the same @Table/@Metric/@Sql references the parent turn carried.
+        """
+        node_input = self._build_typed_subagent_input(node, prompt, db_ctx=db_ctx)
+        at_ctx = self._parent_at_context()
+        node_input = apply_at_context(
+            node_input,
+            schemas=at_ctx.get("schemas"),
+            metrics=at_ctx.get("metrics"),
+            reference_sql=at_ctx.get("reference_sql"),
+            external_knowledge=at_ctx.get("external_knowledge"),
+            context_hints=at_ctx.get("context_hints"),
+        )
+        return node_input
+
+    def _parent_at_context(self) -> Dict[str, Any]:
+        """Resolved @-context (schemas/metrics/reference_sql/knowledge) the parent carries.
+
+        Mirrors :meth:`_parent_db_context`: reads the parent node's ``input`` so a
+        subagent inherits the same @-references. Empty when there is no parent or
+        the parent input declares none.
+        """
+        parent = self._parent_node
+        if parent is None:
+            return {}
+        parent_input = getattr(parent, "input", None)
+        return {
+            "schemas": getattr(parent_input, "schemas", None),
+            "metrics": getattr(parent_input, "metrics", None),
+            "reference_sql": getattr(parent_input, "reference_sql", None),
+            "external_knowledge": getattr(parent_input, "external_knowledge", None) or None,
+            "context_hints": getattr(parent_input, "context_hints", None),
+        }
+
+    def _build_typed_subagent_input(self, node, prompt: str, db_ctx: Optional[Dict[str, Optional[str]]] = None):
+        """Build the node-type-specific subagent input (DB context only, no @-context).
 
         The subagent inherits the parent node's resolved physical ``database`` (and
         ``catalog``/``db_schema`` where supported) via :meth:`_parent_db_context`; without
@@ -1236,19 +1251,28 @@ class SubAgentTaskTool:
         to a later task() call.
         """
 
-        def _failure(error_msg: str) -> FuncToolResult:
+        def _failure(error_msg: str, output_payload: Optional[Dict[str, Any]] = None) -> FuncToolResult:
             # Carry session_id under `result` so the parent can resume the
             # partial subagent session. ``result`` is None when no session
             # was created (e.g. errors raised before node construction).
-            result_payload = {"session_id": session_id} if session_id else None
-            return FuncToolResult(success=0, error=error_msg, result=result_payload)
+            result_payload = {
+                key: output_payload[key]
+                for key in ("status", "blocker_code", "skip_reason", "response", "semantic_models", "tokens_used")
+                if output_payload is not None and key in output_payload
+            }
+            if session_id:
+                result_payload["session_id"] = session_id
+            return FuncToolResult(success=0, error=error_msg, result=result_payload or None)
 
         if not output or not isinstance(output, dict):
             return _failure("No result from subagent")
 
         # Check for explicit failure from subagent
         if output.get("success") is False:
-            return _failure(output.get("error") or output.get("response") or output.get("content", "Subagent failed"))
+            return _failure(
+                output.get("error") or output.get("response") or output.get("content", "Subagent failed"),
+                output,
+            )
 
         response = output.get("response", "")
         tokens = output.get("tokens_used", 0)
@@ -1286,13 +1310,15 @@ class SubAgentTaskTool:
         # Semantic model result: has 'semantic_models' key
         semantic_models = output.get("semantic_models")
         if semantic_models is not None:
-            return _wrap(
-                {
-                    "response": response,
-                    "semantic_models": semantic_models,
-                    "tokens_used": tokens,
-                }
+            result_dict = {
+                "response": response,
+                "semantic_models": semantic_models,
+                "tokens_used": tokens,
+            }
+            result_dict.update(
+                {key: output[key] for key in ("status", "blocker_code", "skip_reason") if output.get(key) is not None}
             )
+            return _wrap(result_dict)
 
         # SQL summary result: has 'sql_summary_file' key
         sql_summary_file = output.get("sql_summary_file")

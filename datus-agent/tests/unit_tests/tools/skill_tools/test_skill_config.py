@@ -260,7 +260,7 @@ class TestPluginSkillDirectories:
         legacy_dir.mkdir()
         builtin_dir = tmp_path / "builtin_skills"
         builtin_dir.mkdir()
-        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda: [str(plugin_dir)])
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda *a, **k: [str(plugin_dir)])
         _patch_entry_points(monkeypatch, [_FakeEntryPoint("mwaa", str(legacy_dir))])
         monkeypatch.setattr("datus.tools.skill_tools.skill_config._builtin_skills_dir", lambda: str(builtin_dir))
 
@@ -275,14 +275,14 @@ class TestPluginSkillDirectories:
         shared = tmp_path / "shared_skills"
         shared.mkdir()
         # Same dir contributed by both a plugin and a legacy adapter appears once.
-        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda: [str(shared)])
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda *a, **k: [str(shared)])
         _patch_entry_points(monkeypatch, [_FakeEntryPoint("mwaa", str(shared))])
         assert _default_skill_directories().count(str(shared)) == 1
 
     def test_from_dict_appends_plugin_dirs(self, monkeypatch, tmp_path):
         plugin_dir = tmp_path / "plugin_skills"
         plugin_dir.mkdir()
-        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda: [str(plugin_dir)])
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda *a, **k: [str(plugin_dir)])
         _patch_entry_points(monkeypatch, [])
         config = SkillConfig.from_dict({"directories": ["/my/skills"]})
         assert config.directories[0] == "/my/skills"
@@ -297,6 +297,62 @@ class TestPluginSkillDirectories:
         # Must not raise; falls back to the non-plugin default order.
         dirs = _default_skill_directories()
         assert dirs[:2] == ["./.datus/skills", "~/.datus/skills"]
+
+    def test_request_agent_config_is_authoritative(self, monkeypatch, tmp_path):
+        """AuthProvider config must win over process/CWD plugin activation."""
+        tenant_a_dir = tmp_path / "tenant-a-skills"
+        tenant_b_dir = tmp_path / "tenant-b-skills"
+        tenant_a_dir.mkdir()
+        tenant_b_dir.mkdir()
+        calls = []
+
+        def plugin_dirs(*, active_names):
+            calls.append(active_names)
+            return [str(tenant_a_dir)] if active_names == {"tenant-a"} else [str(tenant_b_dir)]
+
+        class RuntimeConfig:
+            plugins_enabled = True
+
+            def __init__(self, active_names):
+                self._active_names = active_names
+
+            def active_plugin_names(self):
+                return self._active_names
+
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", plugin_dirs)
+        monkeypatch.setattr(
+            "datus.plugins.activation.active_names_for_cwd",
+            lambda: (_ for _ in ()).throw(AssertionError("CWD config must not be read")),
+        )
+        _patch_entry_points(monkeypatch, [])
+
+        tenant_a = SkillConfig.from_dict({}, agent_config=RuntimeConfig({"tenant-a"}))
+        tenant_b = SkillConfig.from_dict({}, agent_config=RuntimeConfig({"tenant-b"}))
+
+        assert str(tenant_a_dir) in tenant_a.directories
+        assert str(tenant_b_dir) not in tenant_a.directories
+        assert str(tenant_b_dir) in tenant_b.directories
+        assert str(tenant_a_dir) not in tenant_b.directories
+        assert calls == [{"tenant-a"}, {"tenant-b"}]
+
+    def test_request_agent_config_master_switch_is_authoritative(self, monkeypatch):
+        """A tenant-level master switch must not fall back to global config."""
+
+        class RuntimeConfig:
+            plugins_enabled = False
+
+            def active_plugin_names(self):
+                raise AssertionError("disabled plugins must not be enumerated")
+
+        def fail_plugin_discovery(**_kwargs):
+            raise AssertionError("disabled plugins must not be discovered")
+
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", fail_plugin_discovery)
+        _patch_entry_points(monkeypatch, [])
+
+        config = SkillConfig.from_dict({}, agent_config=RuntimeConfig())
+
+        assert config.directories[:2] == ["./.datus/skills", "~/.datus/skills"]
 
 
 class _FakeManager:
@@ -317,7 +373,7 @@ class TestPluginsEnabledGate:
         plugin_dir.mkdir()
         legacy_dir = tmp_path / "legacy_skills"
         legacy_dir.mkdir()
-        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda: [str(plugin_dir)])
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda *a, **k: [str(plugin_dir)])
         _patch_entry_points(monkeypatch, [_FakeEntryPoint("mwaa", str(legacy_dir))])
         self._disable(monkeypatch)
 
@@ -329,7 +385,7 @@ class TestPluginsEnabledGate:
     def test_disabled_excludes_plugin_dirs_from_from_dict(self, monkeypatch, tmp_path):
         plugin_dir = tmp_path / "plugin_skills"
         plugin_dir.mkdir()
-        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda: [str(plugin_dir)])
+        monkeypatch.setattr("datus.plugins.registry.plugin_skill_directories", lambda *a, **k: [str(plugin_dir)])
         _patch_entry_points(monkeypatch, [])
         self._disable(monkeypatch)
 
@@ -456,6 +512,24 @@ class TestSkillMetadata:
         assert metadata.name == "simple"
         assert metadata.description == "Simple skill"
         assert metadata.tags == []
+
+    def test_requires_mutable_config_defaults_false(self):
+        """Omitted frontmatter key parses to False and still serializes."""
+        frontmatter = {"name": "plain", "description": "Plain skill"}
+        metadata = SkillMetadata.from_frontmatter(frontmatter, Path("/skills/plain"))
+        assert metadata.requires_mutable_config is False
+        assert metadata.to_dict()["requires_mutable_config"] is False
+
+    def test_requires_mutable_config_parsed_true(self):
+        """The plugin ``<name>-setup`` convention: frontmatter true survives parsing."""
+        frontmatter = {
+            "name": "hello-setup",
+            "description": "Configure a profile for the hello plugin",
+            "requires_mutable_config": True,
+        }
+        metadata = SkillMetadata.from_frontmatter(frontmatter, Path("/skills/hello-setup"))
+        assert metadata.requires_mutable_config is True
+        assert metadata.to_dict()["requires_mutable_config"] is True
 
     def test_skill_metadata_serialization(self):
         """Test SkillMetadata serialization."""

@@ -1,145 +1,282 @@
-# Plugin Introduction
+# Plugins
 
-A **plugin** is an installable Python package that extends Datus without
-modifying it. Install one into the same Python environment as `datus` and,
-depending on what the plugin ships, you get:
+A plugin connects Datus to an external service or adds a focused command-line
+capability without changing Datus itself. Depending on the plugin, it may add:
 
-| Surface | What it adds |
+| Capability | What you get |
 |---|---|
-| CLI subcommand | `datus <plugin> ...` runs the plugin's own command-line interface |
-| Skills | plugin-bundled skills appear in `/skill list`, alongside project and user skills |
-| Agent awareness | the plugin describes itself and its configured environments in the agent's system prompt, so the model chooses it proactively |
-| Bash permissions | the plugin pre-declares which of its subcommands the agent may auto-run and which need confirmation |
-| Tool transformers | the plugin can rewrite or deny the agent's tool calls before execution (e.g. enforce SQL scoping policies) |
+| CLI commands | Run the service through `datus <plugin> ...` |
+| Skills | Use plugin-provided skills alongside project and user skills |
+| Agent context | Let the agent discover the plugin and its configured environments |
+| Permission rules | Require confirmation before the agent runs sensitive commands |
+| Tool safeguards | Check, rewrite, or reject selected agent tool calls |
 
-Plugins are discovered through the `datus.plugins` Python entry-point group on
-every invocation — installing or upgrading a plugin requires no restart and no
-registration step.
+Plugins are isolated Python packages. Datus discovers them automatically after
+installation, so there is no separate registration step.
 
-Want to build one? See the [development guide](development.md).
+Want to build one? Follow [Develop a plugin](development.md).
 
-## Installing a plugin
+## Install a plugin
 
-Install the plugin package into the same environment as `datus`:
+For a published plugin, pass its package name:
 
 ```bash
-pip install datus-plugin-hello
-datus hello Ada          # the subcommand is available immediately
+datus plugin install datus-airflow-plugin
+datus airflow --help
 ```
 
-If `datus <name>` falls through to the REPL instead of running the plugin, the
-package is not installed in the environment `datus` runs from.
+You can also make the source type explicit:
 
-## Configuration
+```bash
+datus plugin install pip:datus-airflow-plugin
+datus plugin install src:./datus-airflow-plugin
+datus plugin install whl:./dist/datus_airflow_plugin-0.3.0-py3-none-any.whl
+datus plugin install git:https://github.com/acme/datus-airflow-plugin
+datus plugin install zip:./dist/datus-airflow-plugin-0.3.0.zip
+```
 
-Plugins are configured under `agent.plugins.<name>` in `agent.yml`, where each
-key below `<name>` is a **profile** — one named environment (endpoint,
-credentials, options). A plugin can have any number of profiles:
+The supported source types are:
+
+| Source | Use it for |
+|---|---|
+| `pip:` | A package requirement from a package index. This is the default when the prefix is omitted. |
+| `src:` | A local plugin project. |
+| `whl:` | A wheel already built on disk. |
+| `git:` | A Git repository URL. |
+| `zip:` | A bundle created by `datus plugin pack` or `datus plugin export`. |
+
+Datus installs the plugin and its dependencies under
+`~/.datus/plugins/<name>/`. If the same plugin is already present, add
+`--force` to replace it.
+
+If `datus <name>` opens the chat REPL instead of the plugin, check that the
+plugin is installed and [active for the current project](#activating-plugins).
+
+## Configure a plugin
+
+Plugin settings live under `agent.plugins.<name>` in `agent.yml`. Each child is
+a named **profile**, usually representing an environment such as production or
+staging:
 
 ```yaml
 agent:
   plugins:
-    hello:
+    airflow:
       prod:
-        default: true              # picked when --profile is omitted (see below)
-        greeting: Hi
-        token: ${HELLO_TOKEN}      # prefer ${ENV_VAR} for secrets
+        default: true
+        base_url: https://airflow.example.com
+        token: ${AIRFLOW_TOKEN}
       staging:
-        greeting: Yo
+        base_url: https://airflow-staging.example.com
+        token: ${AIRFLOW_STAGING_TOKEN}
 ```
 
-Datus resolves the config file in this order: explicit `--config` →
-`./conf/agent.yml` (project) → `~/.datus/conf/agent.yml` (user default). Put
-the profile in whichever file your datus session actually loads.
+Use `${ENV_VAR}` references for credentials instead of writing secrets directly
+in the file. Datus expands those references before it runs the plugin.
 
-`${VAR}` references are expanded from environment variables per profile —
-always use them for secrets instead of literal values. Config edits take
-effect on the next `datus <plugin>` invocation; no restart is needed.
+Datus looks for the configuration in this order:
 
-Some plugins ship a `<name>-setup` skill that writes this configuration for
-you — see [Using a plugin with the agent](#using-a-plugin-with-the-agent).
+1. The file passed with `--config`.
+2. `./conf/agent.yml` in the current project.
+3. `~/.datus/conf/agent.yml`.
 
-### Which profile runs
+Configuration changes apply the next time you run the plugin; no restart is
+needed.
 
-When you run `datus <name> ...`, the active profile is resolved in this order:
+### Managed API deployments
 
-1. Explicit `--profile <p>` on the command line
-   (`datus hello --profile staging ...`).
-2. Project pin in `./.datus/config.yml` (see below).
-3. The profile flagged `default: true` (more than one is an error).
-4. The sole profile, if only one is configured.
-5. No `agent.plugins.<name>` section at all → the plugin runs with an empty
-   configuration (config-free plugins still work).
-6. Multiple profiles with no way to disambiguate → Datus errors and asks you
-   to pass `--profile`.
+In a multi-tenant `datus-api` deployment, an `AuthProvider` can supply plugin
+settings for each request without writing `agent.yml`. Plugin and skill
+discovery stays within that request, so one tenant never falls back to another
+tenant's settings or to the server's local project configuration.
 
-### Pinning a profile per project
+`--profile` remains available, while `--config` is rejected because the
+provider's configuration is authoritative. When the agent runs a plugin
+through Bash, keep the command to one direct `datus <name>` invocation.
+Pipelines and redirections are supported, but command substitutions and
+wrappers such as `timeout`, `env`, `xargs`, or `sh -c` are rejected.
 
-To make one project always use a specific profile without typing `--profile`,
-pin it in the project's `./.datus/config.yml`:
+Many plugins also provide a `<name>-setup` skill. Ask the agent to configure
+the plugin and it can collect the required values and create the profile for
+you.
+
+### Choose a profile
+
+When a plugin has more than one profile, Datus chooses one in this order:
+
+1. `--profile <name>` on the command line.
+2. The profile selected for the current project in `./.datus/config.yml`.
+3. A profile marked `default: true`.
+4. The only configured profile, when there is just one.
+
+A plugin that needs no configuration can run with an empty profile. If several
+profiles remain and none can be selected, Datus asks you to pass `--profile`.
+
+For example:
+
+```bash
+datus airflow --profile staging dags list
+```
+
+To make a profile the default for one project, select it in
+`./.datus/config.yml`:
 
 ```yaml
 plugins:
-  hello: staging
+  airflow:
+    enabled: true
+    active_profile: [staging]
 ```
 
-## Using a plugin with the agent
+## Manage plugins
 
-Beyond running `datus <name> ...` yourself, plugins integrate with the agent:
+Use `datus plugin` from the terminal:
 
-- **Skills** — plugin-bundled skills show up in `/skill list` and can be
-  invoked like any other skill.
-- **Prompt awareness** — a configured plugin lists its environments in the
-  agent's system prompt, so the model knows the plugin exists and picks it
-  proactively. Ask the agent "which plugins are configured?" to see what it
-  knows. The prompt section refreshes at session start; config edits made
-  mid-session appear in the next session.
-- **Guided setup** — an installed-but-unconfigured plugin typically announces
-  itself in the prompt and points the agent at its bundled `<name>-setup`
-  skill. Ask the agent to set the plugin up, and it collects the required
-  values and writes the profile for you (secrets are referenced as `${VAR}`,
-  never written literally).
+| Command | Purpose |
+|---|---|
+| `datus plugin install <source>` | Install a plugin. Add `--force` to replace an existing installation. |
+| `datus plugin list` | Show installed plugins, versions, sources, profiles, and project status. |
+| `datus plugin info <name>` | Show details for one plugin. |
+| `datus plugin upgrade <name>` | Reinstall a plugin from its recorded `pip:`, `git:`, or `src:` source. |
+| `datus plugin uninstall <name>` | Remove an installed plugin. |
+| `datus plugin enable <name>` | Enable a plugin for the current project. |
+| `datus plugin disable <name>` | Disable a plugin for the current project. |
+| `datus plugin pack [directory]` | Build a distributable `.zip` from a plugin project. |
+| `datus plugin export <name>` | Export an installed plugin as a `.zip`. |
 
-## Agent bash permissions
+Inside the chat REPL, `/plugins` opens an interactive manager. Use it to browse
+plugins, edit profiles, enter secrets as environment-variable references, and
+choose which plugins and profiles are active for the current project.
 
-When the **agent** (not you) runs a plugin's CLI through its bash tool, the
-command goes through Datus' permission layer. Plugins can pre-declare, per
-permission profile (`normal` / `auto`), which of their subcommands are safe to
-auto-run (`allow`), which require confirmation (`ask`), and which are blocked
-(`deny`). Without a declaration, every agent-issued plugin command prompts for
-confirmation.
+## Activating plugins
 
-What this means in practice:
+Plugins are available to every project by default. Add a `plugins:` section to
+`./.datus/config.yml` when a project should use only a selected set:
 
-- **Plugin declarations are namespace-scoped.** A plugin can only shape rules
-  for `datus <its-own-name> ...` — never for `rm`, other plugins, or anything
-  else.
-- **Your rules always win.** A `deny` rule you write under
-  `permissions.bash_commands` in `agent.yml` overrides any plugin `allow`
-  (precedence is deny > ask > allow), and plugin declarations never change a
-  profile's default posture.
-- **`ask` can be relaxed per project.** When the agent hits a plugin-declared
-  `ask` subcommand, the confirmation prompt offers **allow (project)** —
-  choosing it persists the exact matched pattern to the project's
-  `.datus/config.yml` `bash_allow` list, and that subcommand auto-runs from
-  then on. The grant never widens beyond the exact pattern, and plugin `deny`
-  rules are unaffected.
-- **Only the agent is gated.** Typing `datus <name> ...` in a terminal
-  yourself is never affected.
-- The `dangerous` permission profile ignores all command-level bash rules by
-  design, including plugin declarations.
+```yaml
+plugins:
+  airflow:
+    enabled: true
+    active_profile: [staging]
+  internal-admin:
+    enabled: false
+```
 
-## Disabling the plugin system
+Once this section exists, it acts as the project's plugin list. Plugins omitted
+from the list, or marked `enabled: false`, are not loaded in that project. Their
+CLI commands, skills, prompt context, permission rules, and tool safeguards are
+all disabled.
 
-`agent.plugins_enabled: false` in `agent.yml` is a master switch that turns
-off **all** plugin functionality — `datus <plugin>` dispatch, plugin-bundled
-skills, prompt injection (including setup guidance), permission declarations,
-and tool transformers. Recommended for API/web deployments where the agent
-must not be guided to edit configuration files. The default is `true`.
+The CLI can update the same setting:
+
+```bash
+datus plugin enable airflow
+datus plugin enable airflow --profile staging
+datus plugin disable internal-admin
+```
+
+This setting belongs to the current project. It is separate from the
+[global plugin switch](#disabling-the-plugin-system).
+
+## Use a plugin with the agent
+
+You can run a plugin directly in a terminal, or let the agent use it as part of
+a task:
+
+- Plugin-provided skills appear in `/skill list`.
+- A configured plugin can describe its available environments to the agent, so
+  the agent knows when the plugin is relevant.
+- A setup skill can guide you through creating a profile without exposing
+  literal credentials.
+- In the chat REPL, `!<plugin> ...` runs a plugin command directly and returns
+  the output to the conversation. See [Tool and plugin commands](../cli/execution_command.md).
+
+Plugin context is prepared when a session starts. If you change a profile
+during a session, start a new session before expecting the agent to see the
+updated environment information.
+
+In managed deployments where the agent cannot edit `agent.yml`, setup skills
+are hidden. An administrator must configure the plugin instead.
+
+## Permissions
+
+Commands that the agent runs go through Datus's permission system. A plugin can
+mark its own commands as:
+
+- `allow`: the agent may run the command without asking.
+- `ask`: the user must confirm first.
+- `deny`: the agent may not run the command.
+
+These rules apply only when the agent runs the plugin. Commands you type
+directly in a terminal are unaffected.
+
+A plugin can define rules only for its own `datus <name> ...` command. It
+cannot grant access to another plugin or to unrelated shell commands. Rules in
+your `agent.yml` remain authoritative, and a plugin can never override a user
+`deny`.
+
+When an `ask` command is approved with **allow (project)**, Datus remembers that
+exact command pattern in the current project's `.datus/config.yml`.
+
+## Offline installation {#offline-install}
+
+Create a bundle on a machine that has network access:
+
+```bash
+# From the plugin project directory
+datus plugin pack -o ./dist
+datus plugin pack --with-deps -o ./dist
+```
+
+The default bundle contains the plugin wheel only. The target machine still
+needs access to a package index to resolve dependencies.
+
+Use `--with-deps` for a fully offline bundle. It includes the plugin and all
+dependency wheels, so build it on the same operating system and Python version
+as the target when any dependency contains native code.
+
+Install the resulting file with:
+
+```bash
+datus plugin install zip:./dist/datus-airflow-plugin-0.3.0.zip
+```
+
+You can also export an installed plugin:
+
+```bash
+datus plugin export airflow -o ./dist
+```
+
+## Mount plugins from another directory {#plugin-paths}
+
+`agent.plugin_paths` can load a plugin from a directory managed outside
+`~/.datus/plugins/`:
+
+```yaml
+agent:
+  plugin_paths:
+    - /opt/shared/datus-plugins/airflow
+    - $DATUS_PLUGIN_HOME/internal
+```
+
+Each entry must point to one installed plugin directory, not to a parent
+directory containing several plugins. This is useful when several projects or
+machines share centrally deployed plugins. If a mounted plugin has the same
+name as a managed installation, the copy under `~/.datus/plugins/` wins.
+
+## Disable the plugin system {#disabling-the-plugin-system}
+
+Set the global switch in `agent.yml`:
+
+```yaml
+agent:
+  plugins_enabled: false
+```
+
+This disables plugin commands, bundled skills, agent context, permission rules,
+and tool safeguards. The default is `true`.
 
 ## Next steps
 
-- [Plugin Development](development.md) — build your own plugin, from a minimal
-  `hello` command to the full contract.
-- [Skills](../skills/introduction.md) — how skills work, including
-  plugin-bundled ones.
+- [Develop a plugin](development.md) with the `datus-plugin-development` skill.
+- Learn how [skills](../skills/introduction.md) are discovered and used.

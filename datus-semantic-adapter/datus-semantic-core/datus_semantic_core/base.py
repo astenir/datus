@@ -76,7 +76,11 @@ class BaseSemanticAdapter(ABC):
         metric_name: str,
         path: Optional[List[str]] = None,
     ) -> List[DimensionInfo]:
-        """Get queryable dimensions for a specific metric."""
+        """Get queryable dimensions for a specific metric.
+
+        The canonical time dimension, when present, carries its supported
+        ``time_granularities`` in finest-to-coarsest order.
+        """
         raise NotImplementedError()
 
     @abstractmethod

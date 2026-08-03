@@ -54,8 +54,8 @@ datasets:
   - {name: customers, source: {table: customers}, primary_key: customer_id, dimensions: [{name: region_id, expr: region_id}]}
   - {name: regions, source: {table: regions}, primary_key: region_id, dimensions: [{name: region_name, expr: region_name}]}
 relationships:
-  - {name: o2c, from: orders, to: customers, from_columns: [customer_id], to_columns: [customer_id]}
-  - {name: c2r, from: customers, to: regions, from_columns: [region_id], to_columns: [region_id]}
+  - {name: customer, from: orders, to: customers, from_columns: [customer_id], to_columns: [customer_id]}
+  - {name: region, from: customers, to: regions, from_columns: [region_id], to_columns: [region_id]}
 metrics:
   - {name: order_count, expression: "COUNT(DISTINCT order_id)", dataset: orders}
 """
@@ -75,11 +75,12 @@ metrics:
     non_additive_dimension: {name: ds, window_choice: max}
 """
 
+
 def test_multi_hop_join_resolves_two_joins():
     _model, build, parse_errors, sem_errors = _build_and_validate(MULTI_HOP)
     assert parse_errors == [], parse_errors
     assert sem_errors == [], sem_errors
-    sql = _explain(build, ["order_count"], ["customer_id__region_id__region_name"])
+    sql = _explain(build, ["order_count"], ["customer__region__region_name"])
     assert sql.upper().count("JOIN") == 2
 
 

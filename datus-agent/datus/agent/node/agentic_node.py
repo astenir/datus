@@ -37,7 +37,6 @@ from datus.prompts.prompt_manager import get_prompt_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import build_structured_content
 from datus.utils.node_utils import build_database_context
@@ -55,6 +54,7 @@ if TYPE_CHECKING:
     from datus.agent.node.stream_run_context import StreamRunContext
     from datus.agent.workflow import Workflow
     from datus.schemas.token_usage import TokenUsage
+    from datus.tools.func_tool.fs_path_policy import PathAllowlist
     from datus.tools.permission.permission_manager import PermissionManager
     from datus.tools.skill_tools.skill_manager import SkillManager
 
@@ -870,6 +870,106 @@ class AgenticNode(Node):
 
         return {key: value for key, value in context.items() if value}
 
+    def _render_at_context_parts(self, user_input: Any) -> List[str]:
+        """Render resolved @-referenced context as ordered prompt parts.
+
+        Single source of truth for surfacing @Knowledge / @Table / @Metric /
+        @Sql references to the LLM. Shared by :meth:`_build_enhanced_message`
+        and the deliverable / visual-artifact overrides so a new reference kind
+        is rendered everywhere by editing this one method. Reads every field
+        via ``getattr`` — inputs that don't declare a field (or don't inherit
+        :class:`~datus.schemas.at_context.AtContextInput`) simply contribute
+        nothing.
+        """
+        parts: List[str] = []
+
+        ext_know = getattr(user_input, "external_knowledge", "") or ""
+        if ext_know:
+            parts.append(f"## Business knowledge\nMUST apply the following business logic:\n{ext_know}")
+
+        schemas = getattr(user_input, "schemas", None)
+        if schemas:
+            from datus.schemas.node_models import TableSchema
+
+            names = TableSchema.table_names_to_prompt(schemas)
+            bullets = "\n".join(f"- {n.strip()}" for n in names.splitlines() if n.strip())
+            parts.append("## Referenced tables\nMUST use ONLY these tables in FROM/JOIN clauses:\n" + bullets)
+
+        metrics = getattr(user_input, "metrics", None)
+        if metrics:
+            blocks = []
+            for m in metrics:
+                subject_path = getattr(m, "subject_path", []) or []
+                header = f"### {m.name}"
+                if subject_path:
+                    header += f"  (subject_path: {'/'.join(subject_path)})"
+                lines = [header]
+                desc = (getattr(m, "description", "") or "").strip()
+                if desc:
+                    lines.append(desc)
+                meta = []
+                metric_type = (getattr(m, "metric_type", "") or "").strip()
+                measure_expr = (getattr(m, "measure_expr", "") or "").strip()
+                dimensions = getattr(m, "dimensions", []) or []
+                if metric_type:
+                    meta.append(f"type: {metric_type}")
+                if measure_expr:
+                    meta.append(f"measure: {measure_expr}")
+                if dimensions:
+                    meta.append(f"dimensions: {', '.join(dimensions)}")
+                if meta:
+                    lines.append(" · ".join(meta))
+                blocks.append("\n".join(lines))
+            parts.append("## Referenced metrics\n" + "\n\n".join(blocks))
+
+        reference_sql = getattr(user_input, "reference_sql", None)
+        if reference_sql:
+            blocks = []
+            for r in reference_sql:
+                summary = (getattr(r, "summary", "") or "").strip()
+                subject_path = getattr(r, "subject_path", []) or []
+                header = f"### {r.name}" + (f" — {summary}" if summary else "")
+                if subject_path:
+                    header += f"  (subject_path: {'/'.join(subject_path)})"
+                sql = (getattr(r, "sql", "") or "").strip()
+                blocks.append(header + (f"\n```sql\n{sql}\n```" if sql else ""))
+            parts.append("## Referenced SQL\n" + "\n\n".join(blocks))
+
+        hint_part = self._render_context_hint_part(getattr(user_input, "context_hints", None))
+        if hint_part:
+            parts.append(hint_part)
+
+        return parts
+
+    @staticmethod
+    def _render_context_hint_part(hints: Optional[List[Dict[str, Any]]]) -> str:
+        """Render look-up hints for referenced items that couldn't be pre-loaded.
+
+        Names the item and points the model at the exact tool call so it fetches
+        the detail directly instead of searching the subject tree blindly.
+        """
+        if not hints:
+            return ""
+        tool_by_kind = {"metric": "get_metrics", "reference_sql": "get_reference_sql"}
+        label_by_kind = {"metric": "Metric", "reference_sql": "Reference SQL", "knowledge": "Knowledge"}
+        lines = [
+            "## Referenced items to look up",
+            "The user attached these but their details are not loaded here. Fetch each with the "
+            "indicated tool (using the exact subject_path and name) before answering — do not search blindly:",
+        ]
+        for h in hints:
+            kind = h.get("kind", "")
+            name = h.get("name", "")
+            subject_path = h.get("subject_path", []) or []
+            label = label_by_kind.get(kind, kind or "Item")
+            tool = tool_by_kind.get(kind)
+            if tool:
+                lines.append(f'- {label} "{name}" → call {tool}(subject_path={subject_path}, name="{name}")')
+            else:
+                full = "/".join(list(subject_path) + [name])
+                lines.append(f'- {label} "{name}" (subject path: {full}) → locate it via list_subject_tree')
+        return "\n".join(lines)
+
     def _build_enhanced_message(
         self,
         user_input: Any,
@@ -918,10 +1018,6 @@ class AgenticNode(Node):
         if datasource_reminder:
             enhanced_parts.append(datasource_reminder)
 
-        ext_know = getattr(user_input, "external_knowledge", "") or ""
-        if ext_know:
-            enhanced_parts.append(f"MUST use these business logic:\n{ext_know}")
-
         db_type = getattr(self.agent_config, "db_type", "") if self.agent_config else ""
         if db_type and not datasource_reminder:
             # Always resolve empty database via the connector default — the
@@ -945,23 +1041,7 @@ class AgenticNode(Node):
             if ctx:
                 enhanced_parts.append(ctx)
 
-        schemas = getattr(user_input, "schemas", None)
-        if schemas:
-            from datus.schemas.node_models import TableSchema
-
-            table_names_str = TableSchema.table_names_to_prompt(schemas)
-            enhanced_parts.append(
-                "Available tables (MUST use these tables and ONLY use these "
-                f"table names in FROM/JOIN clauses): \n{table_names_str}"
-            )
-
-        metrics = getattr(user_input, "metrics", None)
-        if metrics:
-            enhanced_parts.append(f"Metrics: \n{to_str([item.model_dump() for item in metrics])}")
-
-        reference_sql = getattr(user_input, "reference_sql", None)
-        if reference_sql:
-            enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in reference_sql])}")
+        enhanced_parts.extend(self._render_at_context_parts(user_input))
 
         if extra_enhanced_parts:
             enhanced_parts.extend(p for p in extra_enhanced_parts if p)
@@ -2304,6 +2384,7 @@ class AgenticNode(Node):
                 active_profile=active_profile,
                 plugin_bash_rules=getattr(self.agent_config, "plugin_bash_rules", None),
                 project_bash_allows=getattr(self.agent_config, "project_bash_allow", None),
+                project_sql_allows=getattr(self.agent_config, "project_sql_allow", None),
             )
             # Forward existing callback to permission manager
             if self._permission_callback:
@@ -2340,6 +2421,8 @@ class AgenticNode(Node):
             self.skill_manager = SkillManager(
                 config=skills_config,
                 permission_manager=self.permission_manager,
+                config_mutable=self._resolve_config_mutable(),
+                agent_config=self.agent_config,
             )
             logger.debug(
                 f"Skill manager initialized for node '{self.get_node_name()}' "
@@ -2385,6 +2468,8 @@ class AgenticNode(Node):
 
                 self.skill_manager = SkillManager(
                     permission_manager=self.permission_manager,
+                    config_mutable=self._resolve_config_mutable(),
+                    agent_config=self.agent_config,
                 )
                 logger.info(
                     f"Created default SkillManager for node '{self.get_node_name()}' "
@@ -2438,7 +2523,11 @@ class AgenticNode(Node):
         if not self.skill_manager:
             from datus.tools.skill_tools.skill_manager import SkillManager
 
-            self.skill_manager = SkillManager(permission_manager=self.permission_manager)
+            self.skill_manager = SkillManager(
+                permission_manager=self.permission_manager,
+                config_mutable=self._resolve_config_mutable(),
+                agent_config=self.agent_config,
+            )
 
         from xml.sax.saxutils import quoteattr as xml_quoteattr
 
@@ -2588,10 +2677,12 @@ class AgenticNode(Node):
         """Create the node's general-purpose :class:`BashTool` instance.
 
         Available to every agentic node when ``agent.bash.enabled`` is
-        ``True`` (the default). ``allowed_patterns=["*"]`` means the tool
-        exposes ``bash`` for any shell command; per-call gating
-        is the responsibility of the ``bash_tools`` ASK rule in the
-        permission profile, not a static pattern whitelist.
+        ``True`` (the default). ``allowed_patterns`` comes from
+        ``agent_config.bash_allowed_patterns``: the default ``["*"]`` exposes
+        ``bash`` for any shell command with per-call gating left to the
+        ``bash_tools`` ASK rule in the permission profile; a restrictive list
+        (e.g. the web front-end's ``["datus*"]``) is enforced as a hard
+        whitelist inside the tool itself.
 
         Only creates the instance — the tool enters ``self.tools`` via
         :meth:`_ensure_bash_tool_in_tools` so subclass ``setup_tools()``
@@ -2609,18 +2700,55 @@ class AgenticNode(Node):
             logger.warning("Skipping bash tool because permission enforcement is unavailable")
             self.bash_tool = None
             return
+        # Non-list values (configs mocked without the attribute, legacy
+        # bootstraps) fall back to the unrestricted default — the AgentConfig
+        # setter already normalizes real config input.
+        allowed_patterns = getattr(self.agent_config, "bash_allowed_patterns", None)
+        if not isinstance(allowed_patterns, list) or not allowed_patterns:
+            allowed_patterns = ["*"]
         try:
-            from datus.tools.func_tool.bash_tool import BashTool
+            from datus.tools.func_tool.bash_tool import BashExecutionContext, BashTool
+
+            # Datus home stays readable inside the sandbox: skills, templates
+            # and plugins live there and are read/executed via bash.
+            sandbox_read_dirs = []
+            try:
+                from datus.utils.path_manager import get_path_manager
+
+                sandbox_read_dirs.append(str(get_path_manager(agent_config=self.agent_config).datus_home))
+            except Exception as exc:
+                logger.debug("Failed to resolve datus home for sandbox read dirs: %s", exc)
+
+            execution_context_provider = None
+            if not getattr(self.agent_config, "config_mutable", True):
+                from datus.plugins.runtime_context import prepare_plugin_invocation
+
+                def _managed_plugin_context(command: str):
+                    prepared = prepare_plugin_invocation(command, self.agent_config)
+                    if prepared is None:
+                        return None
+                    return BashExecutionContext(
+                        command=prepared.command,
+                        env=prepared.env,
+                        sandbox_read_dirs=prepared.sandbox_read_dirs,
+                    )
+
+                execution_context_provider = _managed_plugin_context
 
             self.bash_tool = BashTool(
                 workspace_root=self._resolve_workspace_root(),
-                allowed_patterns=["*"],
+                allowed_patterns=allowed_patterns,
                 # Offload oversized command output to the session data dir (the
                 # same location minor compact uses). Resolved lazily: this method
                 # runs before ``session_id`` is finalized, so the closure reads it
                 # at execute time. Returns None until a session id exists → the
                 # tool falls back to in-memory truncation.
                 output_dir_provider=self._bash_output_dir,
+                # Shared mutable settings: /sandbox on|off flips ``enabled`` on
+                # the AgentConfig object and this tool sees it next call.
+                sandbox_settings=getattr(self.agent_config, "bash_sandbox", None),
+                sandbox_read_dirs=sandbox_read_dirs,
+                execution_context_provider=execution_context_provider,
             )
             logger.debug(f"Setup bash tool with workspace: {self.bash_tool.workspace_root}")
         except Exception as e:
@@ -3639,6 +3767,27 @@ class AgenticNode(Node):
             return False
         return bool(self.agent_config.filesystem_strict)
 
+    def _resolve_filesystem_allowlist(self) -> Optional["PathAllowlist"]:
+        """Resolve the configured extra fs roots for this node's tools.
+
+        Reads ``agent_config.filesystem_allowlist`` (``agent.filesystem
+        .allow_read`` / ``allow_write``). Returns ``None`` when unset or empty
+        so the tool / policy layers keep their default project-only view.
+        """
+        allowlist = getattr(self.agent_config, "filesystem_allowlist", None) if self.agent_config else None
+        return allowlist or None
+
+    def _resolve_config_mutable(self) -> bool:
+        """Whether the agent may edit the agent config file (agent.yml).
+
+        Reads ``self.agent_config.config_mutable`` (default ``True``). The
+        chat API / gateway set it to ``False`` on their per-request config
+        clone so config-editing setup skills are hidden and refused.
+        """
+        if not self.agent_config:
+            return True
+        return bool(getattr(self.agent_config, "config_mutable", True))
+
     def _make_filesystem_tool(self, **kwargs):
         """Construct a ``FilesystemFuncTool`` with this node's identity baked in.
 
@@ -3667,6 +3816,7 @@ class AgenticNode(Node):
             strict = self._resolve_filesystem_strict()
         current_node = kwargs.pop("current_node", None) or self.get_node_name()
         session_data_dir = kwargs.pop("session_data_dir", None) or self._resolve_session_data_dir()
+        path_allowlist = kwargs.pop("path_allowlist", None) or self._resolve_filesystem_allowlist()
         return FilesystemFuncTool(
             root_path=root_path,
             current_node=current_node,
@@ -3675,6 +3825,7 @@ class AgenticNode(Node):
             session_data_dir=session_data_dir,
             protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
             global_skills_read_only=bool(getattr(self.agent_config, "_enterprise_enabled", False)),
+            path_allowlist=path_allowlist,
             **kwargs,
         )
 
@@ -3759,6 +3910,7 @@ class AgenticNode(Node):
                 datus_home=_Path(path_manager.datus_home),
                 strict=self._resolve_filesystem_strict(),
                 session_data_dir=session_data_dir,
+                allowlist=self._resolve_filesystem_allowlist(),
             )
         except Exception as e:
             logger.debug(f"Failed to build FilesystemPolicy: {e}")
@@ -3892,6 +4044,7 @@ class AgenticNode(Node):
                 non_interactive=non_interactive,
                 proxied_tool_names=self.proxied_tool_names,
                 project_root=getattr(self.agent_config, "project_root", None),
+                config_mutable=self._resolve_config_mutable(),
                 bash_classifier=create_bash_classifier(bash_rules, self.agent_config),
             )
             logger.debug(
@@ -3936,7 +4089,9 @@ class AgenticNode(Node):
             return
         from datus.plugins.registry import collect_plugin_tool_transformers
 
-        transformers_by_pattern = collect_plugin_tool_transformers()
+        agent_config = getattr(self, "agent_config", None)
+        active_names = agent_config.active_plugin_names() if hasattr(agent_config, "active_plugin_names") else None
+        transformers_by_pattern = collect_plugin_tool_transformers(active_names)
         if not transformers_by_pattern:
             self._tool_transformers_applied = True
             return

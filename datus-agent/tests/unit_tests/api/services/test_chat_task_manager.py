@@ -397,6 +397,293 @@ class TestChatTaskManagerBehavior:
         assert content.payload["content"] == "1 table: orders"
 
     @pytest.mark.asyncio
+    async def test_run_loop_shares_task_pending_queue_with_node(self, real_agent_config):
+        """The node must share the task-scoped pending queue so a /chat/insert
+        that arrived during node startup is drained on the first turn."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        captured = {}
+
+        class FakeNode:
+            session_id = "s-share"
+
+            def __init__(self):
+                self.pending_input_queue = None
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                captured["queue_during_run"] = self.pending_input_queue
+                if False:  # make this an async generator without yielding
+                    yield
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-share", asyncio_task=MagicMock())
+
+        await manager._run_loop(task, real_agent_config, StreamChatInput(message="hi", session_id="s-share"))
+
+        assert task.node.pending_input_queue is task.pending_input_queue
+        assert captured["queue_during_run"] is task.pending_input_queue
+
+    @pytest.mark.asyncio
+    async def test_run_loop_auto_continues_residual_mid_run_message(self, real_agent_config):
+        """A message queued after the final turn (never seen by the SDK filter)
+        is drained after the run, echoed as a user_insert frame, and run in a
+        fresh pass — instead of being silently dropped."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class FakeNode:
+            session_id = "s-cont"
+
+            def __init__(self):
+                self.pending_input_queue = None
+                self.input = None
+                self.run_count = 0
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                self.run_count += 1
+                if self.run_count == 1:
+                    # Simulate a mid-run insert that landed after the final
+                    # turn — the SDK's call_model_input_filter never sees it.
+                    self.pending_input_queue.push("run the second SQL")
+                yield ActionHistory(
+                    action_id=f"r{self.run_count}",
+                    role=ActionRole.ASSISTANT,
+                    action_type="chat_response",
+                    messages="done",
+                    input={},
+                    output={"response": f"pass {self.run_count}"},
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        # Avoid the real @-context/node-input machinery for the continuation turn.
+        manager._create_node_input = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-cont", asyncio_task=MagicMock())
+
+        await manager._run_loop(task, real_agent_config, StreamChatInput(message="explore", session_id="s-cont"))
+
+        # Two passes: the original run + one auto-continuation for the residual.
+        assert task.node.run_count == 2
+        # The residual was echoed to the client as a user bubble.
+        user_events = [
+            e for e in task.events if e.event == "message" and getattr(e.data.payload, "role", None) == "user"
+        ]
+        assert len(user_events) == 1
+        assert "run the second SQL" in user_events[0].data.payload.content[0].payload["content"]
+        # Queue fully drained.
+        assert len(task.pending_input_queue) == 0
+        # The accept window is closed once draining stops, so a tail-race insert
+        # gets SESSION_NOT_RUNNING instead of stranding.
+        assert task.accepting_inserts is False
+
+    @pytest.mark.asyncio
+    async def test_run_loop_continuation_reply_not_deduped_against_prior_pass(self, real_agent_config):
+        """A continuation pass producing the SAME visible text as the first pass
+        must still be emitted. Per-run de-dup state must not span passes — else
+        'run it again' shows the user bubble but drops the reply."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class FakeNode:
+            session_id = "s-dup"
+
+            def __init__(self):
+                self.pending_input_queue = None
+                self.input = None
+                self.run_count = 0
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                self.run_count += 1
+                if self.run_count == 1:
+                    self.pending_input_queue.push("do it again")
+                yield ActionHistory(
+                    action_id=f"r{self.run_count}",
+                    role=ActionRole.ASSISTANT,
+                    action_type="chat_response",
+                    messages="done",
+                    input={},
+                    output={"response": "identical reply"},
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        manager._create_node_input = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-dup", asyncio_task=MagicMock())
+
+        await manager._run_loop(task, real_agent_config, StreamChatInput(message="explore", session_id="s-dup"))
+
+        assert task.node.run_count == 2
+        assistant_events = [
+            e for e in task.events if e.event == "message" and getattr(e.data.payload, "role", None) == "assistant"
+        ]
+        # Both passes' replies reach the client despite identical text.
+        assert len(assistant_events) == 2
+
+    def test_drain_pending_for_continuation_variants(self):
+        """Covers all branches of the drain helper: no queue, empty, interrupted
+        (cleared), and a normal FIFO drain."""
+        from datus.cli.execution_state import PendingInputQueue
+
+        # No queue → None.
+        assert ChatTaskManager._drain_pending_for_continuation(SimpleNamespace(pending_input_queue=None)) is None
+
+        # Empty queue → None.
+        empty = SimpleNamespace(pending_input_queue=PendingInputQueue())
+        assert ChatTaskManager._drain_pending_for_continuation(empty) is None
+
+        # Interrupted → cleared and None (residual is discarded on cancel).
+        q = PendingInputQueue()
+        q.push("x")
+        interrupted = SimpleNamespace(
+            pending_input_queue=q,
+            interrupt_controller=SimpleNamespace(is_interrupted=True),
+        )
+        assert ChatTaskManager._drain_pending_for_continuation(interrupted) is None
+        assert len(q) == 0
+
+        # Normal → FIFO list.
+        q2 = PendingInputQueue()
+        q2.push("a")
+        q2.push("b")
+        live = SimpleNamespace(
+            pending_input_queue=q2,
+            interrupt_controller=SimpleNamespace(is_interrupted=False),
+        )
+        assert ChatTaskManager._drain_pending_for_continuation(live) == ["a", "b"]
+
+    @pytest.mark.asyncio
+    async def test_emit_user_insert_sse_noop_when_converter_returns_none(self):
+        """If the converter drops the frame, event_id is unchanged and nothing
+        is pushed."""
+        manager = ChatTaskManager()
+        task = ChatTask(session_id="s-none", asyncio_task=MagicMock())
+
+        with patch("datus.api.services.chat_task_manager.action_to_sse_event", return_value=None):
+            new_id = await manager._emit_user_insert_sse(task, "hi", 5)
+
+        assert new_id == 5
+        assert task.events == []
+
+    @pytest.mark.asyncio
+    async def test_run_loop_caps_continuations(self, real_agent_config):
+        """A client that keeps inserting can't run one task forever — the loop
+        stops after _MAX_INSERT_CONTINUATIONS and closes the accept window."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.api.services import chat_task_manager as ctm
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class FakeNode:
+            session_id = "s-cap"
+
+            def __init__(self):
+                self.pending_input_queue = None
+                self.input = None
+                self.run_count = 0
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                self.run_count += 1
+                # Never stops producing residue.
+                self.pending_input_queue.push(f"m{self.run_count}")
+                yield ActionHistory(
+                    action_id=f"r{self.run_count}",
+                    role=ActionRole.ASSISTANT,
+                    action_type="chat_response",
+                    messages="x",
+                    input={},
+                    output={"response": "y"},
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        manager._create_node_input = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-cap", asyncio_task=MagicMock())
+
+        await manager._run_loop(task, real_agent_config, StreamChatInput(message="go", session_id="s-cap"))
+
+        # Initial run + the cap in continuations, then it stops.
+        assert task.node.run_count == ctm._MAX_INSERT_CONTINUATIONS + 1
+        assert task.accepting_inserts is False
+
+    @pytest.mark.asyncio
+    async def test_run_loop_reopens_window_for_tail_race_insert(self, real_agent_config):
+        """A residual that only appears after the accept window closed must
+        re-open the window and continue — not be dropped."""
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class FakeNode:
+            session_id = "s-reopen"
+
+            def __init__(self):
+                self.pending_input_queue = None
+                self.input = None
+                self.run_count = 0
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                self.run_count += 1
+                yield ActionHistory(
+                    action_id=f"r{self.run_count}",
+                    role=ActionRole.ASSISTANT,
+                    action_type="chat_response",
+                    messages="x",
+                    input={},
+                    output={"response": "y"},
+                    status=ActionStatus.SUCCESS,
+                )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager()
+        manager._create_node = lambda *args, **kwargs: FakeNode()  # type: ignore[method-assign]
+        manager._create_node_input = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+        # pass 1: first drain empty → close window → second drain finds a tail
+        # message → re-open and continue. pass 2: both drains empty → stop.
+        drains = iter([None, ["tail msg"], None, None])
+        manager._drain_pending_for_continuation = lambda node: next(drains)  # type: ignore[method-assign]
+        task = ChatTask(session_id="s-reopen", asyncio_task=MagicMock())
+
+        await manager._run_loop(task, real_agent_config, StreamChatInput(message="go", session_id="s-reopen"))
+
+        # The re-opened window ran a second pass and echoed the tail message.
+        assert task.node.run_count == 2
+        user_events = [
+            e for e in task.events if e.event == "message" and getattr(e.data.payload, "role", None) == "user"
+        ]
+        assert len(user_events) == 1
+
+    @pytest.mark.asyncio
     async def test_run_loop_web_source_proxies_filesystem_writes(self, real_agent_config):
         """source='web' proxies the client-owned write tools (write/edit/delete_file)."""
         from datus.api.models.cli_models import StreamChatInput
@@ -796,6 +1083,27 @@ class TestStartChat:
             "db_schema": "configured_schema",
         }
 
+    async def test_start_chat_forces_immutable_config(self, real_agent_config, monkeypatch):
+        """The per-request clone is marked read-only (filesystem + config)
+        while the shared config keeps its defaults."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager()
+        request = StreamChatInput(message="hello", session_id="immutable-config")
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        assert captured["config"].config_mutable is False
+        assert captured["config"].filesystem_strict is True
+        # The shared config must not be mutated by the request.
+        assert real_agent_config.config_mutable is True
+
     async def test_start_chat_duplicate_session_raises(self, real_agent_config, mock_llm_create):
         """start_chat raises ValueError for duplicate session_id."""
         from datus.api.models.cli_models import StreamChatInput
@@ -932,49 +1240,54 @@ class TestResolveAtContext:
     """Tests for _resolve_at_context — @ reference resolution."""
 
     def test_resolve_empty_paths_returns_empty(self, real_agent_config):
-        """_resolve_at_context with no paths returns empty lists."""
+        """_resolve_at_context with no paths returns empty lists + no hints."""
         manager = ChatTaskManager()
-        tables, metrics, sqls = manager._resolve_at_context(real_agent_config, None, None, None)
+        tables, metrics, sqls, hints = manager._resolve_at_context(real_agent_config, None, None, None, None)
         assert tables == []
         assert metrics == []
         assert sqls == []
+        assert hints == []
 
     def test_resolve_with_empty_lists(self, real_agent_config):
         """_resolve_at_context with empty lists returns empty results."""
         manager = ChatTaskManager()
-        tables, metrics, sqls = manager._resolve_at_context(real_agent_config, [], [], [])
+        tables, metrics, sqls, hints = manager._resolve_at_context(real_agent_config, [], [], [], [])
         assert tables == []
         assert metrics == []
         assert sqls == []
+        assert hints == []
 
-    def test_resolve_nonexistent_paths(self, real_agent_config):
-        """_resolve_at_context with nonexistent paths returns empty (no crash)."""
+    def test_knowledge_paths_always_become_hints(self, real_agent_config):
+        """@Knowledge has no store loader, so every ref surfaces as a look-up hint."""
         manager = ChatTaskManager()
-        tables, metrics, sqls = manager._resolve_at_context(
-            real_agent_config,
-            ["nonexistent/table/path"],
-            ["nonexistent/metric/path"],
-            ["nonexistent/sql/path"],
-        )
-        # Should return empty lists since paths don't exist
-        assert isinstance(tables, list)
-        assert isinstance(metrics, list)
-        assert isinstance(sqls, list)
+        _, _, _, hints = manager._resolve_at_context(real_agent_config, None, None, None, ["Domain/Glossary/gmv"])
+        assert hints == [{"kind": "knowledge", "name": "gmv", "subject_path": ["Domain", "Glossary"]}]
 
-    def test_resolve_at_context_returns_empty_when_completer_fails(self, real_agent_config):
+    def test_table_completer_failure_still_yields_name_only_ref(self, real_agent_config):
+        """A completer failure must not drop a picked @Table — it degrades to a
+        name-only reference so the node still knows which table to inspect."""
         manager = ChatTaskManager()
 
         with patch("datus.api.services.chat_task_manager.AtReferenceCompleter", side_effect=RuntimeError("hf offline")):
-            tables, metrics, sqls = manager._resolve_at_context(
-                real_agent_config,
-                ["db.schema.table"],
-                ["Finance.revenue"],
-                ["Finance.sql"],
-            )
+            tables = manager._resolve_table_paths(real_agent_config, ["db.schema.table"])
 
-        assert tables == []
+        assert [t.table_name for t in tables] == ["table"]
+
+    def test_metric_store_failure_degrades_to_hint(self, real_agent_config):
+        """A store failure yields no typed metric but a look-up hint (not a silent drop)."""
+        manager = ChatTaskManager()
+        with patch("datus.storage.metric.store.MetricRAG", side_effect=RuntimeError("store down")):
+            metrics, hints = manager._resolve_metric_paths(real_agent_config, ["Finance/revenue"])
         assert metrics == []
+        assert hints == [{"kind": "metric", "name": "revenue", "subject_path": ["Finance"]}]
+
+    def test_sql_store_failure_degrades_to_hint(self, real_agent_config):
+        """A store failure yields no typed reference SQL but a look-up hint."""
+        manager = ChatTaskManager()
+        with patch("datus.storage.reference_sql.store.ReferenceSqlRAG", side_effect=RuntimeError("store down")):
+            sqls, hints = manager._resolve_sql_paths(real_agent_config, ["Finance/sql"])
         assert sqls == []
+        assert hints == [{"kind": "reference_sql", "name": "sql", "subject_path": ["Finance"]}]
 
 
 class TestCreateNode:
@@ -1738,12 +2051,13 @@ class TestStartChatModelOverride:
 
 
 class TestStartChatRemoteSourceHardening:
-    """Remote front-ends (vscode/web) must not see a server-side BashTool.
-    ``filesystem_strict`` is always on for the API surface;
-    ``bash_tool_enabled`` is additionally forced off when
-    ``effective_source in {vscode, web}``. ``project_root`` is intentionally
-    untouched — web keeps its configured root and the read-only property
-    falls back to CWD when empty.
+    """Per-source bash policy for remote front-ends.
+    ``filesystem_strict`` is always on for the API surface. vscode owns its
+    own local shell, so ``bash_tool_enabled`` is forced off; web runs a full
+    server-side bash (``bash_allowed_patterns = ["*"]``) confined by the
+    strict OS sandbox (``bash_sandbox.enabled`` + ``mode == "strict"``).
+    ``project_root`` is intentionally untouched — web keeps its configured
+    root and the read-only property falls back to CWD when empty.
     """
 
     @pytest.mark.asyncio
@@ -1766,11 +2080,13 @@ class TestStartChatRemoteSourceHardening:
         assert cfg.filesystem_strict is True
         assert cfg.bash_tool_enabled is False
         assert cfg._client_source == "vscode"
+        # vscode never gets a restricted-bash whitelist — the tool is gone.
+        assert cfg.bash_allowed_patterns == ["*"]
         # Source config remains untouched because start_chat deep-copies.
         assert real_agent_config.bash_tool_enabled is True
 
     @pytest.mark.asyncio
-    async def test_web_source_disables_bash_tool(self, real_agent_config, monkeypatch):
+    async def test_web_source_allows_all_bash_under_strict_sandbox(self, real_agent_config, monkeypatch):
         from datus.api.models.cli_models import StreamChatInput
 
         real_agent_config.bash_tool_enabled = True
@@ -1787,8 +2103,63 @@ class TestStartChatRemoteSourceHardening:
 
         cfg = captured["agent_config"]
         assert cfg.filesystem_strict is True
-        assert cfg.bash_tool_enabled is False
+        # web runs a full bash confined by the strict OS sandbox, not a whitelist.
+        assert cfg.bash_tool_enabled is True
+        assert cfg.bash_allowed_patterns == ["*"]
+        assert cfg.bash_sandbox.enabled is True
+        assert cfg.bash_sandbox.is_strict is True
         assert cfg._client_source == "web"
+        # Source config remains untouched because start_chat deep-copies.
+        assert real_agent_config.bash_allowed_patterns == ["*"]
+        assert real_agent_config.bash_sandbox.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_web_source_respects_yaml_bash_disable(self, real_agent_config, monkeypatch):
+        """An agent.yml ``bash.enabled: false`` still wins under web —
+        allowing all commands or enabling the sandbox must never re-enable a
+        disabled tool."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        real_agent_config.bash_tool_enabled = False
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager()
+        request = StreamChatInput(message="hi", source="web", session_id="web-yaml-disabled")
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        cfg = captured["agent_config"]
+        assert cfg.bash_tool_enabled is False
+        assert cfg.bash_allowed_patterns == ["*"]
+
+    @pytest.mark.asyncio
+    async def test_default_source_web_applies_strict_sandbox_without_request_source(
+        self, real_agent_config, monkeypatch
+    ):
+        """A daemon launched with --source web applies the full-bash +
+        strict-sandbox policy to every request that does not override source."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        real_agent_config.bash_tool_enabled = True
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager(default_source="web")
+        request = StreamChatInput(message="hi", session_id="default-web-hardening")
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        cfg = captured["agent_config"]
+        assert cfg.bash_tool_enabled is True
+        assert cfg.bash_allowed_patterns == ["*"]
+        assert cfg.bash_sandbox.is_strict is True
 
     @pytest.mark.asyncio
     async def test_default_source_vscode_applies_hardening_without_request_source(self, real_agent_config, monkeypatch):
@@ -1833,6 +2204,7 @@ class TestStartChatRemoteSourceHardening:
         cfg = captured["agent_config"]
         assert cfg.filesystem_strict is True
         assert cfg.bash_tool_enabled is True
+        assert cfg.bash_allowed_patterns == ["*"]
         assert cfg._client_source is None
 
 
@@ -1880,3 +2252,154 @@ class TestStartChatDatasourceOverride:
         request = StreamChatInput(message="hi", session_id="ds-invalid", datasource="nonexistent")
         with pytest.raises(DatusException):
             await manager.start_chat(real_agent_config, request)
+
+
+class TestMatchTableEntry:
+    """_match_table_entry — resilient @Table resolution when the picker's
+    fullName (live introspection) diverges from the metadata-store key."""
+
+    FLAT = {
+        "jeff_shop_live.main.raw_stores": {
+            "table_name": "raw_stores",
+            "database_name": "jeff_shop_live",
+            "schema_name": "main",
+            "definition": "x",
+            "identifier": "i",
+        },
+        "jeff_shop_live.main.raw_orders": {
+            "table_name": "raw_orders",
+            "database_name": "jeff_shop_live",
+            "schema_name": "main",
+            "definition": "x",
+            "identifier": "i",
+        },
+    }
+
+    def test_catalog_prefix_mismatch_resolves(self):
+        entry = ChatTaskManager._match_table_entry(self.FLAT, "default_catalog.jeff_shop_live.raw_stores")
+        assert entry and entry["table_name"] == "raw_stores"
+
+    def test_bare_db_table_resolves(self):
+        entry = ChatTaskManager._match_table_entry(self.FLAT, "jeff_shop_live.raw_stores")
+        assert entry and entry["table_name"] == "raw_stores"
+
+    def test_unknown_table_returns_none(self):
+        assert ChatTaskManager._match_table_entry(self.FLAT, "default_catalog.jeff_shop_live.nope") is None
+
+    def test_ambiguous_without_db_returns_none(self):
+        amb = {
+            "db1.t": {"table_name": "t", "database_name": "db1"},
+            "db2.t": {"table_name": "t", "database_name": "db2"},
+        }
+        assert ChatTaskManager._match_table_entry(amb, "t") is None
+
+    def test_ambiguous_disambiguated_by_db(self):
+        amb = {
+            "db1.t": {"table_name": "t", "database_name": "db1"},
+            "db2.t": {"table_name": "t", "database_name": "db2"},
+        }
+        entry = ChatTaskManager._match_table_entry(amb, "db2.t")
+        assert entry and entry["database_name"] == "db2"
+
+    def test_sqlite_single_level_resolves(self):
+        flat = {"raw_stores": {"table_name": "raw_stores", "definition": "x"}}
+        entry = ChatTaskManager._match_table_entry(flat, "raw_stores")
+        assert entry and entry["table_name"] == "raw_stores"
+
+
+class TestSynthesizeTableEntry:
+    """_synthesize_table_entry — name-only fallback when the metadata store
+    can't resolve a picked @Table (KB not indexed for the datasource)."""
+
+    def test_three_part_path(self):
+        from datus.schemas.node_models import TableSchema
+
+        entry = ChatTaskManager._synthesize_table_entry("default_catalog.jeff_shop_live.raw_orders")
+        assert entry["table_name"] == "raw_orders"
+        assert entry["database_name"] == "jeff_shop_live"
+        # Must build a valid TableSchema and render to its own name in the prompt.
+        ts = TableSchema.from_dict(entry)
+        assert TableSchema.table_names_to_prompt([ts]) == "raw_orders"
+
+    def test_single_segment(self):
+        entry = ChatTaskManager._synthesize_table_entry("raw_orders")
+        assert entry["table_name"] == "raw_orders"
+        assert entry["database_name"] == ""
+
+    def test_empty_path(self):
+        assert ChatTaskManager._synthesize_table_entry("") is None
+
+
+class TestSplitSubjectPath:
+    """_split_subject_path — (subject_path, name) from a picked ref path."""
+
+    def test_slash_joined(self):
+        assert ChatTaskManager._split_subject_path("Commerce/Orders/aov") == (["Commerce", "Orders"], "aov")
+
+    def test_dot_joined_when_no_slash(self):
+        assert ChatTaskManager._split_subject_path("Commerce.Orders.aov") == (["Commerce", "Orders"], "aov")
+
+    def test_slash_present_preserves_dot_in_name(self):
+        assert ChatTaskManager._split_subject_path("A/B/v1.2") == (["A", "B"], "v1.2")
+
+    def test_single_segment(self):
+        assert ChatTaskManager._split_subject_path("aov") == ([], "aov")
+
+    def test_empty(self):
+        assert ChatTaskManager._split_subject_path("") == ([], "")
+
+
+class TestResolveMetricSqlPaths:
+    """@Metric/@Sql resolve by exact subject path via the non-vector store
+    lookup (same as the get_metrics / get_reference_sql tools)."""
+
+    def test_metric_uses_path_scoped_detail_lookup(self):
+        mgr = ChatTaskManager()
+        fake_rag = MagicMock()
+        fake_rag.get_metrics_detail.return_value = [{"name": "aov", "description": "avg order value"}]
+        with patch("datus.storage.metric.store.MetricRAG", return_value=fake_rag):
+            metrics, hints = mgr._resolve_metric_paths(MagicMock(), ["Commerce/Orders/aov"])
+        fake_rag.get_metrics_detail.assert_called_once_with(subject_path=["Commerce", "Orders"], name="aov")
+        assert len(metrics) == 1 and metrics[0].name == "aov"
+        # subject_path must survive into the resolved metric (authoritative from
+        # the picked path), so the prompt can name where it lives.
+        assert metrics[0].subject_path == ["Commerce", "Orders"]
+        assert hints == []
+
+    def test_metric_unresolved_becomes_hint(self):
+        mgr = ChatTaskManager()
+        fake_rag = MagicMock()
+        fake_rag.get_metrics_detail.return_value = []
+        with patch("datus.storage.metric.store.MetricRAG", return_value=fake_rag):
+            metrics, hints = mgr._resolve_metric_paths(MagicMock(), ["A/b/missing"])
+        assert metrics == []
+        assert hints == [{"kind": "metric", "name": "missing", "subject_path": ["A", "b"]}]
+
+    def test_sql_uses_path_scoped_detail_lookup(self):
+        mgr = ChatTaskManager()
+        fake_store = MagicMock()
+        # Store returns optional string columns as None (no comment/tags) —
+        # must still build a valid ReferenceSql (regression: pydantic rejected None).
+        fake_store.get_reference_sql_detail.return_value = [
+            {"name": "q", "sql": "select 1", "summary": None, "comment": None, "tags": None}
+        ]
+        with patch("datus.storage.reference_sql.store.ReferenceSqlRAG", return_value=fake_store):
+            sqls, hints = mgr._resolve_sql_paths(MagicMock(), ["main/q"])
+        fake_store.get_reference_sql_detail.assert_called_once_with(subject_path=["main"], name="q")
+        assert len(sqls) == 1 and sqls[0].sql == "select 1"
+        assert sqls[0].comment == "" and sqls[0].tags == ""
+        assert sqls[0].subject_path == ["main"]
+        assert hints == []
+
+    def test_metric_none_description_coerced(self):
+        mgr = ChatTaskManager()
+        fake_rag = MagicMock()
+        fake_rag.get_metrics_detail.return_value = [{"name": "aov", "description": None}]
+        with patch("datus.storage.metric.store.MetricRAG", return_value=fake_rag):
+            metrics, _ = mgr._resolve_metric_paths(MagicMock(), ["Commerce/aov"])
+        assert len(metrics) == 1 and metrics[0].name == "aov" and metrics[0].description == ""
+
+    def test_empty_paths_short_circuit(self):
+        mgr = ChatTaskManager()
+        assert mgr._resolve_metric_paths(MagicMock(), []) == ([], [])
+        assert mgr._resolve_sql_paths(MagicMock(), None) == ([], [])

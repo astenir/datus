@@ -17,6 +17,7 @@ from datus_semantic_osi.ir import MetricKind
         ("mysql", "mysql"),
         ("postgresql", "postgres"),  # alias
         ("greenplum", "postgres"),  # alias
+        ("hologres", "postgres"),  # alias
         ("duckdb", "duckdb"),
         ("snowflake", "snowflake"),
         ("STARROCKS", "starrocks"),  # case-insensitive
@@ -54,3 +55,19 @@ def test_adapter_dialect_uses_datasource_type_not_config_name(tmp_path):
         )
     )
     assert adapter._dialect == "snowflake"
+
+
+def test_hologres_adapter_uses_postgres_expression_semantics(tmp_path):
+    from datus_semantic_osi.adapter import DatusOSIAdapter
+    from datus_semantic_osi.config import DatusOSIConfig
+
+    adapter = DatusOSIAdapter(
+        DatusOSIConfig(
+            semantic_models_path=str(tmp_path),
+            datasource="prod_wh",
+            db_config={"type": "hologres"},
+        )
+    )
+
+    assert adapter._dialect == "postgres"
+    assert adapter._runtime_where_sql("name ILIKE 'a%'") == "name ILIKE 'a%'"

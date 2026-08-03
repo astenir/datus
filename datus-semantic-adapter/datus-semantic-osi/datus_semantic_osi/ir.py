@@ -12,9 +12,9 @@ own artifacts (e.g. MetricFlow YAML). The IR never depends on MetricFlow.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MetricKind(str, Enum):
@@ -78,12 +78,24 @@ class FieldIR(BaseModel):
     description: str = ""
 
 
+class IdentifierComponentIR(BaseModel):
+    """One locally-expressed component of a composite identifier."""
+
+    name: str
+    expr: str
+
+
 class IdentifierIR(BaseModel):
     """A primary / unique / foreign key used for joins and grain."""
 
     name: str
     type: str  # primary | unique | foreign
-    expr: str
+    expr: Optional[str] = None
+    components: List[IdentifierComponentIR] = Field(default_factory=list)
+
+    @property
+    def is_composite(self) -> bool:
+        return bool(self.components)
 
 
 class DatasetIR(BaseModel):
@@ -136,14 +148,45 @@ class MetricIR(BaseModel):
 
 
 class RelationshipIR(BaseModel):
-    """A join path between two datasets (first version: many-to-one / one-to-one)."""
+    """A join path between two datasets (many-to-one / one-to-one)."""
 
     name: str
     type: str  # many_to_one | one_to_one
     from_dataset: str
-    from_identifier: str
+    from_columns: List[str] = Field(default_factory=list)
     to_dataset: str
-    to_identifier: str
+    to_columns: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_single_identifier_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if "from_columns" not in normalized and "from_identifier" in normalized:
+            normalized["from_columns"] = [normalized["from_identifier"]]
+        if "to_columns" not in normalized and "to_identifier" in normalized:
+            normalized["to_columns"] = [normalized["to_identifier"]]
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_columns(self) -> "RelationshipIR":
+        if not self.from_columns or len(self.from_columns) != len(self.to_columns):
+            raise ValueError(
+                "Relationship IR must have the same non-zero number of "
+                "from_columns and to_columns."
+            )
+        return self
+
+    @property
+    def from_identifier(self) -> str:
+        """Compatibility accessor for legacy single-column consumers."""
+        return self.from_columns[0]
+
+    @property
+    def to_identifier(self) -> str:
+        """Compatibility accessor for legacy single-column consumers."""
+        return self.to_columns[0]
 
 
 class SemanticModelIR(BaseModel):

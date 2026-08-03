@@ -20,6 +20,7 @@
 | `datus-mysql` | SQLAlchemy / MySQL | [README](./datus-mysql/README.md) |
 | `datus-postgresql` | SQLAlchemy / PostgreSQL | [README](./datus-postgresql/README.md) |
 | `datus-starrocks` | MySQL 协议 | [README](./datus-starrocks/README.md) |
+| `datus-doris` | MySQL 协议 / Apache Doris | [README](./datus-doris/README.md) |
 | `datus-snowflake` | Snowflake SDK | [README](./datus-snowflake/README.md) |
 | `datus-clickzetta` | ClickZetta SDK | [README](./datus-clickzetta/README.md) |
 | `datus-clickhouse` | ClickHouse | [README](./datus-clickhouse/README.md) |
@@ -28,6 +29,8 @@
 | `datus-spark` | Spark SQL | [README](./datus-spark/README.md) |
 | `datus-trino` | Trino | [README](./datus-trino/README.md) |
 | `datus-greenplum` | PostgreSQL 协议 / Greenplum | [README](./datus-greenplum/README.md) |
+| `datus-maxcompute` | PyODPS / MaxCompute | [README](./datus-maxcompute/README.md) |
+| `datus-hologres` | PostgreSQL 协议 / Hologres | [README](./datus-hologres/README.md) |
 | `datus-oracle` | python-oracledb / SQLAlchemy | [README](./datus-oracle/README.md) |
 | `datus-oceanbase-oracle` | JDBC / OceanBase Oracle 模式 | [README](./datus-oceanbase-oracle/README.md) |
 

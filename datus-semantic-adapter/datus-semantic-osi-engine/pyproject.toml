@@ -11,7 +11,7 @@ dependencies = [
     # Authoring reuse: the shared MetricAuthor lives in core, so osi_engine
     # reuses the OSI file read/write/validate logic without depending on the
     # datus-semantic-osi (Python compiler) package.
-    "datus-semantic-core>=0.2.2",
+    "datus-semantic-core>=0.2.3",
 ]
 
 [project.optional-dependencies]

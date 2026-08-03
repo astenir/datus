@@ -192,7 +192,7 @@ class TestValidateToolsForAgentType:
 
     def test_ask_metrics_allows_valid_tools_outside_default_surface(self):
         tools = [
-            "db_tools.read_query",
+            "db_tools.execute_sql",
             "date_parsing_tools.parse_temporal_expressions",
             "semantic_tools.validate_semantic",
             "semantic_tools.*",
@@ -296,13 +296,15 @@ class TestConstants:
             "edit_file",
             "delete_file",
             "upsert_osi_metrics",
+            "upsert_osi_datasets",
             "glob",
             "grep",
         }
         assert introspected == expected_runtime_methods
-        for name in expected_runtime_methods - {"upsert_osi_metrics"}:
+        for name in expected_runtime_methods - {"upsert_osi_metrics", "upsert_osi_datasets"}:
             assert hasattr(FilesystemFuncTool, name), f"FilesystemFuncTool dropped method {name!r}"
         assert hasattr(MetricFilesystemFuncTool, "upsert_osi_metrics")
+        assert hasattr(MetricFilesystemFuncTool, "upsert_osi_datasets")
         # BaseTool framework methods must NOT show up in the catalog.
         for framework_method in ("set_tool_context", "get_actions", "call_action"):
             assert framework_method not in catalog
@@ -466,7 +468,7 @@ class TestGetUseTools:
         assert result.success is True
         assert result.data["default_tools"] == SUBAGENT_TOOL_REFERENCE["ask_metrics"]["default_tools"]
         assert set(result.data["tool_types"].keys()) == set(_USER_FACING_TOOL_CATEGORIES)
-        assert "read_query" in result.data["tool_types"]["db_tools"]["tools"]
+        assert "execute_sql" in result.data["tool_types"]["db_tools"]["tools"]
         assert "parse_temporal_expressions" in result.data["tool_types"]["date_parsing_tools"]["tools"]
         assert result.data["tool_types"] == SUBAGENT_TOOL_REFERENCE["ask_metrics"]["tool_types"]
 

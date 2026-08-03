@@ -66,6 +66,10 @@ if TYPE_CHECKING:
 HEARTBEAT_INTERVAL = 10  # seconds
 _TOOL_EXECUTION_QUEUE_STOP = object()
 
+# Max run-boundary auto-continuations per task, bounding a client that keeps
+# POSTing /chat/insert from running one task indefinitely.
+_MAX_INSERT_CONTINUATIONS = 20
+
 
 def is_thinking_only_content(content_items) -> bool:
     """Return True if all content items are thinking chunks (i.e. a delta message).
@@ -309,6 +313,24 @@ class ChatTask:
         self.error: Optional[str] = None
         self.consumer_offset: int = 0
         initialize_chat_task_runtime(self, owner_user_id)
+        # Created up-front — before the node exists — so ``POST /chat/insert``
+        # can enqueue during node startup (node creation is an ``await
+        # to_thread`` that can take hundreds of ms). ``_run_loop`` points the
+        # node at this same instance, so the filter drains these on turn one.
+        self.pending_input_queue: PendingInputQueue = PendingInputQueue()
+        # Whether ``/chat/insert`` may still enqueue. ``_run_loop`` flips this
+        # off once it stops draining (final drain empty), so inserts arriving
+        # during the run's tail (persist / usage / end events) get
+        # SESSION_NOT_RUNNING and the client falls back to a fresh turn, rather
+        # than enqueueing with nothing left to drain them.
+        self.accepting_inserts: bool = True
+
+
+COMPLETED_TASK_TTL = 300  # seconds to keep completed tasks for resume
+
+# Web clients run a FULL server-side bash (all commands allowed), confined by
+# the strict OS sandbox rather than a command whitelist — see ``start_chat``.
+WEB_BASH_ALLOWED_PATTERNS = ["*"]
 
 
 class ChatTaskManager:
@@ -410,12 +432,19 @@ class ChatTaskManager:
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().
         agent_config.filesystem_strict = True
+        # The API always works on a per-request clone and must not expose
+        # config-mutating setup skills or plugin instructions.
+        agent_config.config_mutable = False
         # Enterprise requests never receive a server-side BashTool: changing
         # cwd is not a filesystem sandbox. Remote front-ends (vscode/web) also
-        # own their own shell and keep the same hardening in local mode.
+        # keep the same hardening in local mode where applicable.
         effective_source = request.source or self._default_source
-        if self._enterprise_enabled or effective_source in ("vscode", "web"):
+        if self._enterprise_enabled or effective_source == "vscode":
             agent_config.bash_tool_enabled = False
+        elif effective_source == "web":
+            agent_config.bash_allowed_patterns = WEB_BASH_ALLOWED_PATTERNS
+            agent_config.bash_sandbox.enabled = True
+            agent_config.bash_sandbox.mode = "strict"
         # Stash the resolved source on the cloned config so downstream nodes
         # can adapt prompt-side hints to the front-end (e.g. vscode renders
         # the literal "." for the SQL files root because the IDE owns its own
@@ -767,6 +796,10 @@ class ChatTaskManager:
         try:
             start_time = datetime.now()
 
+            # Snapshot the turn counter BEFORE the run so the @-context persist
+            # below only fires when this run actually adds a new user turn.
+            pre_turn_number = await asyncio.to_thread(self._max_user_turn_number, agent_config, session_id, user_id)
+
             # 1. Create node.
             #    Runs in thread pool because setup_tools() triggers synchronous
             #    operations (psycopg ConnectionPool creation, PG DDL for table
@@ -816,11 +849,15 @@ class ChatTaskManager:
 
             node = await asyncio.to_thread(_init_node)
             task.node = node
-            # The API path accepts free-text mid-run insertions just like the
-            # interactive CLI/TUI path. Initialize the queue before exposing
-            # the session event so /chat/insert always targets a live queue.
-            if getattr(node, "pending_input_queue", None) is None:
-                node.pending_input_queue = PendingInputQueue()
+            # Enable mid-run insert (steering): point the node at the
+            # task-scoped queue that ``start_chat`` created before the node
+            # existed, so messages POSTed to ``/chat/insert`` during node
+            # startup are preserved. The model layer's
+            # ``call_model_input_filter`` — wired ONLY when the queue is
+            # non-None — injects queued messages at the next LLM turn boundary.
+            # Without this the API path silently drops mid-run messages (the
+            # CLI wires its own queue in chat_commands).
+            node.pending_input_queue = task.pending_input_queue
             trace_token = set_trace_context(
                 build_chat_trace_context(
                     session_id=session_id,
@@ -874,9 +911,17 @@ class ChatTaskManager:
                 name=f"chat-tool-timing:{session_id}",
             )
 
-            # 3. Resolve @-references
-            at_tables, at_metrics, at_sqls = self._resolve_at_context(
-                agent_config, request.table_paths, request.metric_paths, request.sql_paths
+            # 3. Resolve @-references. Run in a worker thread (like node
+            # creation): the metric/reference-sql stores use blocking psycopg
+            # connections that must not be driven from the event-loop thread —
+            # doing so corrupts the pooled connection ("the connection is lost").
+            at_tables, at_metrics, at_sqls, at_hints = await asyncio.to_thread(
+                self._resolve_at_context,
+                agent_config,
+                request.table_paths,
+                request.metric_paths,
+                request.sql_paths,
+                request.knowledge_paths,
             )
 
             # 4. Build typed input and assign to node
@@ -886,6 +931,7 @@ class ChatTaskManager:
                 at_tables=at_tables,
                 at_metrics=at_metrics,
                 at_sqls=at_sqls,
+                at_hints=at_hints,
                 catalog=request.catalog,
                 database=request.database,
                 db_schema=request.db_schema,
@@ -931,56 +977,24 @@ class ChatTaskManager:
             # through its call_model_input_filter. Residual input that arrives
             # after the final model turn starts a continuation run below.
             action_count = 0
-            continuation_message: Optional[str] = None
-            while True:
-                if continuation_message is not None:
-                    continuation_action = ActionHistory.create_action(
-                        role=ActionRole.USER,
-                        action_type="user_insert",
-                        messages=continuation_message,
-                        input_data={"user_message": continuation_message, "source": "mid_run_insert"},
-                        output_data={"user_message": continuation_message},
-                        status=ActionStatus.SUCCESS,
-                    )
-                    continuation_event = action_to_sse_event(
-                        continuation_action,
-                        event_id,
-                        continuation_action.action_id,
-                    )
-                    if continuation_event is not None:
-                        await self._push_event(task, continuation_event)
-                        event_id += 1
-                        action_count += 1
-                    node.input = self._create_node_input(
-                        user_message=continuation_message,
-                        current_node=node,
-                        at_tables=at_tables,
-                        at_metrics=at_metrics,
-                        at_sqls=at_sqls,
-                        catalog=request.catalog,
-                        database=request.database,
-                        db_schema=request.db_schema,
-                        plan_mode=request.plan_mode or False,
-                        source_session_id=request.source_session_id,
-                    )
+            # action_id is globally unique, so delta de-dup can safely span passes.
+            action_history = ActionHistoryManager()
+            seen_delta_action_ids: set[str] = set()
 
-                if task.stop_requested:
-                    queue = getattr(node, "pending_input_queue", None)
-                    if queue is not None:
-                        queue.close()
-                    break
-
-                action_history = ActionHistoryManager()
-                seen_delta_action_ids: set[str] = set()
+            async def _run_pass() -> None:
+                nonlocal event_id, action_count
+                # Per-run render state — reset each pass. A continuation pass is a
+                # fresh turn, so its reply must not be dropped as a duplicate of an
+                # earlier pass ("re-run it" is a common steering ask) nor suppressed
+                # by a stale assistant_response_sent carried over between passes.
                 assistant_response_sent = False
                 tool_result_seen = False
                 seen_assistant_message_fingerprints: set[str] = set()
-
                 async for action in node.execute_stream_with_interactions(action_history):
                     action_count += 1
 
-                    # Convert action to SSE.
-                    # Per-request stream_response overrides the server-level --stream flag.
+                    # Convert action to SSE
+                    # Per-request stream_response overrides the server-level --stream flag
                     effective_stream = (
                         request.stream_response if request.stream_response is not None else self._stream_thinking
                     )
@@ -1059,19 +1073,75 @@ class ChatTaskManager:
                         if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
                             tool_result_seen = True
 
-                queue = getattr(node, "pending_input_queue", None)
+            # Mid-run insert (steering) auto-continuation: a message queued
+            # AFTER the final LLM turn is never seen by the SDK's
+            # call_model_input_filter (no further turn boundary fires), so after
+            # each run drain any residue and continue with a fresh turn. Mirrors
+            # the CLI's execute_chat_command loop and prevents silently dropping
+            # late mid-run messages. Messages queued mid-turn are injected in-run
+            # by the filter and never reach here.
+            continuations = 0
+            while True:
+                if task.stop_requested:
+                    task.pending_input_queue.close()
+                    break
+                await _run_pass()
                 interrupted = bool(getattr(getattr(node, "interrupt_controller", None), "is_interrupted", False))
                 if task.stop_requested or interrupted:
-                    if queue is not None:
-                        queue.close()
+                    task.pending_input_queue.close()
                     break
-                if queue is None:
+                residual = self._drain_pending_for_continuation(node)
+                if not residual:
+                    # Close the accept window, then drain once more. An insert
+                    # that landed during this run's tail must not be stranded;
+                    # after the window closes /chat/insert returns
+                    # SESSION_NOT_RUNNING and the client re-sends as a new turn.
+                    task.accepting_inserts = False
+                    residual = self._drain_pending_for_continuation(node)
+                    if not residual:
+                        break
+                    task.accepting_inserts = True
+
+                continuations += 1
+                if continuations > _MAX_INSERT_CONTINUATIONS:
+                    # Defensive bound: a client that inserts without pause could
+                    # otherwise keep one task running forever. Stop accepting and
+                    # log what we drop rather than silently truncating.
+                    task.accepting_inserts = False
+                    logger.warning(
+                        "Mid-run insert continuation cap (%d) hit for session %s; dropping %d residual message(s)",
+                        _MAX_INSERT_CONTINUATIONS,
+                        session_id,
+                        len(residual),
+                    )
                     break
 
-                residual = queue.drain_or_close()
-                if not residual:
-                    break
-                continuation_message = "\n\n".join(residual)
+                # Echo each residual as a user_insert frame so the client
+                # dismisses its pending entry and renders the user bubble —
+                # the same wire shape the in-run filter path emits via the
+                # InteractionBroker.
+                for text in residual:
+                    event_id = await self._emit_user_insert_sse(task, text, event_id)
+                node.input = self._create_node_input(
+                    user_message="\n\n".join(residual),
+                    current_node=node,
+                    at_tables=[],
+                    at_metrics=[],
+                    at_sqls=[],
+                    at_hints=[],
+                    catalog=request.catalog,
+                    database=request.database,
+                    db_schema=request.db_schema,
+                    plan_mode=request.plan_mode or False,
+                    source_session_id=None,
+                )
+
+            # 6.5 Persist this turn's @-context (table/metric/sql/knowledge refs)
+            # so the history API can re-render them. Best-effort and off the
+            # event loop; must never fail the turn.
+            await asyncio.to_thread(
+                self._persist_turn_at_context, agent_config, session_id, request, user_id, pre_turn_number
+            )
 
             # 7. End event
             token_kwargs: dict = {}
@@ -1185,6 +1255,98 @@ class ChatTaskManager:
             self._release_task_slot(session_id, task)
             if self._chat_admission is not None:
                 await self._chat_admission.release(task.admission_token)
+
+    @staticmethod
+    def _drain_pending_for_continuation(node) -> Optional[List[str]]:
+        """Drain mid-run messages left in the queue after a run finished.
+
+        Returns the FIFO list to continue with, or ``None`` when there is
+        nothing to continue or the run was interrupted (in which case the
+        queue is cleared, matching the CLI's cancel semantics).
+        """
+        queue = getattr(node, "pending_input_queue", None)
+        if queue is None or len(queue) == 0:
+            return None
+        ic = getattr(node, "interrupt_controller", None)
+        if ic is not None and getattr(ic, "is_interrupted", False):
+            queue.clear()
+            return None
+        return queue.drain()
+
+    async def _emit_user_insert_sse(self, task: "ChatTask", text: str, event_id: int) -> int:
+        """Emit a ``user_insert`` SSE frame for a residual mid-run message.
+
+        Mirrors the in-run filter path (which surfaces injections via
+        ``InteractionBroker.emit_user_insert``) so the client dismisses the
+        matching pending entry and renders the user bubble. Returns the next
+        ``event_id``.
+        """
+        action = ActionHistory(
+            action_id=str(uuid.uuid4()),
+            role=ActionRole.USER,
+            status=ActionStatus.SUCCESS,
+            action_type="user_insert",
+            messages=text,
+            input={"user_message": text, "source": "mid_run_insert"},
+            output={"user_message": text},
+        )
+        sse = action_to_sse_event(action, event_id, action.action_id)
+        if sse:
+            await self._push_event(task, sse)
+            return event_id + 1
+        return event_id
+
+    @staticmethod
+    def _session_manager(agent_config: AgentConfig, user_id: Optional[str]):
+        """Build a SessionManager pointed at this run's session dir + scope."""
+        from datus.models.session_manager import SessionManager
+        from datus.utils.path_manager import get_path_manager
+
+        base_dir = getattr(agent_config, "session_dir", None) or str(
+            get_path_manager(agent_config=agent_config).sessions_dir
+        )
+        return SessionManager(session_dir=base_dir, scope=user_id)
+
+    def _max_user_turn_number(self, agent_config: AgentConfig, session_id: str, user_id: Optional[str]) -> int:
+        """Best-effort snapshot of the session's turn counter (0 on any error)."""
+        try:
+            return self._session_manager(agent_config, user_id).get_max_user_turn_number(session_id)
+        except Exception:
+            return 0
+
+    def _persist_turn_at_context(
+        self,
+        agent_config: AgentConfig,
+        session_id: str,
+        request: StreamChatInput,
+        user_id: Optional[str],
+        previous_turn_number: int = -1,
+    ) -> None:
+        """Persist the just-completed turn's @-references to the session side table.
+
+        Stores the raw request path identifiers (not the resolved objects) so
+        :meth:`ChatService.get_history` can echo them back for front-end display.
+        ``previous_turn_number`` (captured before the run) gates the write so a
+        run that added no new user turn never mis-attaches to the prior bubble.
+        No-op when the turn carried no references; failures are swallowed.
+        """
+        context: Dict[str, Any] = {}
+        if request.table_paths:
+            context["table_paths"] = list(request.table_paths)
+        if request.metric_paths:
+            context["metric_paths"] = list(request.metric_paths)
+        if request.sql_paths:
+            context["sql_paths"] = list(request.sql_paths)
+        if request.knowledge_paths:
+            context["knowledge_paths"] = list(request.knowledge_paths)
+        if not context:
+            return
+        try:
+            self._session_manager(agent_config, user_id).save_user_message_context(
+                session_id, context, previous_turn_number=previous_turn_number
+            )
+        except Exception:
+            logger.debug("Failed to persist turn @-context for session %s", session_id, exc_info=True)
 
     async def _push_event(self, task: ChatTask, event: SSEEvent) -> None:
         """Append an event to the task buffer and notify consumers."""
@@ -1396,6 +1558,7 @@ class ChatTaskManager:
         at_tables: List[TableSchema],
         at_metrics: List[Metric],
         at_sqls: List[ReferenceSql],
+        at_hints: Optional[List[Dict[str, Any]]] = None,
         catalog: Optional[str] = None,
         database: Optional[str] = None,
         db_schema: Optional[str] = None,
@@ -1430,6 +1593,7 @@ class ChatTaskManager:
             at_tables=at_tables,
             at_metrics=at_metrics,
             at_sqls=at_sqls,
+            context_hints=at_hints,
             prompt_language="en",
             plan_mode=plan_mode,
             source_session_id=source_session_id,
@@ -1468,46 +1632,231 @@ class ChatTaskManager:
         )
         return event_id + 1
 
+    @staticmethod
+    def _match_table_entry(flatten: Dict[str, Any], path: str) -> Optional[Dict[str, Any]]:
+        """Best-effort match when the picker's fullName != the metadata-store key.
+
+        The @-picker builds table paths from live introspection (the catalog
+        tree), while the completer indexes the schema-metadata store; the two can
+        differ in catalog presence or schema level (e.g. picker sends
+        ``default_catalog.db.table`` but the store key is ``db.schema.table``).
+        Fall back to matching the trailing components — table name, plus the
+        database when the path carries one. Returns a hit only when exactly one
+        candidate matches, so a genuinely ambiguous name never resolves to the
+        wrong table.
+        """
+        segs = [s.strip().strip('"').lower() for s in path.split(".") if s.strip()]
+        if not segs:
+            return None
+        want_table = segs[-1]
+        want_db = segs[-2] if len(segs) >= 2 else None
+        candidates: List[Dict[str, Any]] = []
+        for entry in flatten.values():
+            if str(entry.get("table_name", "")).lower() != want_table:
+                continue
+            if want_db is not None:
+                entry_db = str(entry.get("database_name", "")).lower()
+                if entry_db and entry_db != want_db:
+                    continue
+            candidates.append(entry)
+        return candidates[0] if len(candidates) == 1 else None
+
+    @staticmethod
+    def _none_to_empty(detail: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce ``None`` values to ``""`` for typed-model construction.
+
+        The path-scoped store returns optional string columns as ``None`` (e.g.
+        a reference SQL with no ``comment`` / ``tags``), but Metric / ReferenceSql
+        declare those as ``str``; ``from_dict``'s ``.get(k, "")`` doesn't catch a
+        present-but-None value, so normalise here.
+        """
+        return {k: ("" if v is None else v) for k, v in detail.items()}
+
+    @staticmethod
+    def _split_subject_path(path: str) -> tuple[List[str], str]:
+        """Split a subject-tree ref path into ``(subject_path, name)``.
+
+        The canonical form is ``/``-joined (``Commerce/Orders/aov``). A path that
+        contains no ``/`` is treated as an older ``.``-joined form and converted;
+        a ``/``-joined path is trusted verbatim so a ``.`` inside a leaf name
+        (``v1.2``) is preserved. The last segment is the leaf name.
+        """
+        normalized = path if "/" in path else path.replace(".", "/")
+        segs = [s.strip().strip('"') for s in normalized.split("/") if s.strip()]
+        if not segs:
+            return [], ""
+        return segs[:-1], segs[-1]
+
+    @staticmethod
+    def _synthesize_table_entry(path: str) -> Optional[Dict[str, Any]]:
+        """Build a name-only table entry from a picked path when the store can't resolve it.
+
+        Only ``table_name`` is surfaced to the prompt ("Available tables"), so an
+        empty ``definition`` is fine — the node inspects the real DDL via its own
+        ``describe_table``. ``database_name`` is a best-effort guess from the
+        leading segment for display/scoping; it isn't required for resolution.
+        """
+        segs = [s.strip().strip('"') for s in path.split(".") if s.strip()]
+        if not segs:
+            return None
+        return {
+            "identifier": path,
+            "catalog_name": "",
+            "database_name": segs[-2] if len(segs) >= 2 else "",
+            "schema_name": "",
+            "table_name": segs[-1],
+            "table_type": "table",
+            "definition": "",
+        }
+
     def _resolve_at_context(
         self,
         agent_config: AgentConfig,
         table_paths: Optional[List[str]],
         metric_paths: Optional[List[str]],
         sql_paths: Optional[List[str]],
-    ) -> tuple[List[TableSchema], List[Metric], List[ReferenceSql]]:
-        """Resolve @-reference paths to typed objects using a fresh completer."""
+        knowledge_paths: Optional[List[str]] = None,
+    ) -> tuple[List[TableSchema], List[Metric], List[ReferenceSql], List[Dict[str, Any]]]:
+        """Resolve @-reference paths to typed objects (+ look-up hints).
+
+        Tables come from the schema-metadata completer with a name-only fallback.
+        Metrics and reference SQL are resolved by EXACT subject path via the same
+        non-vector, path-scoped store lookup the get_metrics / get_reference_sql
+        tools use — deliberately NOT the completer's vector search, which is empty
+        until the KB is vectorised (and is slated for removal).
+
+        Anything that can't be pre-loaded (a metric/sql that didn't resolve, and
+        every @Knowledge ref, which has no store loader) becomes a ``hint`` —
+        ``{kind, name, subject_path}`` — so the prompt can still name it and tell
+        the model which tool to call, instead of dropping it and forcing a blind
+        search.
+        """
+        logger.info(
+            "AT-CONTEXT resolving: table_paths=%s metric_paths=%s sql_paths=%s knowledge_paths=%s "
+            "(project=%s, datasource=%s)",
+            table_paths,
+            metric_paths,
+            sql_paths,
+            knowledge_paths,
+            getattr(agent_config, "project_name", None),
+            getattr(agent_config, "current_datasource", None),
+        )
+        tables = self._resolve_table_paths(agent_config, table_paths)
+        metrics, metric_hints = self._resolve_metric_paths(agent_config, metric_paths)
+        sqls, sql_hints = self._resolve_sql_paths(agent_config, sql_paths)
+        hints = metric_hints + sql_hints + self._knowledge_hints(knowledge_paths)
+        logger.info(
+            "AT-CONTEXT resolved: tables=%s metrics=%s sqls=%s hints=%s",
+            [t.table_name for t in tables],
+            [m.name for m in metrics],
+            [s.name for s in sqls],
+            [f"{h['kind']}:{h['name']}" for h in hints],
+        )
+        return tables, metrics, sqls, hints
+
+    def _knowledge_hints(self, knowledge_paths: Optional[List[str]]) -> List[Dict[str, Any]]:
+        """@Knowledge has no store loader yet — surface every ref as a hint."""
+        hints: List[Dict[str, Any]] = []
+        for path in knowledge_paths or []:
+            subject_path, name = self._split_subject_path(path)
+            if name:
+                hints.append({"kind": "knowledge", "name": name, "subject_path": subject_path})
+        return hints
+
+    def _resolve_table_paths(self, agent_config: AgentConfig, table_paths: Optional[List[str]]) -> List[TableSchema]:
+        tables: List[TableSchema] = []
+        if not table_paths:
+            return tables
         try:
             completer = AtReferenceCompleter(agent_config)
-            completer.reload_data()
+            completer.table_completer.reload_data()
+            table_flatten = completer.table_completer.flatten_data
         except Exception as exc:
-            logger.warning("Failed to resolve @ references; continuing without context references: %s", exc)
-            return [], [], []
-
-        tables: List[TableSchema] = []
-        for path in table_paths or []:
+            logger.warning("Table completer unavailable; falling back to name-only @Table refs: %s", exc)
+            table_flatten = {}
+        for path in table_paths:
             try:
-                entry = completer.table_completer.flatten_data.get(path)
+                entry = table_flatten.get(path) or self._match_table_entry(table_flatten, path)
+                if not entry:
+                    # The @-picker builds table paths from live introspection, so a
+                    # picked table always exists even when the schema-metadata store
+                    # is empty/stale (KB not indexed for this datasource). The prompt
+                    # injection only needs the table NAME (the node's own describe_table
+                    # fetches the DDL), so synthesise a name-only entry rather than
+                    # silently dropping the reference and re-asking the user.
+                    logger.warning(
+                        "Unresolved @Table path '%s' (%d indexed tables); using name-only reference. Sample keys: %s",
+                        path,
+                        len(table_flatten),
+                        list(table_flatten.keys())[:5],
+                    )
+                    entry = self._synthesize_table_entry(path)
                 if entry:
                     tables.append(TableSchema.from_dict(entry))
             except Exception as e:
                 logger.warning(f"Failed to resolve table path '{path}': {e}")
+        return tables
 
+    def _resolve_metric_paths(
+        self, agent_config: AgentConfig, metric_paths: Optional[List[str]]
+    ) -> tuple[List[Metric], List[Dict[str, Any]]]:
         metrics: List[Metric] = []
-        for path in metric_paths or []:
-            try:
-                entry = completer.metric_completer.flatten_data.get(path)
-                if entry:
-                    metrics.append(Metric.from_dict(entry))
-            except Exception as e:
-                logger.warning(f"Failed to resolve metric path '{path}': {e}")
+        hints: List[Dict[str, Any]] = []
+        if not metric_paths:
+            return metrics, hints
+        try:
+            from datus.storage.metric.store import MetricRAG
 
+            rag = MetricRAG(agent_config)
+        except Exception as exc:
+            logger.warning("MetricRAG unavailable; emitting @Metric look-up hints: %s", exc)
+            rag = None
+        for path in metric_paths:
+            subject_path, name = self._split_subject_path(path)
+            if not name:
+                continue
+            try:
+                details = rag.get_metrics_detail(subject_path=subject_path, name=name) if rag else []
+                if details:
+                    metric = Metric.from_dict(self._none_to_empty(details[0]))
+                    # Authoritative subject_path from the picked path (the store row
+                    # may omit it), so the prompt can name where the metric lives.
+                    metric.subject_path = subject_path
+                    metrics.append(metric)
+                    continue
+                logger.warning("Unresolved @Metric path '%s'; emitting look-up hint", path)
+            except Exception as e:
+                logger.warning("Failed to resolve metric path '%s': %s; emitting look-up hint", path, e)
+            hints.append({"kind": "metric", "name": name, "subject_path": subject_path})
+        return metrics, hints
+
+    def _resolve_sql_paths(
+        self, agent_config: AgentConfig, sql_paths: Optional[List[str]]
+    ) -> tuple[List[ReferenceSql], List[Dict[str, Any]]]:
         sqls: List[ReferenceSql] = []
-        for path in sql_paths or []:
-            try:
-                entry = completer.sql_completer.flatten_data.get(path)
-                if entry:
-                    sqls.append(ReferenceSql.from_dict(entry))
-            except Exception as e:
-                logger.warning(f"Failed to resolve sql path '{path}': {e}")
+        hints: List[Dict[str, Any]] = []
+        if not sql_paths:
+            return sqls, hints
+        try:
+            from datus.storage.reference_sql.store import ReferenceSqlRAG
 
-        return tables, metrics, sqls
+            store = ReferenceSqlRAG(agent_config)
+        except Exception as exc:
+            logger.warning("ReferenceSqlRAG unavailable; emitting @Sql look-up hints: %s", exc)
+            store = None
+        for path in sql_paths:
+            subject_path, name = self._split_subject_path(path)
+            if not name:
+                continue
+            try:
+                details = store.get_reference_sql_detail(subject_path=subject_path, name=name) if store else []
+                if details:
+                    ref = ReferenceSql.from_dict(self._none_to_empty(details[0]))
+                    ref.subject_path = subject_path
+                    sqls.append(ref)
+                    continue
+                logger.warning("Unresolved @Sql path '%s'; emitting look-up hint", path)
+            except Exception as e:
+                logger.warning("Failed to resolve sql path '%s': %s; emitting look-up hint", path, e)
+            hints.append({"kind": "reference_sql", "name": name, "subject_path": subject_path})
+        return sqls, hints

@@ -187,13 +187,17 @@ class TestSemanticLayerServiceBranches:
         request = SemanticModelInput(table="orders", yaml="kind: semantic_model\n")
 
         with patch("datus.tools.func_tool.generation_tools.GenerationTools") as tools_cls:
-            tools_cls.return_value.sync_osi_semantic_to_db.return_value = {"success": True}
+            tools_cls.return_value.sync_osi_to_db.return_value = {"success": True}
             result = await svc.save_semantic_model(request)
 
         assert result.success is True
         assert yaml_file.read_text(encoding="utf-8") == request.yaml
         tools_cls.assert_called_once_with(agent_config=svc.agent_config, authoring_format="osi")
-        tools_cls.return_value.sync_osi_semantic_to_db.assert_called_once_with(str(yaml_file))
+        tools_cls.return_value.sync_osi_to_db.assert_called_once_with(
+            str(yaml_file),
+            include_semantic_objects=True,
+            include_metrics=False,
+        )
 
     @pytest.mark.asyncio
     async def test_save_semantic_model_uses_metricflow_sync(self, tmp_path):
@@ -278,6 +282,16 @@ class TestGetSemanticModel:
             "schema_name": "runtime_schema",
             "table_name": "schools",
         }
+
+    def test_get_semantic_model_passes_explicit_model_name(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        semantic_rag = MagicMock()
+        semantic_rag.get_semantic_model.return_value = None
+        svc._ensure_semantic_rag = lambda: semantic_rag
+
+        svc._get_semantic_model("schools", semantic_model_name="education")
+
+        assert semantic_rag.get_semantic_model.call_args.kwargs["semantic_model_name"] == "education"
 
     @pytest.mark.asyncio
     async def test_validate_semantic_model_nonexistent(self, real_agent_config):
@@ -476,6 +490,26 @@ class TestGetTableSchema:
             assert col.name != ""
             assert col.type != ""
 
+    def test_get_table_schema_uses_connector_nullable_contract(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        svc._ensure_current_connection()
+        svc.current_db_connector.get_schema = MagicMock(
+            return_value=[
+                {
+                    "name": "id",
+                    "type": "BIGINT",
+                    "nullable": False,
+                    "default_value": None,
+                    "pk": False,
+                }
+            ]
+        )
+
+        result = svc.get_table_schema("orders")
+
+        assert result.success is True
+        assert result.data.table.columns[0].nullable is False
+
     def test_get_table_schema_nonexistent_table(self, real_agent_config):
         """Nonexistent table returns failure."""
         svc = DatasourceService(agent_config=real_agent_config)
@@ -528,3 +562,58 @@ class TestGetTableSchema:
         assert column.default_value is None
         assert column.pk is True
         assert column.comment is None
+
+    def test_get_table_schema_caches_columns(self, real_agent_config):
+        """Second lookup is served from cache without re-hitting the connector."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        svc._ensure_current_connection()
+        spy = MagicMock(wraps=svc.current_db_connector.get_schema)
+        svc.current_db_connector.get_schema = spy
+
+        first = svc.get_table_schema("schools")
+        second = svc.get_table_schema("schools")
+
+        assert first.success is True and second.success is True
+        assert [c.name for c in second.data.table.columns] == [c.name for c in first.data.table.columns]
+        assert spy.call_count == 1
+
+
+class TestGetTablesColumns:
+    """Tests for the batch get_tables_columns (autocomplete prefetch)."""
+
+    def test_returns_columns_for_known_tables(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        result = svc.get_tables_columns(["schools"])
+        assert result.success is True
+        assert [t.table for t in result.data.tables] == ["schools"]
+        col = result.data.tables[0].columns[0]
+        assert col.name != "" and col.type != ""
+        # Slim shape: no default_value in the prefetch payload.
+        assert not hasattr(col, "default_value")
+
+    def test_omits_unresolved_tables(self, real_agent_config):
+        """A bad name is skipped rather than failing the whole batch."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        result = svc.get_tables_columns(["schools", "totally_fake_table_xyz"])
+        assert result.success is True
+        assert [t.table for t in result.data.tables] == ["schools"]
+
+    def test_populates_shared_cache(self, real_agent_config):
+        """Columns fetched by the batch are reused by a later single-table detail."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        svc._ensure_current_connection()
+        spy = MagicMock(wraps=svc.current_db_connector.get_schema)
+        svc.current_db_connector.get_schema = spy
+
+        svc.get_tables_columns(["schools"])
+        detail = svc.get_table_schema("schools")
+
+        assert detail.success is True
+        assert spy.call_count == 1
+
+    def test_over_limit_returns_validation_error(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        svc.agent_config.api_config = {"max_prefetch_tables": 1}
+        result = svc.get_tables_columns(["schools", "frpm"])
+        assert result.success is False
+        assert result.errorCode == "INVALID_PARAMETERS"

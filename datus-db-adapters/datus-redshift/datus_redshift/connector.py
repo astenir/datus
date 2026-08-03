@@ -47,6 +47,32 @@ from .config import RedshiftConfig
 # Get a logger instance for this module (for debugging and error messages)
 logger = get_logger(__name__)
 
+_SQL_PREVIEW_CHARS = 50
+
+
+def _log_sql_exception(event: str, sql: str, exc: Exception) -> None:
+    """Log a SQL failure with a bounded preview instead of the full statement."""
+    statement = sql or ""
+    normalized_sql = " ".join(statement.split())
+    sql_preview = normalized_sql[:_SQL_PREVIEW_CHARS]
+    if len(normalized_sql) > _SQL_PREVIEW_CHARS:
+        sql_preview += "..."
+    driver_error = str(getattr(exc, "orig", None) or exc) or type(exc).__name__
+    if statement:
+        driver_error = driver_error.replace(statement, "<sql>")
+    if normalized_sql and normalized_sql != statement:
+        driver_error = driver_error.replace(normalized_sql, "<sql>")
+    safe_exception = RuntimeError(driver_error)
+    logger.error(
+        "%s; sql_preview=%r; sql_chars=%d; error_type=%s; error=%s",
+        event,
+        sql_preview,
+        len(statement),
+        type(exc).__name__,
+        driver_error,
+        exc_info=(type(safe_exception), safe_exception, exc.__traceback__),
+    )
+
 
 def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
     """
@@ -62,6 +88,7 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
     Returns:
         DatusDbException with appropriate error code and message
     """
+    _log_sql_exception("Redshift SQL execution failed", sql, e)
 
     # Check subclasses before parent classes to ensure correct error mapping.
     # IntegrityError, InternalError, DataError are all subclasses of DatabaseError,
@@ -833,6 +860,21 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             raise _handle_redshift_exception(e, sql)
 
     @override
+    @staticmethod
+    def _qualify_name(meta, arg_db, arg_schema):
+        """Prefix the table with the db/schema levels the caller left blank.
+
+        Yields ``[db.][schema.]table`` so an unscoped listing stays addressable; a level is
+        prepended only when the caller passed it empty and the row carries that coordinate.
+        """
+        parts = []
+        if not arg_db and meta.get("database_name"):
+            parts.append(meta["database_name"])
+        if not arg_schema and meta.get("schema_name"):
+            parts.append(meta["schema_name"])
+        parts.append(meta["table_name"])
+        return ".".join(parts)
+
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """
         Get list of table names.
@@ -851,7 +893,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             schema_name=schema_name,
             table_type="table",
         )
-        return [item["table_name"] for item in tables]
+        return [self._qualify_name(item, database_name, schema_name) for item in tables]
 
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """
@@ -871,7 +913,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             schema_name=schema_name,
             table_type="view",
         )
-        return [view["table_name"] for view in views]
+        return [self._qualify_name(view, database_name, schema_name) for view in views]
 
     def get_materialized_views(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
@@ -893,7 +935,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             schema_name=schema_name,
             table_type="mv",
         )
-        return [mv["table_name"] for mv in mvs]
+        return [self._qualify_name(mv, database_name, schema_name) for mv in mvs]
 
     def _get_tables_per_schema(
         self,

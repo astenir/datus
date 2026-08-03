@@ -123,3 +123,34 @@ def test_dry_run_renders_sql_for_each_metric(tmp_path):
         metrics=["completed_order_count"]
     ).rendered_sql_without_descriptions.sql_query
     assert "status" in filtered_sql
+
+
+def test_timeless_query_backed_metric_passes_metricflow_validation(tmp_path):
+    osi = """
+semantic_model:
+  name: snapshot_model
+datasets:
+  - name: regional_snapshot
+    source:
+      query: SELECT region, SUM(amount) AS amount FROM orders GROUP BY region
+    dimensions:
+      - name: region
+        expr: region
+metrics:
+  - name: total_amount
+    expression: SUM(amount)
+    dataset: regional_snapshot
+"""
+    art = lower_to_metricflow(compile_document(parse_osi(osi)))
+    art.write(tmp_path)
+
+    build, parse_errors, semantic_errors = _validate(tmp_path)
+
+    assert parse_errors == []
+    assert semantic_errors == []
+    data_source = build.model.data_sources[0]
+    assert any(
+        dimension.name == "datus_static_metric_time"
+        and dimension.type_params.is_primary
+        for dimension in data_source.dimensions
+    )

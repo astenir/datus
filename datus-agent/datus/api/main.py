@@ -27,6 +27,7 @@ import uvicorn
 from datus import __version__
 from datus.configuration.agent_config_loader import parse_config_path
 from datus.utils.loggings import configure_logging, get_logger
+from datus.utils.multiprocessing_utils import configure_multiprocessing_start_method
 
 logger = get_logger(__name__)
 
@@ -265,8 +266,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=["web", "vscode"],
         help=(
-            "Default proxy tool source shortcut. 'vscode' -> proxy filesystem_tools.*, "
-            "'web' -> proxy write_file/edit_file/delete_file. "
+            "Default proxy tool source shortcut. 'vscode' -> proxy filesystem_tools.* and no "
+            "server-side bash, 'web' -> proxy write_file/edit_file/delete_file with a "
+            "server-side bash restricted to datus commands. "
             "Overridable per request via ChatInput.source."
         ),
     )
@@ -314,11 +316,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main():
     """Main entry point for starting the Datus Agent API server."""
-    if hasattr(multiprocessing, "set_start_method"):
-        try:
-            multiprocessing.set_start_method("spawn", force=True)
-        except RuntimeError:
-            pass
+    configure_multiprocessing_start_method()
 
     parser = _build_parser()
     args = parser.parse_args()

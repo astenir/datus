@@ -15,6 +15,7 @@ from datus.utils.async_utils import setup_windows_policy
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import configure_logging, get_logger
+from datus.utils.multiprocessing_utils import configure_multiprocessing_start_method
 
 logger = get_logger(__name__)
 
@@ -557,9 +558,10 @@ class Application:
 
 
 # Subcommand tokens owned by built-in handlers in ``main()``. An installed
-# adapter must never shadow these via the ``datus.cli_commands`` entry-point
-# group. Kept in one place so the reserved set is easy to extend.
-_RESERVED_SUBCOMMANDS = frozenset({"upgrade", "skill"})
+# adapter/plugin must never shadow these via the ``datus.cli_commands`` /
+# ``datus.plugins`` entry-point groups. Kept in one place so the reserved set
+# is easy to extend.
+_RESERVED_SUBCOMMANDS = frozenset({"upgrade", "skill", "plugin"})
 
 
 def _coerce_exit_code(rc: object, name: str) -> int:
@@ -634,93 +636,133 @@ def _split_plugin_globals(args: "list[str]") -> "tuple[str | None, str | None, l
     (``bash_rules._normalize_datus_plugin_argv``) so plugin-declared rules
     match profile-qualified invocations — keep the two in sync.
     """
-    profile: "str | None" = None
-    config: "str | None" = None
-    i = 0
-    n = len(args)
-    while i < n:
-        tok = args[i]
-        if tok in ("--profile", "--config"):
-            if i + 1 >= n:
-                # Missing value — hand the token back to the plugin unchanged.
-                break
-            value = args[i + 1]
-            if tok == "--profile":
-                profile = value
-            else:
-                config = value
-            i += 2
-            continue
-        if tok.startswith("--profile="):
-            profile = tok.split("=", 1)[1]
-            i += 1
-            continue
-        if tok.startswith("--config="):
-            config = tok.split("=", 1)[1]
-            i += 1
-            continue
-        break
-    return profile, config, args[i:]
+    from datus.plugins.runtime_context import split_plugin_globals
+
+    return split_plugin_globals(args)
 
 
 def _dispatch_plugin_command(argv: "list[str]") -> "int | None":
-    """Dispatch ``datus <plugin> ...`` to a ``datus.plugins`` entry point.
+    """Dispatch ``datus <plugin> ...`` to a ``datus.plugins`` manifest plugin.
 
-    A plugin package registers a plugin class under the ``datus.plugins`` group
-    (``hello = datus_hello.plugin:HelloPlugin``). datus strips
-    its own leading ``--profile`` / ``--config`` globals, resolves the active
-    profile from ``agent.plugins.<name>.<profile>`` (env-expanded), constructs
-    the plugin with that profile, and calls ``run_cli`` with the rest.
+    A plugin package registers its package name under the ``datus.plugins``
+    group (``hello = datus_plugin_hello``) and declares a ``cli`` code ref in
+    its bundled ``datus-plugin.yml``. datus strips its own leading
+    ``--profile`` / ``--config`` globals, resolves the active profile from
+    ``agent.plugins.<name>.<profile>`` (env-expanded), and calls the declared
+    entry as ``main(rest, profile)``.
 
     Runs before :func:`_dispatch_external_command` (the legacy
     ``datus.cli_commands`` path). Returns the plugin's exit code, or ``None``
     when no plugin claims the token so the caller falls through.
     """
-    import sys
-
     if not argv or argv[0].startswith("-") or argv[0] in _RESERVED_SUBCOMMANDS:
         return None
 
     name = argv[0]
-    from datus.plugins.registry import load_plugin_class, plugin_entry_point_exists
+    from rich.console import Console
+
+    from datus.cli.cli_styles import print_error
+    from datus.plugins import store
+    from datus.plugins.registry import load_plugin_manifest, plugin_entry_point_exists, resolve_code_ref
+
+    # Route plugin dispatch errors through the shared CLI styling on an
+    # stderr-backed Console (so stdout stays reserved for the plugin's output).
+    err_console = Console(stderr=True)
+
+    profile_name, config_path, rest = _split_plugin_globals(argv[1:])
+    runtime_context = None
+    try:
+        from datus.plugins.runtime_context import has_plugin_config_global, load_runtime_context_from_env
+
+        runtime_context = load_runtime_context_from_env(expected_plugin=name)
+        if runtime_context is not None and has_plugin_config_global(argv[1:]):
+            raise ValueError(
+                "`--config` is unavailable for managed plugin commands; the AuthProvider AgentConfig is authoritative"
+            )
+    except Exception as exc:  # noqa: BLE001 - malformed runtime data must fail closed
+        logger.error("Failed to decode runtime config for plugin '%s': %s", name, exc)
+        print_error(err_console, f"datus {name}: {exc}")
+        return 3
+
+    # A managed plugin lives in its own ``~/.datus/plugins/{name}/`` directory;
+    # append it to ``sys.path`` so the entry-point probe can see it. Plugins
+    # mounted through ``agent.plugin_paths`` live elsewhere, so when no managed
+    # directory claims the token the configured paths are injected instead.
+    # Both are path-only — they do NOT import the plugin package (reading the
+    # manifest never executes plugin code, and the ``cli`` ref is imported only
+    # after every gate below has passed), so the ``plugins_enabled`` master
+    # switch is still honoured before any third-party module-level code runs.
+    if runtime_context is not None and runtime_context.plugin_path:
+        store.activate_paths([runtime_context.plugin_path])
+    elif runtime_context is not None:
+        # A site-packages plugin is already visible to this interpreter.
+        pass
+    elif store.plugin_dir(name).is_dir():
+        store.activate_name(name)
+    else:
+        from datus.configuration.agent_config_loader import get_plugin_paths
+
+        store.activate_paths(get_plugin_paths(config_path or ""))
 
     # Metadata-only probe: with ``plugins_enabled: false`` the plugin package
     # must not even be imported, so the master switch is checked before
-    # ``load_plugin_class`` (whose ``ep.load()`` runs module-level code).
+    # ``resolve_code_ref`` runs the plugin's module-level code.
     if not plugin_entry_point_exists(name):
+        if runtime_context is not None:
+            print_error(err_console, f"datus {name}: runtime plugin `{name}` is not installed or discoverable")
+            return 3
         return None
 
-    profile_name, config_path, rest = _split_plugin_globals(argv[1:])
-
     try:
-        from datus.configuration.agent_config_loader import load_agent_config
+        if runtime_context is not None:
+            profile = runtime_context.profile
+        else:
+            from datus.configuration.agent_config_loader import load_agent_config
 
-        kwargs = {"config": config_path} if config_path else {}
-        agent_config = load_agent_config(**kwargs)
-        if not getattr(agent_config, "plugins_enabled", True):
-            print(
-                f"datus {name}: plugins are disabled (`agent.plugins_enabled: false`)",
-                file=sys.stderr,
-            )
-            return 3
-        profile = agent_config.get_plugin_profile(name, profile_name)
+            kwargs = {"config": config_path} if config_path else {}
+            agent_config = load_agent_config(**kwargs)
+            if not getattr(agent_config, "plugins_enabled", True):
+                print_error(err_console, f"datus {name}: plugins are disabled (`agent.plugins_enabled: false`)")
+                return 3
+            # Respect per-project activation: a plugin the project's
+            # ``plugins:`` whitelist does not enable is inactive.
+            if hasattr(agent_config, "plugin_active") and not agent_config.plugin_active(name):
+                print_error(
+                    err_console,
+                    f"datus {name}: plugin `{name}` is not active for this project. "
+                    f"Enable it with `datus plugin enable {name}` or via `/plugins`.",
+                )
+                return 3
+            profile = agent_config.get_plugin_profile(name, profile_name)
     except Exception as exc:  # noqa: BLE001 - surface a clean error, do not crash
         logger.error("Failed to resolve config for plugin '%s': %s", name, exc)
-        print(f"datus {name}: {exc}", file=sys.stderr)
+        print_error(err_console, f"datus {name}: {exc}")
         return 3
 
-    plugin_cls = load_plugin_class(name)
-    if plugin_cls is None:
-        # Entry point exists but the package is broken; fall through so a
-        # same-named ``datus.cli_commands`` handler still gets its chance.
+    manifest = load_plugin_manifest(name)
+    if manifest is None:
+        if runtime_context is not None:
+            print_error(err_console, f"datus {name}: runtime plugin `{name}` has no valid manifest")
+            return 3
+        # Entry point exists but the manifest is missing/rejected (already
+        # warned about); fall through so a same-named ``datus.cli_commands``
+        # handler still gets its chance.
         return None
 
+    if not manifest.cli:
+        print_error(err_console, f"datus {name}: plugin declares no CLI command in its manifest")
+        return 2
+
+    func = resolve_code_ref(manifest.cli, name)
+    if not callable(func):
+        print_error(err_console, f"datus {name}: plugin CLI entry `{manifest.cli}` could not be loaded")
+        return 1
+
     try:
-        plugin = plugin_cls(profile=profile)
-        rc = plugin.run_cli(rest)
+        rc = func(rest, profile)
     except Exception as exc:  # noqa: BLE001 - a broken plugin must not crash the CLI
         logger.error("Plugin '%s' failed: %s", name, exc)
-        print(f"datus {name}: {exc}", file=sys.stderr)
+        print_error(err_console, f"datus {name}: {exc}")
         return 1
     return _coerce_exit_code(rc, name)
 
@@ -730,6 +772,8 @@ def main():
     import signal
     import sys
 
+    configure_multiprocessing_start_method()
+
     # Intercept 'upgrade' subcommand: self-upgrade datus-agent and the installed
     # datus-* adapter packages. Handled before the REPL is built so it works even
     # when the installed CLI is otherwise broken.
@@ -738,6 +782,15 @@ def main():
 
         configure_logging(False, console_output=False)
         sys.exit(run_upgrade_command(sys.argv[2:]))
+
+    # Intercept 'plugin' management subcommand (install/uninstall/list/info/
+    # enable/disable). Handled before the REPL and never gated by a plugin's
+    # own ``enabled`` flag, so a disabled plugin can still be re-enabled.
+    if len(sys.argv) > 1 and sys.argv[1] == "plugin":
+        from datus.cli.plugin_cli import run_plugin_command
+
+        configure_logging(False, console_output=False)
+        sys.exit(run_plugin_command(sys.argv[2:]))
 
     # Intercept 'skill' subcommand and delegate to datus.main's skill handler
     if len(sys.argv) > 1 and sys.argv[1] == "skill":

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
+    AtContextData,
     ChatHistoryData,
     ChatSessionData,
     ChatSessionItemInfo,
@@ -30,6 +31,7 @@ from datus.api.services.chat_task_manager import (
     _should_include_final_response,
     _should_skip_duplicate_assistant_message,
 )
+from datus.cli.manual_exec import exec_to_markdown
 from datus.configuration.agent_config import AgentConfig
 from datus.models.session_manager import (
     SessionManager,
@@ -637,6 +639,16 @@ class EnterpriseChatServiceMixin:
             if role == "user":
                 content = msg.get("content", "")
                 if content:
+                    content = exec_to_markdown(content)
+                    at_context_raw = msg.get("at_context")
+                    at_context = None
+                    if isinstance(at_context_raw, dict):
+                        at_context = AtContextData(
+                            table_paths=at_context_raw.get("table_paths") or [],
+                            metric_paths=at_context_raw.get("metric_paths") or [],
+                            sql_paths=at_context_raw.get("sql_paths") or [],
+                            knowledge_paths=at_context_raw.get("knowledge_paths") or [],
+                        )
                     sse_messages.append(
                         SSEMessagePayload(
                             message_id=str(uuid.uuid4()),
@@ -644,6 +656,7 @@ class EnterpriseChatServiceMixin:
                             content=[IMessageContent(type="markdown", payload={"content": content})],
                             depth=depth,
                             parent_action_id=parent_action_id,
+                            at_context=at_context,
                         )
                     )
                     event_id += 1

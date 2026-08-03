@@ -11,6 +11,8 @@ from datus.api.models.base_models import Result
 from datus.api.models.table_models import (
     GetSemanticModelData,
     GetTableDetailData,
+    GetTablesColumnsData,
+    GetTablesColumnsInput,
     SemanticModelInput,
     ValidateSemanticModelData,
 )
@@ -38,6 +40,21 @@ async def get_table_detail(
     return await asyncio.to_thread(svc.datasource.get_table_schema, table)
 
 
+@router.post(
+    "/table/columns",
+    response_model=Result[GetTablesColumnsData],
+    summary="Get Columns For Multiple Tables",
+    description="Batch-fetch column metadata for a list of tables (autocomplete prefetch). "
+    "Results are cached in memory; tables that fail to resolve are omitted.",
+)
+async def get_tables_columns(
+    request: GetTablesColumnsInput,
+    svc: ServiceDep,
+) -> Result[GetTablesColumnsData]:
+    """Batch table columns."""
+    return await asyncio.to_thread(svc.datasource.get_tables_columns, request.tables)
+
+
 # ========== SemanticModel Endpoints ==========
 
 
@@ -56,6 +73,7 @@ async def get_semantic_model(
     catalog: str | None = Query(None, description="Current catalog context"),
     database: str | None = Query(None, description="Current database context"),
     db_schema: str | None = Query(None, description="Current schema context"),
+    semantic_model_name: str | None = Query(None, description="Semantic model owning a shared physical table"),
 ) -> Result[GetSemanticModelData]:
     """Get SemanticModel YAML."""
     return await asyncio.to_thread(
@@ -64,6 +82,7 @@ async def get_semantic_model(
         catalog=catalog,
         database=database,
         db_schema=db_schema,
+        semantic_model_name=semantic_model_name,
     )
 
 

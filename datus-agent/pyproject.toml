@@ -1,7 +1,7 @@
 # Project basic information configuration, required.
 [project]
 name = "datus-agent"
-version = "0.3.8"
+version = "0.3.9"
 description = "AI-powered SQL Agent for data engineering (Compiled Version)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "datus-db-core>=0.1.4",
+    "datus-db-core>=0.1.5",
     "datus-storage-base>=0.1.5,<0.2.0",
     "python-dotenv==1.0.0",
     "pandas==2.1.4",
@@ -59,7 +59,7 @@ dependencies = [
     "textual[syntax]==5.1.1",
     "anthropic==0.51.0",
     "duckdb-engine>=0.17.0",
-    "duckdb>=1.5.2,<2.0.0",
+    "duckdb==1.5.2",
     # MCP (Model Context Protocol) support
     "mcp>=1.11.0",
     "anyio>=4.9.0",
@@ -78,17 +78,20 @@ dependencies = [
     "lxml>=5.0.0",
     "markdown-it-py>=3.0.0",
     "tabulate>=0.9.0",
-    "datus-semantic-core>=0.2.1",
+    "datus-semantic-core>=0.2.3",
     # BI platform adapters (core models & interfaces)
     "datus-bi-core>=0.1.2",
     # Workflow scheduler adapters (core framework)
     "datus-scheduler-core>=0.1.1",
+    # Plugin manifest: config-schema validation and system-prompt templates
+    "jsonschema>=4.17,<5",
+    "jinja2>=3.1,<4",
 ]
 
 [project.optional-dependencies]
 metricflow-oceanbase-oracle = [
     "datus-metricflow>=0.2.7",
-    "datus-semantic-metricflow>=0.2.8",
+    "datus-semantic-metricflow>=0.2.12",
     "datus-oceanbase-oracle>=0.1.0",
 ]
 storage-oceanbase-mysql = [
@@ -96,7 +99,7 @@ storage-oceanbase-mysql = [
 ]
 enterprise-intranet = [
     "datus-metricflow>=0.2.7",
-    "datus-semantic-metricflow>=0.2.8",
+    "datus-semantic-metricflow>=0.2.12",
     "datus-oceanbase-oracle>=0.1.0",
     "datus-oracle>=0.1.0,<0.2.0",
     "datus-mysql>=0.1.7,<0.2.0",
@@ -112,12 +115,12 @@ Repository = "https://github.com/datus-ai/datus-agent"
 "Bug Tracker" = "https://github.com/datus-ai/datus-agent/issues"
 
 [project.scripts]
-datus-agent = "datus.main:main"
-datus-cli = "datus.cli.main:main"
-datus = "datus.cli.main:main"
-datus-api = "datus.api.main:main"
-datus-mcp = "datus.mcp_server:main"
-datus-gateway = "datus.gateway.main:main"
+datus-agent = "datus.entrypoints:agent_main"
+datus-cli = "datus.entrypoints:cli_main"
+datus = "datus.entrypoints:cli_main"
+datus-api = "datus.entrypoints:api_main"
+datus-mcp = "datus.entrypoints:mcp_main"
+datus-gateway = "datus.entrypoints:gateway_main"
 
 [build-system]
 requires = ["setuptools>=80.9.0", "wheel"]
@@ -226,8 +229,10 @@ dev = [
 ci = [
     "datus-storage-postgresql>=0.1.5",
     "datus-metricflow>=0.2.7",
-    "datus-semantic-metricflow>=0.2.9",
+    "datus-semantic-metricflow>=0.2.12",
     "datus-oceanbase-oracle>=0.1.0",
+    # Required so the OSI authoring tests run in CI (rather than skipping).
+    "datus-semantic-osi>=0.1.5",
 ]
 
 [tool.uv.sources]
@@ -239,6 +244,7 @@ datus-oracle = { path = "../datus-db-adapters/datus-oracle", editable = true }
 datus-postgresql = { path = "../datus-db-adapters/datus-postgresql", editable = true }
 datus-semantic-core = { path = "../datus-semantic-adapter/datus-semantic-core", editable = true }
 datus-semantic-metricflow = { path = "../datus-semantic-adapter/datus-semantic-metricflow", editable = true }
+datus-semantic-osi = { path = "../datus-semantic-adapter/datus-semantic-osi", editable = true }
 datus-sqlalchemy = { path = "../datus-db-adapters/datus-sqlalchemy", editable = true }
 datus-storage-base = { path = "../datus-storage-adapters/datus-storage-base", editable = true }
 datus-storage-oceanbase-mysql = { path = "../datus-storage-adapters/datus-storage-oceanbase-mysql", editable = true }

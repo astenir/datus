@@ -15,9 +15,19 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+def _registry_hook(name: str, dialect: str):
+    from datus.tools.db_tools import connector_registry
+
+    getter = getattr(connector_registry, name, None)
+    return getter(dialect) if callable(getter) else None
+
+
 def parse_read_dialect(dialect: str = "snowflake") -> str:
     """Map SQL dialect to the appropriate read dialect for sqlglot parsing."""
     db = (dialect or "").strip().lower()
+    registered = _registry_hook("get_parser_dialect", db)
+    if registered:
+        return registered
     if db in ("postgres", "postgresql", "redshift", "greenplum"):
         return "postgres"
     if db in ("spark", "databricks", "hive", "starrocks"):
@@ -30,6 +40,9 @@ def parse_read_dialect(dialect: str = "snowflake") -> str:
 def parse_dialect(dialect: str = "snowflake") -> str:
     """Map SQL dialect to the dialect for sqlglot parsing."""
     db = (dialect or "").strip().lower()
+    registered = _registry_hook("get_parser_dialect", db)
+    if registered:
+        return registered
     if db in ("postgres", "postgresql"):
         return "postgres"
     if db in ("mssql", "sqlserver"):
@@ -61,7 +74,8 @@ def parse_metadata_from_ddl(sql: str, dialect: str = "snowflake") -> Dict[str, A
             ]
         }
     """
-    dialect = parse_dialect(dialect)
+    raw_dialect = (dialect or "").strip().lower()
+    dialect = parse_dialect(raw_dialect)
 
     try:
         result = {"table": {"name": "", "schema_name": "", "database_name": ""}, "columns": []}
@@ -77,8 +91,16 @@ def parse_metadata_from_ddl(sql: str, dialect: str = "snowflake") -> Dict[str, A
             if isinstance(table_name, str):
                 table_name = table_name.strip('"').strip("`").strip("[]")
             result["table"]["name"] = table_name
-            result["table"]["schema_name"] = tb_info.db
-            result["table"]["database_name"] = tb_info.catalog
+            identifier_parser = _registry_hook("get_identifier_parser", raw_dialect)
+            if identifier_parser:
+                parsed_name = identifier_parser(
+                    ".".join(part for part in (tb_info.catalog, tb_info.db, table_name) if part)
+                )
+                result["table"]["schema_name"] = parsed_name["schema_name"]
+                result["table"]["database_name"] = parsed_name["database_name"]
+            else:
+                result["table"]["schema_name"] = tb_info.db
+                result["table"]["database_name"] = tb_info.catalog
             if tb_info.comments:
                 result["table"]["comment"] = tb_info.comments
 
@@ -121,6 +143,20 @@ def extract_table_names(sql, dialect="snowflake", ignore_empty=False) -> List[st
     except Exception as e:
         logger.warning(f"Error parsing SQL {sql}, error: {e}")
         return []
+    return _table_names_from_expression(parsed, dialect=dialect, ignore_empty=ignore_empty)
+
+
+def extract_table_names_strict(sql, dialect="snowflake", ignore_empty=False) -> List[str]:
+    """Extract table names and raise when sqlglot cannot parse the SQL."""
+    read_dialect = parse_read_dialect(dialect)
+    parsed = sqlglot.parse_one(sql, read=read_dialect, error_level=sqlglot.ErrorLevel.RAISE)
+    if parsed is None:
+        raise ValueError("SQL parser returned no expression")
+    return _table_names_from_expression(parsed, dialect=dialect, ignore_empty=ignore_empty)
+
+
+def _table_names_from_expression(parsed, *, dialect: str, ignore_empty: bool) -> List[str]:
+    """Collect physical table names from an already parsed sqlglot expression."""
     table_names = []
 
     # Get all CTE names
@@ -137,6 +173,16 @@ def extract_table_names(sql, dialect="snowflake", ignore_empty=False) -> List[st
         # Skip if the table is a CTE
         if table_name.lower() in cte_names:
             continue
+        if _registry_hook("get_identifier_parser", dialect):
+            parts = []
+            if not ignore_empty or db:
+                parts.append(db)
+            if not ignore_empty or schema:
+                parts.append(schema)
+            parts.append(table_name)
+            table_names.append(".".join(parts))
+            continue
+
         full_name = []
 
         if dialect in ["mysql", "oracle", "postgres", "postgresql"]:
@@ -183,6 +229,56 @@ def metadata_identifier(
     return ".".join(parts)
 
 
+#: Widest identifier shape, in right-align order. Used for dialects that declare
+#: no namespace capabilities at all (adapter not installed, or one that reports
+#: none): assuming the widest shape keeps a qualified prefix in a namespace field
+#: instead of collapsing it into ``table_name``.
+_WIDEST_FIELD_ORDER = ("catalog_name", "database_name", "schema_name", "table_name")
+
+
+def table_name_field_order(dialect: str = "snowflake") -> List[str]:
+    """Return the fields a dotted identifier right-aligns into for *dialect*.
+
+    Single source of truth for the identifier *shape*, shared by
+    :func:`parse_table_name_parts` (which right-aligns onto this order) and by
+    callers that need to **emit** an identifier or scope token with a matching
+    segment count. Emitting fewer segments than the order has silently lands
+    every literal in the wrong field: ``default_catalog.*`` on StarRocks
+    (``[catalog, database, table]``) parses as ``{database: default_catalog,
+    table: *}`` and matches no real table.
+
+    Adapters that ship their own ``get_identifier_parser`` are expected to
+    right-align the same way; their order still follows the capabilities they
+    declare.
+    """
+    d = parse_dialect((dialect or "").strip().lower())
+    from datus.tools.db_tools import connector_registry
+
+    # Built-in connectors
+    if d == DBType.SQLITE:
+        return ["database_name", "table_name"]
+    if d == DBType.DUCKDB:
+        return ["database_name", "schema_name", "table_name"]
+    # StarRocks has a stable catalog.database.table identifier shape. Keep
+    # parsing deterministic even when the optional adapter package is not
+    # installed in a lightweight API/test environment, where the registry has
+    # no capabilities to report yet.
+    if d == "starrocks":
+        return ["catalog_name", "database_name", "table_name"]
+    # External dialects: derive from registry
+    fields = []
+    if connector_registry.support_catalog(d):
+        fields.append("catalog_name")
+    if connector_registry.support_database(d):
+        fields.append("database_name")
+    if connector_registry.support_schema(d):
+        fields.append("schema_name")
+    if not fields:
+        return list(_WIDEST_FIELD_ORDER)
+    fields.append("table_name")
+    return fields
+
+
 def parse_table_name_parts(full_table_name: str, dialect: str = "snowflake") -> Dict[str, str]:
     """
     Parse a full table name into its component parts (catalog, database, schema, table).
@@ -201,27 +297,18 @@ def parse_table_name_parts(full_table_name: str, dialect: str = "snowflake") -> 
         - "database.schema.table" -> {"catalog_name": "", "database_name": "database",
                                       "schema_name": "schema", "table_name": "table"}
     """
-    dialect = parse_dialect(dialect)
+    raw_dialect = (dialect or "").strip().lower()
+    identifier_parser = _registry_hook("get_identifier_parser", raw_dialect)
+    if identifier_parser:
+        parsed = identifier_parser(full_table_name)
+        expected_fields = {"catalog_name", "database_name", "schema_name", "table_name"}
+        if not isinstance(parsed, dict) or not expected_fields.issubset(parsed):
+            raise ValueError(
+                "Adapter identifier parser must return catalog_name, database_name, schema_name, and table_name"
+            )
+        return {field: str(parsed[field] or "") for field in expected_fields}
 
-    # Build field mapping dynamically from registry capabilities
-    def _build_field_mapping(d: str) -> list:
-        from datus.tools.db_tools import connector_registry
-
-        # Built-in connectors
-        if d == DBType.SQLITE:
-            return ["database_name", "table_name"]
-        if d == DBType.DUCKDB:
-            return ["database_name", "schema_name", "table_name"]
-        # External dialects: derive from registry
-        fields = []
-        if connector_registry.support_catalog(d):
-            fields.append("catalog_name")
-        if connector_registry.support_database(d):
-            fields.append("database_name")
-        if connector_registry.support_schema(d):
-            fields.append("schema_name")
-        fields.append("table_name")
-        return fields
+    dialect = parse_dialect(raw_dialect)
 
     # Split the table name by dots
     # Handle different quote styles: `backticks`, "double quotes", [brackets]
@@ -269,30 +356,21 @@ def parse_table_name_parts(full_table_name: str, dialect: str = "snowflake") -> 
     if not parts:
         return result
 
-    # Get field mapping for the dialect, or use default mapping
-    field_mapping = _build_field_mapping(dialect)
-    if len(field_mapping) > 1:
-        max_parts = len(field_mapping)
+    # Right-align the parts onto the dialect's field order (always >= 2 fields,
+    # so an unknown dialect degrades to the widest shape rather than to a bare
+    # table name).
+    field_mapping = table_name_field_order(dialect)
+    max_parts = len(field_mapping)
 
-        # If we have more parts than expected, take the last N parts
-        if len(parts) > max_parts:
-            parts = parts[-max_parts:]
+    # If we have more parts than expected, take the last N parts
+    if len(parts) > max_parts:
+        parts = parts[-max_parts:]
 
-        # Map parts to fields according to the configuration
-        # We map from right to left (table_name is always the last part)
-        for i, part in enumerate(reversed(parts)):
-            if i < len(field_mapping):
-                field_name = field_mapping[-(i + 1)]  # Get field name from right to left
-                result[field_name] = part
-    else:
-        # Default behavior for unknown dialects: assume last part is table name
-        result["table_name"] = parts[-1]
-        if len(parts) > 1:
-            result["schema_name"] = parts[-2]
-        if len(parts) > 2:
-            result["database_name"] = parts[-3]
-        if len(parts) > 3:
-            result["catalog_name"] = parts[-4]
+    # Map parts to fields according to the configuration
+    # We map from right to left (table_name is always the last part)
+    for i, part in enumerate(reversed(parts)):
+        field_name = field_mapping[-(i + 1)]  # Get field name from right to left
+        result[field_name] = part
 
     return result
 
@@ -675,6 +753,59 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
 
     inferred = _fallback_sql_type(first_statement)
     return inferred if inferred else SQLType.UNKNOWN
+
+
+# ``SQLType.DDL`` refinements for the permission layer: statements that
+# destroy data or schema get their own kind so they can be gated separately
+# from benign DDL (COMMENT/GRANT/ANALYZE/...). RENAME maps to ``alter`` — it
+# is the same ALTER-family schema mutation under a different keyword.
+_DDL_KIND_KEYWORDS: Dict[str, str] = {
+    "CREATE": "create",
+    "ALTER": "alter",
+    "DROP": "drop",
+    "TRUNCATE": "truncate",
+    "RENAME": "alter",
+}
+
+
+def parse_sql_statement_kind(sql: str, dialect: str = "") -> str:
+    """Fine-grained statement kind for the permission layer.
+
+    Same as ``parse_sql_type(...).value`` except two refinements the
+    ``execute_sql`` permission gate needs:
+
+    * ``SQLType.DDL`` is split by leading keyword into ``create`` / ``alter``
+      / ``drop`` / ``truncate`` (RENAME counts as ``alter``); everything else
+      (COMMENT/GRANT/REVOKE/ANALYZE/VACUUM/...) stays ``ddl``.
+    * ``REPLACE`` statements (folded into ``SQLType.INSERT`` by
+      ``parse_sql_type``) become ``replace`` — REPLACE INTO deletes matched
+      rows before re-inserting, so it must not inherit INSERT's class.
+
+    Only the first statement is classified (same contract as
+    ``parse_sql_type``); the tool layer's multi-statement rejection is the
+    backstop for trailing statements.
+
+    Returns one of: ``select``, ``metadata``, ``explain``, ``insert``,
+    ``replace``, ``create``, ``ddl``, ``context_set``, ``update``,
+    ``delete``, ``merge``, ``drop``, ``truncate``, ``alter``, ``unknown``.
+    """
+    sql_type = parse_sql_type(sql, dialect)
+    if sql_type not in (SQLType.DDL, SQLType.INSERT, SQLType.CONTENT_SET):
+        return sql_type.value
+
+    first_statement = _first_statement(sql.strip())
+    match = re.match(r"\s*([A-Za-z_]+)", first_statement)
+    keyword = match.group(1).upper() if match else ""
+
+    if sql_type == SQLType.INSERT:
+        return "replace" if keyword == "REPLACE" else SQLType.INSERT.value
+    if sql_type == SQLType.CONTENT_SET:
+        # sqlglot parses dialect-specific statements it cannot model as a
+        # generic Command, which ``parse_sql_type`` folds into CONTENT_SET
+        # (e.g. MySQL ``RENAME TABLE``). A destructive leading keyword must
+        # not ride that fold into the write class.
+        return _DDL_KIND_KEYWORDS.get(keyword, SQLType.CONTENT_SET.value)
+    return _DDL_KIND_KEYWORDS.get(keyword, "ddl")
 
 
 _CONTEXT_CMD_RE = re.compile(r"^\s*(use|set)\b", flags=re.IGNORECASE)

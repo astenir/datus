@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional, TypeVar
@@ -41,6 +42,15 @@ DEFAULT_CHAT_AGENT = "chat"
 _SAFE_SCOPE_RE = _session_scope.SAFE_SESSION_SCOPE_RE
 _project_id_from_config = _session_scope.project_id_from_config
 session_scope_from_user_id = _session_scope.session_scope_from_user_id
+
+
+@dataclass(frozen=True)
+class SessionTurnCheckpoint:
+    """Durable session boundary captured immediately before a new turn."""
+
+    max_message_id: int = 0
+    max_sequence_number: int = 0
+    max_user_turn_number: int = 0
 
 
 def extract_agent_from_session_id(session_id: str) -> str:
@@ -212,6 +222,112 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
         # Clearing history is a session rebuild: drop the frozen system prompt
         # so the next turn re-bakes it instead of replaying pre-clear context.
         self.delete_system_prompt_snapshot(session_id)
+
+    def checkpoint_turn(self, session_id: str) -> Optional[SessionTurnCheckpoint]:
+        """Capture the SQLite boundary before dispatching a model turn.
+
+        The database can legitimately not exist yet for a brand-new node; in
+        that case the empty checkpoint still identifies everything written by
+        the upcoming turn.
+        """
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return SessionTurnCheckpoint()
+
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                max_message_id = 0
+                max_sequence_number = 0
+                max_user_turn_number = 0
+                if self._table_exists(conn, "agent_messages"):
+                    row = conn.execute(
+                        "SELECT COALESCE(MAX(id), 0) FROM agent_messages WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    max_message_id = int(row[0] or 0) if row else 0
+                if self._table_exists(conn, "message_structure"):
+                    row = conn.execute(
+                        "SELECT COALESCE(MAX(sequence_number), 0), "
+                        "COALESCE(MAX(user_turn_number), 0) "
+                        "FROM message_structure WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    if row:
+                        max_sequence_number = int(row[0] or 0)
+                        max_user_turn_number = int(row[1] or 0)
+                return SessionTurnCheckpoint(
+                    max_message_id=max_message_id,
+                    max_sequence_number=max_sequence_number,
+                    max_user_turn_number=max_user_turn_number,
+                )
+        except sqlite3.Error as exc:
+            logger.warning("Failed to checkpoint session %s before turn: %s", session_id, exc)
+            # Never substitute an empty boundary for a failed read: doing so
+            # could make a later rollback delete pre-existing history.
+            return None
+
+    def rollback_turn(self, session_id: str, checkpoint: Optional[SessionTurnCheckpoint]) -> None:
+        """Atomically remove everything persisted after *checkpoint*.
+
+        ``AdvancedSQLiteSession.pop_item`` only removes ``agent_messages`` and
+        leaves orphaned ``message_structure`` metadata. This repository-owned
+        rollback deletes both sides, along with usage rows for the cancelled
+        turn, so the next model call observes the exact pre-turn session.
+        """
+        self._validate_session_id(session_id)
+        if checkpoint is None:
+            logger.warning("Skipping unanswered-turn rollback for %s: no safe checkpoint", session_id)
+            return
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return
+
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if self._table_exists(conn, "message_structure"):
+                    conn.execute(
+                        "DELETE FROM message_structure "
+                        "WHERE session_id = ? AND "
+                        "(sequence_number > ? OR message_id IN ("
+                        "SELECT id FROM agent_messages WHERE session_id = ? AND id > ?"
+                        "))",
+                        (
+                            session_id,
+                            checkpoint.max_sequence_number,
+                            session_id,
+                            checkpoint.max_message_id,
+                        ),
+                    )
+                if self._table_exists(conn, "agent_messages"):
+                    conn.execute(
+                        "DELETE FROM agent_messages WHERE session_id = ? AND id > ?",
+                        (session_id, checkpoint.max_message_id),
+                    )
+                if self._table_exists(conn, "turn_usage"):
+                    conn.execute(
+                        "DELETE FROM turn_usage WHERE session_id = ? AND user_turn_number > ?",
+                        (session_id, checkpoint.max_user_turn_number),
+                    )
+                if self._table_exists(conn, "user_message_context"):
+                    conn.execute(
+                        "DELETE FROM user_message_context WHERE session_id = ? AND user_turn_number > ?",
+                        (session_id, checkpoint.max_user_turn_number),
+                    )
+                if self._table_exists(conn, "running_turn_usage"):
+                    conn.execute("DELETE FROM running_turn_usage WHERE session_id = ?", (session_id,))
+                conn.commit()
+        except sqlite3.Error as exc:
+            logger.warning("Failed to roll back unanswered turn for session %s: %s", session_id, exc)
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
 
     # ------------------------------------------------------------------
     # System-prompt snapshot persistence
@@ -1146,6 +1262,123 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
             "updated_at": to_utc_iso(updated_at) if updated_at else None,
         }
 
+    # ------------------------------------------------------------------
+    # Per-user-turn @-context (table/metric/sql/knowledge references)
+    # ------------------------------------------------------------------
+    #
+    # The SDK's ``agent_messages`` table only stores the enhanced prompt text,
+    # from which structured @-references can't be recovered. This side table —
+    # written by the API layer once a turn is persisted, never read back into
+    # the LLM — lets ``get_history`` echo the exact references a user attached
+    # so the front-end can re-render them. Keyed by ``user_turn_number`` (the
+    # SDK's canonical per-turn id) so it survives gaps (turns with no refs).
+
+    _USER_MESSAGE_CONTEXT_DDL = (
+        "CREATE TABLE IF NOT EXISTS user_message_context ("
+        "session_id TEXT NOT NULL, "
+        "user_turn_number INTEGER NOT NULL, "
+        "context_json TEXT NOT NULL, "
+        "created_at TIMESTAMP, "
+        "PRIMARY KEY (session_id, user_turn_number)"
+        ")"
+    )
+
+    def get_max_user_turn_number(self, session_id: str) -> int:
+        """Return the highest ``user_turn_number`` recorded, or 0 when none/no DB.
+
+        ``user_turn_number`` is session-global and monotonic (assigned by the
+        SDK across every branch), so callers use it to detect whether a run
+        actually persisted a new user turn. Captured before a run and compared
+        after — see :meth:`save_user_message_context`.
+        """
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return 0
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                row = conn.execute(
+                    "SELECT MAX(user_turn_number) FROM message_structure WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def save_user_message_context(
+        self, session_id: str, context: Dict[str, Any], previous_turn_number: int = -1
+    ) -> None:
+        """Persist a turn's @-context against its ``user_turn_number``.
+
+        Call after the turn's user message is persisted by the SDK. The turn is
+        resolved as ``MAX(user_turn_number)``. ``previous_turn_number`` is the
+        value captured *before* the run: the write only happens when the new max
+        strictly exceeds it, so a run that persisted no new user turn (e.g. a
+        node type that emits no user message, or a failed/cancelled turn) can
+        never mis-attach this run's context onto the previous turn's bubble.
+
+        ``user_turn_number`` is session-global monotonic, so a bare ``MAX`` is
+        the right turn even across rewind/fork branches — no ``branch_id``
+        filter is needed. No-op when *context* is empty or the session DB /
+        turn isn't there yet.
+        """
+        if not context:
+            return
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return
+        payload = json.dumps(context, ensure_ascii=False)
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                row = conn.execute(
+                    "SELECT MAX(user_turn_number) FROM message_structure WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                turn_number = row[0] if row else None
+                if turn_number is None or int(turn_number) <= previous_turn_number:
+                    # No new user turn was persisted this run — don't attach.
+                    return
+                conn.execute(self._USER_MESSAGE_CONTEXT_DDL)
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_message_context "
+                    "(session_id, user_turn_number, context_json, created_at) VALUES (?, ?, ?, ?)",
+                    (session_id, int(turn_number), payload, datetime.now(timezone.utc)),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            logger.debug(f"save_user_message_context failed for {session_id}: {exc}")
+
+    @staticmethod
+    def _read_user_message_context(conn: sqlite3.Connection, session_id: str) -> Dict[int, Dict[str, Any]]:
+        """Return ``{user_turn_number: context_dict}`` for a session, ``{}`` if absent."""
+        try:
+            rows = conn.execute(
+                "SELECT user_turn_number, context_json FROM user_message_context WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        result: Dict[int, Dict[str, Any]] = {}
+        for turn_number, context_json in rows:
+            try:
+                result[int(turn_number)] = json.loads(context_json) if context_json else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return result
+
+    @staticmethod
+    def _read_message_turn_map(conn: sqlite3.Connection, session_id: str) -> Dict[int, int]:
+        """Return ``{agent_messages.id: user_turn_number}`` from message_structure."""
+        try:
+            rows = conn.execute(
+                "SELECT message_id, user_turn_number FROM message_structure WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        return {int(mid): int(turn) for mid, turn in rows if mid is not None and turn is not None}
+
     @staticmethod
     def _parse_final_output(actions: List[ActionHistory], current_assistant_group: Dict) -> Optional[ActionHistory]:
         """Try to parse sql/output from the last assistant action's messages and update assistant group.
@@ -1224,16 +1457,15 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
             return messages
 
         try:
+            turn_map: Dict[int, int] = {}
+            context_map: Dict[int, Dict[str, Any]] = {}
             if self._body_store is not None:
                 message_rows = self._run_body_store_sync(
                     lambda: self._body_store.get_session_messages(**self._store_kwargs(session_id))
                 )
             else:
-                # Build path with pathlib and resolve to absolute path
                 sessions_dir = Path(self.session_dir)
                 db_path = (sessions_dir / f"{session_id}.db").resolve()
-
-                # Ensure resolved path is within sessions directory
                 try:
                     db_path.relative_to(sessions_dir.resolve())
                 except ValueError:
@@ -1248,7 +1480,7 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
                     cursor = conn.cursor()
                     cursor.execute(
                         """
-                        SELECT message_data, created_at
+                        SELECT id, message_data, created_at
                         FROM agent_messages
                         WHERE session_id = ?
                         ORDER BY created_at, id
@@ -1256,8 +1488,17 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
                         (session_id,),
                     )
                     message_rows = cursor.fetchall()
+                    turn_map = self._read_message_turn_map(conn, session_id)
+                    context_map = self._read_user_message_context(conn, session_id)
 
-            messages = self._message_rows_to_raw_messages(message_rows)
+            messages = message_rows_to_raw_messages(
+                message_rows,
+                parse_final_output=SessionManager._parse_final_output,
+                restore_native_tool_call=SessionManager._restore_native_tool_call,
+                attach_native_tool_result=SessionManager._attach_native_tool_result,
+                message_turn_map=turn_map,
+                user_context_map=context_map,
+            )
 
         except Exception as e:
             logger.exception(f"Failed to load session messages for {session_id}: {e}")

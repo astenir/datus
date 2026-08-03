@@ -1103,6 +1103,83 @@ class TestBashToolToggle:
         node._ensure_bash_tool_in_tools()
         assert node.tools == []
 
+    def test_bash_allowed_patterns_passed_through_to_tool(self, mock_agent_config):
+        """``agent_config.bash_allowed_patterns`` reaches the BashTool instance.
+
+        The API surface sets ``["datus*"]`` for web clients; the node must
+        hand it to the tool verbatim so the execution-layer whitelist gates
+        commands regardless of the permission profile.
+        """
+        self._wire_permissions(mock_agent_config)
+        mock_agent_config.bash_allowed_patterns = ["datus*"]
+
+        node = MinimalAgenticNode(
+            node_id="bash_patterns_passthrough",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        from datus.tools.func_tool.bash_tool import BashTool
+
+        assert isinstance(node.bash_tool, BashTool)
+        assert node.bash_tool.allowed_patterns == ["datus*"]
+        assert node.bash_tool._is_command_allowed("datus plugin list") is True
+        assert node.bash_tool._is_command_allowed("rm -rf /") is False
+
+    def test_non_list_bash_patterns_fall_back_to_unrestricted(self, mock_agent_config):
+        """A config without a usable ``bash_allowed_patterns`` (e.g. a Mock
+        or a legacy bootstrap) must not kill the tool — it falls back to the
+        unrestricted default gated by the permission profile."""
+        self._wire_permissions(mock_agent_config)
+        # Mock(spec=AgentConfig) resolves the attribute to a truthy Mock —
+        # exactly the non-list shape the fallback must absorb.
+
+        node = MinimalAgenticNode(
+            node_id="bash_patterns_fallback",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        from datus.tools.func_tool.bash_tool import BashTool
+
+        assert isinstance(node.bash_tool, BashTool)
+        assert node.bash_tool.allowed_patterns == ["*"]
+
+    def test_read_only_managed_config_wires_plugin_runtime_provider(self, mock_agent_config):
+        """Only managed/read-only AgentConfig instances bridge plugin CLI config."""
+        self._wire_permissions(mock_agent_config)
+        mock_agent_config.config_mutable = False
+
+        node = MinimalAgenticNode(
+            node_id="bash_managed_plugin_context",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        from datus.tools.func_tool.bash_tool import BashTool
+
+        assert isinstance(node.bash_tool, BashTool)
+        assert node.bash_tool.execution_context_provider.__name__ == "_managed_plugin_context"
+
+    def test_mutable_local_config_does_not_wire_runtime_provider(self, mock_agent_config):
+        self._wire_permissions(mock_agent_config)
+        mock_agent_config.config_mutable = True
+
+        node = MinimalAgenticNode(
+            node_id="bash_local_plugin_context",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        from datus.tools.func_tool.bash_tool import BashTool
+
+        assert isinstance(node.bash_tool, BashTool)
+        assert node.bash_tool.execution_context_provider is None
+
 
 class TestRequiredSkillsInjection:
     """``REQUIRED_SKILLS`` host-injection primitive (``_inject_required_skills``)."""

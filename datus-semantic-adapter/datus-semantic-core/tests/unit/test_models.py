@@ -38,6 +38,16 @@ class TestDimensionInfo:
         dim = DimensionInfo(name="created_at", type="time")
         assert dim.type == "time"
 
+    def test_with_time_query_capabilities(self):
+        dim = DimensionInfo(
+            name="snapshot_month",
+            type="time",
+            is_primary_time=True,
+            time_granularities=["month", "quarter", "year"],
+        )
+        assert dim.is_primary_time is True
+        assert dim.time_granularities == ["month", "quarter", "year"]
+
     def test_with_type_categorical(self):
         dim = DimensionInfo(name="segment", type="categorical")
         assert dim.type == "categorical"
@@ -47,7 +57,9 @@ class TestDimensionInfo:
         assert dim.is_primary_key is True
 
     def test_all_fields(self):
-        dim = DimensionInfo(name="id", description="PK", type="number", is_primary_key=True)
+        dim = DimensionInfo(
+            name="id", description="PK", type="number", is_primary_key=True
+        )
         assert dim.name == "id"
         assert dim.description == "PK"
         assert dim.type == "number"
@@ -63,6 +75,8 @@ class TestDimensionInfo:
         dim = DimensionInfo(**data)
         assert dim.type is None
         assert dim.is_primary_key is None
+        assert dim.is_primary_time is None
+        assert dim.time_granularities == []
 
 
 class TestSemanticModelInfo:
@@ -190,7 +204,9 @@ class TestValidationResult:
         assert len(vr.issues) == 1
 
     def test_validation_issue_with_location(self):
-        issue = ValidationIssue(severity="warning", message="bad join", location="models/orders.yml:42")
+        issue = ValidationIssue(
+            severity="warning", message="bad join", location="models/orders.yml:42"
+        )
         assert issue.location == "models/orders.yml:42"
 
     def test_validation_issue_rejects_unknown_severity(self):

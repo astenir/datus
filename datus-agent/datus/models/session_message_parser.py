@@ -29,19 +29,28 @@ def message_rows_to_raw_messages(
     parse_final_output: ParseFinalOutput,
     restore_native_tool_call: RestoreNativeToolCall,
     attach_native_tool_result: AttachNativeToolResult,
+    message_turn_map: Optional[Dict[int, int]] = None,
+    user_context_map: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Convert persisted SDK message rows into API-ready raw chat messages."""
     messages = []
     current_assistant_group = None
     assistant_progress = []
     current_actions = []
+    message_turn_map = message_turn_map or {}
+    user_context_map = user_context_map or {}
 
     for row in message_rows:
         if isinstance(row, dict):
+            row_id = row.get("id")
             message_data = row.get("message_data")
             created_at = row.get("created_at")
         else:
-            message_data, created_at = row
+            if len(row) == 3:
+                row_id, message_data, created_at = row
+            else:
+                row_id = None
+                message_data, created_at = row
 
         created_at_iso = to_utc_iso(created_at)
         try:
@@ -87,14 +96,16 @@ def message_rows_to_raw_messages(
                     current_actions = []
 
                 content = extract_user_input(message_json.get("content", ""))
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": content,
-                        "timestamp": created_at_iso,
-                        "created_at": created_at_iso,
-                    }
-                )
+                user_message = {
+                    "role": "user",
+                    "content": content,
+                    "timestamp": created_at_iso,
+                    "created_at": created_at_iso,
+                }
+                turn_number = message_turn_map.get(row_id) if row_id is not None else None
+                if turn_number is not None and turn_number in user_context_map:
+                    user_message["at_context"] = user_context_map[turn_number]
+                messages.append(user_message)
                 continue
 
             if msg_type == "reasoning":

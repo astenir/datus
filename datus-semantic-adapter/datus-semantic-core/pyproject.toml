@@ -1,6 +1,6 @@
 [project]
 name = "datus-semantic-core"
-version = "0.2.1"
+version = "0.2.3"
 description = "Core interfaces for Datus semantic adapters"
 requires-python = ">=3.12"
 license = {text = "Apache-2.0"}

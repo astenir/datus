@@ -63,6 +63,10 @@ class ErrorCode(Enum):
         "SSL_CERT_FILE=<path-to-ca.pem>). Avoid `ssl_verify: false`, which disables verification. "
         "See docs/configuration/agent.md (Private or self-signed certificates).",
     )
+    MODEL_NOT_CONFIGURED = (
+        "300025",
+        "Unknown custom model `{model_name}`. Available: {available_models}",
+    )
 
     # OAuth authentication errors
     OAUTH_NOT_AUTHENTICATED = ("300030", "Not authenticated. Please run OAuth login first.")
@@ -89,6 +93,7 @@ class ErrorCode(Enum):
     # Tool errors
     TOOL_EXECUTION_FAILED = ("400001", "Tool execution failed")
     TOOL_INVALID_INPUT = ("400002", "Invalid tool input")
+    BASH_SANDBOX_UNAVAILABLE = ("400003", "OS sandbox unavailable")
 
     # Validation errors (ValidationHook for table-producing subagents)
     VALIDATION_BLOCKING_FAILURE = (
@@ -107,6 +112,9 @@ class ErrorCode(Enum):
         "400020",
         "Skill at {location}: invalid frontmatter — {error_message}",
     )
+
+    # Plugin store errors
+    PLUGIN_STORE_ERROR = ("400030", "Plugin store error: {error_message}")
 
     # Storage errors - Vector Database Operations
     STORAGE_FAILED = ("410000", "Vector database operation failed: {error_message}")
@@ -175,6 +183,10 @@ class ErrorCode(Enum):
     SEMANTIC_ADAPTER_ERROR = ("600002", "Semantic adapter operation failed: {error_message}")
     SEMANTIC_ADAPTER_CONFIG_ERROR = ("600003", "Semantic adapter configuration error: {error_message}")
     SEMANTIC_ADAPTER_SYNC_FAILED = ("600004", "Failed to sync from semantic adapter: {error_message}")
+    SEMANTIC_MODEL_BOOTSTRAP_FAILED = (
+        "600005",
+        "Failed to create prerequisite OSI semantic model: {error_message}",
+    )
 
     def __init__(self, code: str, desc: str):
         self.code = code
