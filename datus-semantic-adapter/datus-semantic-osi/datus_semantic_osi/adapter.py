@@ -54,7 +54,9 @@ from datus_semantic_osi.ir import (
     SemanticModelIR,
 )
 from datus_semantic_osi.metricflow_backend import (
+    executable_query_source,
     is_period_over_period_base_metric_name,
+    metricflow_dimension_path,
     period_over_period_base_metric_name,
 )
 from datus_semantic_osi.normalizer import NormalizationResult, normalize_document
@@ -232,13 +234,37 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             )
         return self._model_cache[semantic_model_name]
 
+    def _target_model(self, semantic_model_name: str) -> SemanticModelIR:
+        """Compile one explicitly selected model without loading invalid siblings."""
+        result = self._load_target_document_result(semantic_model_name)
+        if result.errors:
+            raise OSIValidationError(" ".join(result.errors))
+        return compile_document(result.document, dialect=self._dialect)
+
     def _metric_model_name(self, metric_name: str) -> Optional[str]:
         self._load_document_results()
         return self._metric_to_model.get(metric_name)
 
-    def _resolve_query_model(self, metrics: List[str]) -> SemanticModelIR:
+    def _resolve_query_model(
+        self,
+        metrics: List[str],
+        semantic_model_name: Optional[str] = None,
+    ) -> SemanticModelIR:
         if not metrics:
             raise ValueError("At least one metric is required.")
+        if semantic_model_name:
+            model = self._target_model(semantic_model_name)
+            unknown = [
+                name
+                for name in self._dedupe(metrics)
+                if self._find_metric_in_model(model, name) is None
+            ]
+            if unknown:
+                raise ValueError(
+                    f"Unknown metric(s) in semantic model `{semantic_model_name}`: "
+                    f"{', '.join(unknown)}."
+                )
+            return model
         unknown = [
             name for name in self._dedupe(metrics) if not self._metric_model_name(name)
         ]
@@ -966,10 +992,8 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             to_dataset = datasets.get(relationship.to_dataset)
             if to_dataset is None:
                 continue
-            join_name = self._relationship_join_name(
-                to_dataset, relationship.to_identifier
-            )
-            prefix = f"{join_name}__"
+            relationship_name = relationship.name
+            prefix = f"{relationship_name}__"
             if not dimension.startswith(prefix):
                 continue
             field_name = dimension[len(prefix) :]
@@ -982,7 +1006,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 None,
             )
             if field is not None:
-                return relationship, to_dataset, field, join_name
+                return relationship, to_dataset, field, relationship_name
         return None
 
     @staticmethod
@@ -990,7 +1014,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         if dataset.sql_table:
             return dataset.sql_table
         if dataset.sql_query:
-            return f"({dataset.sql_query})"
+            return f"({executable_query_source(dataset.sql_query)})"
         raise ValueError(f"Dataset `{dataset.name}` does not declare a SQL source.")
 
     @staticmethod
@@ -1051,20 +1075,126 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             raise ValueError(f"{label} must not contain nested queries or SQL commands")
         return expression.sql(dialect=self._dialect)
 
+    def _parse_dataset_query_source(self, sql: str) -> List[exp.Expression]:
+        """Parse a query source for classification while preserving its authored SQL."""
+        try:
+            return sqlglot.parse(sql, read=self._dialect)
+        except Exception as dialect_error:
+            # SQLGlot's StarRocks dialect is stricter than the warehouse for
+            # some native forms (for example two-argument DATE_ADD/DATE_SUB).
+            # Generic parsing is only a shape check; live metric dry-runs send
+            # the unchanged SQL to the warehouse, which remains authoritative.
+            if self._dialect != "starrocks":
+                raise
+            try:
+                return sqlglot.parse(sql)
+            except Exception:
+                raise dialect_error from None
+
+    @staticmethod
+    def _warehouse_dry_run(executor: Any, result: QueryResult) -> None:
+        """Validate compiled SQL against the live warehouse without fetching rows."""
+        sql = str((result.metadata or {}).get("sql") or "").strip()
+        if not sql and result.data and isinstance(result.data[0], dict):
+            sql = str(result.data[0].get("sql") or "").strip()
+        if not sql:
+            raise RuntimeError(
+                "Metric dry-run did not return compiled SQL for warehouse validation."
+            )
+        sql_client = getattr(getattr(executor, "client", None), "sql_client", None)
+        if sql_client is None or not callable(getattr(sql_client, "dry_run", None)):
+            raise RuntimeError(
+                "The live semantic backend does not expose warehouse dry-run support."
+            )
+        sql_client.dry_run(sql)
+        result.metadata["warehouse_dry_run"] = {
+            "status": "success",
+            "method": "explain",
+        }
+
+    def _query_dataset_projection_sql(
+        self, dataset: DatasetIR
+    ) -> tuple[str, List[str]]:
+        """Build a no-row query that validates a query dataset's public contract."""
+        projections: List[tuple[str, str]] = [
+            (field.name, field.expr or field.name) for field in dataset.fields
+        ]
+        for identifier in dataset.identifiers:
+            if identifier.components:
+                projections.extend(
+                    (component.name, component.expr)
+                    for component in identifier.components
+                )
+            elif identifier.expr:
+                projections.append((identifier.name, identifier.expr))
+
+        names: List[str] = []
+        expressions: List[str] = []
+        seen_expressions: set[str] = set()
+        for name, expression in projections:
+            if expression in seen_expressions:
+                continue
+            seen_expressions.add(expression)
+            names.append(name)
+            expressions.append(
+                self._profile_sql_expression(
+                    expression,
+                    label=f"dataset `{dataset.name}` projection `{name}`",
+                )
+            )
+
+        select_list = ", ".join(expressions) if expressions else "*"
+        source = executable_query_source(dataset.sql_query or "")
+        return (
+            f"SELECT {select_list} FROM ({source}) AS __datus_query_source LIMIT 0",
+            names,
+        )
+
+    def _warehouse_validate_query_datasets(
+        self,
+        executor: Any,
+        model: SemanticModelIR,
+    ) -> List[str]:
+        """Validate query sources and their declared projections in the warehouse."""
+        sql_client = getattr(getattr(executor, "client", None), "sql_client", None)
+        if sql_client is None or not callable(getattr(sql_client, "dry_run", None)):
+            return [
+                "The live semantic backend does not expose warehouse dry-run support."
+            ]
+
+        issues: List[str] = []
+        for dataset in model.datasets:
+            if not dataset.sql_query:
+                continue
+            sql, projection_names = self._query_dataset_projection_sql(dataset)
+            try:
+                sql_client.dry_run(sql)
+            except Exception as exc:
+                contract = (
+                    f"declared fields/keys {projection_names}"
+                    if projection_names
+                    else "query output"
+                )
+                issues.append(
+                    f"Dataset `{dataset.name}` cannot expose its {contract} from the "
+                    f"query source in the warehouse: {exc}"
+                )
+        return issues
+
     @staticmethod
     def _relationship_dimension_key(
         rel_dim: tuple[RelationshipIR, DatasetIR, FieldIR, str],
-    ) -> tuple[str, ...]:
-        relationship, to_dataset, field, join_name = rel_dim
+    ) -> tuple[object, ...]:
+        relationship, to_dataset, field, relationship_name = rel_dim
         return (
             relationship.from_dataset,
-            relationship.from_identifier,
+            tuple(relationship.from_columns),
             relationship.to_dataset,
-            relationship.to_identifier,
+            tuple(relationship.to_columns),
             to_dataset.name,
             field.name,
             field.expr,
-            join_name,
+            relationship_name,
         )
 
     @staticmethod
@@ -1124,7 +1254,7 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         rel_dim = self._relationship_dimension(model, first_metric, dimensions[0])
         if rel_dim is None:
             return None
-        relationship, to_dataset, field, _join_name = rel_dim
+        relationship, to_dataset, field, _relationship_name = rel_dim
         rel_dim_key = self._relationship_dimension_key(rel_dim)
         for metric in typed_metrics[1:]:
             metric_rel_dim = self._relationship_dimension(model, metric, dimensions[0])
@@ -1169,23 +1299,43 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             f"{self._metric_aggregate_sql(metric)} AS {self._sql_identifier(metric.name, label='metric alias')}"
             for metric in typed_metrics
         ]
-        from_identifier = self._sql_identifier(
-            relationship.from_identifier, label="relationship key"
-        )
-        to_identifier = self._sql_identifier(
-            relationship.to_identifier, label="relationship key"
-        )
+        fact_field_expr = {item.name: item.expr for item in fact_dataset.fields}
+        dimension_field_expr = {item.name: item.expr for item in to_dataset.fields}
+        from_identifiers = [
+            self._profile_sql_expression(
+                fact_field_expr.get(column, column), label="relationship key"
+            )
+            for column in relationship.from_columns
+        ]
+        to_identifiers = [
+            self._profile_sql_expression(
+                dimension_field_expr.get(column, column), label="relationship key"
+            )
+            for column in relationship.to_columns
+        ]
+        join_aliases = [
+            f"__join_key_{index}" for index in range(len(relationship.from_columns))
+        ]
         field_expr = self._profile_sql_expression(
             field.expr, label="dimension expression"
         )
         field_name = self._sql_identifier(field.name, label="dimension alias")
+        fact_join_select = ", ".join(
+            f"{identifier} AS {alias}"
+            for identifier, alias in zip(from_identifiers, join_aliases)
+        )
+        dimension_join_select = ", ".join(
+            f"{identifier} AS {alias}"
+            for identifier, alias in zip(to_identifiers, join_aliases)
+        )
         fact_sql = (
-            f"SELECT {from_identifier} AS __join_key, "
+            f"SELECT {fact_join_select}, "
             f"{', '.join(select_metrics)} "
-            f"FROM {fact_source} {where_sql} GROUP BY {from_identifier}"
+            f"FROM {fact_source} {where_sql} "
+            f"GROUP BY {', '.join(from_identifiers)}"
         )
         dimension_sql = (
-            f"SELECT {to_identifier} AS __join_key, {field_expr} AS {field_name} "
+            f"SELECT {dimension_join_select}, {field_expr} AS {field_name} "
             f"FROM {dimension_source}"
         )
         metric_selects = []
@@ -1221,11 +1371,14 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         else:
             order_sql = f" ORDER BY {field_name}"
         limit_sql = f" LIMIT {int(limit)}" if limit is not None else ""
+        join_condition = " AND ".join(
+            f"fact.{alias} = dim.{alias}" for alias in join_aliases
+        )
         return (
             f"SELECT dim.{field_name} AS {field_name}, {', '.join(metric_selects)} "
             f"FROM ({dimension_sql}) dim "
             f"LEFT JOIN ({fact_sql}) fact "
-            "ON fact.__join_key = dim.__join_key"
+            f"ON {join_condition}"
             f"{order_sql}{limit_sql}"
         )
 
@@ -1286,7 +1439,11 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             "execution": "osi_dimension_preserving_sql",
         }
         if dry_run:
-            return QueryResult(columns=["sql"], data=[{"sql": sql}], metadata=metadata)
+            result = QueryResult(
+                columns=["sql"], data=[{"sql": sql}], metadata=metadata
+            )
+            self._warehouse_dry_run(executor, result)
+            return result
         sql_client = getattr(getattr(executor, "client", None), "sql_client", None)
         if sql_client is None or not hasattr(sql_client, "query"):
             return None
@@ -1367,10 +1524,102 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             is_primary_key=False,
         )
 
-    @staticmethod
-    def _relationship_join_name(to_dataset: DatasetIR, fallback_identifier: str) -> str:
-        primary = next((i for i in to_dataset.identifiers if i.type == "primary"), None)
-        return primary.name if primary else fallback_identifier
+    def _metric_time_field(
+        self, model: SemanticModelIR, metric: MetricIR
+    ) -> tuple[Optional[str], Optional[FieldIR]]:
+        dataset_names = self._root_dataset_names_for_metric(model, metric)
+        if len(dataset_names) != 1:
+            return None, None
+
+        dataset = self._dataset_by_name(model).get(dataset_names[0])
+        if dataset is None:
+            return None, None
+
+        time_dimension = metric.time_dimension or dataset.primary_time_dimension
+        if not time_dimension:
+            return None, None
+        field = next(
+            (
+                candidate
+                for candidate in dataset.fields
+                if candidate.name == time_dimension
+                and candidate.type == "time"
+                and candidate.is_dimension
+            ),
+            None,
+        )
+        return (time_dimension, field) if field is not None else (None, None)
+
+    def _metric_has_authored_time_dimension(
+        self, model: SemanticModelIR, metric: MetricIR
+    ) -> bool:
+        """Return whether every root needed by the metric has authored time semantics."""
+        if metric.time_dimension:
+            return True
+
+        dataset_names = self._root_dataset_names_for_metric(model, metric)
+        if not dataset_names:
+            return False
+        datasets = self._dataset_by_name(model)
+        return all(
+            (dataset := datasets.get(dataset_name)) is not None
+            and bool(dataset.primary_time_dimension)
+            for dataset_name in dataset_names
+        )
+
+    def _time_granularities_for_metric(
+        self, model: SemanticModelIR, metric: MetricIR, time_field: FieldIR
+    ) -> List[str]:
+        """Return legal metric-time grains, ordered from finest to coarsest."""
+        minimum_grain = str(time_field.time_granularity or "day").lower()
+        if minimum_grain not in self._TIME_GRAINS:
+            return []
+
+        if metric.period_over_period is not None:
+            fixed_grain = str(metric.period_over_period.time_grain or "").lower()
+            return [fixed_grain] if fixed_grain in self._TIME_GRAINS else []
+
+        if self._requires_time_dimension(model, metric):
+            required_grains = self._static_required_grains(model, metric)
+            if len(required_grains) == 1:
+                required_grain = next(iter(required_grains))
+                return [required_grain] if required_grain in self._TIME_GRAINS else []
+            if len(required_grains) > 1:
+                return []
+            if metric.kind is MetricKind.CUMULATIVE:
+                return [minimum_grain]
+
+        minimum_index = self._TIME_GRAINS.index(minimum_grain)
+        return list(self._TIME_GRAINS[minimum_index:])
+
+    def _validate_time_query_contract(
+        self,
+        model: SemanticModelIR,
+        metrics: List[str],
+        dimensions: List[str],
+        time_start: Optional[str],
+        time_end: Optional[str],
+        time_granularity: Optional[str],
+    ) -> None:
+        has_time_query = bool(time_start or time_end or time_granularity) or any(
+            is_metric_time_dimension(dimension) for dimension in dimensions
+        )
+        if not has_time_query:
+            return
+
+        timeless_metrics = []
+        for name in metrics:
+            metric = self._find_metric(name, model)
+            if metric is not None and not self._metric_has_authored_time_dimension(
+                model, metric
+            ):
+                timeless_metrics.append(name)
+        if timeless_metrics:
+            raise ValueError(
+                "Metrics without an authored time dimension cannot be queried with "
+                "time_start, time_end, time_granularity, or metric_time dimensions: "
+                f"{', '.join(timeless_metrics)}."
+            )
 
     def _dimensions_for_dataset(
         self,
@@ -1407,14 +1656,11 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             to_dataset = datasets.get(relationship.to_dataset)
             if to_dataset is None:
                 continue
-            join_name = self._relationship_join_name(
-                to_dataset, relationship.to_identifier
-            )
             dimensions.extend(
                 self._dimensions_for_dataset(
                     model,
                     relationship.to_dataset,
-                    prefix=[*prefix, join_name],
+                    prefix=[*prefix, relationship.name],
                     visited=set(visited),
                 )
             )
@@ -1431,11 +1677,31 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                     continue
                 seen.add(dimension.name)
                 dimensions.append(dimension)
+
+        time_dimension, time_field = self._metric_time_field(model, metric)
+        if time_dimension is not None and time_field is not None:
+            for dimension in dimensions:
+                if dimension.name != time_dimension:
+                    continue
+                dimension.is_primary_time = True
+                dimension.time_granularities = self._time_granularities_for_metric(
+                    model, metric, time_field
+                )
+                break
         return dimensions
 
     async def get_dimensions(
-        self, metric_name: str, path: Optional[List[str]] = None
+        self,
+        metric_name: str,
+        path: Optional[List[str]] = None,
+        semantic_model_name: Optional[str] = None,
     ) -> List[DimensionInfo]:
+        if semantic_model_name:
+            model = self._target_model(semantic_model_name)
+            metric = self._find_metric(metric_name, model)
+            if metric is None:
+                return []
+            return self._dimensions_for_metric(model, metric)
         model_name = self._metric_model_name(metric_name)
         if model_name is None:
             return []
@@ -1459,16 +1725,26 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         join_policy: Optional[str] = None,
         zero_fill: bool = False,
         dry_run: bool = False,
+        semantic_model_name: Optional[str] = None,
     ) -> QueryResult:
-        model = self._resolve_query_model(metrics)
+        model = self._resolve_query_model(metrics, semantic_model_name)
         period_over_period_metrics = self._period_over_period_metrics(model, metrics)
         live = getattr(self._backend, "has_live_connection", False)
         dimensions = dimensions or []
-        time_end = self._exclusive_end_to_inclusive(time_end)
         dimensions, time_granularity = self._ensure_time_grouping(
             model, metrics, dimensions, time_granularity
         )
         policy = normalize_join_policy(join_policy)
+        if policy != "dimension_preserving":
+            self._validate_time_query_contract(
+                model,
+                metrics,
+                dimensions,
+                time_start,
+                time_end,
+                time_granularity,
+            )
+        time_end = self._exclusive_end_to_inclusive(time_end)
 
         if zero_fill and policy != "dimension_preserving":
             raise ValueError("zero_fill requires join_policy='dimension_preserving'.")
@@ -1517,10 +1793,13 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                         "execution": "osi_dimension_preserving_sql",
                     },
                 )
+            backend_dimensions = [
+                metricflow_dimension_path(dimension) for dimension in dimensions
+            ]
             sql = self._backend.render_sql(
                 model,
                 metrics=metrics,
-                dimensions=dimensions,
+                dimensions=backend_dimensions,
                 time_start=time_start,
                 time_end=time_end,
                 where=where,
@@ -1548,6 +1827,20 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         query_metrics, hidden_anchor_metrics, filter_anchor_metrics = (
             self._query_metrics_plan(model, metrics)
         )
+        backend_dimensions = [
+            metricflow_dimension_path(dimension) for dimension in dimensions
+        ]
+        backend_to_public_dimensions = {
+            backend: public
+            for public, backend in zip(dimensions, backend_dimensions)
+            if public != backend
+        }
+        backend_order_by = []
+        for item in order_by or []:
+            descending = str(item).startswith("-")
+            name = str(item)[1:] if descending else str(item)
+            mapped = metricflow_dimension_path(name) if name in dimensions else name
+            backend_order_by.append(f"-{mapped}" if descending else mapped)
 
         # delegate live execution / explain to the wrapped MetricFlowAdapter
         executor = self._backend.make_executor(model)
@@ -1577,26 +1870,26 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                     executor,
                     model,
                     metrics=query_metrics,
-                    dimensions=dimensions,
+                    dimensions=backend_dimensions,
                     path=path,
                     time_start=time_start,
                     time_end=time_end,
                     time_granularity=time_granularity,
                     where=where,
                     limit=limit,
-                    order_by=order_by,
+                    order_by=backend_order_by or None,
                 )
             else:
                 result = await executor.query_metrics(
                     query_metrics,
-                    dimensions=dimensions,
+                    dimensions=backend_dimensions,
                     path=path,
                     time_start=time_start,
                     time_end=time_end,
                     time_granularity=time_granularity,
                     where=where,
                     limit=limit,
-                    order_by=order_by,
+                    order_by=backend_order_by or None,
                     dry_run=dry_run,
                 )
         except Exception as exc:
@@ -1605,6 +1898,14 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 raise
             raise SemanticValidationException(payload) from exc
         if dry_run:
+            warehouse_status = (result.metadata or {}).get("warehouse_dry_run")
+            if (
+                not isinstance(warehouse_status, dict)
+                or warehouse_status.get("status") != "success"
+            ):
+                raise RuntimeError(
+                    "The live metric executor did not complete a warehouse dry-run."
+                )
             if period_over_period_metrics:
                 result.metadata["period_over_period"] = (
                     self._period_over_period_metadata(period_over_period_metrics)
@@ -1614,6 +1915,21 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                         time_start
                     )
             return result
+        if backend_to_public_dimensions:
+            result = QueryResult(
+                columns=[
+                    backend_to_public_dimensions.get(column, column)
+                    for column in result.columns
+                ],
+                data=[
+                    {
+                        backend_to_public_dimensions.get(column, column): value
+                        for column, value in row.items()
+                    }
+                    for row in result.data
+                ],
+                metadata=dict(result.metadata),
+            )
         if period_over_period_metrics:
             result.metadata["period_over_period"] = self._period_over_period_metadata(
                 period_over_period_metrics
@@ -1644,6 +1960,16 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         checks: Optional[List[str] | str] = None,
         baseline_artifact: Optional[Dict[str, Any]] = None,
     ) -> ValidationResult:
+        if scope not in {"all", "semantic_model"}:
+            return ValidationResult(
+                valid=False,
+                issues=[
+                    ValidationIssue(
+                        severity="error",
+                        message="scope must be one of: all, semantic_model",
+                    )
+                ],
+            )
         checks_list = _normalize_validate_checks(checks)
         unsupported = sorted(
             check for check in checks_list if check not in _SUPPORTED_VALIDATE_CHECKS
@@ -1747,6 +2073,29 @@ class DatusOSIAdapter(BaseSemanticAdapter):
             if "ir" in checks_list:
                 for message in validate_ir(model):
                     add_issue(model_name, "error", message)
+                for dataset in model.datasets:
+                    if not dataset.sql_query:
+                        continue
+                    try:
+                        parsed_queries = self._parse_dataset_query_source(
+                            dataset.sql_query
+                        )
+                    except Exception as exc:
+                        add_issue(
+                            model_name,
+                            "error",
+                            f"Dataset `{dataset.name}` query source is invalid: {exc}",
+                        )
+                        continue
+                    if len(parsed_queries) != 1 or not isinstance(
+                        parsed_queries[0], exp.Query
+                    ):
+                        add_issue(
+                            model_name,
+                            "error",
+                            f"Dataset `{dataset.name}` query source must contain "
+                            "exactly one SQL query.",
+                        )
                 for message in detect_measure_columns_modeled_as_dimensions(
                     model, dialect=self._dialect
                 ):
@@ -1756,18 +2105,60 @@ class DatusOSIAdapter(BaseSemanticAdapter):
                 for message in validate_capabilities(model, caps):
                     add_issue(model_name, "error", message)
 
+            executor = None
+            if (
+                not any(
+                    issue.severity == "error" for issue in issues[model_issue_start:]
+                )
+                and "backend" in checks_list
+                and getattr(self._backend, "has_live_connection", False)
+                and any(dataset.sql_query for dataset in model.datasets)
+            ):
+                try:
+                    executor = self._backend.make_executor(model)
+                    for message in self._warehouse_validate_query_datasets(
+                        executor, model
+                    ):
+                        add_issue(model_name, "error", message)
+                except Exception as exc:
+                    add_issue(
+                        model_name,
+                        "error",
+                        f"Query-backed dataset warehouse validation failed: {exc}",
+                    )
+
+            defer_empty_backend_model = (
+                scope == "semantic_model"
+                and checks is None
+                and not (
+                    model.metrics
+                    or model.relationships
+                    or any(
+                        dataset.identifiers
+                        or any(field.is_dimension for field in dataset.fields)
+                        for dataset in model.datasets
+                    )
+                )
+            )
             if (
                 any(issue.severity == "error" for issue in issues[model_issue_start:])
                 or "backend" not in checks_list
+                or defer_empty_backend_model
             ):
                 continue
 
             if getattr(self._backend, "has_live_connection", False):
-                executor = self._backend.make_executor(model)
+                executor = executor or self._backend.make_executor(model)
                 backend_result = await executor.validate_semantic(scope=scope)
             else:
                 backend_result = self._backend.validate(model)
             for issue in backend_result.issues:
+                if (
+                    scope == "semantic_model"
+                    and issue.severity == "error"
+                    and "No metrics present in the model" in issue.message
+                ):
+                    continue
                 add_issue(model_name, issue.severity, issue.message)
 
         return ValidationResult(
@@ -1798,7 +2189,9 @@ class DatusOSIAdapter(BaseSemanticAdapter):
         subject_path: Optional[List[str]] = None,
         create: bool = False,
     ) -> MetricMutationResult:
-        return self._author().write(metric_name, source, subject_path=subject_path, create=create)
+        return self._author().write(
+            metric_name, source, subject_path=subject_path, create=create
+        )
 
     def delete_metric_source(
         self,

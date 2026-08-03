@@ -51,7 +51,9 @@ def detect_nonportable_functions(
             continue
         if tree is None:
             continue
-        names = sorted({node.name.upper() for node in tree.find_all(exp.Anonymous) if node.name})
+        names = sorted(
+            {node.name.upper() for node in tree.find_all(exp.Anonymous) if node.name}
+        )
         if names:
             warnings.append(
                 f"Metric `{metric.name}` uses function(s) {names} that sqlglot cannot "
@@ -312,7 +314,10 @@ def detect_measure_columns_modeled_as_dimensions(
                 continue
             for column in tree.find_all(exp.Column):
                 col_name = column.name
-                if col_name in dims_by_ds.get(ds_name, set()) and (ds_name, col_name) not in seen:
+                if (
+                    col_name in dims_by_ds.get(ds_name, set())
+                    and (ds_name, col_name) not in seen
+                ):
                     seen.add((ds_name, col_name))
                     warnings.append(
                         f"Metric `{metric.name}` aggregates column `{col_name}` which "
@@ -328,12 +333,35 @@ def validate_capabilities(model: SemanticModelIR, capabilities: dict) -> List[st
     """Check the IR against a backend's declared capabilities before lowering."""
     issues: List[str] = []
     supported_kinds = set(capabilities.get("metric_kinds", []))
+    supported_time_grains = {
+        str(grain).lower() for grain in capabilities.get("time_bucket", [])
+    }
     for metric in model.metrics:
         if supported_kinds and metric.kind.value not in supported_kinds:
             issues.append(
                 f"Backend does not support metric kind `{metric.kind.value}` "
                 f"used by metric `{metric.name}`. Supported: {sorted(supported_kinds)}."
             )
+    if supported_time_grains:
+        for dataset in model.datasets:
+            for field in dataset.fields:
+                if not field.is_dimension or field.type != "time":
+                    continue
+                grain = str(field.time_granularity or "day").lower()
+                if grain not in supported_time_grains:
+                    issues.append(
+                        f"Backend does not support time granularity `{grain}` used by "
+                        f"dataset `{dataset.name}` field `{field.name}`. Supported: "
+                        f"{sorted(supported_time_grains)}."
+                    )
+    if not capabilities.get("composite_join", False):
+        for relationship in model.relationships:
+            if len(relationship.from_columns) > 1:
+                issues.append(
+                    f"Backend does not support composite relationship "
+                    f"`{relationship.name}` with {len(relationship.from_columns)} "
+                    "ordered key columns."
+                )
     return issues
 
 

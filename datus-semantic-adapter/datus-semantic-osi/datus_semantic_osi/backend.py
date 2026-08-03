@@ -80,6 +80,7 @@ class MetricFlowBackend(SemanticExecutionBackend):
         "filtered_dataset": True,
         "runtime_where": True,
         "many_to_one_join": True,
+        "composite_join": True,
         "time_bucket": ["day", "week", "month", "quarter", "year"],
         "dry_run": "sql",
         "artifact": "yaml",

@@ -358,8 +358,35 @@ semantic_model:
         )
 
 
-def test_parse_osi_rejects_composite_relationship_columns_for_now():
-    with pytest.raises(Exception, match="exactly one column"):
+def test_parse_osi_accepts_ordered_composite_relationship_columns():
+    document = parse_osi_model(
+        """
+version: 0.2.0.dev0
+semantic_model:
+  - name: shop
+    datasets:
+      - name: order_lines
+        source: order_lines
+      - name: orders
+        source: orders
+        unique_keys:
+          - [order_id, tenant_id]
+    relationships:
+      - name: order_lines_to_orders
+        from: order_lines
+        to: orders
+        from_columns: [order_id, tenant_id]
+        to_columns: [order_id, tenant_id]
+"""
+    )
+
+    relationship = document.relationships[0]
+    assert relationship.from_columns == ["order_id", "tenant_id"]
+    assert relationship.to_columns == ["order_id", "tenant_id"]
+
+
+def test_parse_osi_rejects_mismatched_relationship_column_counts():
+    with pytest.raises(Exception, match="same length"):
         parse_osi_model(
             """
 version: 0.2.0.dev0
@@ -374,8 +401,8 @@ semantic_model:
       - name: order_lines_to_orders
         from: order_lines
         to: orders
-        from_columns: [order_id, tenant_id]
-        to_columns: [order_id, tenant_id]
+        from_columns: [tenant_id, order_id]
+        to_columns: [id]
 """
         )
 

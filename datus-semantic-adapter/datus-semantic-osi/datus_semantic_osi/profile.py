@@ -158,18 +158,17 @@ class OSIRelationship(BaseModel):
     """Join relationship between datasets.
 
     OSI core declares relationships with ``from`` / ``to`` and
-    ``from_columns`` / ``to_columns``. The executable Datus IR currently uses a
-    single identifier on each side, so this profile accepts the OSI core shape
-    and normalizes one-column relationships into the internal field names.
-    Legacy top-level Datus fields remain accepted for backward compatibility.
+    ``from_columns`` / ``to_columns``. Column order defines the component
+    correspondence for composite relationships. Legacy single-identifier
+    fields remain accepted by the internal profile parser for migration.
     """
 
     name: str
     type: str = "many_to_one"  # many_to_one | one_to_one
     from_dataset: str
-    from_identifier: str
+    from_columns: List[str]
     to_dataset: str
-    to_identifier: str
+    to_columns: List[str]
     ai_context: Optional[Union[str, Dict[str, Any]]] = None
 
     @model_validator(mode="before")
@@ -195,15 +194,44 @@ class OSIRelationship(BaseModel):
             normalized["from_dataset"] = normalized["from"]
         if "to_dataset" not in normalized and "to" in normalized:
             normalized["to_dataset"] = normalized["to"]
-        if "from_identifier" not in normalized and "from_columns" in normalized:
-            normalized["from_identifier"] = _single_relationship_column(
-                normalized["from_columns"], "from_columns", rel_name
-            )
-        if "to_identifier" not in normalized and "to_columns" in normalized:
-            normalized["to_identifier"] = _single_relationship_column(
-                normalized["to_columns"], "to_columns", rel_name
-            )
+        if "from_columns" not in normalized and "from_identifier" in normalized:
+            normalized["from_columns"] = [normalized["from_identifier"]]
+        if "to_columns" not in normalized and "to_identifier" in normalized:
+            normalized["to_columns"] = [normalized["to_identifier"]]
+        if isinstance(normalized.get("from_columns"), str):
+            normalized["from_columns"] = [normalized["from_columns"]]
+        if isinstance(normalized.get("to_columns"), str):
+            normalized["to_columns"] = [normalized["to_columns"]]
         return normalized
+
+    @model_validator(mode="after")
+    def _validate_column_pairs(self) -> "OSIRelationship":
+        name = f" `{self.name}`"
+        if not self.from_columns or not self.to_columns:
+            raise ValueError(
+                f"Relationship{name} must declare at least one column on each side."
+            )
+        if len(self.from_columns) != len(self.to_columns):
+            raise ValueError(
+                f"Relationship{name} has {len(self.from_columns)} `from_columns` "
+                f"but {len(self.to_columns)} `to_columns`; the lists must have "
+                "the same length and corresponding order."
+            )
+        if len(set(self.from_columns)) != len(self.from_columns):
+            raise ValueError(f"Relationship{name} has duplicate `from_columns`.")
+        if len(set(self.to_columns)) != len(self.to_columns):
+            raise ValueError(f"Relationship{name} has duplicate `to_columns`.")
+        return self
+
+    @property
+    def from_identifier(self) -> str:
+        """Compatibility accessor for legacy single-column callers."""
+        return self.from_columns[0]
+
+    @property
+    def to_identifier(self) -> str:
+        """Compatibility accessor for legacy single-column callers."""
+        return self.to_columns[0]
 
 
 class OSIDocument(BaseModel):
@@ -256,19 +284,6 @@ def validate_osi_core_schema(data: Dict[str, Any]) -> None:
 
 def _looks_like_core_document(data: Dict[str, Any]) -> bool:
     return "version" in data or isinstance(data.get("semantic_model"), list)
-
-
-def _single_relationship_column(value: Any, field_name: str, rel_name: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], str):
-        return value[0]
-    name = f" `{rel_name}`" if rel_name else ""
-    raise ValueError(
-        f"Relationship{name} uses `{field_name}`={value!r}; the current Datus "
-        "execution profile supports OSI relationships with exactly one column "
-        "on each side."
-    )
 
 
 def _datus_hints(obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -1098,8 +1113,8 @@ def to_core_schema_document(doc: OSIDocument) -> Dict[str, Any]:
             "name": rel.name,
             "from": rel.from_dataset,
             "to": rel.to_dataset,
-            "from_columns": [rel.from_identifier],
-            "to_columns": [rel.to_identifier],
+            "from_columns": list(rel.from_columns),
+            "to_columns": list(rel.to_columns),
         }
         if rel.ai_context:
             core_rel["ai_context"] = rel.ai_context

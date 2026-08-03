@@ -19,6 +19,17 @@ class DimensionInfo(BaseModel):
     is_primary_key: Optional[bool] = Field(
         None, description="Whether this dimension is a primary key"
     )
+    is_primary_time: Optional[bool] = Field(
+        None,
+        description="Whether this is the metric's canonical time dimension",
+    )
+    time_granularities: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Queryable time granularities for the canonical time dimension, "
+            "ordered from finest to coarsest"
+        ),
+    )
 
 
 class SemanticModelInfo(BaseModel):

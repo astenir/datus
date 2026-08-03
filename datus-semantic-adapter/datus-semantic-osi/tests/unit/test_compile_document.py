@@ -93,3 +93,51 @@ metrics:
 """
     with pytest.raises(OSIValidationError, match="reserved metric key"):
         compile_document(parse_osi(osi))
+
+
+def test_relationship_target_must_declare_complete_unique_key():
+    osi = """
+semantic_model:
+  name: multi_tenant_shop
+datasets:
+  - name: order_items
+    source:
+      table: order_items
+  - name: orders
+    source:
+      table: orders
+relationships:
+  - name: order_items_to_orders
+    from: order_items
+    to: orders
+    from_columns: [tenant_id, order_id]
+    to_columns: [tenant_id, id]
+"""
+
+    with pytest.raises(OSIValidationError, match="primary_key.*unique_keys"):
+        compile_document(parse_osi(osi))
+
+
+def test_relationship_cannot_target_subset_of_composite_unique_key():
+    osi = """
+semantic_model:
+  name: multi_tenant_shop
+datasets:
+  - name: order_items
+    source:
+      table: order_items
+  - name: orders
+    source:
+      table: orders
+    unique_keys:
+      - [tenant_id, id]
+relationships:
+  - name: order_items_to_orders
+    from: order_items
+    to: orders
+    from_columns: [order_id]
+    to_columns: [id]
+"""
+
+    with pytest.raises(OSIValidationError, match="complete target key"):
+        compile_document(parse_osi(osi))

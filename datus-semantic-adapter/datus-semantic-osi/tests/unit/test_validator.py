@@ -292,9 +292,7 @@ def test_identical_duplicate_datasets_are_merged(tmp_path):
     (tmp_path / "b.yml").write_text(
         f'datasets: [{ds}]\nmetrics: [{{name: s, expression: "SUM(amount)", dataset: orders}}]\n'
     )
-    doc = next(
-        iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values())
-    )
+    doc = next(iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values()))
     # the identical `orders` dataset declared in both files collapses to one
     assert [d.name for d in doc.datasets] == ["orders"]
     assert {m.name for m in doc.metrics} == {"c", "s"}
@@ -309,9 +307,7 @@ def test_conflicting_duplicate_datasets_are_kept_for_validation(tmp_path):
     (tmp_path / "b.yml").write_text(
         "datasets: [{name: orders, source: {table: other}, primary_key: id}]\n"
     )
-    doc = next(
-        iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values())
-    )
+    doc = next(iter(load_osi_path(str(tmp_path), allow_legacy_profile=True).values()))
     assert [d.name for d in doc.datasets] == ["orders", "orders"]  # validator will flag
 
 
@@ -416,6 +412,55 @@ def test_capabilities_reject_unsupported_metric_kind():
     caps = {"metric_kinds": ["ratio"]}  # aggregate not supported
     issues = validate_capabilities(model, caps)
     assert any("aggregate" in i for i in issues)
+
+
+def test_capabilities_reject_unsupported_time_granularity():
+    model = SemanticModelIR(
+        datasets=[
+            DatasetIR(
+                name="events",
+                sql_table="events",
+                fields=[
+                    FieldIR(
+                        name="event_time",
+                        expr="event_time",
+                        type="time",
+                        time_granularity="hour",
+                    )
+                ],
+            )
+        ]
+    )
+
+    issues = validate_capabilities(model, {"time_bucket": ["day", "month"]})
+
+    assert issues == [
+        "Backend does not support time granularity `hour` used by dataset "
+        "`events` field `event_time`. Supported: ['day', 'month']."
+    ]
+
+
+def test_capabilities_normalize_declared_time_granularity():
+    model = SemanticModelIR(
+        datasets=[
+            DatasetIR(
+                name="events",
+                sql_table="events",
+                fields=[
+                    FieldIR(
+                        name="event_time",
+                        expr="event_time",
+                        type="time",
+                        time_granularity="day",
+                    )
+                ],
+            )
+        ]
+    )
+
+    issues = validate_capabilities(model, {"time_bucket": ["Day", "Month"]})
+
+    assert issues == []
 
 
 def test_ensure_valid_raises_business_error():

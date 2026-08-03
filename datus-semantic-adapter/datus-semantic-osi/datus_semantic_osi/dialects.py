@@ -16,6 +16,7 @@ import sqlglot
 _DIALECT_ALIASES = {
     "postgresql": "postgres",
     "greenplum": "postgres",
+    "hologres": "postgres",
 }
 
 # Lenient fallback when the datasource is unknown or maps to no sqlglot dialect.

@@ -485,9 +485,49 @@ class MetricFlowAdapter(BaseSemanticAdapter):
 
         # Get dimensions from client (returns List[Dimension])
         dimensions = client.list_dimensions(metric_names=[metric_name])
+        time_dimension_names = self._time_dimension_names_for_metrics(client, [metric_name])
+        primary_time_name = next(
+            (
+                dimension.name
+                for dimension in dimensions
+                if self._is_metric_time_dimension(dimension.name)
+            ),
+            None,
+        )
+        if primary_time_name is None:
+            primary_time_name = next(
+                (
+                    dimension.name
+                    for dimension in dimensions
+                    if self._is_known_time_dimension_name(dimension.name, time_dimension_names)
+                ),
+                None,
+            )
+        time_granularities = (
+            self._time_granularities_for_metric(client, metric_name) if primary_time_name else []
+        )
 
         # Convert to DimensionInfo objects
-        return [DimensionInfo(name=d.name, description=d.description) for d in dimensions]
+        return [
+            DimensionInfo(
+                name=dimension.name,
+                description=dimension.description,
+                type=(
+                    "time"
+                    if dimension.name == primary_time_name
+                    or self._is_known_time_dimension_name(
+                        dimension.name,
+                        time_dimension_names,
+                    )
+                    else None
+                ),
+                is_primary_time=(True if dimension.name == primary_time_name else None),
+                time_granularities=(
+                    time_granularities if dimension.name == primary_time_name else []
+                ),
+            )
+            for dimension in dimensions
+        ]
 
     @staticmethod
     def _normalize_time_granularity(granularity: Optional[str]) -> Optional[str]:
@@ -593,6 +633,43 @@ class MetricFlowAdapter(BaseSemanticAdapter):
         if not isinstance(full_metrics, (list, tuple)):
             return {}
         return {name: metric for metric in full_metrics if (name := cls._metric_name(metric))}
+
+    @classmethod
+    def _time_granularities_for_metric(cls, client, metric_name: str) -> List[str]:
+        """Return legal metric-time grains, ordered from finest to coarsest."""
+        try:
+            solver = client.engine._query_parser._time_granularity_solver
+            _, minimum_query_granularity = solver.local_dimension_granularity_range(
+                metric_references=[MetricReference(element_name=metric_name)],
+                local_time_dimension_reference=TimeDimensionReference(element_name="metric_time"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Unable to discover time granularities for metric %s: %s",
+                metric_name,
+                exc,
+            )
+            return []
+
+        minimum_grain = cls._time_grain_from_text(minimum_query_granularity)
+        if minimum_grain not in cls._TIME_GRAINS:
+            return []
+
+        metric = cls._metric_catalog_for_query(client, [metric_name]).get(metric_name)
+        if metric is not None and cls._metric_requires_time_dimension(
+            metric, {metric_name: metric}
+        ):
+            if cls._metric_type_name(metric) == "cumulative":
+                return [minimum_grain]
+            required_grains = cls._static_required_grains(metric, {metric_name: metric})
+            if len(required_grains) == 1:
+                required_grain = next(iter(required_grains))
+                return [required_grain] if required_grain in cls._TIME_GRAINS else []
+            if len(required_grains) > 1:
+                return []
+
+        minimum_index = cls._TIME_GRAINS.index(minimum_grain)
+        return list(cls._TIME_GRAINS[minimum_index:])
 
     @classmethod
     def _metric_has_offset_dependency(
@@ -933,7 +1010,8 @@ class MetricFlowAdapter(BaseSemanticAdapter):
         )
 
         if dry_run:
-            # Use explain to get SQL without executing
+            # Compile first, then ask the warehouse to validate the rendered SQL
+            # without fetching rows.
             try:
                 result = client.explain(
                     metrics=query_metric_names,
@@ -949,9 +1027,16 @@ class MetricFlowAdapter(BaseSemanticAdapter):
                 if payload is None:
                     raise
                 raise MetricFlowSemanticValidationException(payload) from exc
-            # Return SQL as result
             sql = result.rendered_sql_without_descriptions.sql_query
-            metadata = {"explain": True, "sql": sql}
+            client.sql_client.dry_run(sql)
+            metadata = {
+                "explain": True,
+                "sql": sql,
+                "warehouse_dry_run": {
+                    "status": "success",
+                    "method": "explain",
+                },
+            }
             return QueryResult(
                 columns=["sql"],
                 data=[{"sql": sql}],
