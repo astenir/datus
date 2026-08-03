@@ -306,15 +306,20 @@ class BashTool:
             cls._bash_path_resolved = True
         return cls._bash_path_cache
 
+    @staticmethod
+    def _resolve_python() -> Optional[str]:
+        executable = sys.executable or shutil.which("python3")
+        return os.path.realpath(executable) if executable else None
+
     def _shell_prefix(self) -> str:
         """Hardening prefix prepended to every ``bash -c`` command.
 
         - ``shopt -u extglob``: disable extended globs so a malicious filename
           can't expand into something unexpected after permission validation
           (mirrors Claude Code's bashProvider hardening).
-        - ``python`` shim: shadow ``python`` with the interpreter datus runs
-          under, preserving the legacy ``argv[0]=='python' -> sys.executable``
-          rewrite for environments where only ``python3`` exists.
+        - ``python`` shim: shadow ``python`` with the resolved interpreter
+          datus runs under, preserving the legacy ``argv[0]=='python'``
+          rewrite while avoiding virtualenv symlink paths hidden by a sandbox.
 
         NOTE: intentionally NO ``set -o pipefail`` — bash's default takes the
         LAST stage's exit code, matching Claude Code. pipefail would flag the
@@ -324,7 +329,7 @@ class BashTool:
         parts = [
             "shopt -u extglob 2>/dev/null || true",
         ]
-        py = sys.executable or shutil.which("python3")
+        py = self._resolve_python()
         if py:
             parts.append(f'python() {{ {shlex.quote(py)} "$@"; }}')
         return "; ".join(parts) + "; "
@@ -344,7 +349,7 @@ class BashTool:
         # Legacy fallback: no shell interpretation.
         argv = shlex.split(command)
         if argv and argv[0] == "python":
-            argv[0] = sys.executable or shutil.which("python3") or "python3"
+            argv[0] = self._resolve_python() or "python3"
         return argv
 
     def _resolve_output_dir(self) -> Optional[Path]:

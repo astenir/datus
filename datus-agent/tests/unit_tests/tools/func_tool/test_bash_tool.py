@@ -127,6 +127,27 @@ class TestBashToolConstruction:
         python_tool.set_tool_context(ctx)
         assert python_tool._tool_context == ctx
 
+    def test_python_shim_resolves_uv_symlink_chain(self, temp_workspace, tmp_path, monkeypatch):
+        from datus.tools.func_tool import bash_tool as bash_tool_module
+
+        real_python = tmp_path / "cpython-3.12.13" / "bin" / "python3.12"
+        real_python.parent.mkdir(parents=True)
+        real_python.write_text("")
+        python_alias = tmp_path / "cpython-3.12"
+        python_alias.symlink_to(real_python.parents[1], target_is_directory=True)
+        venv_python = tmp_path / "venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.symlink_to(python_alias / "bin" / "python3.12")
+
+        monkeypatch.setattr(bash_tool_module.sys, "executable", str(venv_python))
+        tool = BashTool(workspace_root=str(temp_workspace), allowed_patterns=["*"])
+
+        assert str(real_python) in tool._shell_prefix()
+
+        monkeypatch.setattr(BashTool, "_bash_path_resolved", True)
+        monkeypatch.setattr(BashTool, "_bash_path_cache", None)
+        assert tool._build_spawn_argv("python -V")[0] == str(real_python)
+
 
 class TestBashToolAvailableTools:
     def test_patterns_present_exposes_tool(self, python_tool):
