@@ -181,15 +181,14 @@ class CompareAgenticNode(AgenticNode):
         """Pre-render Compare's hand-written system + user prompts.
 
         ``_prepare_prompt_components`` returns both prompts together (they share
-        Jinja context), so we cache the system instruction on ``self`` for the
-        ``_get_system_prompt`` override and stash the rendered user prompt in
-        ``ctx.extras`` for ``_build_template_context`` to surface as
-        ``user_message_override``.
+        Jinja context). The system instruction is re-resolved while building
+        the session snapshot so provenance is captured; the rendered user
+        prompt is stashed in ``ctx.extras`` for ``_build_template_context`` to
+        surface as ``user_message_override``.
         """
-        system_instruction, raw_user_prompt, _ = self._prepare_prompt_components(
+        _, raw_user_prompt, _ = self._prepare_prompt_components(
             ctx.user_input, agent_config=self.agent_config
         )
-        self._cached_system_instruction = system_instruction
         ctx.extras["compare_user_prompt"] = raw_user_prompt
 
     def _build_template_context(self, ctx: StreamRunContext) -> Optional[dict]:
@@ -207,8 +206,14 @@ class CompareAgenticNode(AgenticNode):
         template_context: Optional[dict] = None,
     ) -> str:
         # Compare bypasses the standard ``{node_name}_system`` resolution and
-        # uses ``compare_sql_system_mcp`` rendered in ``_before_stream``.
-        return getattr(self, "_cached_system_instruction", "")
+        # uses the raw ``compare_sql_system_mcp`` template. Resolve it here as
+        # well as in ``_before_stream`` so the session snapshot captures its
+        # exact template provenance and invalidates after a template update.
+        version = prompt_version or getattr(self.input, "prompt_version", None)
+        return get_prompt_manager(agent_config=self.agent_config).get_raw_template(
+            "compare_sql_system_mcp",
+            version=version,
+        )
 
     def _build_success_result(self, ctx: StreamRunContext) -> CompareResult:
         response_content = ctx.response_content

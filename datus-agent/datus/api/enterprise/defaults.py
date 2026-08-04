@@ -15,6 +15,14 @@ from typing import Any
 
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.models import AccessDecision, AuditEvent, ProjectionInput, ProjectionResult, ResourceRef
+from datus.api.enterprise.prompt_versions import (
+    PromptVersionAgentNotFoundError,
+    PromptVersionConflictError,
+    PromptVersionNotFoundError,
+    copy_prompt_version_record,
+    normalized_prompt_version_input,
+    prompt_template_value,
+)
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.model_credentials import CredentialSecretCodec
 from datus_enterprise.personal_datasources import password_hint
@@ -856,6 +864,9 @@ class InMemoryEnterpriseAgentStore:
 
     def __init__(self) -> None:
         self._agents: dict[str, dict[str, Any]] = {}
+        self._prompt_versions: dict[tuple[str, str], dict[str, Any]] = {}
+        self._prompt_version_labels: dict[tuple[str, str], str] = {}
+        self._active_prompt_versions: dict[str, str] = {}
 
     async def list_agents(self, *, status: str | None = None) -> list[dict[str, Any]]:
         records = [
@@ -905,7 +916,99 @@ class InMemoryEnterpriseAgentStore:
         return _copy_agent_record(self._agents[agent_id])
 
     async def delete_agent(self, agent_id: str) -> bool:
-        return self._agents.pop(agent_id, None) is not None
+        deleted = self._agents.pop(agent_id, None) is not None
+        self._active_prompt_versions.pop(agent_id, None)
+        version_ids = [
+            version_id for stored_agent_id, version_id in self._prompt_versions if stored_agent_id == agent_id
+        ]
+        for version_id in version_ids:
+            record = self._prompt_versions.pop((agent_id, version_id))
+            self._prompt_version_labels.pop((agent_id, str(record["version"])), None)
+        return deleted
+
+    async def list_prompt_versions(self, agent_id: str) -> list[dict[str, Any]]:
+        active_version_id = self._active_prompt_versions.get(agent_id)
+        records = [
+            copy_prompt_version_record(record, active=version_id == active_version_id)
+            for (stored_agent_id, version_id), record in self._prompt_versions.items()
+            if stored_agent_id == agent_id
+        ]
+        return sorted(
+            records, key=lambda record: (str(record.get("created_at") or ""), str(record["version_id"])), reverse=True
+        )
+
+    async def get_prompt_version(self, agent_id: str, version_id: str) -> dict[str, Any] | None:
+        record = self._prompt_versions.get((agent_id, version_id))
+        if record is None:
+            return None
+        return copy_prompt_version_record(record, active=self._active_prompt_versions.get(agent_id) == version_id)
+
+    async def get_active_prompt_version(self, agent_id: str) -> dict[str, Any] | None:
+        version_id = self._active_prompt_versions.get(agent_id)
+        return await self.get_prompt_version(agent_id, version_id) if version_id else None
+
+    async def create_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version: str,
+        prompt_template: str,
+        prompt_language: str,
+        change_note: str | None,
+        based_on_version_id: str | None,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        if agent_id not in self._agents:
+            raise PromptVersionAgentNotFoundError("Agent not found.")
+        normalized = normalized_prompt_version_input(
+            agent_id=agent_id,
+            version=version,
+            prompt_template=prompt_template,
+            prompt_language=prompt_language,
+            change_note=change_note,
+            based_on_version_id=based_on_version_id,
+            created_by=created_by,
+        )
+        label_key = (agent_id, str(normalized["version"]))
+        if label_key in self._prompt_version_labels:
+            raise PromptVersionConflictError("Prompt version already exists for this Agent.")
+        if based_on_version_id and (agent_id, based_on_version_id) not in self._prompt_versions:
+            raise PromptVersionNotFoundError("Base prompt version not found for this Agent.")
+        normalized["created_at"] = _sqlite_now()
+        version_id = str(normalized["version_id"])
+        self._prompt_versions[(agent_id, version_id)] = normalized
+        self._prompt_version_labels[label_key] = version_id
+        return copy_prompt_version_record(normalized, active=False)
+
+    async def activate_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version_id: str,
+        expected_active_version_id: str | None,
+        activated_by: str | None,  # noqa: ARG002
+    ) -> dict[str, Any]:
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            raise PromptVersionAgentNotFoundError("Agent not found.")
+        record = self._prompt_versions.get((agent_id, version_id))
+        if record is None:
+            raise PromptVersionNotFoundError("Prompt version not found for this Agent.")
+        current_version_id = self._active_prompt_versions.get(agent_id)
+        if current_version_id != expected_active_version_id:
+            raise PromptVersionConflictError("The active prompt version changed; reload before activating.")
+        self._active_prompt_versions[agent_id] = version_id
+        updated = dict(agent)
+        updated.update(
+            {
+                "prompt_template": record["prompt_template"],
+                "prompt_language": record["prompt_language"],
+                "prompt_version": record["version"],
+                "updated_at": _sqlite_now(),
+            }
+        )
+        self._agents[agent_id] = _normalized_agent_record(updated)
+        return copy_prompt_version_record(record, active=True)
 
 
 class InMemoryEnterpriseQuotaStore:
@@ -2532,7 +2635,7 @@ def _normalized_agent_record(record: dict[str, Any]) -> dict[str, Any]:
         "owner_user_id": _optional_str(record.get("owner_user_id")),
         "datasource_id": _optional_str(record.get("datasource_id")),
         "artifact_slug": _optional_str(record.get("artifact_slug")),
-        "prompt_template": _optional_str(record.get("prompt_template")),
+        "prompt_template": prompt_template_value(record.get("prompt_template")),
         "prompt_language": str(record.get("prompt_language") or "en").strip(),
         "prompt_version": _optional_str(record.get("prompt_version")) or "1.0",
         "tools": _normalized_string_list(record.get("tools")),

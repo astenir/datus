@@ -120,6 +120,58 @@ That means:
 - `scoped_kb_path` is deprecated and not persisted for newly saved configs
 - global knowledge still needs to be populated separately with `datus-agent bootstrap-kb`
 
+## Prompt Sources, Updates, and Verification
+
+An Agent's base system prompt resolves in this order:
+
+1. A non-empty enterprise `prompt_template` projected into the request-scoped
+   `agent_config.agentic_nodes`
+2. A user template at
+   `{agent.home}/template/{template_name}_{version}.j2`
+3. A bundled template under `datus/prompts/prompt_templates/`
+
+`system_prompt` selects `template_name`; most nodes append `_system`. An explicit
+`prompt_version` pins that version. Only an unpinned template selects the highest
+numeric version across the user and bundled directories. In other words,
+"latest" means the current effective source selected by configuration, not an
+unconditional switch to the highest filename while a version is pinned.
+
+The finalized system prompt can also append runtime context, datasource
+capabilities, plugin context, `AGENTS.md`, Skills, Memory, and response-language
+rules. These non-template inputs follow session snapshot semantics and do not
+drift on every turn merely because template auto-invalidation is enabled.
+
+Each session persists one system-prompt snapshot. Local sessions use:
+
+```text
+{sessions_dir}/{scope}/{session_id}.sysprompt.json
+```
+
+With an enterprise `session_body_store`, the snapshot is stored in
+`enterprise_session_system_prompts.snapshot_json`. Snapshot schema v2 records
+safe provenance fields including:
+
+- `agent_id`, `prompt_version`, and `prompt_pipeline_version`
+- `prompt_template_name`, `resolved_prompt_version`, and `prompt_template_source`
+- `prompt_template_sha256` and `prompt_template_revision_sha256`
+- `prompt_revision_sha256` and `final_prompt_sha256`
+- `prompt_templates`, containing every template identity read while assembling
+  the final prompt
+
+Whenever a session continues, Datus re-resolves those identities. A change to
+the main template, a static Jinja `include`/`import`, a user override, a
+request-scoped enterprise custom prompt, the effective version, or the Agent
+definition invalidates and atomically replaces the old snapshot. No API restart
+or manual database deletion is required. A v1 snapshot is lazily rebuilt as v2
+on its next use. A change cannot alter an in-flight turn that has already been
+sent to the model; it applies at the next prompt lookup.
+
+Verify provenance and hashes without printing the `prompt` field. The
+`System prompt snapshot rebuilt` log includes the Agent, session, template,
+resolved version, revision hash, and final hash. If no rebuild is logged,
+compare the snapshot's `prompt_templates` with the intended source. Adding a
+higher version does not switch an explicitly pinned Agent.
+
 ## Advanced Manual Configuration
 
 The wizard covers the common `gen_sql` and `gen_report` cases. For more advanced setups, edit `agent.yml` directly.

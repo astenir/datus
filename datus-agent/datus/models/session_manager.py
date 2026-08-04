@@ -332,16 +332,17 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
     # ------------------------------------------------------------------
     # System-prompt snapshot persistence
     # ------------------------------------------------------------------
-    # The finalized system prompt of a session is frozen on the first LLM
-    # call and replayed verbatim on every later turn so the provider-side
-    # prefix cache (Anthropic ephemeral / OpenAI prompt_cache_key) stays
-    # warm. The snapshot lives next to the session db. Multi-process note:
+    # The finalized system prompt of a session is persisted on the first LLM
+    # call and replayed while its configuration and template provenance remain
+    # current, keeping the provider-side prefix cache (Anthropic ephemeral /
+    # OpenAI prompt_cache_key) warm. The snapshot lives next to the session db.
+    # Multi-process note:
     # when a CLI and an API server share a session dir the last writer wins
     # on disk; rebuilt prompts for the same meta are semantically equivalent
     # and the live datasource/dialect is injected per turn in the user
     # message, so a stale snapshot can never emit a wrong dialect.
 
-    _SNAPSHOT_SCHEMA_VERSION = 1
+    _SNAPSHOT_SCHEMA_VERSION = 2
 
     def _snapshot_path(self, session_id: str) -> str:
         self._validate_session_id(session_id)
@@ -357,9 +358,9 @@ class SessionManager(SessionSidecarMixin, SessionAsyncStoreMixin):
     def save_system_prompt_snapshot(self, session_id: str, prompt: str, meta: Dict[str, Any]) -> None:
         """Persist the finalized system prompt plus its invalidation metadata.
 
-        ``meta`` carries the identity keys (node_name, prompt_version,
-        model_name) the consumer compares before replaying; a mismatch on any
-        key triggers a rebuild that overwrites this file. Written atomically
+        ``meta`` carries the Agent/model/tool identity plus non-secret template
+        provenance and hashes that the consumer compares before replaying; a
+        mismatch triggers a rebuild that overwrites this file. Written atomically
         (``.tmp`` then ``os.replace``) so a crash mid-write never leaves a
         truncated snapshot. A disk failure only logs a warning — the caller
         already holds the freshly built prompt for this turn.

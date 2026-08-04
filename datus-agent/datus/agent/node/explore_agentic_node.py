@@ -185,7 +185,8 @@ class ExploreAgenticNode(AgenticNode):
         from datus.prompts.prompt_manager import get_prompt_manager
 
         version = prompt_version or self.node_config.get("prompt_version")
-        template_name = "explore_system"
+        system_prompt_name = self.node_config.get("system_prompt") or self.get_node_name()
+        template_name = f"{system_prompt_name}_system"
 
         from datus.utils.node_utils import build_datasource_prompt_context
 

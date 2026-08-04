@@ -12,6 +12,7 @@ streaming interactions with tool integration and action history management.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Dict
 from agents import Tool
 from agents.extensions.memory import AdvancedSQLiteSession
 from agents.mcp import MCPServerStdio
+from jinja2 import TemplateError
 
 from datus.agent.node.compact_archive import ToolArchive, maybe_truncate_item
 from datus.agent.node.compact_prompts import build_continuation_message, render_major_compact_prompt
@@ -34,7 +36,7 @@ from datus.api.utils.stream_errors import humanize_stream_error
 from datus.cli.execution_state import ExecutionInterrupted, InteractionBroker, InterruptController, PendingInputQueue
 from datus.configuration.agent_config import AgentConfig, CompactConfig
 from datus.models.base import LLMBaseModel
-from datus.prompts.prompt_manager import get_prompt_manager
+from datus.prompts.prompt_manager import capture_prompt_template_identities, get_prompt_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -60,6 +62,8 @@ if TYPE_CHECKING:
     from datus.tools.skill_tools.skill_manager import SkillManager
 
 logger = get_logger(__name__)
+
+_SYSTEM_PROMPT_PIPELINE_VERSION = "2"
 
 
 _LANGUAGE_NAME_MAP: Dict[str, str] = {
@@ -1139,6 +1143,9 @@ class AgenticNode(Node):
         """
         agent_config = getattr(self, "agent_config", None)
         version = prompt_version
+        node_config = getattr(self, "node_config", None)
+        if version is None and isinstance(node_config, dict):
+            version = node_config.get("prompt_version")
         if version is None and agent_config is not None and hasattr(agent_config, "prompt_version"):
             version = agent_config.prompt_version
         # A node-level model override (``node_config.model``) pins the
@@ -1179,13 +1186,127 @@ class AgenticNode(Node):
                 logger.debug("Failed to collect MCP prompt tool names for snapshot identity", exc_info=True)
         return {
             "node_name": self.get_node_name(),
+            "agent_id": self.get_node_name(),
             "prompt_version": str(version or ""),
+            "prompt_pipeline_version": _SYSTEM_PROMPT_PIPELINE_VERSION,
+            "prompt_definition_sha256": self._prompt_definition_sha256(),
             "model_name": model_id,
             "execution_mode": str(getattr(self, "execution_mode", "") or ""),
             "tool_names": tool_names,
             "mcp_server_names": mcp_server_names,
             "mcp_tool_names": ",".join(sorted(mcp_tool_names)),
         }
+
+    @staticmethod
+    def _sha256_text(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _prompt_definition_sha256(self) -> str:
+        """Hash request-scoped Agent fields that can affect prompt rendering."""
+
+        payload = {
+            "agent_id": self.get_node_name(),
+            "node_class": self.get_node_class_name(),
+            "node_config": getattr(self, "node_config", None) or {},
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return self._sha256_text(canonical)
+
+    def _prompt_revision_sha256(
+        self,
+        meta: Dict[str, str],
+        template_identities: List[Dict[str, str]],
+    ) -> str:
+        payload = {
+            "prompt_pipeline_version": meta["prompt_pipeline_version"],
+            "prompt_definition_sha256": meta["prompt_definition_sha256"],
+            "prompt_templates": template_identities,
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return self._sha256_text(canonical)
+
+    def _system_prompt_snapshot_matches(self, snapshot: Any, meta: Dict[str, str]) -> bool:
+        """Return whether a persisted prompt still matches all effective sources."""
+
+        if not isinstance(snapshot, dict) or not all(snapshot.get(key) == value for key, value in meta.items()):
+            return False
+        prompt = snapshot.get("prompt")
+        if not isinstance(prompt, str) or snapshot.get("final_prompt_sha256") != self._sha256_text(prompt):
+            return False
+        template_identities = snapshot.get("prompt_templates")
+        if not isinstance(template_identities, list):
+            return False
+
+        prompt_manager = get_prompt_manager(agent_config=getattr(self, "agent_config", None))
+        current_identities: List[Dict[str, str]] = []
+        try:
+            for identity in template_identities:
+                if not isinstance(identity, dict) or not isinstance(identity.get("template_name"), str):
+                    return False
+                requested_version = identity.get("requested_version") or None
+                current = prompt_manager.get_template_identity(identity["template_name"], requested_version)
+                if current != identity:
+                    return False
+                current_identities.append(current)
+        except (FileNotFoundError, OSError, TemplateError, ValueError):
+            return False
+
+        return snapshot.get("prompt_revision_sha256") == self._prompt_revision_sha256(meta, current_identities)
+
+    def _build_system_prompt_snapshot(
+        self,
+        meta: Dict[str, str],
+        prompt_version: Optional[str],
+        template_context: Optional[Dict[str, Any]],
+    ) -> tuple[str, Dict[str, Any]]:
+        """Build the prompt and return persistence metadata with exact provenance."""
+
+        with capture_prompt_template_identities() as template_identities:
+            if template_context:
+                prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
+            else:
+                prompt = self._get_system_prompt(prompt_version=prompt_version)
+
+        snapshot_meta: Dict[str, Any] = {
+            **meta,
+            "prompt_templates": template_identities,
+            "prompt_revision_sha256": self._prompt_revision_sha256(meta, template_identities),
+            "final_prompt_sha256": self._sha256_text(prompt),
+        }
+        if template_identities:
+            primary = template_identities[0]
+            snapshot_meta.update(
+                {
+                    "prompt_template_name": primary["template_name"],
+                    "resolved_prompt_version": primary["resolved_version"],
+                    "prompt_template_source": primary["source"],
+                    "prompt_template_sha256": primary["content_sha256"],
+                    "prompt_template_revision_sha256": primary["revision_sha256"],
+                }
+            )
+        else:
+            snapshot_meta.update(
+                {
+                    "prompt_template_name": "",
+                    "resolved_prompt_version": "",
+                    "prompt_template_source": "",
+                    "prompt_template_sha256": "",
+                    "prompt_template_revision_sha256": "",
+                }
+            )
+        session_id = getattr(self, "session_id", "") or ""
+        log_rebuild = logger.info if session_id else logger.debug
+        log_rebuild(
+            "System prompt snapshot rebuilt: agent_id=%s session_id=%s template=%s version=%s "
+            "prompt_revision_sha256=%s final_prompt_sha256=%s",
+            snapshot_meta["agent_id"],
+            session_id,
+            snapshot_meta["prompt_template_name"],
+            snapshot_meta["resolved_prompt_version"],
+            snapshot_meta["prompt_revision_sha256"],
+            snapshot_meta["final_prompt_sha256"],
+        )
+        return prompt, snapshot_meta
 
     def _exposed_tool_names(self) -> set[str]:
         """Return the native tool names currently exposed to the LLM."""
@@ -1238,21 +1359,16 @@ class AgenticNode(Node):
 
         if sm is not None:
             snapshot = sm.load_system_prompt_snapshot(session_id)
-            if snapshot is not None and all(snapshot.get(k) == v for k, v in meta.items()):
+            if self._system_prompt_snapshot_matches(snapshot, meta):
                 # The replayed prompt advertises skill/bash/memory tools whose
                 # mounting is normally a side effect of the (skipped) build.
                 self._ensure_lazy_tools_mounted()
                 return snapshot["prompt"]
 
-        # Cache miss / stale meta: rebuild. Preserve the call shape — several
-        # subclass overrides accept only ``prompt_version``.
-        if template_context:
-            prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
-        else:
-            prompt = self._get_system_prompt(prompt_version=prompt_version)
+        prompt, snapshot_meta = self._build_system_prompt_snapshot(meta, prompt_version, template_context)
 
         if sm is not None:
-            sm.save_system_prompt_snapshot(session_id, prompt, meta)
+            sm.save_system_prompt_snapshot(session_id, prompt, snapshot_meta)
         return prompt
 
     async def _get_session_system_prompt_async(

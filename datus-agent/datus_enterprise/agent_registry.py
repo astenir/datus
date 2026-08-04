@@ -9,6 +9,7 @@ from typing import Any
 from datus.agent.node_capabilities import enterprise_agent_node_capabilities, get_agent_node_capability
 from datus.agent.tool_policy import include_bound_mcp_servers, normalize_runtime_policy, normalize_tool_policy
 from datus.api.auth.context import AppContext
+from datus.api.enterprise.prompt_versions import prompt_template_value
 from datus.api.services.agent_service import _validate_tools, _validate_tools_for_agent_type
 from datus.prompts.prompt_manager import PromptManager
 from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS
@@ -213,7 +214,7 @@ def normalize_agent_payload(
         "owner_user_id": _optional_str(payload.get("owner_user_id")) or actor_user_id,
         "datasource_id": _optional_str(payload.get("datasource_id")),
         "artifact_slug": _optional_str(payload.get("artifact_slug")),
-        "prompt_template": _optional_str(payload.get("prompt_template")),
+        "prompt_template": prompt_template_value(payload.get("prompt_template")),
         "prompt_language": str(payload.get("prompt_language") or "en").strip(),
         "prompt_version": _optional_str(payload.get("prompt_version")) or "1.0",
         "tools": tools,
@@ -455,23 +456,38 @@ def with_agent_policy_metadata(
     return updated
 
 
-def builtin_agent_prompt_template(agent_id: str) -> dict[str, str | None]:
+def builtin_agent_prompt_template(
+    agent_id: str,
+    *,
+    agent_config: Any | None = None,
+) -> dict[str, str | None]:
     """Return read-only prompt template metadata and source for one built-in agent."""
 
     capability = get_agent_node_capability(agent_id)
     template_name = capability.prompt_template if capability and capability.prompt_template else f"{agent_id}_system"
-    prompt_manager = PromptManager()
+    prompt_manager = PromptManager(agent_config=agent_config)
     try:
         version = prompt_manager.get_latest_version(template_name)
         content = prompt_manager.get_raw_template(template_name, version)
+        identity = prompt_manager.get_template_identity(template_name, version)
     except FileNotFoundError:
         version = None
         content = None
+        identity = None
+    template_source = identity.get("source") if identity is not None else "builtin"
+    prompt_source = {
+        "user": "user_override",
+        "runtime": "runtime",
+    }.get(template_source, "builtin")
     return {
         "prompt_template_name": template_name,
         "prompt_version": version,
         "prompt_template": content,
         "prompt_template_content": content,
+        "prompt_source": prompt_source,
+        "configured_prompt_version": version,
+        "resolved_prompt_version": version,
+        "prompt_revision": identity.get("content_sha256") if identity is not None else None,
     }
 
 

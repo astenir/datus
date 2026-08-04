@@ -16,6 +16,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from datus.api.enterprise.models import AuditEvent
+from datus.api.enterprise.prompt_versions import (
+    PromptVersionAgentNotFoundError,
+    PromptVersionConflictError,
+    PromptVersionNotFoundError,
+    normalized_prompt_version_input,
+    prompt_template_value,
+)
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_enterprise.model_credentials import CredentialSecretCodec, api_key_hint
@@ -1040,8 +1047,243 @@ class PgEnterpriseAgentStore(_PgStoreBase):
         return _agent_record(row) if row else None
 
     async def delete_agent(self, agent_id: str) -> bool:
-        result = await self._execute("DELETE FROM enterprise_agents WHERE agent_id = $1", agent_id)
+        await self._ensure_schema()
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("DELETE FROM enterprise_agent_active_prompt_versions WHERE agent_id = $1", agent_id)
+            await conn.execute("DELETE FROM enterprise_agent_prompt_versions WHERE agent_id = $1", agent_id)
+            result = await conn.execute("DELETE FROM enterprise_agents WHERE agent_id = $1", agent_id)
         return _affected_rows(result) > 0
+
+    async def list_prompt_versions(self, agent_id: str) -> list[dict[str, Any]]:
+        rows = await self._fetch(
+            """
+            SELECT
+                version.version_id,
+                version.agent_id,
+                version.version_label,
+                version.prompt_template,
+                version.prompt_language,
+                version.content_sha256,
+                version.change_note,
+                version.based_on_version_id,
+                version.created_by,
+                version.created_at,
+                active.version_id IS NOT NULL AS active
+            FROM enterprise_agent_prompt_versions AS version
+            LEFT JOIN enterprise_agent_active_prompt_versions AS active
+                ON active.agent_id = version.agent_id AND active.version_id = version.version_id
+            WHERE version.agent_id = $1
+            ORDER BY version.created_at DESC, version.version_id DESC
+            """,
+            agent_id,
+        )
+        return [_prompt_version_record(row) for row in rows]
+
+    async def get_prompt_version(self, agent_id: str, version_id: str) -> dict[str, Any] | None:
+        row = await self._fetchrow(
+            """
+            SELECT
+                version.version_id,
+                version.agent_id,
+                version.version_label,
+                version.prompt_template,
+                version.prompt_language,
+                version.content_sha256,
+                version.change_note,
+                version.based_on_version_id,
+                version.created_by,
+                version.created_at,
+                active.version_id IS NOT NULL AS active
+            FROM enterprise_agent_prompt_versions AS version
+            LEFT JOIN enterprise_agent_active_prompt_versions AS active
+                ON active.agent_id = version.agent_id AND active.version_id = version.version_id
+            WHERE version.agent_id = $1 AND version.version_id = $2
+            """,
+            agent_id,
+            version_id,
+        )
+        return _prompt_version_record(row) if row else None
+
+    async def get_active_prompt_version(self, agent_id: str) -> dict[str, Any] | None:
+        row = await self._fetchrow(
+            """
+            SELECT
+                version.version_id,
+                version.agent_id,
+                version.version_label,
+                version.prompt_template,
+                version.prompt_language,
+                version.content_sha256,
+                version.change_note,
+                version.based_on_version_id,
+                version.created_by,
+                version.created_at,
+                true AS active
+            FROM enterprise_agent_active_prompt_versions AS active
+            JOIN enterprise_agent_prompt_versions AS version
+                ON version.agent_id = active.agent_id AND version.version_id = active.version_id
+            WHERE active.agent_id = $1
+            """,
+            agent_id,
+        )
+        return _prompt_version_record(row) if row else None
+
+    async def create_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version: str,
+        prompt_template: str,
+        prompt_language: str,
+        change_note: str | None,
+        based_on_version_id: str | None,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        normalized = normalized_prompt_version_input(
+            agent_id=agent_id,
+            version=version,
+            prompt_template=prompt_template,
+            prompt_language=prompt_language,
+            change_note=change_note,
+            based_on_version_id=based_on_version_id,
+            created_by=created_by,
+        )
+        if await self.get_agent(agent_id) is None:
+            raise PromptVersionAgentNotFoundError("Agent not found.")
+        if based_on_version_id and await self.get_prompt_version(agent_id, based_on_version_id) is None:
+            raise PromptVersionNotFoundError("Base prompt version not found for this Agent.")
+        try:
+            row = await self._fetchrow(
+                """
+                INSERT INTO enterprise_agent_prompt_versions (
+                    version_id,
+                    agent_id,
+                    version_label,
+                    prompt_template,
+                    prompt_language,
+                    content_sha256,
+                    change_note,
+                    based_on_version_id,
+                    created_by,
+                    created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                RETURNING
+                    version_id,
+                    agent_id,
+                    version_label,
+                    prompt_template,
+                    prompt_language,
+                    content_sha256,
+                    change_note,
+                    based_on_version_id,
+                    created_by,
+                    created_at,
+                    false AS active
+                """,
+                normalized["version_id"],
+                normalized["agent_id"],
+                normalized["version"],
+                normalized["prompt_template"],
+                normalized["prompt_language"],
+                normalized["content_sha256"],
+                normalized["change_note"],
+                normalized["based_on_version_id"],
+                normalized["created_by"],
+            )
+        except Exception as exc:
+            existing = next(
+                (
+                    item
+                    for item in await self.list_prompt_versions(agent_id)
+                    if item["version"] == normalized["version"]
+                ),
+                None,
+            )
+            if existing is not None:
+                raise PromptVersionConflictError("Prompt version already exists for this Agent.") from exc
+            raise
+        if row is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist Agent prompt version.")
+        return _prompt_version_record(row)
+
+    async def activate_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version_id: str,
+        expected_active_version_id: str | None,
+        activated_by: str | None,
+    ) -> dict[str, Any]:
+        await self._ensure_schema()
+        pool = await self._get_pool()
+        async with pool.acquire() as conn, conn.transaction():
+            agent = await conn.fetchrow(
+                "SELECT agent_id FROM enterprise_agents WHERE agent_id = $1 FOR UPDATE", agent_id
+            )
+            if agent is None:
+                raise PromptVersionAgentNotFoundError("Agent not found.")
+            version = await conn.fetchrow(
+                """
+                SELECT
+                    version_id,
+                    agent_id,
+                    version_label,
+                    prompt_template,
+                    prompt_language,
+                    content_sha256,
+                    change_note,
+                    based_on_version_id,
+                    created_by,
+                    created_at,
+                    true AS active
+                FROM enterprise_agent_prompt_versions
+                WHERE agent_id = $1 AND version_id = $2
+                """,
+                agent_id,
+                version_id,
+            )
+            if version is None:
+                raise PromptVersionNotFoundError("Prompt version not found for this Agent.")
+            current = await conn.fetchrow(
+                "SELECT version_id FROM enterprise_agent_active_prompt_versions WHERE agent_id = $1 FOR UPDATE",
+                agent_id,
+            )
+            current_version_id = str(current["version_id"]) if current else None
+            if current_version_id != expected_active_version_id:
+                raise PromptVersionConflictError("The active prompt version changed; reload before activating.")
+            await conn.execute(
+                """
+                INSERT INTO enterprise_agent_active_prompt_versions (
+                    agent_id, version_id, activated_by, activated_at
+                )
+                VALUES ($1, $2, $3, now())
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    version_id = excluded.version_id,
+                    activated_by = excluded.activated_by,
+                    activated_at = now()
+                """,
+                agent_id,
+                version_id,
+                activated_by,
+            )
+            await conn.execute(
+                """
+                UPDATE enterprise_agents
+                SET
+                    prompt_template = $2,
+                    prompt_language = $3,
+                    prompt_version = $4,
+                    updated_at = now()
+                WHERE agent_id = $1
+                """,
+                agent_id,
+                version["prompt_template"],
+                version["prompt_language"],
+                version["version_label"],
+            )
+        return _prompt_version_record(version)
 
 
 class PgSessionOwnerStore(_PgStoreBase):
@@ -2043,7 +2285,7 @@ def _normalized_agent_metadata(record: dict[str, Any]) -> dict[str, Any]:
         "owner_user_id": _optional_str(record.get("owner_user_id")),
         "datasource_id": _optional_str(record.get("datasource_id")),
         "artifact_slug": _optional_str(record.get("artifact_slug")),
-        "prompt_template": _optional_str(record.get("prompt_template")),
+        "prompt_template": prompt_template_value(record.get("prompt_template")),
         "prompt_language": str(record.get("prompt_language") or "en").strip(),
         "prompt_version": _optional_str(record.get("prompt_version")) or "1.0",
         "tools": _normalized_string_list(record.get("tools")),
@@ -2230,7 +2472,7 @@ def _agent_record(row: Any) -> dict[str, Any]:
         "owner_user_id": _optional_str(row["owner_user_id"]),
         "datasource_id": _optional_str(row["datasource_id"]),
         "artifact_slug": _optional_str(row["artifact_slug"]),
-        "prompt_template": _optional_str(row["prompt_template"]),
+        "prompt_template": prompt_template_value(row["prompt_template"]),
         "prompt_language": str(row["prompt_language"] or "en"),
         "prompt_version": _optional_str(row["prompt_version"]) or "1.0",
         "tools": _normalized_strings(list(row["tools"] or [])),
@@ -2242,6 +2484,22 @@ def _agent_record(row: Any) -> dict[str, Any]:
         "acl": _normalized_agent_acl(_load_jsonb(row["acl_json"])),
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def _prompt_version_record(row: Any) -> dict[str, Any]:
+    return {
+        "version_id": str(row["version_id"]),
+        "agent_id": str(row["agent_id"]),
+        "version": str(row["version_label"]),
+        "prompt_template": str(row["prompt_template"]),
+        "prompt_language": str(row["prompt_language"] or "en"),
+        "content_sha256": str(row["content_sha256"]),
+        "change_note": _optional_str(row["change_note"]),
+        "based_on_version_id": _optional_str(row["based_on_version_id"]),
+        "created_by": _optional_str(row["created_by"]),
+        "created_at": _iso(row["created_at"]),
+        "active": bool(row["active"]),
     }
 
 
@@ -2498,6 +2756,30 @@ ON enterprise_agents (status, agent_id);
 
 CREATE INDEX IF NOT EXISTS idx_enterprise_agents_owner
 ON enterprise_agents (owner_user_id, agent_id);
+
+CREATE TABLE IF NOT EXISTS enterprise_agent_prompt_versions (
+    version_id text PRIMARY KEY,
+    agent_id text NOT NULL,
+    version_label text NOT NULL,
+    prompt_template text NOT NULL,
+    prompt_language text NOT NULL DEFAULT 'en',
+    content_sha256 text NOT NULL,
+    change_note text,
+    based_on_version_id text,
+    created_by text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, version_label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_agent_prompt_versions_agent
+ON enterprise_agent_prompt_versions (agent_id, created_at DESC, version_id);
+
+CREATE TABLE IF NOT EXISTS enterprise_agent_active_prompt_versions (
+    agent_id text PRIMARY KEY,
+    version_id text NOT NULL,
+    activated_by text,
+    activated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS session_owners (
     project_id text NOT NULL,

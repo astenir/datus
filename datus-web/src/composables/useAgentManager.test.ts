@@ -17,6 +17,10 @@ const agentDefaultUsers = vi.fn();
 const updateAgentDefaultUsers = vi.fn();
 const enterpriseDefault = vi.fn();
 const updateEnterpriseDefault = vi.fn();
+const listPromptVersions = vi.fn();
+const getPromptVersion = vi.fn();
+const createPromptVersion = vi.fn();
+const activatePromptVersion = vi.fn();
 const listDatasources = vi.fn();
 const listArtifacts = vi.fn();
 const listMcpServers = vi.fn();
@@ -65,6 +69,10 @@ vi.mock("@/lib/api", () => ({
     updateDefaultUsers: updateAgentDefaultUsers,
     enterpriseDefault,
     updateEnterpriseDefault,
+    promptVersions: listPromptVersions,
+    promptVersion: getPromptVersion,
+    createPromptVersion,
+    activatePromptVersion,
   },
   adminDatasourceApi: {
     listDatasources,
@@ -147,6 +155,10 @@ describe("useAgentManager", () => {
     updateAgentDefaultUsers.mockResolvedValue([]);
     enterpriseDefault.mockResolvedValue({ default_agent_id: "chat", source: "enterprise" });
     updateEnterpriseDefault.mockResolvedValue({ default_agent_id: "chat", source: "enterprise" });
+    listPromptVersions.mockResolvedValue({ active_version_id: null, versions: [] });
+    getPromptVersion.mockResolvedValue(null);
+    createPromptVersion.mockResolvedValue(null);
+    activatePromptVersion.mockResolvedValue(null);
     agentNodeTypes.mockResolvedValue([
       {
         node_class: "gen_sql",
@@ -298,12 +310,34 @@ describe("useAgentManager", () => {
       id: "analyst",
       name: "analyst",
       promptTemplate: "Analyze data",
+      promptVersion: "1.0",
       toolsText: "read_query",
       visibility: "role",
       allowedRoleIds: ["analyst"],
       allowedUserIds: ["alice"],
     });
     expect(manager.selectedUseToolCount.value).toBe(2);
+    expect(listPromptVersions).toHaveBeenCalledWith("http://api.test", "analyst");
+  });
+
+  it("does not keep the main detail loader waiting for prompt versions", async () => {
+    const versionRequest = deferred<{
+      active_version_id: string | null;
+      versions: [];
+    }>();
+    listPromptVersions.mockReturnValueOnce(versionRequest.promise);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+
+    expect(manager.detailLoading.value).toBe(false);
+    expect(manager.selectedAgent.value?.agent_id).toBe("analyst");
+    expect(manager.promptVersions.loading.value).toBe(true);
+
+    versionRequest.resolve({ active_version_id: null, versions: [] });
+    await flushPendingPromises();
+    expect(manager.promptVersions.loading.value).toBe(false);
   });
 
   it("loads edit dependencies in parallel while keeping detail loading active", async () => {
@@ -800,7 +834,8 @@ describe("useAgentManager", () => {
       nodeClass: "gen_sql",
       status: "draft",
       description: "Research agent",
-      promptTemplate: "Answer carefully",
+      promptTemplate: "\n  Answer carefully\n",
+      promptVersion: "2.1",
       toolsText: "read_query, explain_query",
       mcpText: "filesystem",
       skillsText: "fund-analyst",
@@ -829,9 +864,9 @@ describe("useAgentManager", () => {
       datasource_id: "fund_pg",
       artifact_slug: "risk_dashboard",
       description: "Research agent",
-      prompt_template: "Answer carefully",
+      prompt_template: "\n  Answer carefully\n",
       prompt_language: "en",
-      prompt_version: "1.0",
+      prompt_version: "2.1",
       tools: ["read_query", "explain_query"],
       mcp: ["filesystem"],
       skills: ["fund-analyst"],

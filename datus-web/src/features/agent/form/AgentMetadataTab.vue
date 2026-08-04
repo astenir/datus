@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import type { AgentManagerController } from "@/composables/useAgentManager"
+import { promptSourceLabel } from "@/features/agent/form/promptSource"
 import { formatDate } from "@/lib/utils"
 
 const props = defineProps<{
   manager: AgentManagerController
 }>()
 
-function sourceLabel(source: string | null | undefined) {
+function agentSourceLabel(source: string | null | undefined) {
   if (source === "builtin") return "系统内置"
   if (source === "enterprise") return "企业自定义"
   return source?.trim() || "-"
@@ -42,14 +43,18 @@ const detailRows = computed(() => {
 
   return [
     ["Agent ID", agent.agent_id],
-    ["来源", sourceLabel(agent.source)],
+    ["来源", agentSourceLabel(agent.source)],
     ["所有者", agent.owner_user_id],
     ["数据源", agent.datasource_id],
     ["Artifact", agent.artifact_slug],
     ["创建时间", formatDate(agent.created_at) || null],
     ["更新时间", formatDate(agent.updated_at) || null],
     ["模板", agent.prompt_template_name],
-    ["模板版本", agent.prompt_version],
+    ["提示词来源", promptSourceLabel(agent.prompt_source)],
+    ["配置版本", agent.configured_prompt_version],
+    ["生效版本", agent.resolved_prompt_version ?? agent.prompt_version],
+    ["激活版本 ID", agent.active_prompt_version_id],
+    ["正文修订", agent.prompt_revision],
     ["语言", agent.prompt_language],
     ["MCP", listSummary(agent.mcp)],
     ["Skills", listSummary(agent.skills)],

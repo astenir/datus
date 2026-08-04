@@ -30,12 +30,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.models.session_manager import SessionManager
+from datus.prompts.prompt_manager import PromptManager, get_prompt_manager
+from datus.utils.path_manager import DatusPathManager
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[4] / "datus" / "prompts" / "prompt_templates"
 ACTIVE_TEMPLATES = [
@@ -61,6 +63,7 @@ def _agent_config(*, current_datasource=None, services=None, model="gpt-4.1"):
         current_datasource=current_datasource,
         services=services,
         active_model=lambda: SimpleNamespace(type="openai", model=model),
+        agentic_nodes={},
     )
 
 
@@ -85,6 +88,7 @@ class _SnapshotNode(AgenticNode):
         self.tools = []
         self.mcp_servers = {}
         self.mcp_prompt_tool_names = set()
+        self.node_config = {}
 
     def _ensure_lazy_tools_mounted(self) -> None:
         self.lazy_mount_count += 1
@@ -110,6 +114,50 @@ class _SnapshotNode(AgenticNode):
         return f"SYS#{self.build_count}"
 
 
+class _TemplateSnapshotNode(_SnapshotNode):
+    def __init__(self, session_manager: SessionManager, agent_config, template_name: str):
+        super().__init__(session_manager, agent_config)
+        self.template_name = template_name
+        self.node_config = agent_config.agentic_nodes["chat"]
+
+    def _get_system_prompt(
+        self,
+        prompt_version: Optional[str] = None,
+        template_context: Optional[dict] = None,
+    ) -> str:
+        self.build_count += 1
+        version = prompt_version or self.node_config.get("prompt_version")
+        return get_prompt_manager(agent_config=self.agent_config).render_template(self.template_name, version)
+
+
+class _AsyncSnapshotSessionManager:
+    """Async-only session manager matching the enterprise body-store boundary."""
+
+    def __init__(self) -> None:
+        self.snapshot: dict[str, Any] | None = None
+        self.load_count = 0
+        self.save_count = 0
+
+    async def load_system_prompt_snapshot_async(self, session_id: str) -> dict[str, Any] | None:
+        self.load_count += 1
+        return self.snapshot
+
+    async def save_system_prompt_snapshot_async(
+        self,
+        session_id: str,
+        prompt: str,
+        meta: dict[str, Any],
+    ) -> None:
+        self.save_count += 1
+        self.snapshot = {"schema_version": 2, "prompt": prompt, **meta}
+
+    def load_system_prompt_snapshot(self, session_id: str) -> None:
+        raise AssertionError("enterprise async runtime must not call the sync loader")
+
+    def save_system_prompt_snapshot(self, session_id: str, prompt: str, meta: dict[str, Any]) -> None:
+        raise AssertionError("enterprise async runtime must not call the sync saver")
+
+
 @pytest.fixture
 def session_manager(tmp_path):
     manager = SessionManager(session_dir=str(tmp_path))
@@ -127,6 +175,11 @@ class TestGetSessionSystemPrompt:
         snapshot = session_manager.load_system_prompt_snapshot(node.session_id)
         assert snapshot["prompt"] == "SYS#1"
         assert snapshot["model_name"] == "openai:gpt-4.1"
+        assert snapshot["agent_id"] == "chat"
+        assert snapshot["prompt_definition_sha256"]
+        assert snapshot["prompt_revision_sha256"]
+        assert snapshot["final_prompt_sha256"]
+        assert snapshot["prompt_templates"] == []
 
     def test_second_turn_replays_verbatim(self, session_manager):
         node = _SnapshotNode(session_manager, _agent_config())
@@ -234,6 +287,142 @@ class TestGetSessionSystemPrompt:
         assert node._get_session_system_prompt(prompt_version="1.2") == "SYS#2"
         assert node.build_count == 2
 
+    def test_same_version_template_content_change_rebuilds(self, session_manager, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        manager = PromptManager(path_manager=path_manager)
+        manager.default_templates_dir = tmp_path / "templates"
+        manager.default_templates_dir.mkdir()
+        template = manager.default_templates_dir / "chat_system_1.0.j2"
+        template.write_text("PROMPT V1", encoding="utf-8")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.prompt_manager = manager
+        config.agentic_nodes = {"chat": {"system_prompt": "chat", "prompt_version": "1.0"}}
+        node = _TemplateSnapshotNode(session_manager, config, "chat_system")
+
+        assert node._get_session_system_prompt() == "PROMPT V1"
+        template.write_text("PROMPT V1 EDITED", encoding="utf-8")
+        assert node._get_session_system_prompt() == "PROMPT V1 EDITED"
+        assert node.build_count == 2
+
+    def test_new_latest_template_version_rebuilds(self, session_manager, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        manager = PromptManager(path_manager=path_manager)
+        manager.default_templates_dir = tmp_path / "templates"
+        manager.default_templates_dir.mkdir()
+        (manager.default_templates_dir / "chat_system_1.0.j2").write_text("PROMPT V1", encoding="utf-8")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.prompt_manager = manager
+        config.agentic_nodes = {"chat": {"system_prompt": "chat"}}
+        node = _TemplateSnapshotNode(session_manager, config, "chat_system")
+
+        assert node._get_session_system_prompt() == "PROMPT V1"
+        (manager.default_templates_dir / "chat_system_1.1.j2").write_text("PROMPT V1.1", encoding="utf-8")
+        assert node._get_session_system_prompt() == "PROMPT V1.1"
+        assert node.build_count == 2
+
+    def test_user_template_override_rebuilds(self, session_manager, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        manager = PromptManager(path_manager=path_manager)
+        manager.default_templates_dir = tmp_path / "templates"
+        manager.default_templates_dir.mkdir()
+        (manager.default_templates_dir / "chat_system_1.0.j2").write_text("BUILTIN", encoding="utf-8")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.prompt_manager = manager
+        config.agentic_nodes = {"chat": {"system_prompt": "chat", "prompt_version": "1.0"}}
+        node = _TemplateSnapshotNode(session_manager, config, "chat_system")
+
+        assert node._get_session_system_prompt() == "BUILTIN"
+        manager.user_templates_dir.mkdir(parents=True)
+        (manager.user_templates_dir / "chat_system_1.0.j2").write_text("USER OVERRIDE", encoding="utf-8")
+        assert node._get_session_system_prompt() == "USER OVERRIDE"
+        assert node.build_count == 2
+
+    def test_user_partial_override_rebuilds_and_renders_latest(self, session_manager, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        manager = PromptManager(path_manager=path_manager)
+        manager.default_templates_dir = tmp_path / "templates"
+        manager.default_templates_dir.mkdir()
+        (manager.default_templates_dir / "chat_system_1.0.j2").write_text(
+            "PREFIX {% include '_shared.j2' %}",
+            encoding="utf-8",
+        )
+        (manager.default_templates_dir / "_shared.j2").write_text("BUILTIN", encoding="utf-8")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.prompt_manager = manager
+        config.agentic_nodes = {"chat": {"system_prompt": "chat", "prompt_version": "1.0"}}
+        node = _TemplateSnapshotNode(session_manager, config, "chat_system")
+
+        assert node._get_session_system_prompt() == "PREFIX BUILTIN"
+        manager.user_templates_dir.mkdir(parents=True, exist_ok=True)
+        (manager.user_templates_dir / "_shared.j2").write_text("USER", encoding="utf-8")
+        assert node._get_session_system_prompt() == "PREFIX USER"
+        assert node.build_count == 2
+
+    def test_request_scoped_prompt_content_change_rebuilds(self, session_manager, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.agentic_nodes = {
+            "chat": {
+                "system_prompt": "chat_custom",
+                "prompt_template": "CUSTOM V1",
+                "prompt_version": "1.0",
+            }
+        }
+        node = _TemplateSnapshotNode(session_manager, config, "chat_custom_system")
+
+        assert node._get_session_system_prompt() == "CUSTOM V1"
+        node.node_config["prompt_template"] = "CUSTOM V2"
+        assert node._get_session_system_prompt() == "CUSTOM V2"
+        assert node.build_count == 2
+
+    @pytest.mark.asyncio
+    async def test_async_request_scoped_prompt_change_rebuilds(self, session_manager, tmp_path):
+        """Enterprise async session stores use the same provenance contract."""
+        path_manager = DatusPathManager(tmp_path / "home")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.agentic_nodes = {
+            "chat": {
+                "system_prompt": "chat_custom",
+                "prompt_template": "ASYNC V1",
+                "prompt_version": "1.0",
+            }
+        }
+        node = _TemplateSnapshotNode(session_manager, config, "chat_custom_system")
+
+        assert await node._get_session_system_prompt_async() == "ASYNC V1"
+        node.node_config["prompt_template"] = "ASYNC V2"
+        assert await node._get_session_system_prompt_async() == "ASYNC V2"
+        assert node.build_count == 2
+
+    @pytest.mark.asyncio
+    async def test_enterprise_async_runtime_never_calls_sync_snapshot_store(self, tmp_path):
+        path_manager = DatusPathManager(tmp_path / "home")
+        config = _agent_config()
+        config.path_manager = path_manager
+        config.agentic_nodes = {
+            "chat": {
+                "system_prompt": "chat_custom",
+                "prompt_template": "ASYNC STORE V1",
+                "prompt_version": "1.0",
+            }
+        }
+        async_manager = _AsyncSnapshotSessionManager()
+        node = _TemplateSnapshotNode(async_manager, config, "chat_custom_system")
+
+        assert await node._get_session_system_prompt_async() == "ASYNC STORE V1"
+        node.node_config["prompt_template"] = "ASYNC STORE V2"
+        assert await node._get_session_system_prompt_async() == "ASYNC STORE V2"
+
+        assert async_manager.load_count == 2
+        assert async_manager.save_count == 2
+        assert node.build_count == 2
+
 
 class TestSnapshotMeta:
     def test_meta_is_exactly_the_identity_keys(self, session_manager):
@@ -241,7 +430,10 @@ class TestSnapshotMeta:
         meta = node._system_prompt_snapshot_meta("1.2")
         assert meta == {
             "node_name": "chat",
+            "agent_id": "chat",
             "prompt_version": "1.2",
+            "prompt_pipeline_version": "2",
+            "prompt_definition_sha256": meta["prompt_definition_sha256"],
             "model_name": "openai:gpt-4.1",
             "execution_mode": "interactive",
             "tool_names": "",

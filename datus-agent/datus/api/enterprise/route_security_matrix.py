@@ -334,6 +334,8 @@ _add_many(
         "/api/v1/admin/agents/{agent_id}/acl",
         "/api/v1/admin/agents/{agent_id}/policy",
         "/api/v1/admin/agents/{agent_id}/default-users",
+        "/api/v1/admin/agents/{agent_id}/prompt-versions",
+        "/api/v1/admin/agents/{agent_id}/prompt-versions/{version_id}",
         "/api/v1/admin/agents/default",
     ],
     _ADMIN_AGENT_READ_POLICY,
@@ -346,10 +348,12 @@ _add_many(
         "/api/v1/admin/agents/{agent_id}/acl",
         "/api/v1/admin/agents/{agent_id}/policy",
         "/api/v1/admin/agents/{agent_id}/default-users",
+        "/api/v1/admin/agents/{agent_id}/prompt-version",
         "/api/v1/admin/agents/default",
     ],
     _ADMIN_AGENT_MUTATION_POLICY,
 )
+_add("POST", "/api/v1/admin/agents/{agent_id}/prompt-versions", _ADMIN_AGENT_MUTATION_POLICY)
 _add("DELETE", "/api/v1/admin/agents/{agent_id}", _ADMIN_AGENT_MUTATION_POLICY)
 
 _add(

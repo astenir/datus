@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +17,9 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.enterprise.prompt_versions import prompt_content_sha256
 from datus.api.service import create_app
+from datus.utils.path_manager import DatusPathManager
 from datus_enterprise.agent_registry import (
     ENTERPRISE_AGENT_NODE_CAPABILITIES,
     ENTERPRISE_AGENT_NODE_CLASSES,
@@ -63,13 +66,19 @@ def _install_extensions(monkeypatch, agent_store, audit_sink=None, *, enabled=Fa
     return extensions
 
 
-def _client(ctx: AppContext):
+def _client(ctx: AppContext, *, agent_config=None):
     app = FastAPI()
     app.include_router(agent_routes.router)
 
+    service_agent_config = agent_config or SimpleNamespace(
+        path_manager=DatusPathManager(
+            datus_home=Path(__file__).parent / "__missing_datus_home__",
+        )
+    )
+
     async def override_service(request: Request):
         request.state.app_context = ctx
-        return SimpleNamespace()
+        return SimpleNamespace(agent_config=service_agent_config)
 
     async def override_context(request: Request):
         request.state.app_context = ctx
@@ -390,6 +399,72 @@ def test_admin_default_chat_agent_detail_is_readonly(monkeypatch):
     assert mutation_response.json()["errorCode"] == "AGENT_ID_INVALID"
 
 
+def test_admin_builtin_agent_detail_uses_running_service_template_home(monkeypatch, tmp_path):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+    default_home = tmp_path / "default-user"
+    stale_template_dir = default_home / ".datus" / "template"
+    stale_template_dir.mkdir(parents=True)
+    (stale_template_dir / "chat_system_1.2.j2").write_text(
+        "STALE DEFAULT HOME PROMPT",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(default_home))
+
+    runtime_home = tmp_path / "runtime-home"
+    agent_config = SimpleNamespace(path_manager=DatusPathManager(datus_home=runtime_home))
+
+    with _client(ctx, agent_config=agent_config) as client:
+        response = client.get("/api/v1/admin/agents/chat")
+
+    assert response.status_code == 200
+    detail = response.json()["data"]
+    assert detail["prompt_source"] == "builtin"
+    assert "STALE DEFAULT HOME PROMPT" not in detail["prompt_template"]
+    assert "{% if has_ask_user_tool %}" in detail["prompt_template"]
+    assert "reference SQL and external knowledge" not in detail["prompt_template"]
+
+
+def test_admin_agent_fallback_uses_running_service_user_override(monkeypatch, tmp_path):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["sales_chat"] = {
+        "agent_id": "sales_chat",
+        "name": "Sales Chat",
+        "node_class": "chat",
+        "status": "published",
+        "prompt_template": None,
+        "prompt_version": "1.0",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    default_home = tmp_path / "default-user"
+    stale_template_dir = default_home / ".datus" / "template"
+    stale_template_dir.mkdir(parents=True)
+    (stale_template_dir / "chat_system_1.2.j2").write_text(
+        "STALE DEFAULT HOME PROMPT",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(default_home))
+
+    runtime_home = tmp_path / "runtime-home"
+    runtime_template_dir = runtime_home / "template"
+    runtime_template_dir.mkdir(parents=True)
+    runtime_prompt = "RUNTIME HOME USER OVERRIDE"
+    (runtime_template_dir / "chat_system_1.2.j2").write_text(runtime_prompt, encoding="utf-8")
+    agent_config = SimpleNamespace(path_manager=DatusPathManager(datus_home=runtime_home))
+
+    with _client(ctx, agent_config=agent_config) as client:
+        response = client.get("/api/v1/admin/agents/sales_chat")
+
+    assert response.status_code == 200
+    detail = response.json()["data"]
+    assert detail["prompt_source"] == "user_override_fallback"
+    assert detail["prompt_template_content"] == runtime_prompt
+    assert detail["prompt_revision"] == prompt_content_sha256(runtime_prompt)
+
+
 def test_available_agent_tools_require_visible_agent_acl_not_node_permission(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
@@ -593,6 +668,494 @@ def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
 
     ids = {item["agent_id"] for item in list_response.json()["data"]}
     assert "sales_sql" in ids
+
+
+def test_admin_agent_prompt_versions_create_preview_activate_and_conflict(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, agent_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        create_agent_response = client.put(
+            "/api/v1/admin/agents/versioned_sql",
+            json={
+                "name": "Versioned SQL",
+                "node_class": "gen_sql",
+                "prompt_template": "Prompt body v1",
+                "prompt_version": "1.0",
+            },
+        )
+        list_response = client.get("/api/v1/admin/agents/versioned_sql/prompt-versions")
+        active_v1 = list_response.json()["data"]["active_version_id"]
+        create_version_response = client.post(
+            "/api/v1/admin/agents/versioned_sql/prompt-versions",
+            json={
+                "version": "2.0",
+                "prompt_template": "Prompt body v2 secret marker",
+                "change_note": "Tighten query constraints",
+                "based_on_version_id": active_v1,
+            },
+        )
+        version_v2 = create_version_response.json()["data"]["version_id"]
+        preview_response = client.get(f"/api/v1/admin/agents/versioned_sql/prompt-versions/{version_v2}")
+        activate_response = client.put(
+            "/api/v1/admin/agents/versioned_sql/prompt-version",
+            json={"version_id": version_v2, "expected_active_version_id": active_v1},
+        )
+        detail_response = client.get("/api/v1/admin/agents/versioned_sql")
+        stale_activation_response = client.put(
+            "/api/v1/admin/agents/versioned_sql/prompt-version",
+            json={"version_id": active_v1, "expected_active_version_id": active_v1},
+        )
+
+    assert create_agent_response.status_code == 200
+    assert list_response.status_code == 200
+    versions = list_response.json()["data"]["versions"]
+    assert len(versions) == 1
+    assert "prompt_template" not in versions[0]
+    assert versions[0]["version"] == "1.0"
+    assert versions[0]["active"] is True
+    assert create_version_response.status_code == 200
+    assert create_version_response.json()["data"]["active"] is False
+    assert preview_response.json()["data"]["prompt_template"] == "Prompt body v2 secret marker"
+    assert activate_response.status_code == 200
+    assert activate_response.json()["data"]["active"] is True
+    detail = detail_response.json()["data"]
+    assert detail["prompt_version"] == "2.0"
+    assert detail["resolved_prompt_version"] == "2.0"
+    assert detail["prompt_source"] == "enterprise"
+    assert detail["active_prompt_version_id"] == version_v2
+    assert detail["prompt_revision"] == activate_response.json()["data"]["content_sha256"]
+    assert stale_activation_response.status_code == 409
+    assert stale_activation_response.json()["detail"] == "AGENT_PROMPT_VERSION_CONFLICT"
+    assert "Prompt body v2 secret marker" not in repr([event.metadata for event in audit_sink.events])
+
+
+def test_admin_agent_prompt_version_legacy_read_is_side_effect_free_and_migrates_on_write(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["legacy_sql"] = {
+        "agent_id": "legacy_sql",
+        "name": "Legacy SQL",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": "Legacy prompt body",
+        "prompt_version": "1.7",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        list_response = client.get("/api/v1/admin/agents/legacy_sql/prompt-versions")
+        legacy = list_response.json()["data"]["versions"][0]
+        assert agent_store._prompt_versions == {}
+        create_response = client.post(
+            "/api/v1/admin/agents/legacy_sql/prompt-versions",
+            json={
+                "version": "2.0",
+                "prompt_template": "New prompt body",
+                "based_on_version_id": legacy["version_id"],
+            },
+        )
+        migrated_list_response = client.get("/api/v1/admin/agents/legacy_sql/prompt-versions")
+
+    assert list_response.status_code == 200
+    assert legacy["version"] == "1.7"
+    assert legacy["version_id"].startswith("legacy_")
+    assert create_response.status_code == 200
+    assert create_response.json()["data"]["based_on_version_id"] != legacy["version_id"]
+    migrated_versions = migrated_list_response.json()["data"]["versions"]
+    assert {version["version"] for version in migrated_versions} == {"1.7", "2.0"}
+    assert sum(1 for version in migrated_versions if version["active"]) == 1
+
+
+def test_admin_agent_prompt_version_preserves_exact_prompt_whitespace(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+    prompt_body = "\n  Keep this indentation exactly.\n"
+
+    with _client(ctx) as client:
+        create_response = client.put(
+            "/api/v1/admin/agents/exact_prompt",
+            json={
+                "node_class": "gen_sql",
+                "prompt_template": prompt_body,
+                "prompt_version": "1.0",
+            },
+        )
+        versions_response = client.get("/api/v1/admin/agents/exact_prompt/prompt-versions")
+        unchanged_upsert_response = client.put(
+            "/api/v1/admin/agents/exact_prompt",
+            json={
+                "node_class": "gen_sql",
+                "description": "Metadata-only update",
+                "prompt_template": prompt_body,
+                "prompt_version": "1.0",
+            },
+        )
+
+    expected_revision = prompt_content_sha256(prompt_body)
+    assert create_response.json()["data"]["prompt_template"] == prompt_body
+    assert create_response.json()["data"]["prompt_revision"] == expected_revision
+    assert versions_response.json()["data"]["versions"][0]["content_sha256"] == expected_revision
+    assert unchanged_upsert_response.status_code == 200
+    assert unchanged_upsert_response.json()["success"] is True
+    assert unchanged_upsert_response.json()["data"]["prompt_template"] == prompt_body
+
+
+def test_legacy_prompt_identity_changes_with_version_or_language(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["legacy_identity"] = {
+        "agent_id": "legacy_identity",
+        "name": "Legacy identity",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": "Legacy prompt body",
+        "prompt_version": "1.0",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        first_list = client.get("/api/v1/admin/agents/legacy_identity/prompt-versions")
+        stale_legacy_id = first_list.json()["data"]["active_version_id"]
+        agent_store._agents["legacy_identity"]["prompt_language"] = "zh-CN"
+        second_list = client.get("/api/v1/admin/agents/legacy_identity/prompt-versions")
+        create_response = client.post(
+            "/api/v1/admin/agents/legacy_identity/prompt-versions",
+            json={
+                "version": "2.0",
+                "prompt_template": "Prompt v2",
+                "based_on_version_id": stale_legacy_id,
+            },
+        )
+
+    assert second_list.json()["data"]["active_version_id"] != stale_legacy_id
+    assert create_response.status_code == 404
+    assert create_response.json()["detail"] == "RESOURCE_NOT_FOUND"
+
+
+def test_admin_agent_prompt_version_is_scoped_to_agent_and_builtin_is_immutable(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        for agent_id in ("agent_a", "agent_b"):
+            client.put(
+                f"/api/v1/admin/agents/{agent_id}",
+                json={
+                    "node_class": "gen_sql",
+                    "prompt_template": f"Prompt for {agent_id}",
+                    "prompt_version": "1.0",
+                },
+            )
+        versions_a = client.get("/api/v1/admin/agents/agent_a/prompt-versions").json()["data"]
+        version_a = versions_a["active_version_id"]
+        versions_b = client.get("/api/v1/admin/agents/agent_b/prompt-versions").json()["data"]
+        cross_agent_detail = client.get(f"/api/v1/admin/agents/agent_b/prompt-versions/{version_a}")
+        cross_agent_activation = client.put(
+            "/api/v1/admin/agents/agent_b/prompt-version",
+            json={
+                "version_id": version_a,
+                "expected_active_version_id": versions_b["active_version_id"],
+            },
+        )
+        builtin_create = client.post(
+            "/api/v1/admin/agents/gen_sql/prompt-versions",
+            json={"version": "9.9", "prompt_template": "Override builtin"},
+        )
+
+    assert cross_agent_detail.status_code == 404
+    assert cross_agent_activation.status_code == 404
+    assert builtin_create.status_code == 409
+    assert builtin_create.json()["detail"] == "AGENT_BUILTIN_IMMUTABLE"
+
+
+def test_admin_agent_prompt_version_routes_require_admin_permission(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        responses = [
+            client.get("/api/v1/admin/agents/analyst/prompt-versions"),
+            client.get("/api/v1/admin/agents/analyst/prompt-versions/version-1"),
+            client.post(
+                "/api/v1/admin/agents/analyst/prompt-versions",
+                json={"version": "2.0", "prompt_template": "Prompt v2"},
+            ),
+            client.put(
+                "/api/v1/admin/agents/analyst/prompt-version",
+                json={"version_id": "version-1", "expected_active_version_id": None},
+            ),
+        ]
+
+    assert all(response.status_code == 403 for response in responses)
+    assert all("module.admin.agents" in response.json()["detail"] for response in responses)
+
+
+def test_admin_agent_prompt_version_reads_are_side_effect_free_in_readonly(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["readonly_sql"] = {
+        "agent_id": "readonly_sql",
+        "name": "Readonly SQL",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": "Legacy readonly prompt",
+        "prompt_version": "1.0",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    _install_extensions(monkeypatch, agent_store, enabled=True)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        list_response = client.get("/api/v1/admin/agents/readonly_sql/prompt-versions")
+        legacy_version_id = list_response.json()["data"]["active_version_id"]
+        detail_response = client.get(
+            f"/api/v1/admin/agents/readonly_sql/prompt-versions/{legacy_version_id}",
+        )
+        create_response = client.post(
+            "/api/v1/admin/agents/readonly_sql/prompt-versions",
+            json={"version": "2.0", "prompt_template": "Prompt v2"},
+        )
+        activate_response = client.put(
+            "/api/v1/admin/agents/readonly_sql/prompt-version",
+            json={"version_id": legacy_version_id, "expected_active_version_id": legacy_version_id},
+        )
+
+    assert list_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert agent_store._prompt_versions == {}
+    assert agent_store._active_prompt_versions == {}
+    assert create_response.status_code == 403
+    assert activate_response.status_code == 403
+    assert create_response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+    assert activate_response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+
+
+def test_admin_agent_detail_reports_builtin_prompt_fallback_provenance(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["fallback_sql"] = {
+        "agent_id": "fallback_sql",
+        "name": "Fallback SQL",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": None,
+        "prompt_version": "9.0-configured",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/fallback_sql")
+
+    assert response.status_code == 200
+    detail = response.json()["data"]
+    assert detail["prompt_source"] == "builtin_fallback"
+    assert detail["prompt_template"] is None
+    assert detail["prompt_template_content"]
+    assert detail["configured_prompt_version"] == "9.0-configured"
+    assert detail["resolved_prompt_version"] != detail["configured_prompt_version"]
+    assert len(detail["prompt_revision"]) == 64
+    assert detail["active_prompt_version_id"] is None
+
+
+def test_admin_agent_prompt_version_duplicate_activate_and_validation(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        client.put(
+            "/api/v1/admin/agents/version_rules",
+            json={
+                "node_class": "gen_sql",
+                "prompt_template": "Prompt v1",
+                "prompt_version": "1.0",
+            },
+        )
+        duplicate_response = client.post(
+            "/api/v1/admin/agents/version_rules/prompt-versions",
+            json={"version": "1.0", "prompt_template": "Another prompt"},
+        )
+        activate_create_response = client.post(
+            "/api/v1/admin/agents/version_rules/prompt-versions",
+            json={
+                "version": "2.0",
+                "prompt_template": "Prompt v2",
+                "activate": True,
+            },
+        )
+        empty_prompt_response = client.post(
+            "/api/v1/admin/agents/version_rules/prompt-versions",
+            json={"version": "3.0", "prompt_template": "   "},
+        )
+        long_version_response = client.post(
+            "/api/v1/admin/agents/version_rules/prompt-versions",
+            json={"version": "v" * 41, "prompt_template": "Prompt v3"},
+        )
+        detail_response = client.get("/api/v1/admin/agents/version_rules")
+
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.json()["detail"] == "AGENT_PROMPT_VERSION_CONFLICT"
+    assert activate_create_response.status_code == 200
+    assert activate_create_response.json()["data"]["active"] is True
+    assert detail_response.json()["data"]["prompt_version"] == "2.0"
+    assert empty_prompt_response.status_code == 422
+    assert empty_prompt_response.json()["detail"] == "AGENT_PROMPT_VERSION_INVALID"
+    assert long_version_response.status_code == 422
+
+
+def test_admin_agent_legacy_migration_rejects_conflicting_version_label(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    agent_store._agents["legacy_conflict"] = {
+        "agent_id": "legacy_conflict",
+        "name": "Legacy conflict",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": "Legacy body",
+        "prompt_version": "1.0",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    asyncio.run(
+        agent_store.create_prompt_version(
+            agent_id="legacy_conflict",
+            version="1.0",
+            prompt_template="Different stored body",
+            prompt_language="en",
+            change_note=None,
+            based_on_version_id=None,
+            created_by="operator",
+        ),
+    )
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.post(
+            "/api/v1/admin/agents/legacy_conflict/prompt-versions",
+            json={"version": "2.0", "prompt_template": "Prompt v2"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "AGENT_PROMPT_VERSION_CONFLICT"
+
+
+def test_admin_agent_prompt_version_store_failures_are_stable_and_audited(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    audit_sink = CollectingAuditSink()
+    agent_store._agents["store_failure"] = {
+        "agent_id": "store_failure",
+        "name": "Store failure",
+        "node_class": "gen_sql",
+        "status": "draft",
+        "prompt_template": None,
+        "prompt_version": "1.0",
+        "prompt_language": "en",
+        "acl": {"visibility": "enterprise"},
+    }
+    original_get_prompt_version = agent_store.get_prompt_version
+    original_create_prompt_version = agent_store.create_prompt_version
+
+    async def fail_read(_agent_id, _version_id):
+        raise RuntimeError("database secret detail")
+
+    async def fail_create(**_kwargs):
+        raise RuntimeError("database secret detail")
+
+    monkeypatch.setattr(agent_store, "get_prompt_version", fail_read)
+    monkeypatch.setattr(agent_store, "create_prompt_version", fail_create)
+    _install_extensions(monkeypatch, agent_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        read_response = client.get("/api/v1/admin/agents/store_failure/prompt-versions/missing")
+        create_response = client.post(
+            "/api/v1/admin/agents/store_failure/prompt-versions",
+            json={"version": "2.0", "prompt_template": "Prompt v2"},
+        )
+
+    assert read_response.status_code == 200
+    assert read_response.json()["errorCode"] == "AGENT_PROMPT_VERSION_READ_FAILED"
+    assert create_response.status_code == 200
+    assert create_response.json()["errorCode"] == "AGENT_PROMPT_VERSION_CREATE_FAILED"
+    assert "database secret detail" not in str(read_response.json())
+    assert "database secret detail" not in str(create_response.json())
+    assert audit_sink.events[-1].decision == "deny"
+
+    monkeypatch.setattr(agent_store, "get_prompt_version", original_get_prompt_version)
+    monkeypatch.setattr(agent_store, "create_prompt_version", original_create_prompt_version)
+
+
+def test_admin_agent_upsert_requires_new_version_for_prompt_changes(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        client.put(
+            "/api/v1/admin/agents/immutable_sql",
+            json={
+                "node_class": "gen_sql",
+                "prompt_template": "Original prompt",
+                "prompt_version": "1.0",
+            },
+        )
+        conflict_response = client.put(
+            "/api/v1/admin/agents/immutable_sql",
+            json={
+                "node_class": "gen_sql",
+                "prompt_template": "Overwritten prompt",
+                "prompt_version": "1.0",
+            },
+        )
+        detail_response = client.get("/api/v1/admin/agents/immutable_sql")
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["detail"] == "AGENT_PROMPT_VERSION_REQUIRED"
+    assert detail_response.json()["data"]["prompt_template"] == "Original prompt"
+
+
+def test_admin_agent_upsert_cannot_bypass_unactivated_prompt_history(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        client.put(
+            "/api/v1/admin/agents/fallback_history",
+            json={"node_class": "gen_sql"},
+        )
+        create_version_response = client.post(
+            "/api/v1/admin/agents/fallback_history/prompt-versions",
+            json={"version": "1.0-custom", "prompt_template": "Unactivated custom prompt"},
+        )
+        bypass_response = client.put(
+            "/api/v1/admin/agents/fallback_history",
+            json={
+                "node_class": "gen_sql",
+                "prompt_template": "Bypass prompt",
+                "prompt_version": "2.0",
+            },
+        )
+        detail_response = client.get("/api/v1/admin/agents/fallback_history")
+
+    assert create_version_response.status_code == 200
+    assert create_version_response.json()["data"]["active"] is False
+    assert bypass_response.status_code == 409
+    assert bypass_response.json()["detail"] == "AGENT_PROMPT_VERSION_REQUIRED"
+    assert detail_response.json()["data"]["prompt_template"] is None
+    assert detail_response.json()["data"]["prompt_source"] == "builtin_fallback"
 
 
 def test_available_agents_do_not_filter_by_node_class_permission(monkeypatch):

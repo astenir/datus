@@ -195,6 +195,43 @@ class EnterpriseAgentStore(Protocol):
         """Delete one enterprise agent definition."""
         ...
 
+    async def list_prompt_versions(self, agent_id: str) -> list[dict[str, Any]]:
+        """Return immutable prompt versions for one Agent."""
+        ...
+
+    async def get_prompt_version(self, agent_id: str, version_id: str) -> dict[str, Any] | None:
+        """Return one prompt version only when it belongs to the Agent."""
+        ...
+
+    async def get_active_prompt_version(self, agent_id: str) -> dict[str, Any] | None:
+        """Return the Agent's current active prompt version."""
+        ...
+
+    async def create_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version: str,
+        prompt_template: str,
+        prompt_language: str,
+        change_note: str | None,
+        based_on_version_id: str | None,
+        created_by: str | None,
+    ) -> dict[str, Any]:
+        """Create one immutable prompt version without activating it."""
+        ...
+
+    async def activate_prompt_version(
+        self,
+        *,
+        agent_id: str,
+        version_id: str,
+        expected_active_version_id: str | None,
+        activated_by: str | None,
+    ) -> dict[str, Any]:
+        """Activate a version with an optimistic concurrency precondition."""
+        ...
+
 
 @runtime_checkable
 class EnterpriseQuotaStore(Protocol):

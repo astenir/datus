@@ -1084,6 +1084,49 @@ describe("api client", () => {
     expect((vi.mocked(fetch).mock.calls[7]?.[1] as RequestInit).method).toBe("DELETE");
   });
 
+  it("uses immutable Agent prompt version routes", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: {} }))
+    );
+
+    await agentApi.promptVersions("http://localhost:8000/", "sales analyst");
+    await agentApi.promptVersion("http://localhost:8000/", "sales analyst", "version/1");
+    await agentApi.createPromptVersion("http://localhost:8000/", "sales analyst", {
+      version: "1.1",
+      prompt_template: "Review sales data",
+      prompt_language: "zh-CN",
+      change_note: "补充口径",
+      based_on_version_id: "version-1",
+      activate: false,
+    });
+    await agentApi.activatePromptVersion("http://localhost:8000/", "sales analyst", {
+      version_id: "version-2",
+      expected_active_version_id: "version-1",
+    });
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[0]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/sales%20analyst/prompt-versions");
+    expect(calls[1]?.[0]).toBe(
+      "http://localhost:8000/api/v1/admin/agents/sales%20analyst/prompt-versions/version%2F1",
+    );
+    expect(calls[2]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/sales%20analyst/prompt-versions");
+    expect((calls[2]?.[1] as RequestInit).method).toBe("POST");
+    expect(JSON.parse(String((calls[2]?.[1] as RequestInit).body))).toEqual({
+      version: "1.1",
+      prompt_template: "Review sales data",
+      prompt_language: "zh-CN",
+      change_note: "补充口径",
+      based_on_version_id: "version-1",
+      activate: false,
+    });
+    expect(calls[3]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/sales%20analyst/prompt-version");
+    expect((calls[3]?.[1] as RequestInit).method).toBe("PUT");
+    expect(JSON.parse(String((calls[3]?.[1] as RequestInit).body))).toEqual({
+      version_id: "version-2",
+      expected_active_version_id: "version-1",
+    });
+  });
+
   it("uses enterprise Agent policy and default assignment routes", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(mockJsonResponse({ success: true, data: {} }))

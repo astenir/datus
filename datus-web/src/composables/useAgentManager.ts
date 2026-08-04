@@ -2,6 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
+import { useAgentPromptVersions } from "@/composables/useAgentPromptVersions";
 import { usePermission } from "@/composables/usePermission";
 import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
@@ -17,6 +18,7 @@ import type {
   AgentUseToolsData,
   AgentVisibility,
   CreateAgentInput,
+  CreateAgentPromptVersionInput,
   EditAgentInput,
   McpServerInfo,
 } from "@/types";
@@ -31,6 +33,7 @@ export interface AgentFormState {
   artifactSlug: string;
   description: string;
   promptTemplate: string;
+  promptVersion: string;
   toolsText: string;
   mcpText: string;
   skillsText: string;
@@ -90,6 +93,7 @@ function emptyForm(): AgentFormState {
     artifactSlug: "",
     description: "",
     promptTemplate: "",
+    promptVersion: "1.0",
     toolsText: "",
     mcpText: "",
     skillsText: "",
@@ -192,6 +196,10 @@ function trimmedOptional(value: string): string | undefined {
   return trimmed || undefined;
 }
 
+function promptTemplateValue(value: string): string | undefined {
+  return value.trim() ? value : undefined;
+}
+
 function parsePositiveInteger(value: string): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
@@ -222,6 +230,7 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     artifactSlug: agent.artifact_slug ?? "",
     description: agent.description ?? "",
     promptTemplate: agent.prompt_template ?? agent.prompt_template_content ?? "",
+    promptVersion: agent.prompt_version ?? "1.0",
     toolsText: listText(configuredTools),
     mcpText: listText(agent.mcp),
     skillsText: listText(agent.skills),
@@ -248,9 +257,9 @@ function createInputFromForm(form: AgentFormState, supportsMcp: boolean): Create
     datasource_id: trimmedOptional(form.datasourceId),
     artifact_slug: trimmedOptional(form.artifactSlug),
     description: trimmedOptional(form.description),
-    prompt_template: trimmedOptional(form.promptTemplate),
+    prompt_template: promptTemplateValue(form.promptTemplate),
     prompt_language: "en",
-    prompt_version: "1.0",
+    prompt_version: trimmedOptional(form.promptVersion) ?? "1.0",
     tools: parseListText(form.toolsText),
     mcp: supportsMcp ? parseListText(form.mcpText) : undefined,
     skills: parseListText(form.skillsText),
@@ -425,6 +434,7 @@ function uniqueAgentId(baseId: string, existingAgents: readonly AgentInfo[]): st
 export function useAgentManager() {
   const connection = useConnection();
   const permission = usePermission();
+  const promptVersions = useAgentPromptVersions();
 
   const agents = ref<AgentInfo[]>([]);
   const selectedAgent = ref<AgentDetail | null>(null);
@@ -833,6 +843,7 @@ export function useAgentManager() {
     const requestId = ++selectionRequestId;
 
     if (!agentName) {
+      promptVersions.reset();
       selectedAgent.value = null;
       selectedUseTools.value = null;
       form.value = emptyForm();
@@ -846,6 +857,7 @@ export function useAgentManager() {
     detailError.value = null;
     selectedAgent.value = null;
     selectedUseTools.value = null;
+    promptVersions.reset();
     form.value = emptyForm();
     formMode.value = "edit";
 
@@ -866,6 +878,11 @@ export function useAgentManager() {
             return null;
           })
         : Promise.resolve(null);
+      if (!isBuiltinAgent(detail)) {
+        void promptVersions.load(detail.agent_id).catch((err: unknown) => {
+          if (requestId === selectionRequestId) console.error("读取 Agent 提示词版本失败:", err);
+        });
+      }
       const [defaultUserIds, useTools] = await Promise.all([
         agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id),
         useToolsPromise,
@@ -891,6 +908,7 @@ export function useAgentManager() {
 
   function startCreate() {
     selectionRequestId += 1;
+    promptVersions.reset();
     selectedAgent.value = null;
     selectedUseTools.value = null;
     form.value = emptyForm();
@@ -1061,6 +1079,48 @@ export function useAgentManager() {
     }
   }
 
+  async function selectPromptVersion(versionId: string) {
+    const agentId = selectedAgent.value?.agent_id;
+    if (!agentId || selectedIsBuiltin.value) return;
+    try {
+      await promptVersions.select(agentId, versionId);
+    } catch (err) {
+      console.error("读取提示词版本失败:", err);
+      toast.error("读取提示词版本失败");
+    }
+  }
+
+  async function createPromptVersion(input: CreateAgentPromptVersionInput): Promise<boolean> {
+    const agentId = selectedAgent.value?.agent_id;
+    if (!agentId || selectedIsBuiltin.value) return false;
+    try {
+      const created = await promptVersions.create(agentId, input);
+      if (!created) return false;
+      toast.success(`提示词版本 v${created.version} 已创建`);
+      return true;
+    } catch (err) {
+      console.error("创建提示词版本失败:", err);
+      toast.error("创建提示词版本失败，请确认版本标识未重复。");
+      return false;
+    }
+  }
+
+  async function activatePromptVersion(versionId: string): Promise<boolean> {
+    const agentId = selectedAgent.value?.agent_id;
+    if (!agentId || selectedIsBuiltin.value) return false;
+    try {
+      const activated = await promptVersions.activate(agentId, versionId);
+      if (!activated) return false;
+      toast.success(`提示词版本 v${activated.version} 已设为当前版本`);
+      await selectAgent(agentId);
+      return true;
+    } catch (err) {
+      console.error("激活提示词版本失败:", err);
+      toast.error("激活失败，当前版本可能已被其他管理员修改，请刷新后重试。");
+      return false;
+    }
+  }
+
   async function setEnterpriseDefault(agentId: string | null) {
     defaultPolicyLoading.value = true;
     try {
@@ -1123,6 +1183,7 @@ export function useAgentManager() {
     aclRoles: readonly(aclRoles),
     enterpriseDefaultAgentId: readonly(enterpriseDefaultAgentId),
     toolCatalog: readonly(toolCatalog),
+    promptVersions,
     form,
     formMode: readonly(formMode),
     loading: readonly(loading),
@@ -1188,6 +1249,9 @@ export function useAgentManager() {
     toggleAllowedSubagent,
     applyDefaultTools,
     saveForm,
+    selectPromptVersion,
+    createPromptVersion,
+    activatePromptVersion,
     setEnterpriseDefault,
     deleteAgent,
     isBuiltinAgent,

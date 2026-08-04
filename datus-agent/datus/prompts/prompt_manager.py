@@ -10,21 +10,43 @@ Template files follow the pattern: {template_name}_{version}.j2
 No configuration file needed - versions are determined by scanning files.
 """
 
+import hashlib
+import json
 import re
 import shutil
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Iterator, List, Optional
 
-from jinja2 import Environment, FileSystemLoader, Template
+from jinja2 import Environment, FileSystemLoader, Template, meta
 
-from datus.prompts.prompt_runtime_template_downstream import find_runtime_template_content
+from datus.prompts.prompt_runtime_template_downstream import find_runtime_template
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.utils.path_manager import DatusPathManager
+
+
+_captured_template_identities: ContextVar[list[dict[str, str]] | None] = ContextVar(
+    "captured_prompt_template_identities",
+    default=None,
+)
+
+
+@contextmanager
+def capture_prompt_template_identities() -> Iterator[list[dict[str, str]]]:
+    """Capture the exact templates rendered while building one system prompt."""
+
+    identities: list[dict[str, str]] = []
+    token = _captured_template_identities.set(identities)
+    try:
+        yield identities
+    finally:
+        _captured_template_identities.reset(token)
 
 
 class PromptManager:
@@ -74,7 +96,17 @@ class PromptManager:
             self._env_cache.move_to_end(cache_key)
             return env
         search_paths = [cache_key, str(self.default_templates_dir)]
-        env = Environment(loader=FileSystemLoader(search_paths), trim_blocks=True, lstrip_blocks=True)
+        # Keep the environment but not Jinja's logical-filename template
+        # cache. A cached builtin include remains "up to date" even when a
+        # same-name user override later appears earlier in the loader search
+        # path, which would make the rendered prompt disagree with its current
+        # provenance. Session-level prompt snapshots provide the useful cache.
+        env = Environment(
+            loader=FileSystemLoader(search_paths),
+            trim_blocks=True,
+            lstrip_blocks=True,
+            cache_size=0,
+        )
         self._env_cache[cache_key] = env
         if len(self._env_cache) > self._MAX_ENV_CACHE_SIZE:
             self._env_cache.popitem(last=False)
@@ -160,6 +192,93 @@ class PromptManager:
         filename = self._get_template_filename(template_name, version)
         return self._get_env().get_template(filename)
 
+    @staticmethod
+    def _content_sha256(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _version_from_filename(filename: str) -> str:
+        match = re.search(r"_(\d+\.\d+)\.j2$", filename)
+        return match.group(1) if match else ""
+
+    def _named_template_source(self, filename: str) -> tuple[str, str]:
+        user_path = self.user_templates_dir / filename
+        if user_path.is_file():
+            return user_path.read_text(encoding="utf-8"), "user"
+        default_path = self.default_templates_dir / filename
+        if default_path.is_file():
+            return default_path.read_text(encoding="utf-8"), "builtin"
+        raise FileNotFoundError(f"Prompt Template dependency '{filename}' not found")
+
+    def _template_revision(self, *, filename: str, content: str, source: str) -> str:
+        """Hash one template plus all statically referenced Jinja templates."""
+
+        resolved: dict[str, dict[str, str]] = {}
+
+        def collect(current_name: str, current_content: str, current_source: str) -> None:
+            if current_name in resolved:
+                return
+            resolved[current_name] = {
+                "source": current_source,
+                "content_sha256": self._content_sha256(current_content),
+            }
+            parsed = self._get_env().parse(current_content)
+            for dependency_name in meta.find_referenced_templates(parsed) or ():
+                if dependency_name is None:
+                    continue
+                dependency_content, dependency_source = self._named_template_source(dependency_name)
+                collect(dependency_name, dependency_content, dependency_source)
+
+        collect(filename, content, source)
+        canonical = json.dumps(resolved, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return self._content_sha256(canonical)
+
+    def _resolve_template_source(
+        self,
+        template_name: str,
+        version: Optional[str],
+    ) -> tuple[str, str, str, str]:
+        runtime = find_runtime_template(self._agent_config, template_name, version)
+        if runtime is not None:
+            content, configured_version = runtime
+            return content, f"{template_name}_runtime.j2", configured_version or str(version or ""), "runtime"
+
+        path = self._get_template_path(template_name, version)
+        source = "user" if path.parent == self.user_templates_dir else "builtin"
+        return path.read_text(encoding="utf-8"), path.name, self._version_from_filename(path.name), source
+
+    def get_template_identity(self, template_name: str, version: Optional[str] = None) -> dict[str, str]:
+        """Return stable, non-secret provenance for the effective template."""
+
+        content, filename, resolved_version, source = self._resolve_template_source(template_name, version)
+        return self._template_identity_from_resolution(
+            template_name=template_name,
+            requested_version=version,
+            content=content,
+            filename=filename,
+            resolved_version=resolved_version,
+            source=source,
+        )
+
+    def _template_identity_from_resolution(
+        self,
+        *,
+        template_name: str,
+        requested_version: Optional[str],
+        content: str,
+        filename: str,
+        resolved_version: str,
+        source: str,
+    ) -> dict[str, str]:
+        return {
+            "template_name": template_name,
+            "requested_version": str(requested_version or ""),
+            "resolved_version": resolved_version,
+            "source": source,
+            "content_sha256": self._content_sha256(content),
+            "revision_sha256": self._template_revision(filename=filename, content=content, source=source),
+        }
+
     def render_template(self, template_name: str, version: Optional[str] = None, **kwargs) -> str:
         """
         Render a template with the given variables.
@@ -172,11 +291,23 @@ class PromptManager:
         Returns:
             Rendered template string
         """
-        runtime_content = find_runtime_template_content(self._agent_config, template_name, version)
-        if runtime_content is not None:
-            template = self._get_env().from_string(runtime_content)
-        else:
-            template = self.load_template(template_name, version)
+        content, filename, resolved_version, source = self._resolve_template_source(template_name, version)
+        captured = _captured_template_identities.get()
+        if captured is not None:
+            captured.append(
+                self._template_identity_from_resolution(
+                    template_name=template_name,
+                    requested_version=version,
+                    content=content,
+                    filename=filename,
+                    resolved_version=resolved_version,
+                    source=source,
+                )
+            )
+        # Render the exact source selected above. Loading again by logical
+        # filename can replay a cached builtin after a same-name user override
+        # appears, making provenance and rendered bytes disagree.
+        template = self._get_env().from_string(content)
         return template.render(**kwargs)
 
     def get_raw_template(self, template_name: str, version: Optional[str] = None) -> str:
@@ -190,10 +321,20 @@ class PromptManager:
         Returns:
             Raw template string
         """
-        template_path = self._get_template_path(template_name, version)
-
-        with open(template_path, "r", encoding="utf-8") as f:
-            return f.read()
+        content, filename, resolved_version, source = self._resolve_template_source(template_name, version)
+        captured = _captured_template_identities.get()
+        if captured is not None:
+            captured.append(
+                self._template_identity_from_resolution(
+                    template_name=template_name,
+                    requested_version=version,
+                    content=content,
+                    filename=filename,
+                    resolved_version=resolved_version,
+                    source=source,
+                )
+            )
+        return content
 
     def list_templates(self) -> List[str]:
         """
