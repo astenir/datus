@@ -30,6 +30,7 @@ from datus.agent.node.mcp_failure_actions_downstream import (
     record_mcp_connection_failure,
 )
 from datus.agent.node.node import Node
+from datus.api.utils.stream_errors import humanize_stream_error
 from datus.cli.execution_state import ExecutionInterrupted, InteractionBroker, InterruptController, PendingInputQueue
 from datus.configuration.agent_config import AgentConfig, CompactConfig
 from datus.models.base import LLMBaseModel
@@ -3243,6 +3244,11 @@ class AgenticNode(Node):
             error_output = error_result.model_dump()
             if is_permission_denied:
                 error_output["error_type"] = "PERMISSION_DENIED"
+            else:
+                error_type, safe_error = humanize_stream_error(exc)
+                if error_type != "INTERNAL_ERROR":
+                    error_output["error_type"] = error_type
+                    error_output["error"] = safe_error
             current_actions = ahm.get_actions()
             if current_actions and current_actions[-1].status == ActionStatus.PROCESSING:
                 ahm.update_current_action(
