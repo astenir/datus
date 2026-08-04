@@ -80,6 +80,7 @@ async def prepare_chat_request_config(
     agent_config._request_user_id = user_id
     agent_config._artifact_acl_store = artifact_acl_store
     agent_config._enterprise_enabled = enterprise_enabled
+    agent_config._business_datasource_read_only = enterprise_enabled
     agent_config._protect_artifact_filesystem = enterprise_enabled
     if enterprise_enabled and not user_id:
         raise ValueError("AUTH_REQUIRED")

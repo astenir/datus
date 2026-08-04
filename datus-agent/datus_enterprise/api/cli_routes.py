@@ -78,6 +78,7 @@ async def execute_sql(
         requested_datasource=request.datasource,
         requested_database=request.database_name,
     )
+    projection.config._business_datasource_read_only = True
     datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
     quota_error = await consume_enterprise_quota(
         ctx,

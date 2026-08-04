@@ -5,6 +5,12 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 
+from datus.tools.business_datasource_policy import business_datasource_read_only_message
+
+_BUSINESS_DATASOURCE_READ_ONLY_RE = re.compile(
+    r"ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY:\s*operation='(?P<operation>[^']+)'",
+    re.IGNORECASE,
+)
 _PERMISSION_DENIED_TOOL_RE = re.compile(
     r"PERMISSION_DENIED:\s*Tool\s+'(?P<tool>[^']+)'\s+\((?P<category>[^)]+)\)\s+"
     r"is blocked by the\s+'(?P<profile>[^']+)'\s+permission profile",
@@ -38,6 +44,10 @@ def format_permission_denied_error(exc: BaseException) -> str | None:
         text = str(current).strip()
         if not text:
             continue
+
+        datasource_match = _BUSINESS_DATASOURCE_READ_ONLY_RE.search(text)
+        if datasource_match:
+            return f"权限受限：{business_datasource_read_only_message(datasource_match.group('operation'))}"
 
         tool_match = _PERMISSION_DENIED_TOOL_RE.search(text)
         if tool_match:

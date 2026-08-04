@@ -1884,6 +1884,7 @@ class TestExecuteSqlClassRules:
         project_root=None,
         project_sql_allows=None,
         config_mutable=True,
+        business_datasource_read_only=False,
     ):
         registry = ToolRegistry()
         tool_mock = MagicMock()
@@ -1898,6 +1899,7 @@ class TestExecuteSqlClassRules:
             non_interactive=non_interactive,
             project_root=project_root,
             config_mutable=config_mutable,
+            business_datasource_read_only=business_datasource_read_only,
         )
 
     @staticmethod
@@ -1935,6 +1937,67 @@ class TestExecuteSqlClassRules:
         hooks = self._make_hooks(mock_broker, self._normal_config())
 
         await hooks.on_tool_start(self._ctx("SELECT * FROM users"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("profile", ["normal", "auto", "dangerous"])
+    @pytest.mark.parametrize(
+        ("sql", "operation"),
+        [
+            ("INSERT INTO t VALUES (1)", "INSERT"),
+            ("UPDATE t SET a = 1", "UPDATE"),
+            ("DELETE FROM t", "DELETE"),
+            ("MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE", "MERGE"),
+            ("DROP TABLE t", "DROP"),
+            ("TRUNCATE TABLE t", "TRUNCATE"),
+        ],
+    )
+    async def test_enterprise_read_only_denies_before_any_confirmation(
+        self,
+        mock_broker,
+        profile,
+        sql,
+        operation,
+    ):
+        hooks = self._make_hooks(
+            mock_broker,
+            get_profile(profile),
+            business_datasource_read_only=True,
+        )
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        with pytest.raises(
+            PermissionDeniedException,
+            match=rf"ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY: operation='{operation}'",
+        ):
+            await hooks.on_tool_start(self._ctx(sql), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enterprise_read_only_ignores_existing_project_grant(self, mock_broker):
+        hooks = self._make_hooks(
+            mock_broker,
+            self._auto_config(),
+            project_sql_allows=["delete"],
+            business_datasource_read_only=True,
+        )
+
+        with pytest.raises(PermissionDeniedException, match="operation='DELETE'"):
+            await hooks.on_tool_start(self._ctx("DELETE FROM t"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enterprise_read_only_still_allows_select(self, mock_broker):
+        hooks = self._make_hooks(
+            mock_broker,
+            self._normal_config(),
+            business_datasource_read_only=True,
+        )
+
+        await hooks.on_tool_start(self._ctx("SELECT * FROM t"), MagicMock(), self._tool())
 
         mock_broker.request.assert_not_called()
 

@@ -935,6 +935,21 @@ describe("chat error display", () => {
     });
   });
 
+  it("keeps the enterprise business datasource DELETE denial copy", () => {
+    const detail = "权限受限：企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。如需删除业务数据，请通过受控的数据维护流程联系管理员。";
+
+    expect(friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: detail,
+    })).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。如需删除业务数据，请通过受控的数据维护流程联系管理员。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
   it("hides raw exception text when no stable error code is available", () => {
     const block = friendlyChatErrorBlock({ message: "RuntimeError: /srv/private/provider failed" });
 
@@ -1752,6 +1767,34 @@ describe("normalizeHistoryMessages", () => {
       tone: "warning",
       code: "PERMISSION_DENIED",
     }]);
+  });
+
+  it("restores the enterprise read-only DELETE denial without an interaction prompt", () => {
+    const detail = "权限受限：企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。如需删除业务数据，请通过受控的数据维护流程联系管理员。";
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "business-datasource-read-only-terminal",
+        role: "system",
+        content: [{
+          type: "error",
+          payload: {
+            error: detail,
+            error_type: "PERMISSION_DENIED",
+            event_type: "error",
+          },
+        }],
+      },
+    ]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.blocks).toEqual([{
+      type: "error",
+      title: "权限受限",
+      message: "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。如需删除业务数据，请通过受控的数据维护流程联系管理员。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    }]);
+    expect(JSON.stringify(messages)).not.toContain("user-interaction");
   });
 
   it("collapses stored thinking and final markdown payloads with the same message id", () => {

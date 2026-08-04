@@ -4052,6 +4052,10 @@ class AgenticNode(Node):
                 project_root=getattr(self.agent_config, "project_root", None),
                 config_mutable=self._resolve_config_mutable(),
                 bash_classifier=create_bash_classifier(bash_rules, self.agent_config),
+                business_datasource_read_only=bool(
+                    getattr(self.agent_config, "_business_datasource_read_only", False)
+                    or getattr(self.agent_config, "_enterprise_enabled", False)
+                ),
             )
             logger.debug(
                 f"PermissionHooks attached to node '{self.get_node_name()}' "

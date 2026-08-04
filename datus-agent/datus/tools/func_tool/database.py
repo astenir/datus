@@ -180,7 +180,11 @@ class DBFuncTool:
         principal_source = principal if principal is not None else getattr(agent_config, "principal", {})
         self.principal: Dict[str, Any] = dict(principal_source) if isinstance(principal_source, dict) else {}
         self.sub_agent_name = sub_agent_name
-        enterprise_read_only = getattr(agent_config, "_enterprise_enabled", False) is True
+        enterprise_read_only = (
+            getattr(agent_config, "_business_datasource_read_only", False) is True
+            or getattr(agent_config, "_enterprise_enabled", False) is True
+        )
+        self.enterprise_read_only = enterprise_read_only
         self.read_only = bool(read_only or enterprise_read_only)
         if agent_config and metadata_fts_enabled(agent_config):
             self.schema_rag = create_metadata_rag(agent_config, sub_agent_name)
@@ -207,16 +211,31 @@ class DBFuncTool:
             self._table_semantic_profiles = None
             self.has_table_semantic_profiles = False
 
-    def _reject_read_only_mutation(self, operation: str) -> Optional[FuncToolResult]:
+    def _reject_read_only_mutation(
+        self,
+        operation: str,
+        *,
+        sql: Optional[str] = None,
+        dialect: str = "",
+    ) -> Optional[FuncToolResult]:
         if not self.read_only:
             return None
-        return FuncToolResult(
-            success=0,
-            error=(
+        from datus.tools.business_datasource_policy import (
+            business_datasource_read_only_message,
+            evaluate_business_datasource_read_only_sql,
+        )
+
+        operation_label = operation.upper()
+        if isinstance(sql, str) and sql.strip():
+            operation_label = evaluate_business_datasource_read_only_sql(sql, dialect).operation
+        if self.enterprise_read_only:
+            error = f"{business_datasource_read_only_message(operation_label)} (read-only policy)"
+        else:
+            error = (
                 "This agent is read-only: business datasource mutations are disabled. "
                 f"Operation '{operation}' was not executed."
-            ),
-        )
+            )
+        return FuncToolResult(success=0, error=error)
 
     def _has_schema_storage(self) -> bool:
         if not self.schema_rag:
@@ -1584,7 +1603,11 @@ class DBFuncTool:
 
             if sql_type in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN):
                 return self.read_query(sql, datasource=datasource, database=database)
-            read_only_denial = self._reject_read_only_mutation("execute_sql")
+            read_only_denial = self._reject_read_only_mutation(
+                "execute_sql",
+                sql=sql,
+                dialect=connector.dialect,
+            )
             if read_only_denial is not None:
                 return read_only_denial
             if sql_type in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE):
@@ -1755,6 +1778,21 @@ class DBFuncTool:
                 SQLType.UNKNOWN,
             )
 
+        if self.read_only:
+            from datus.tools.business_datasource_policy import evaluate_business_datasource_read_only_sql
+
+            decision = evaluate_business_datasource_read_only_sql(sql, connector.dialect)
+            if not decision.allowed:
+                denial = self._reject_read_only_mutation(
+                    "execute_sql",
+                    sql=sql,
+                    dialect=connector.dialect,
+                )
+                return (
+                    denial or FuncToolResult(success=0, error="Read-only SQL policy denied the statement."),
+                    SQLType.UNKNOWN,
+                )
+
         sql_type = parse_sql_type(sql, connector.dialect)
         readonly_sql_types = {SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN}
         if sql_type not in readonly_sql_types:
@@ -1901,7 +1939,11 @@ class DBFuncTool:
         Returns:
             Execution result with success status
         """
-        read_only_denial = self._reject_read_only_mutation("execute_ddl")
+        read_only_denial = self._reject_read_only_mutation(
+            "execute_ddl",
+            sql=sql,
+            dialect=getattr(self.connector, "dialect", ""),
+        )
         if read_only_denial is not None:
             return read_only_denial
 
@@ -2022,7 +2064,11 @@ class DBFuncTool:
         Returns:
             FuncToolResult with execution metadata when successful.
         """
-        read_only_denial = self._reject_read_only_mutation("execute_write")
+        read_only_denial = self._reject_read_only_mutation(
+            "execute_write",
+            sql=sql,
+            dialect=getattr(self.connector, "dialect", ""),
+        )
         if read_only_denial is not None:
             return read_only_denial
 

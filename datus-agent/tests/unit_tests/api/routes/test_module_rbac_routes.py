@@ -2450,6 +2450,7 @@ def test_sql_execute_uses_projected_default_datasource(monkeypatch):
     assert projected_config.current_datasource == "finance"
     assert set(projected_config.services.datasources) == {"finance"}
     assert projected_config.principal["datasource"] == "finance"
+    assert projected_config._business_datasource_read_only is True
 
 
 def test_sql_execute_rejects_unauthorized_database_before_execution(monkeypatch):
