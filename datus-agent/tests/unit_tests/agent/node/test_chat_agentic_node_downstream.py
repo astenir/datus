@@ -14,6 +14,10 @@ from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.tools.permission.permission_hooks import PermissionDeniedException
 
 
+class ServiceUnavailableError(Exception):
+    """Stand-in matching LiteLLM's stable exception class name."""
+
+
 def _node(real_agent_config, *, node_id: str, description: str, node_name: str | None = None):
     kwargs = {}
     if node_name is not None:
@@ -173,6 +177,31 @@ async def test_execute_stream_formats_permission_denial_as_user_message(real_age
         assert "授予“高危对话模式”权限" not in error_text
         assert "STOP retrying" not in error_text
         assert "permissions.rules" not in error_text
+    finally:
+        mock_llm_create.generate_with_tools_stream = original_method
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_preserves_safe_upstream_unavailable_type(real_agent_config, mock_llm_create):
+    node = _node(real_agent_config, node_id="test_upstream_unavailable", description="Test upstream failure")
+    original_method = mock_llm_create.generate_with_tools_stream
+
+    async def raising_stream(*args, **kwargs):
+        raise ServiceUnavailableError(
+            'litellm.ServiceUnavailableError: DeepseekException - {"error":{"message":"Service is too busy."}}'
+        )
+        yield  # pragma: no cover
+
+    mock_llm_create.generate_with_tools_stream = raising_stream
+    node.input = ChatNodeInput(user_message="Analyze sales", database="california_schools")
+    try:
+        actions = [action async for action in node.execute_stream(ActionHistoryManager())]
+        final_action = actions[-1]
+        assert final_action.status == ActionStatus.FAILED
+        assert final_action.output.get("error_type") == "UPSTREAM_UNAVAILABLE"
+        assert final_action.output.get("error") == "Service is too busy."
+        assert "litellm" not in str(final_action.output)
+        assert "DeepseekException" not in str(final_action.output)
     finally:
         mock_llm_create.generate_with_tools_stream = original_method
 

@@ -19,7 +19,7 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.downstream import AgentConfigSummaryData, MutationResultData, ProbeResultData
-from datus.configuration.agent_config import _SAFE_NAME_RE, DbConfig, load_model_config, resolve_env
+from datus.configuration.agent_config import _SAFE_NAME_RE, resolve_env
 from datus.configuration.agent_config_loader import configuration_manager
 from datus.configuration.project_config import (
     ProjectOverride,
@@ -28,10 +28,13 @@ from datus.configuration.project_config import (
     project_config_path,
     save_project_override,
 )
-from datus.models.base import LLMBaseModel
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.text_utils import redact_uri
+from datus_enterprise.services.connectivity_probe import (
+    probe_datasource_connection as _probe_datasource_sync,
+)
+from datus_enterprise.services.connectivity_probe import probe_llm_connection as _probe_llm_sync
 
 logger = get_logger(__name__)
 
@@ -132,21 +135,6 @@ class ProbeSavedDatasourceRequest(BaseModel):
     name: str
 
 
-def _probe_llm_sync(payload: Dict[str, Any]) -> None:
-    """Build a one-shot LLM client from a raw dict and send a tiny probe."""
-    model_cfg = load_model_config(payload)
-    model_class_name = LLMBaseModel.MODEL_TYPE_MAP.get(model_cfg.type)
-    if model_class_name is None:
-        raise DatusException(
-            ErrorCode.COMMON_FIELD_INVALID,
-            message=f"Unsupported model type: {model_cfg.type}",
-        )
-    module = __import__(f"datus.models.{model_cfg.type}_model", fromlist=[model_class_name])
-    model_class = getattr(module, model_class_name)
-    client = model_class(model_config=model_cfg)
-    client.generate("Hello")
-
-
 def _embedding_config_for_custom(name: str) -> Optional[Dict[str, Any]]:
     """Return the first OpenAI embedding storage config referencing a custom model."""
     storage = configuration_manager().data.get("storage") or {}
@@ -174,22 +162,6 @@ def _probe_embedding_sync(model_config: Any, embedding_config: Dict[str, Any]) -
         single_input_only=bool(embedding_config.get("single_input_only", False)),
     )
     embedding_model.init_model()
-
-
-def _probe_datasource_sync(payload: Dict[str, Any]) -> None:
-    """Build a one-shot connector from a raw dict and run a SELECT 1 probe."""
-    from datus.tools.db_tools.db_manager import DBManager
-
-    kwargs = dict(payload)
-    kwargs.setdefault("name", "_probe_")
-    db_config = DbConfig.filter_kwargs(DbConfig, kwargs)
-
-    manager = DBManager({"_probe_": db_config})
-    try:
-        conn = manager.get_conn("_probe_")
-        conn.test_connection()
-    finally:
-        manager.close()
 
 
 def _validate_keys(entries: Dict[str, Any], kind: str) -> None:

@@ -33,22 +33,18 @@ async def get_session_system_prompt(
             if inspect.iscoroutinefunction(load_snapshot)
             else session_manager.load_system_prompt_snapshot(session_id)
         )
-        if snapshot is not None and all(snapshot.get(key) == value for key, value in meta.items()):
+        if node._system_prompt_snapshot_matches(snapshot, meta):
             node._ensure_lazy_tools_mounted()
             return snapshot["prompt"]
 
-    prompt = (
-        node._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
-        if template_context
-        else node._get_system_prompt(prompt_version=prompt_version)
-    )
+    prompt, snapshot_meta = node._build_system_prompt_snapshot(meta, prompt_version, template_context)
 
     if session_manager is not None:
         save_snapshot = getattr(session_manager, "save_system_prompt_snapshot_async", None)
         if inspect.iscoroutinefunction(save_snapshot):
-            await save_snapshot(session_id, prompt, meta)
+            await save_snapshot(session_id, prompt, snapshot_meta)
         else:
-            session_manager.save_system_prompt_snapshot(session_id, prompt, meta)
+            session_manager.save_system_prompt_snapshot(session_id, prompt, snapshot_meta)
     return prompt
 
 

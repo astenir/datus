@@ -10,6 +10,17 @@ def find_runtime_template_content(
     template_name: str,
     version: str | None,
 ) -> str | None:
+    resolved = find_runtime_template(agent_config, template_name, version)
+    return resolved[0] if resolved is not None else None
+
+
+def find_runtime_template(
+    agent_config: Any,
+    template_name: str,
+    version: str | None,
+) -> tuple[str, str | None] | None:
+    """Return request-scoped template content and its configured version."""
+
     agentic_nodes = getattr(agent_config, "agentic_nodes", None)
     if not isinstance(agentic_nodes, dict):
         return None
@@ -26,5 +37,5 @@ def find_runtime_template_content(
         configured_version = node_config.get("prompt_version")
         if version and configured_version and str(version) != str(configured_version):
             continue
-        return content
+        return content, str(configured_version) if configured_version not in (None, "") else None
     return None

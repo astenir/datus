@@ -46,6 +46,52 @@ class RewriteCliSqlPolicyEnforcer:
 
 class TestCLIServiceExecuteSQL:
     @pytest.mark.asyncio
+    async def test_enterprise_read_only_delete_returns_product_copy_without_connector_execution(self, monkeypatch):
+        class FakeConnector:
+            dialect = "postgresql"
+
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return=[], row_count=0)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                pass
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={"datasource": "finance"},
+            _business_datasource_read_only=True,
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="DELETE FROM users WHERE id = 1", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert result.errorMessage == (
+            "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。"
+            "如需删除业务数据，请通过受控的数据维护流程联系管理员。"
+        )
+        assert connector.executed is False
+
+    @pytest.mark.asyncio
     async def test_execute_sql_json_normalizes_list_rows_with_date_and_decimal(self):
         """JSON responses use a connector-supported format and serialize typed cells."""
 

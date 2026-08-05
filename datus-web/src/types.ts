@@ -315,6 +315,16 @@ export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];
 
 export type AgentNodeType = components["schemas"]["EnterpriseAgentNodeType"];
 
+export type AgentPromptVersionSummary = components["schemas"]["AgentPromptVersionSummary"];
+
+export type AgentPromptVersionDetail = components["schemas"]["AgentPromptVersionDetail"];
+
+export type AgentPromptVersionCollection = components["schemas"]["AgentPromptVersionCollection"];
+
+export type CreateAgentPromptVersionInput = components["schemas"]["CreateAgentPromptVersionRequest"];
+
+export type ActivateAgentPromptVersionInput = components["schemas"]["ActivateAgentPromptVersionRequest"];
+
 export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
 
 export type EditAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];

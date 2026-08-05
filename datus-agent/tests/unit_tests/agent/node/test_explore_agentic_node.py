@@ -234,6 +234,26 @@ class TestExploreAgenticNodeTools:
         assert "`search_reference_sql" in prompt
         assert "`get_reference_sql" in prompt
 
+    def test_custom_alias_uses_its_runtime_prompt(self, real_agent_config, mock_llm_create):
+        """Enterprise-customizable explore aliases must not render the builtin prompt."""
+        from datus.agent.node.explore_agentic_node import ExploreAgenticNode
+
+        real_agent_config.agentic_nodes["explore_custom"] = {
+            "node_class": "explore",
+            "system_prompt": "explore_custom",
+            "prompt_template": "CUSTOM EXPLORE PROMPT",
+            "prompt_version": "7.0",
+        }
+        node = ExploreAgenticNode(
+            node_id="test_explore_custom_prompt",
+            description="Custom Explore node",
+            node_type=NodeType.TYPE_EXPLORE,
+            agent_config=real_agent_config,
+            node_name="explore_custom",
+        )
+
+        assert node._get_system_prompt().startswith("CUSTOM EXPLORE PROMPT")
+
 
 @pytest.mark.component
 @pytest.mark.llm_harness

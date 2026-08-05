@@ -7,11 +7,15 @@ import type {
   AgentInfo,
   AgentNodeType,
   AgentPolicy,
+  AgentPromptVersionCollection,
+  AgentPromptVersionDetail,
   AgentPreferenceSummary,
   AgentToolsData,
   AgentUseToolsData,
   CreateAgentInput,
+  CreateAgentPromptVersionInput,
   EditAgentInput,
+  ActivateAgentPromptVersionInput,
 } from "@/types";
 
 export const agentApi = {
@@ -37,6 +41,39 @@ export const agentApi = {
 
   get(baseUrl: string, agentId: string): Promise<AgentDetail | null> {
     return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}`);
+  },
+
+  promptVersions(baseUrl: string, agentId: string): Promise<AgentPromptVersionCollection | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}/prompt-versions`);
+  },
+
+  promptVersion(baseUrl: string, agentId: string, versionId: string): Promise<AgentPromptVersionDetail | null> {
+    return apiResult(
+      baseUrl,
+      `/api/v1/admin/agents/${encodeURIComponent(agentId)}/prompt-versions/${encodeURIComponent(versionId)}`,
+    );
+  },
+
+  createPromptVersion(
+    baseUrl: string,
+    agentId: string,
+    input: CreateAgentPromptVersionInput,
+  ): Promise<AgentPromptVersionDetail | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}/prompt-versions`, {
+      ...jsonBody(input),
+      method: "POST",
+    });
+  },
+
+  activatePromptVersion(
+    baseUrl: string,
+    agentId: string,
+    input: ActivateAgentPromptVersionInput,
+  ): Promise<AgentPromptVersionDetail | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}/prompt-version`, {
+      ...jsonBody(input),
+      method: "PUT",
+    });
   },
 
   policy(baseUrl: string, agentId: string): Promise<AgentPolicy | null> {

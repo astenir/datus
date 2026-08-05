@@ -112,7 +112,7 @@ git diff --name-status -M v0.3.9 HEAD:datus-agent
 
 ### 2026-07-27：Chat Agent runtime materialization adapter 归位
 
-分类：阶段 1/2 的企业 Chat/Artifact `core-hook`。处理方式：扩展已有 added 文件 `datus_enterprise/agent_registry.py`，迁入企业 Agent record 和已授权 Artifact edit session 对请求级 `AgentConfig.agentic_nodes` 的 runtime entry 组装。上游 `chat_routes.py` 只保留 helper import、企业 Agent 可用集遍历和 Artifact edit ACL 成功后的调用点。
+分类：阶段 1/2 的企业 Chat/Artifact `core-hook`。处理方式：企业 Agent record 和已授权 Artifact edit session 对请求级 `AgentConfig.agentic_nodes` 的 runtime entry 组装位于 `datus_enterprise/agents/registry.py`，`datus_enterprise/agent_registry.py` 保留兼容导出。上游 `chat_routes.py` 只保留 helper import、企业 Agent 可用集遍历和 Artifact edit ACL 成功后的调用点。
 
 不变边界：helper 不查询也不授予 Agent/Artifact ACL，不访问 metadata store；route 仍负责企业 Agent 解析、owner 校验、`require_artifact_edit_access` / query ACL、请求级配置投影、model policy、SQL policy、quota 和最终 dispatch。`_acl_authorized_artifact_edit` marker 仍只在权威 edit ACL 成功后写入请求级 clone，locked slug、bind-first 规则、跨 Artifact 禁止和本地兼容行为均未改变；共享 `DatusService.agent_config` 不被修改。没有新增、删除或改变 FastAPI route，因此 route security matrix 无需变化。
 
@@ -222,7 +222,7 @@ git diff --name-status -M v0.3.9 HEAD:datus-agent
 
 ### 2026-07-26：Enterprise auth loader policy 归位
 
-分类：阶段 0/1 的稳定 `core-hook`。处理方式：新增 `datus_enterprise/auth_loader_policy.py`，迁入 `enterprise.enabled` 解析、缺少 `api.auth_provider.class` 和显式实例化 `NoAuthProvider` 的 fail-closed 策略。上游 `load_auth_provider()` 只保留可选 enterprise config 参数，以及 fallback 前和实例协议校验后的两次策略调用。
+分类：阶段 0/1 的稳定 `core-hook`。处理方式：fail-closed 实现位于 `datus_enterprise/auth/loader_policy.py`，`datus_enterprise/auth_loader_policy.py` 保留兼容导出，负责 `enterprise.enabled` 解析、缺少 `api.auth_provider.class` 和显式实例化 `NoAuthProvider` 的拒绝策略。上游 `load_auth_provider()` 只保留可选 enterprise config 参数，以及 fallback 前和实例协议校验后的两次策略调用。
 
 不变边界：`enterprise.enabled=false` 仍返回本地 `NoAuthProvider`；企业缺 provider 或显式 NoAuth 的错误码和文案逐字不变。动态 class path 解析、模块导入、kwargs 实例化、`AuthProvider` 协议校验和成功日志仍在原 loader；Bearer/userinfo、签名 header、AppContext、RBAC、projection、audit 和 route 注册均未迁移或改变。该切片不新增或修改 FastAPI route，因此 route security matrix 无需变化。
 

@@ -275,6 +275,7 @@ class PermissionHooks(AgentHooks):
         project_root: Optional[str] = None,
         config_mutable: bool = True,
         bash_classifier: Optional["BashCommandClassifier"] = None,
+        business_datasource_read_only: bool = False,
     ):
         """Initialize the permission hooks.
 
@@ -326,6 +327,9 @@ class PermissionHooks(AgentHooks):
                 static bash rules yield ASK with ``safety_forced=False``; a
                 high-confidence ALLOW verdict auto-approves, anything else
                 falls through to the normal confirmation prompt (fail closed).
+            business_datasource_read_only: Non-downgradable request capability.
+                When true, non-read SQL is denied before permission profiles,
+                cached grants, or interactive confirmation are consulted.
         """
         self.broker = broker
         self.permission_manager = permission_manager
@@ -338,6 +342,7 @@ class PermissionHooks(AgentHooks):
         self.project_root = project_root
         self.config_mutable = bool(config_mutable)
         self.bash_classifier = bash_classifier
+        self.business_datasource_read_only = bool(business_datasource_read_only)
 
     # Plan-mode tooling is always allowed regardless of permission profile:
     # ``confirm_plan`` already runs its own user interaction, and ``todo_*``
@@ -837,6 +842,36 @@ class PermissionHooks(AgentHooks):
         # ``parse_sql_statement_kind`` is enough to separate the classes.
         kind = parse_sql_statement_kind(sql, "") if isinstance(sql, str) else SQLType.UNKNOWN.value
         sql_class = classify_sql_kind(kind)
+
+        # Enterprise business datasources are a hard read-only capability, not
+        # a confirmation preference. Apply that ceiling before coarse ALLOW,
+        # dangerous mode, session/project grants, or InteractionBroker prompts.
+        # DBFuncTool retains its own connector-adjacent read-only backstop for
+        # direct/internal callers that do not pass through this hook.
+        if self.business_datasource_read_only:
+            from datus.tools.business_datasource_policy import (
+                ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY,
+                evaluate_business_datasource_read_only_sql,
+            )
+
+            decision = evaluate_business_datasource_read_only_sql(sql if isinstance(sql, str) else "")
+            if not decision.allowed:
+                logger.warning(
+                    "Enterprise business datasource rejected SQL operation %s (%s): %s",
+                    decision.operation,
+                    decision.statement_kind,
+                    decision.reason,
+                )
+                raise PermissionDeniedException(
+                    (
+                        f"PERMISSION_DENIED: {ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY}: "
+                        f"operation='{decision.operation}' kind='{decision.statement_kind}'. "
+                        "STOP retrying — permission mode and user confirmation cannot authorize "
+                        "business datasource mutations."
+                    ),
+                    tool_category="db_tools",
+                    tool_name="execute_sql",
+                )
 
         # Honour explicit coarse rules first — they are the escape hatches.
         permission = self.permission_manager.check_permission("db_tools", pattern_name, self.node_name)

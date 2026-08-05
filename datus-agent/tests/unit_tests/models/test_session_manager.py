@@ -2375,7 +2375,7 @@ class TestSystemPromptSnapshot:
         payload = sm_custom.load_system_prompt_snapshot("chat_session_rt")
 
         assert payload["prompt"] == prompt
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
         for key, value in self.META.items():
             assert payload[key] == value
 
@@ -2387,7 +2387,7 @@ class TestSystemPromptSnapshot:
         """A truncated/corrupt file -> None, never an exception."""
         path = self._path(sm_custom, "chat_session_corrupt")
         with open(path, "w", encoding="utf-8") as f:
-            f.write('{"schema_version": 1, "prompt": "trunc')
+            f.write('{"schema_version": 2, "prompt": "trunc')
 
         assert sm_custom.load_system_prompt_snapshot("chat_session_corrupt") is None
 
@@ -2403,7 +2403,7 @@ class TestSystemPromptSnapshot:
         """A payload whose prompt is not a string is unusable -> None."""
         path = self._path(sm_custom, "chat_session_badprompt")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"schema_version": 1, "prompt": ["not", "a", "string"], **self.META}, f)
+            json.dump({"schema_version": 2, "prompt": ["not", "a", "string"], **self.META}, f)
 
         assert sm_custom.load_system_prompt_snapshot("chat_session_badprompt") is None
 

@@ -884,7 +884,6 @@ class SubAgentTaskTool:
 
             stream_start_time = datetime.now()
             tool_count = 0
-            subagent_status = ActionStatus.SUCCESS
             first_user_seen = False
 
             try:
@@ -915,7 +914,6 @@ class SubAgentTaskTool:
                         tool_count += 1
 
                     if action.status == ActionStatus.FAILED:
-                        subagent_status = ActionStatus.FAILED
                         if action.output:
                             final_output = action.output
                     elif action.status == ActionStatus.SUCCESS and action.output:
@@ -925,7 +923,6 @@ class SubAgentTaskTool:
                 # parent agent can resume the partial subagent session via
                 # the returned session_id — e.g. when MaxTurnsExceeded
                 # interrupts a long workflow mid-task.
-                subagent_status = ActionStatus.FAILED
                 logger.error(
                     "Subagent stream error (type=%s, session_id=%s): %s",
                     subagent_type,
@@ -935,7 +932,9 @@ class SubAgentTaskTool:
                 )
                 final_output = {"success": False, "error": f"Subagent stream failed: {e}"}
             finally:
-                self._emit_complete_action(subagent_type, call_id, stream_start_time, tool_count, subagent_status)
+                func_result = self._convert_to_func_result(final_output, session_id=node.session_id)
+                complete_status = ActionStatus.SUCCESS if func_result.success else ActionStatus.FAILED
+                self._emit_complete_action(subagent_type, call_id, stream_start_time, tool_count, complete_status)
                 # Release in-memory handles WITHOUT deleting the .db file — the parent
                 # LLM may resume this session_id on a later turn.
                 try:
@@ -945,7 +944,7 @@ class SubAgentTaskTool:
                 except Exception:
                     logger.debug("Failed to release sub-agent session handle", exc_info=True)
 
-        return self._convert_to_func_result(final_output, session_id=node.session_id)
+        return func_result
 
     def _resolve_inherited_memory_node(self, subagent_type: str) -> Optional[str]:
         """Pick the memory node a sub-agent should inherit (read-only inline).

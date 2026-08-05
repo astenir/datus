@@ -111,3 +111,13 @@ def test_permission_hooks_receive_canonical_node_class():
     kwargs = hooks_class.call_args.kwargs
     assert kwargs["node_name"] == "dashboard_edit__unit"
     assert kwargs["node_class"] == "gen_visual_dashboard"
+
+
+def test_enterprise_permission_hooks_receive_business_datasource_read_only_ceiling():
+    node = _PermissionHooksFixture()._prepare_node(set())
+    node.agent_config = SimpleNamespace(_enterprise_enabled=True)
+
+    with patch("datus.tools.permission.permission_hooks.PermissionHooks") as hooks_class:
+        node._ensure_permission_hooks()
+
+    assert hooks_class.call_args.kwargs["business_datasource_read_only"] is True

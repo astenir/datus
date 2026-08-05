@@ -1702,6 +1702,11 @@ class TestDBFuncToolExecuteSql:
         tool = self._make_tool(mock_connector, agent_config=mock_config)
 
         assert tool.read_only is True
+        result = tool.execute_sql("DELETE FROM users")
+        assert result.error == (
+            "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。"
+            "如需删除业务数据，请通过受控的数据维护流程联系管理员。 (read-only policy)"
+        )
 
     def test_select_routes_to_read_query(self):
         mock_connector = Mock()
@@ -1765,6 +1770,36 @@ class TestDBFuncToolExecuteSql:
 
         assert result.success == 1
         mock_connector.execute_query.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "EXPLAIN ANALYZE DELETE FROM users",
+            "WITH removed AS (DELETE FROM users RETURNING *) SELECT * FROM removed",
+            "SELECT * INTO archived_users FROM users",
+            "SELECT * FROM users FOR UPDATE",
+        ],
+    )
+    def test_read_only_rejects_select_shaped_mutations(self, sql):
+        mock_connector = Mock()
+        mock_connector.dialect = "postgresql"
+        mock_connector.get_databases.return_value = []
+
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            tool = DBFuncTool(mock_connector, read_only=True)
+
+        result = tool.execute_sql(sql)
+
+        assert result.success == 0
+        assert "read-only" in (result.error or "")
+        mock_connector.execute_query.assert_not_called()
+        mock_connector.execute_insert.assert_not_called()
+        mock_connector.execute_ddl.assert_not_called()
 
     @pytest.mark.parametrize(
         "sql",

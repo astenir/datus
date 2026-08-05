@@ -120,6 +120,50 @@ agent:
 - `scoped_kb_path` 已废弃，新保存的配置不会持久化该字段
 - 全局知识仍然需要通过 `datus-agent bootstrap-kb` 单独构建
 
+## Prompt 来源、更新与核验
+
+一个 Agent 的基础系统 Prompt 按以下优先级解析：
+
+1. 企业 Agent 定义投影到请求级 `agent_config.agentic_nodes` 的非空
+   `prompt_template`
+2. `{agent.home}/template/{template_name}_{version}.j2` 中的用户模板
+3. Python 包内 `datus/prompts/prompt_templates/` 中的内置模板
+
+`system_prompt` 决定 `template_name`；大多数节点会在其后追加 `_system`。
+显式 `prompt_version` 会固定版本；只有未指定版本时，才从用户模板和内置模板中选择
+数字最大的版本。因此，“加载最新 Prompt”是指加载当前配置所指向的有效来源，不是无条件
+忽略版本固定并选择最大的文件名。
+
+最终系统 Prompt 还可能追加运行上下文、数据源能力、插件上下文、`AGENTS.md`、Skills、
+Memory 和响应语言规则。这些非模板上下文按会话快照语义冻结；它们不会因为模板自动失效机制
+而在一个既有会话中逐轮漂移。
+
+每个会话持久化一份 system Prompt 快照。本地模式写入：
+
+```text
+{sessions_dir}/{scope}/{session_id}.sysprompt.json
+```
+
+配置企业 `session_body_store` 后，快照写入
+`enterprise_session_system_prompts.snapshot_json`。快照 schema v2 除完整 Prompt 正文外，
+还记录以下可安全用于比对的 provenance 字段：
+
+- `agent_id`、`prompt_version`、`prompt_pipeline_version`
+- `prompt_template_name`、`resolved_prompt_version`、`prompt_template_source`
+- `prompt_template_sha256`、`prompt_template_revision_sha256`
+- `prompt_revision_sha256`、`final_prompt_sha256`
+- `prompt_templates`：本次构造最终 Prompt 时实际读取的所有模板身份
+
+每次继续会话时，Datus 都会重新解析这些模板身份。主模板内容、静态 Jinja
+`include`/`import`、用户覆盖、请求级企业自定义内容、有效版本或 Agent 定义任一变化，都会使
+旧快照失效并原子覆盖；不需要重启 API，也不需要手工删除数据库记录。v1 快照会在下一次使用
+时惰性重建为 v2。变更不会改写一个已经发送给模型的进行中 turn，只从下一次 Prompt 获取生效。
+
+核验时只查看 provenance 和哈希，不要输出 `prompt` 字段。日志中的
+`System prompt snapshot rebuilt` 会给出 Agent、会话、模板、解析版本以及 revision/final
+哈希。若日志没有重建记录，比较当前快照中的 `prompt_templates` 与预期来源；显式固定版本时，
+新增更高版本文件不会触发切换。
+
 ## 高级手工配置
 
 向导覆盖的是最常见的 `gen_sql` 和 `gen_report` 场景。更高级的配置请直接编辑 `agent.yml`。

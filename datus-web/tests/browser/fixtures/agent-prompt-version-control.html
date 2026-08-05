@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent prompt version control fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { computed, createApp, h, ref } from "vue"
+      import "/src/style.css"
+      import AgentPromptVersionControl from "/src/features/agent/form/AgentPromptVersionControl.vue"
+
+      const mode = new URLSearchParams(location.search).get("mode") ?? "versions"
+      const version1 = {
+        version_id: "version-1",
+        version: "1.0",
+        content_sha256: "11111111aaaaaaaa",
+        change_note: "Initial version",
+        based_on_version_id: null,
+        created_by: "alice",
+        created_at: "2026-08-04T09:00:00Z",
+        active: true,
+        prompt_template: "Prompt body v1",
+        prompt_language: "en",
+      }
+      const version2 = {
+        version_id: "version-2",
+        version: "2.0",
+        content_sha256: "22222222bbbbbbbb",
+        change_note: "Tighten query constraints with a longer note that can wrap safely.",
+        based_on_version_id: "version-1",
+        created_by: "bob",
+        created_at: "2026-08-04T10:00:00Z",
+        active: false,
+        prompt_template: "Prompt body v2",
+        prompt_language: "zh-CN",
+      }
+      const versions = mode === "fallback"
+        ? ref([])
+        : ref([version1, version2].map(({ prompt_template, prompt_language, ...summary }) => summary))
+      const activeVersionId = ref(mode === "fallback" ? null : "version-1")
+      const selectedVersionId = ref(mode === "fallback" ? null : "version-1")
+      const lastEvent = ref(null)
+      const activationCount = ref(0)
+      const detailById = { "version-1": version1, "version-2": version2 }
+      const selectedVersion = computed(() => selectedVersionId.value ? detailById[selectedVersionId.value] : null)
+      const activeVersion = computed(() => activeVersionId.value ? detailById[activeVersionId.value] : null)
+
+      createApp({
+        setup() {
+          return () => h("main", { class: "mx-auto flex max-w-5xl flex-col gap-4 p-6" }, [
+            h(AgentPromptVersionControl, {
+              versions: versions.value,
+              activeVersionId: activeVersionId.value,
+              selectedVersionId: selectedVersionId.value,
+              selectedVersion: selectedVersion.value,
+              activeVersion: activeVersion.value,
+              loading: false,
+              detailLoading: false,
+              creating: false,
+              activating: false,
+              error: null,
+              promptSource: mode === "fallback" ? "builtin_fallback" : "enterprise",
+              basePromptContent: mode === "fallback" ? "Builtin fallback prompt body" : version1.prompt_template,
+              basePromptLanguage: "en",
+              basePromptVersion: mode === "fallback" ? "1.2" : "1.0",
+              basePromptRevision: mode === "fallback" ? "abcdef1234567890" : version1.content_sha256,
+              onSelect: (versionId) => {
+                selectedVersionId.value = versionId
+                lastEvent.value = { type: "select", versionId }
+              },
+              onCreate: (input) => {
+                lastEvent.value = { type: "create", input }
+              },
+              onActivate: (versionId) => {
+                activationCount.value += 1
+                lastEvent.value = { type: "activate", versionId }
+                activeVersionId.value = versionId
+                versions.value = versions.value.map(version => ({
+                  ...version,
+                  active: version.version_id === versionId,
+                }))
+              },
+            }),
+            h("output", { "data-testid": "last-event" }, JSON.stringify(lastEvent.value)),
+            h("output", { "data-testid": "activation-count" }, String(activationCount.value)),
+          ])
+        },
+      }).mount("#app")
+    </script>
+  </body>
+</html>

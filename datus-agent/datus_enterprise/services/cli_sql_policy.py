@@ -385,9 +385,32 @@ def filter_table_names_by_grant(
 
 
 def authorize_read_sql(sql: str, connector, agent_config: Optional[AgentConfig]) -> str | Result[ExecuteSQLData]:
+    if bool(getattr(agent_config, "_business_datasource_read_only", False)):
+        from datus.tools.business_datasource_policy import (
+            business_datasource_read_only_message,
+            evaluate_business_datasource_read_only_sql,
+        )
+
+        decision = evaluate_business_datasource_read_only_sql(
+            sql,
+            getattr(connector, "dialect", "") or "",
+        )
+        if not decision.allowed:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=business_datasource_read_only_message(decision.operation),
+            )
+
     guard = object.__new__(DBFuncTool)
     guard._primary_connector = connector
     guard.agent_config = agent_config
+    # This lightweight authorization guard deliberately bypasses DBFuncTool.__init__.
+    # Enterprise request-level read-only enforcement already ran above; initialize
+    # the tool-layer flags explicitly so the shared validator keeps working for
+    # normal projected configs and test doubles.
+    guard.enterprise_read_only = False
+    guard.read_only = False
     principal = getattr(agent_config, "principal", {}) if agent_config is not None else {}
     guard.principal = dict(principal) if isinstance(principal, dict) else {}
     guard.sub_agent_name = None

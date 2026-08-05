@@ -2095,6 +2095,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/prompt-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_agent_prompt_versions_api_v1_admin_agents__agent_id__prompt_versions_get"];
+        put?: never;
+
+        post: operations["create_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/prompt-versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_versions__version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/prompt-version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+
+        put: operations["activate_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_version_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/status": {
         parameters: {
             query?: never;
@@ -2674,6 +2726,13 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
 
+        ActivateAgentPromptVersionRequest: {
+
+            version_id: string;
+
+            expected_active_version_id: string | null;
+        };
+
         AddServerInput: {
 
             name: string;
@@ -3151,6 +3210,55 @@ export interface components {
             updated_at?: string | null;
         };
 
+        AgentPromptVersionCollection: {
+
+            active_version_id?: string | null;
+
+            versions?: components["schemas"]["AgentPromptVersionSummary"][];
+        };
+
+        AgentPromptVersionDetail: {
+
+            version_id: string;
+
+            version: string;
+
+            content_sha256: string;
+
+            change_note?: string | null;
+
+            based_on_version_id?: string | null;
+
+            created_by?: string | null;
+
+            created_at?: string | null;
+
+            active: boolean;
+
+            prompt_template: string;
+
+            prompt_language: string;
+        };
+
+        AgentPromptVersionSummary: {
+
+            version_id: string;
+
+            version: string;
+
+            content_sha256: string;
+
+            change_note?: string | null;
+
+            based_on_version_id?: string | null;
+
+            created_by?: string | null;
+
+            created_at?: string | null;
+
+            active: boolean;
+        };
+
         AgentRuntimePolicy: {
 
             allow_subagent_delegation: boolean;
@@ -3302,6 +3410,17 @@ export interface components {
             department?: string | null;
 
             title?: string | null;
+        };
+
+        AtContextData: {
+
+            table_paths?: string[];
+
+            metric_paths?: string[];
+
+            sql_paths?: string[];
+
+            knowledge_paths?: string[];
         };
 
         AuditLogEntry: {
@@ -3580,6 +3699,21 @@ export interface components {
             sql_preview_lines?: number | null;
         };
 
+        CreateAgentPromptVersionRequest: {
+
+            version: string;
+
+            prompt_template: string;
+
+            prompt_language: string;
+
+            change_note?: string | null;
+
+            based_on_version_id?: string | null;
+
+            activate: boolean;
+        };
+
         CreateDirectoryInput: {
 
             subject_path: string[];
@@ -3834,6 +3968,16 @@ export interface components {
             prompt_language: string;
 
             prompt_version: string | null;
+
+            prompt_source: string;
+
+            configured_prompt_version?: string | null;
+
+            resolved_prompt_version?: string | null;
+
+            prompt_revision?: string | null;
+
+            active_prompt_version_id?: string | null;
 
             tools?: string[];
 
@@ -4242,6 +4386,10 @@ export interface components {
             metric: string;
 
             dimensions?: components["schemas"]["MetricDimensionItem"][];
+
+            time_dimension?: string | null;
+
+            time_granularities?: string[];
         };
 
         MetricInfo: {
@@ -4708,6 +4856,28 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["AgentPreferenceSummary"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_AgentPromptVersionCollection_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentPromptVersionCollection"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_AgentPromptVersionDetail_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentPromptVersionDetail"] | null;
 
             errorCode?: string | null;
 
@@ -5451,6 +5621,8 @@ export interface components {
             depth: number;
 
             parent_action_id?: string | null;
+
+            at_context?: components["schemas"]["AtContextData"] | null;
         };
 
         SemanticModelInput: {
@@ -5464,6 +5636,8 @@ export interface components {
             database?: string | null;
 
             db_schema?: string | null;
+
+            semantic_model_name?: string | null;
 
             datasource_id?: string | null;
         };
@@ -6622,6 +6796,8 @@ export interface operations {
                 database?: string | null;
 
                 db_schema?: string | null;
+
+                semantic_model_name?: string | null;
             };
             header?: never;
             path?: never;
@@ -10360,6 +10536,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_dict_str__bool__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_agent_prompt_versions_api_v1_admin_agents__agent_id__prompt_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPromptVersionCollection_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAgentPromptVersionRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPromptVersionDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPromptVersionDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activate_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_version_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivateAgentPromptVersionRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPromptVersionDetail_"];
                 };
             };
 

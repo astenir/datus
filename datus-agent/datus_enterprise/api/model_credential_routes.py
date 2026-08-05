@@ -19,7 +19,6 @@ from datus.api.models.downstream import ProbeResultData
 from datus.configuration.agent_config import ProviderConfig
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
-from datus_enterprise.api.config_routes import _probe_llm_sync
 from datus_enterprise.model_credentials import (
     CUSTOM_OPENAI_PROVIDER,
     OPENAI_PROVIDER,
@@ -32,6 +31,7 @@ from datus_enterprise.model_credentials import (
     provider_options,
     validate_custom_openai_compatible_policy,
 )
+from datus_enterprise.services.connectivity_probe import probe_llm_connection as _probe_llm_sync
 
 logger = get_logger(__name__)
 

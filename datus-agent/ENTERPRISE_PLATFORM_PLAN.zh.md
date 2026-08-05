@@ -28,14 +28,14 @@ Datus Agent 从本地 agent/API 服务演进为企业内网单租户、多用户
 | --- | --- | --- |
 | 请求上下文 | `datus/api/auth/context.py` | `AppContext` 已包含 roles、permissions、datasource_grants、principal、is_admin 等字段。 |
 | 默认本地认证 | `datus/api/auth/no_auth_provider.py` | 只适合本地兼容模式；生产企业模式不能信任裸 header。 |
-| 企业身份 provider | `datus_enterprise/auth_provider.py` | 当前重点是 `UserInfoBearerAuthProvider` 和 `SignedHeaderAuthProvider`。 |
+| 企业身份 provider | `datus_enterprise/auth/providers.py` | 当前重点是 `UserInfoBearerAuthProvider` 和 `SignedHeaderAuthProvider`；`datus_enterprise/auth_provider.py` 保留旧类路径兼容。 |
 | route dependency | `datus/api/enterprise/deps.py` | 模块权限、platform status、session/artifact/datasource helper 应集中在这里。 |
 | route 暴露面 | `datus/api/enterprise/route_security_matrix.py` | 新增或修改 FastAPI route 必须同步分类并测试。 |
 | service cache | `datus/api/services/datus_service_cache.py` | 企业模式 cache key 必须和本地兼容模式隔离。 |
-| session owner | `datus/api/enterprise/defaults.py`、`datus/models/session_manager.py` | owner/index metadata 决定可见性；正文 store 不授予访问权。 |
+| session owner | `datus_enterprise/storage/local/`、`datus/models/session_manager.py` | owner/index metadata 决定可见性；`datus/api/enterprise/defaults.py` 保留旧类路径兼容导出，正文 store 不授予访问权。 |
 | config projection | `datus_enterprise/projection.py` | 用户级 datasource/principal 限制只能进入请求级 `AgentConfig` clone。 |
 | PostgreSQL metadata | `datus_enterprise/postgres_stores.py` | 试点/生产 metadata store 起点；当前不是完整 migration runner。 |
-| PG session body | `datus_enterprise/postgres_session_store.py` | 可选正文/history/state backend，不替代 owner store，不迁移历史 `.db`。 |
+| PG session body | `datus_enterprise/storage/postgres/session.py` | 可选正文/history/state backend；`datus_enterprise/postgres_session_store.py` 保留旧类路径兼容，不替代 owner store，不迁移历史 `.db`。 |
 
 ## 核心链路
 
@@ -272,6 +272,37 @@ PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF N
 用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和委派 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
 
 Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。交互节点的澄清、计划确认和会话 Todo 控件统一归入 `tools.*`，进入管理目录并在交互型 Agent 的工具参考中默认启用；orchestrator 和 Skill 作者工具使用独立类别，不能被 `tools.*` 隐式授权；管理员仍可通过精确 deny 关闭某个交互控件。Visual Report/Dashboard 的受限文件方法和 Artifact 创建、绑定、保存、校验方法，以及 Chat 默认启用的平台文档方法，都必须进入各自节点的管理目录与默认引用，避免默认 allowlist 删除节点必需工具或让下拉框只能显示不可展开的默认占位。新建、更新 Agent 或单独更新策略时，服务端必须校验 allowed/denied 模式：allowed 只能引用该节点管理目录内的原生工具或当前 Agent 已绑定的 MCP Server，不能通过策略启用 Bash 或未绑定 MCP；denied 独立保留 Bash、BI、scheduler、sub-agent、Skill、Web、orchestrator、Skill 作者和 MCP 等已知运行时类别的防御性规则，但拒绝未知类别或方法。历史已存记录在只读加载时不强制迁移。workflow、sub-agent、Artifact create/edit 状态和 Plan Mode 继续由执行模式、ACL 与节点状态决定实际注册哪些工具，allowlist 不会凭空创建未注册工具。运行时必须先完成本轮工具装配、再应用 Tool Policy，系统 Prompt 随后基于最终 LLM 工具面生成；所有节点的 Prompt 能力标记都从过滤后的最终工具面计算，Prompt 快照身份包含执行模式、最终原生工具面以及可宣传的 MCP server/tool 面，避免旧快照宣称已被策略移除的工具。对话 permission mode 属于用户和本轮会话的确认策略，由 `module.chat.permission_mode` 控制，Agent 不再配置第二套模式上限。`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，`task()` 由 runtime policy 保留而不要求混入普通工具 allowlist，但显式 Tool Policy deny 仍优先，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
+
+### Agent Prompt 不可变版本库
+
+企业自定义 Agent 的 Prompt 版本使用两张增量 companion 表，不直接给既有 `enterprise_agents` 增加外键列：
+
+- `enterprise_agent_prompt_versions` 保存不可变正文、版本标签、语言、正文 SHA-256、变更说明、基线版本和创建人；同一 Agent 内版本标签唯一。
+- `enterprise_agent_active_prompt_versions` 保存每个 Agent 唯一的当前版本引用和激活审计字段。
+- `enterprise_agents.prompt_template`、`prompt_language`、`prompt_version` 继续作为运行时当前版本投影。激活版本时必须在同一存储事务内更新 active 引用和这三个投影字段，既有运行时加载器不直接读取历史表。
+
+管理 API 固定为：
+
+```text
+GET  /api/v1/admin/agents/{agent_id}/prompt-versions
+GET  /api/v1/admin/agents/{agent_id}/prompt-versions/{version_id}
+POST /api/v1/admin/agents/{agent_id}/prompt-versions
+PUT  /api/v1/admin/agents/{agent_id}/prompt-version
+```
+
+四个接口都要求 `module.admin.agents`；POST/PUT 还必须先通过 `require_platform_active`。列表不返回 Prompt 正文，详情只在管理权限校验后返回正文。创建后的版本不可覆盖；激活必须携带 `expected_active_version_id` 做乐观并发校验。审计只保存版本 ID、版本标签、正文 SHA-256 和 old/new active 信息，不保存 Prompt 正文。内置 Agent 定义保持只读；企业 Agent 使用内置模板回退时，详情需要明确返回 `prompt_source=builtin_fallback`、配置版本、生效版本和正文修订，避免把配置标签误当成实际模板版本。
+
+内置模板与企业 Agent 回退模板的管理详情必须使用当前请求对应 `DatusService.agent_config.path_manager` 解析，和 Chat 运行时共享同一 `agent.home/template -> repository builtin` 优先级；不得在路由中裸构造缺少 `AgentConfig` 的 `PromptManager` 后静默回退到进程用户的 `~/.datus`。`prompt_source` 需要区分 `builtin`、`user_override`、`runtime`，回退场景分别使用 `builtin_fallback`、`user_override_fallback`、`runtime_fallback`。管理界面展示的是带 Jinja 条件的原始模板，不等同于某个会话最终发送给模型的已渲染 system-prompt snapshot。
+
+历史 Agent 的迁移采用只读穿透：GET 在尚无版本记录时返回确定性的 `legacy_*` 合成当前版本，但不写 metadata；第一次 Prompt 版本 mutation 才幂等持久化旧正文并建立 active 引用。若旧版本标签已存在但正文 SHA-256 不同，迁移必须冲突退出，不能覆盖。Agent 一旦进入版本库，普通 Agent upsert 只能保存其他配置字段，不能改变当前 Prompt 的版本、语言或正文；Prompt 变化必须创建新版本并显式激活。
+
+发布与回滚规则：
+
+- 当前仓库仍没有正式 migration runner。生产发布前应按 PostgreSQL 或 OceanBase 目标方言，先执行仓库 `_SCHEMA_SQL` 中两张 companion 表的同构 `CREATE TABLE IF NOT EXISTS`、唯一键和索引 DDL，并备份 `enterprise_agents` 与新增版本表。
+- 滚动发布时旧应用会忽略 companion 表；新应用可读取既有 Agent 投影，并对 legacy 记录执行无写入的 read-through。应先建表，再发布新应用，最后开放版本 mutation。
+- 回滚应用继续读取激活事务写回的 `enterprise_agents` 当前投影，不需要删除新表。回滚期间应暂停新版本 mutation，避免旧管理界面与新版本管理并行修改。
+- 不自动删除 companion 表。只有确认不再回滚、版本历史与审计已完成备份、运行时已无读取需求后，才能人工制定清理方案。
+- 激活只影响下一次 Prompt 解析；正在执行的轮次不被修改。已有会话的后续轮次按版本和正文修订指纹重新判断 Prompt 快照是否有效。
 
 每个 PG metadata/body store 独立持有 asyncpg pool。连接预算按：
 

@@ -2172,6 +2172,55 @@ class TestCompleteAction:
         assert complete_actions[0].parent_action_id == "call_fail"
 
     @pytest.mark.asyncio
+    async def test_recovered_tool_failure_emits_successful_complete_action(self, task_tool):
+        """A recovered inner tool failure must not poison the subagent's final status."""
+        from datus.schemas.action_bus import ActionBus
+
+        bus = ActionBus()
+        task_tool.set_action_bus(bus)
+
+        failed_tool_action = Mock(
+            spec=ActionHistory,
+            status=ActionStatus.FAILED,
+            output={"success": False, "error": "retryable query error"},
+            depth=0,
+            parent_action_id=None,
+            role=ActionRole.TOOL,
+            action_type="read_query",
+        )
+        final_action = Mock(
+            spec=ActionHistory,
+            status=ActionStatus.SUCCESS,
+            output={"success": True, "response": "recovered", "tokens_used": 10},
+            depth=0,
+            parent_action_id=None,
+            role=ActionRole.ASSISTANT,
+            action_type="gen_sql_response",
+        )
+        mock_node = MagicMock()
+
+        async def mock_stream(ahm):
+            yield failed_tool_action
+            yield final_action
+
+        mock_node.execute_stream_with_interactions = mock_stream
+
+        with patch.object(task_tool, "_create_node", return_value=mock_node):
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(type="gen_sql", prompt="test", call_id="call_recovered")
+
+        assert result.success == 1
+        complete_actions = []
+        while not bus._queue.empty():
+            action = bus._queue.get_nowait()
+            if action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
+                complete_actions.append(action)
+
+        assert len(complete_actions) == 1
+        assert complete_actions[0].status == ActionStatus.SUCCESS
+        assert complete_actions[0].parent_action_id == "call_recovered"
+
+    @pytest.mark.asyncio
     async def test_complete_action_not_emitted_without_bus(self, task_tool):
         """Without an ActionBus, no complete action is emitted and no error occurs."""
         assert task_tool._action_bus is None
