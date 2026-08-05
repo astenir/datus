@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import get_datus_service, get_request_app_context, init_deps
+from datus.api.enterprise.defaults import InMemoryEnterpriseUserStore
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.utils.datasource_scope import datasource_scope_matches
 
@@ -32,6 +33,13 @@ def _reset_deps():
     deps._datasource = "default"
     deps._default_source = None
     deps._default_interactive = True
+
+
+async def _active_enterprise_user_store(*user_ids: str) -> InMemoryEnterpriseUserStore:
+    store = InMemoryEnterpriseUserStore()
+    for user_id in user_ids:
+        await store.upsert_user(user_id=user_id, enabled=True)
+    return store
 
 
 @pytest.mark.asyncio
@@ -140,7 +148,6 @@ class TestGetRequestAppContext:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -175,7 +182,7 @@ class TestGetRequestAppContext:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=grant_store,
         )
@@ -314,7 +321,6 @@ class TestGetRequestAppContext:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -342,7 +348,7 @@ class TestGetRequestAppContext:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -362,7 +368,6 @@ class TestGetRequestAppContext:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -388,7 +393,7 @@ class TestGetRequestAppContext:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("admin"),
             role_store=InMemoryEnterpriseRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -478,6 +483,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
+            user_store=await _active_enterprise_user_store("user-1"),
         )
 
         request = MagicMock()
@@ -528,12 +534,67 @@ class TestGetDatusService:
         assert exc_info.value.detail == "AUTH_REQUIRED"
         mock_cache.get_or_create.assert_not_called()
 
+    async def test_enterprise_unprovisioned_user_fails_before_authz_refresh_and_service_cache(self):
+        """Authenticated identities must exist in the enterprise user store unless auto-provisioning is enabled."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class CollectingAuditSink:
+            def __init__(self):
+                self.events = []
+
+            async def write(self, event):
+                self.events.append(event)
+
+        audit_sink = CollectingAuditSink()
+        role_store = InMemoryEnterpriseRoleStore()
+        role_store.list_user_roles = AsyncMock()
+        grant_store = InMemoryEnterpriseDatasourceGrantStore()
+        grant_store.list_grants = AsyncMock()
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=grant_store,
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "ENTERPRISE_USER_NOT_PROVISIONED"
+        assert audit_sink.events[-1].action == "auth.enterprise_user_status"
+        assert audit_sink.events[-1].decision == "deny"
+        assert audit_sink.events[-1].reason == "user not provisioned"
+        role_store.list_user_roles.assert_not_awaited()
+        grant_store.list_grants.assert_not_awaited()
+        mock_cache.get_or_create.assert_not_called()
+
     async def test_enterprise_identity_only_context_reaches_service_cache(self):
         """Enterprise auth providers may return identity-only contexts and leave RBAC to authz dependencies."""
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -555,7 +616,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("u1"),
             role_store=InMemoryEnterpriseRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -572,7 +633,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -619,7 +679,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=grant_store,
         )
@@ -647,7 +707,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -669,7 +728,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -688,7 +747,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -731,7 +789,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=grant_store,
         )
@@ -754,7 +812,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -794,7 +851,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=grant_store,
         )
@@ -816,7 +873,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             NoopAuditSink,
@@ -855,7 +911,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=role_store,
             datasource_grant_store=grant_store,
         )
@@ -879,7 +935,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             PassthroughConfigProjector,
@@ -910,7 +965,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=audit_sink,
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=StaleRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -1101,7 +1156,6 @@ class TestGetDatusService:
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
             InMemoryEnterpriseRoleStore,
-            InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
             PassthroughConfigProjector,
@@ -1128,7 +1182,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=FailingAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=await _active_enterprise_user_store("alice"),
             role_store=StaleRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
@@ -1178,6 +1232,7 @@ class TestGetDatusService:
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
+            user_store=await _active_enterprise_user_store("u1"),
         )
 
         with (
