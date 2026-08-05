@@ -11,6 +11,8 @@ from pydantic import ValidationError
 
 from datus.tools.mcp_tools.mcp_config import (
     HTTPServerConfig,
+    MCPAuthConfig,
+    MCPAuthMode,
     MCPConfig,
     MCPServerConfig,
     MCPServerType,
@@ -141,6 +143,34 @@ class TestMCPServerType:
         assert MCPServerType.STDIO == "stdio"
         assert MCPServerType.SSE == "sse"
         assert MCPServerType.HTTP == "http"
+
+
+class TestMCPAuthConfig:
+    def test_normalizes_static_bearer_token(self):
+        auth = MCPAuthConfig(mode="static_bearer", token="  Bearer fixed-value  ")
+
+        assert auth.mode == MCPAuthMode.STATIC_BEARER
+        assert auth.token == "fixed-value"
+        assert auth.credential_configured is True
+
+    def test_request_bearer_has_credential_source_without_token(self):
+        auth = MCPAuthConfig(mode="request_bearer")
+
+        assert auth.credential_configured is True
+        assert auth.token is None
+
+    def test_static_bearer_requires_token(self):
+        with pytest.raises(ValidationError):
+            MCPAuthConfig(mode="static_bearer")
+
+    def test_non_static_mode_rejects_token(self):
+        with pytest.raises(ValidationError):
+            MCPAuthConfig(mode="request_bearer", token="must-not-persist")
+
+    def test_model_dump_excludes_static_token(self):
+        auth = MCPAuthConfig(mode="static_bearer", token="dump-secret")
+
+        assert "dump-secret" not in str(auth.model_dump())
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +331,35 @@ class TestMCPServerConfigFactory:
                 "srv", {"type": "sse", "url": "http://example.com", "headers": {"Authorization": "${AUTH_TOKEN}"}}
             )
         assert isinstance(cfg, SSEServerConfig)
-        assert cfg.headers["Authorization"] == "mytoken"
+        assert cfg.headers is None
+        assert cfg.auth.mode == MCPAuthMode.STATIC_BEARER
+        assert cfg.auth.token == "mytoken"
+
+    def test_legacy_authorization_header_is_normalized_case_insensitively(self):
+        cfg = MCPServerConfig.from_config_format(
+            "srv",
+            {
+                "type": "http",
+                "url": "http://example.com",
+                "headers": {"authorization": "Bearer legacy-value", "X-Tenant": "acme"},
+            },
+        )
+
+        assert cfg.headers == {"X-Tenant": "acme"}
+        assert cfg.auth.mode == MCPAuthMode.STATIC_BEARER
+        assert cfg.auth.token == "legacy-value"
+
+    def test_authorization_header_conflicts_with_explicit_auth(self):
+        with pytest.raises(ValueError):
+            MCPServerConfig.from_config_format(
+                "srv",
+                {
+                    "type": "http",
+                    "url": "http://example.com",
+                    "headers": {"Authorization": "Bearer legacy-value"},
+                    "auth": {"mode": "request_bearer"},
+                },
+            )
 
     def test_invalid_type_string_raises(self):
         with pytest.raises(ValueError):

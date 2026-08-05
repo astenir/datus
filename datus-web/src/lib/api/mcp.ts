@@ -1,9 +1,9 @@
 import { apiResult, jsonBody, putBody } from "./helpers";
-import type { McpConnectivityResult, McpServerInfo, McpToolFilter, McpToolInfo } from "@/types";
+import type { McpConnectivityResult, McpServerInfo, McpServerInput, McpToolFilter, McpToolInfo } from "@/types";
 
 type McpServerUpdateInput = Pick<
-  McpServerInfo,
-  "type" | "command" | "args" | "url" | "headers" | "timeout" | "env" | "cwd"
+  McpServerInput,
+  "type" | "command" | "args" | "url" | "headers" | "auth" | "timeout" | "env" | "cwd"
 >;
 
 export const mcpApi = {
@@ -12,17 +12,18 @@ export const mcpApi = {
     return apiResult(baseUrl, `/api/v1/mcp/servers${query}`);
   },
 
-  addServer(baseUrl: string, server: McpServerInfo): Promise<unknown> {
+  addServer(baseUrl: string, server: McpServerInput): Promise<unknown> {
     return apiResult(baseUrl, "/api/v1/mcp/servers", jsonBody(server));
   },
 
-  updateServer(baseUrl: string, serverName: string, server: McpServerInfo): Promise<unknown> {
+  updateServer(baseUrl: string, serverName: string, server: McpServerInput): Promise<unknown> {
     const payload: McpServerUpdateInput = {
       type: server.type,
       command: server.command,
       args: server.args,
       url: server.url,
       headers: server.headers,
+      auth: server.auth,
       timeout: server.timeout,
       env: server.env,
       cwd: server.cwd,

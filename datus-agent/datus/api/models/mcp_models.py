@@ -1,8 +1,24 @@
 """Pydantic models for MCP (Model Context Protocol) API endpoints."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+MCPAuthModeValue = Literal["none", "static_bearer", "request_bearer"]
+
+
+class MCPAuthInput(BaseModel):
+    """Input-only remote MCP authentication settings."""
+
+    mode: MCPAuthModeValue = Field(..., description="Remote MCP authentication mode")
+    token: Optional[str] = Field(None, description="Static bearer token; accepted on writes and never returned")
+
+
+class MCPAuthSummary(BaseModel):
+    """Redaction-safe remote MCP authentication summary."""
+
+    mode: MCPAuthModeValue
+    credential_configured: bool
 
 
 # Server management models
@@ -16,6 +32,7 @@ class MCPServerInfo(BaseModel):
     args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
     url: Optional[str] = Field(None, description="URL for sse/http servers")
     headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthSummary] = Field(None, description="Redaction-safe remote authentication summary")
     timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
     cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
@@ -36,6 +53,7 @@ class AddServerInput(BaseModel):
     args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
     url: Optional[str] = Field(None, description="URL for sse/http servers")
     headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthInput] = Field(None, description="Remote MCP authentication settings")
     timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
     cwd: Optional[str] = Field(None, description="Working directory for stdio servers")

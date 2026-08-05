@@ -11,13 +11,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from datus.tools.mcp_tools.mcp_config import (
+    HTTPServerConfig,
+    MCPAuthConfig,
     MCPConfig,
     MCPServerType,
     SSEServerConfig,
     STDIOServerConfig,
     ToolFilterConfig,
 )
-from datus.tools.mcp_tools.mcp_manager import MCPManager, _validate_server_exists, create_static_tool_filter
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
+from datus.tools.mcp_tools.mcp_manager import (
+    MCPManager,
+    _safe_operation_error,
+    _validate_server_exists,
+    create_static_tool_filter,
+)
 
 # ---------------------------------------------------------------------------
 # Helper: build a manager bypassing __init__ path manager calls
@@ -62,6 +70,17 @@ class TestCreateStaticToolFilter:
     def test_filter_is_toolfilterconfig(self):
         tf = create_static_tool_filter()
         assert isinstance(tf, ToolFilterConfig)
+
+
+class TestSafeOperationError:
+    def test_redacts_bearer_and_url_from_http_error(self):
+        error = RuntimeError("HTTP 403 for https://private.example/mcp Authorization: Bearer should-not-appear")
+
+        message = _safe_operation_error(error)
+
+        assert message == "MCP server returned HTTP 403."
+        assert "should-not-appear" not in message
+        assert "private.example" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +235,31 @@ class TestMCPManagerPersistence:
 
     def test_save_config_failure(self, tmp_path):
         manager = _make_manager(tmp_path)
-        with patch("builtins.open", side_effect=PermissionError("denied")):
+        with patch("datus.tools.mcp_tools.mcp_manager.os.open", side_effect=PermissionError("denied")):
             result = manager.save_config()
         assert result is False
+
+    def test_static_token_round_trip_and_file_permissions(self, tmp_path):
+        manager = _make_manager(tmp_path)
+        manager.config.add_server(
+            HTTPServerConfig(
+                name="secured",
+                url="http://example.com/mcp",
+                auth=MCPAuthConfig(mode="static_bearer", token="stored-value"),
+            )
+        )
+
+        assert manager.save_config() is True
+        persisted = json.loads(manager.config_path.read_text())
+        assert persisted["mcpServers"]["secured"]["auth"] == {
+            "mode": "static_bearer",
+            "token": "stored-value",
+        }
+        assert manager.config_path.stat().st_mode & 0o777 == 0o600
+
+        loaded = _make_manager(tmp_path).get_server_config("secured")
+        assert loaded.auth.token == "stored-value"
+        assert "stored-value" not in str(loaded.model_dump())
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +362,42 @@ class TestCreateServerInstance:
         monkeypatch.setattr(cfg, "type", "unsupported_type")
         instance, _details = manager._create_server_instance(cfg)
         assert instance is None
+
+    def test_request_bearer_headers_are_isolated_per_connection(self, tmp_path):
+        manager = _make_manager(tmp_path)
+        config = HTTPServerConfig(
+            name="secured",
+            url="http://example.com/mcp",
+            headers={"X-Tenant": "acme"},
+            auth=MCPAuthConfig(mode="request_bearer"),
+        )
+
+        alice = manager._resolve_remote_headers(
+            config.headers,
+            config=config,
+            request_credentials=MCPRequestCredentials(bearer_token="alice-value", user_id="alice"),
+        )
+        bob = manager._resolve_remote_headers(
+            config.headers,
+            config=config,
+            request_credentials=MCPRequestCredentials(bearer_token="bob-value", user_id="bob"),
+        )
+
+        assert alice == {"X-Tenant": "acme", "Authorization": "Bearer alice-value"}
+        assert bob == {"X-Tenant": "acme", "Authorization": "Bearer bob-value"}
+        assert config.headers == {"X-Tenant": "acme"}
+        assert config.auth.token is None
+
+    def test_request_bearer_fails_closed_without_request_credentials(self, tmp_path):
+        manager = _make_manager(tmp_path)
+        config = HTTPServerConfig(
+            name="secured",
+            url="http://example.com/mcp",
+            auth=MCPAuthConfig(mode="request_bearer"),
+        )
+
+        with pytest.raises(ValueError, match="MCP_AUTH_CONTEXT_UNAVAILABLE"):
+            manager._resolve_remote_headers({}, config=config, request_credentials=None)
 
 
 # ---------------------------------------------------------------------------

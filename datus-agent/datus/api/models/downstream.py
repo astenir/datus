@@ -14,6 +14,7 @@ from datus.api.models.cli_models import (
     StreamChatInput as UpstreamStreamChatInput,
 )
 from datus.api.models.config_models import ModelPricing
+from datus.api.models.mcp_models import MCPAuthInput
 from datus.utils.time_utils import now_utc_iso
 
 
@@ -351,6 +352,7 @@ class UpdateServerInput(BaseModel):
     args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
     url: Optional[str] = Field(None, description="URL for sse/http servers")
     headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthInput] = Field(None, description="Remote MCP authentication settings")
     timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
     cwd: Optional[str] = Field(None, description="Working directory for stdio servers")

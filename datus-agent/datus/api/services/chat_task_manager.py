@@ -34,6 +34,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.models.session_manager import SessionManager, session_scope_from_user_id
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 from datus.tools.proxy.proxy_tool import apply_proxy_tools
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager, set_current_path_manager
@@ -412,6 +413,7 @@ class ChatTaskManager:
         sub_agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         principal: Optional[Dict[str, Any]] = None,
+        mcp_request_credentials: Optional[MCPRequestCredentials] = None,
     ) -> ChatTask:
         """Create a background task for the agentic loop.
             :param sub_agent_id: builtin name or custom sub-agent DB ID
@@ -419,6 +421,7 @@ class ChatTaskManager:
         """
         # Clone config to avoid cross-request mutation of shared AgentConfig
         agent_config = copy.deepcopy(agent_config)
+        agent_config._mcp_request_credentials = mcp_request_credentials
         await prepare_chat_request_config(
             agent_config,
             project_id=self._project_id,

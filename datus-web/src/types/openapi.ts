@@ -1680,24 +1680,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/dashboards/{slug}/acl": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-
-        get: operations["get_dashboard_share_acl_api_v1_dashboards__slug__acl_get"];
-
-        put: operations["put_dashboard_share_acl_api_v1_dashboards__slug__acl_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/dashboards/{slug}/html": {
         parameters: {
             query?: never;
@@ -1783,6 +1765,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reports/{slug}/html": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_report_html_by_path_api_v1_reports__slug__html_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dashboards/{slug}/acl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_dashboard_share_acl_api_v1_dashboards__slug__acl_get"];
+
+        put: operations["put_dashboard_share_acl_api_v1_dashboards__slug__acl_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reports/{slug}/acl": {
         parameters: {
             query?: never;
@@ -1794,23 +1811,6 @@ export interface paths {
         get: operations["get_report_share_acl_api_v1_reports__slug__acl_get"];
 
         put: operations["put_report_share_acl_api_v1_reports__slug__acl_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/reports/{slug}/html": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-
-        get: operations["get_report_html_by_path_api_v1_reports__slug__html_get"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -2095,6 +2095,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+
+        put: operations["set_admin_agent_status_api_v1_admin_agents__agent_id__status_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/prompt-versions": {
         parameters: {
             query?: never;
@@ -2140,23 +2157,6 @@ export interface paths {
         get?: never;
 
         put: operations["activate_admin_agent_prompt_version_api_v1_admin_agents__agent_id__prompt_version_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/agents/{agent_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-
-        put: operations["set_admin_agent_status_api_v1_admin_agents__agent_id__status_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2748,6 +2748,8 @@ export interface components {
             headers?: {
                 [key: string]: string;
             } | null;
+
+            auth?: components["schemas"]["MCPAuthInput"] | null;
 
             timeout?: number | null;
 
@@ -4328,6 +4330,13 @@ export interface components {
             content_type?: string | null;
 
             relative_path: string;
+        };
+
+        MCPAuthInput: {
+
+            mode: "none" | "static_bearer" | "request_bearer";
+
+            token?: string | null;
         };
 
         MeSummary: {
@@ -5965,6 +5974,8 @@ export interface components {
             headers?: {
                 [key: string]: string;
             } | null;
+
+            auth?: components["schemas"]["MCPAuthInput"] | null;
 
             timeout?: number | null;
 
@@ -9608,72 +9619,6 @@ export interface operations {
             };
         };
     };
-    get_dashboard_share_acl_api_v1_dashboards__slug__acl_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Result_ArtifactShare_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_dashboard_share_acl_api_v1_dashboards__slug__acl_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ArtifactShareUpdate"];
-            };
-        };
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Result_ArtifactShare_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_dashboard_html_by_path_api_v1_dashboards__slug__html_get: {
         parameters: {
             query?: {
@@ -9822,6 +9767,103 @@ export interface operations {
             };
         };
     };
+    get_report_html_by_path_api_v1_reports__slug__html_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_share_acl_api_v1_dashboards__slug__acl_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ArtifactShare_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_dashboard_share_acl_api_v1_dashboards__slug__acl_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUpdate"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ArtifactShare_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_report_share_acl_api_v1_reports__slug__acl_get: {
         parameters: {
             query?: never;
@@ -9875,37 +9917,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_ArtifactShare_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_report_html_by_path_api_v1_reports__slug__html_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                slug: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
                 };
             };
 
@@ -10549,6 +10560,41 @@ export interface operations {
             };
         };
     };
+    set_admin_agent_status_api_v1_admin_agents__agent_id__status_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAgentStatusRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_EnterpriseAgentDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_admin_agent_prompt_versions_api_v1_admin_agents__agent_id__prompt_versions_get: {
         parameters: {
             query?: never;
@@ -10669,41 +10715,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_AgentPromptVersionDetail_"];
-                };
-            };
-
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_admin_agent_status_api_v1_admin_agents__agent_id__status_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetAgentStatusRequest"];
-            };
-        };
-        responses: {
-
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Result_EnterpriseAgentDetail_"];
                 };
             };
 

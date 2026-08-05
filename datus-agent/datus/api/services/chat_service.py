@@ -40,6 +40,7 @@ from datus.api.services.chat_task_manager import (
 from datus.configuration.agent_config import AgentConfig
 from datus.models.session_manager import SessionManager, session_matches_agent
 from datus.models.session_manager import session_scope_from_user_id
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 from datus.schemas.action_history import ActionRole, ActionStatus
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -90,6 +91,7 @@ class ChatService(EnterpriseChatServiceMixin):
         user_id: Optional[str] = None,
         principal: Optional[Dict[str, Any]] = None,
         agent_config: Optional[AgentConfig] = None,
+        mcp_request_credentials: Optional[MCPRequestCredentials] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Start a background chat task and yield SSE events."""
         task_manager = self._task_manager
@@ -101,6 +103,7 @@ class ChatService(EnterpriseChatServiceMixin):
                 sub_agent_id=sub_agent_id,
                 user_id=user_id,
                 principal=principal,
+                mcp_request_credentials=mcp_request_credentials,
             )
         except ChatCapacityError as e:
             yield self._stream_start_error_event(e, "CHAT_CAPACITY_EXCEEDED", request.session_id)

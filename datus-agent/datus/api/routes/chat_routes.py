@@ -60,6 +60,7 @@ from datus.api.models.downstream import (
 from datus.api.services.background_drain import track_background_task
 from datus.api.services.chat_task_manager import EventBufferExpiredError
 from datus.api.utils.stream_errors import humanize_stream_error
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
@@ -480,6 +481,11 @@ async def stream_chat(
         )
 
     pre_extra = pre_outcome.extra if pre_outcome else {}
+    request_headers = getattr(http_request, "headers", {})
+    mcp_request_credentials = MCPRequestCredentials.from_authorization_header(
+        request_headers.get("Authorization"),
+        user_id=ctx.user_id,
+    )
 
     async def generate_sse():
         async for chunk in _stream_with_post_hook(
@@ -489,6 +495,7 @@ async def stream_chat(
                 user_id=ctx.user_id,
                 principal=projection.principal,
                 agent_config=projection.config,
+                mcp_request_credentials=mcp_request_credentials,
             ),
             http_request=http_request,
             request=request,
@@ -647,6 +654,12 @@ async def stream_chat_feedback(
             headers=_sse_headers(),
         )
 
+    request_headers = getattr(http_request, "headers", {})
+    mcp_request_credentials = MCPRequestCredentials.from_authorization_header(
+        request_headers.get("Authorization"),
+        user_id=ctx.user_id,
+    )
+
     async def generate_sse():
         async for event in svc.chat.stream_chat(
             stream_input,
@@ -654,6 +667,7 @@ async def stream_chat_feedback(
             user_id=ctx.user_id,
             principal=projection.principal,
             agent_config=projection.config,
+            mcp_request_credentials=mcp_request_credentials,
         ):
             yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
 

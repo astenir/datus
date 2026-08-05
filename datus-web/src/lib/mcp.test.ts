@@ -52,34 +52,14 @@ describe("MCP helpers", () => {
     expect(friendlyMcpConnectionError({ status: 401 }, "quotes")).toBeNull();
   });
 
-  it("builds an Authorization header from a remote MCP token", () => {
-    expect(buildRemoteMcpHeaders({ token: "abc123" })).toEqual({
-      headers: { Authorization: "Bearer abc123" },
-    });
+  it("rejects Authorization in custom headers", () => {
+    expect(buildRemoteMcpHeaders({ headersJson: '{"authorization":"Bearer old-value"}' }).error).toBe(
+      "Authorization 请通过认证方式配置，不能写入 Headers JSON",
+    );
   });
 
-  it("keeps a pasted Bearer token unchanged", () => {
-    expect(buildRemoteMcpHeaders({ token: "Bearer abc123" })).toEqual({
-      headers: { Authorization: "Bearer abc123" },
-    });
-  });
-
-  it("lets the token field override Authorization from custom headers", () => {
-    expect(
-      buildRemoteMcpHeaders({
-        token: "new-token",
-        headersJson: '{"Authorization":"Bearer old-token","X-API-Key":"key"}',
-      }),
-    ).toEqual({
-      headers: {
-        Authorization: "Bearer new-token",
-        "X-API-Key": "key",
-      },
-    });
-  });
-
-  it("returns no headers when both inputs are empty", () => {
-    expect(buildRemoteMcpHeaders({ token: "", headersJson: "" })).toEqual({});
+  it("returns no headers when the JSON input is empty", () => {
+    expect(buildRemoteMcpHeaders({ headersJson: "" })).toEqual({});
   });
 
   it("rejects invalid headers JSON", () => {
@@ -142,7 +122,6 @@ describe("MCP helpers", () => {
         name: "remote",
         type: "http",
         url: "https://example.com/mcp",
-        token: "token",
         headersJson: '{"X-Project":"demo"}',
         timeoutText: "30",
       }),
@@ -152,12 +131,68 @@ describe("MCP helpers", () => {
         type: "http",
         url: "https://example.com/mcp",
         headers: {
-          Authorization: "Bearer token",
           "X-Project": "demo",
         },
+        auth: { mode: "request_bearer" },
         timeout: 30,
       },
     });
+  });
+
+  it("builds a remote server with a fixed token outside custom headers", () => {
+    expect(
+      buildMcpServerInfo({
+        ...createDefaultMcpServerForm(),
+        name: "remote",
+        type: "sse",
+        url: "https://example.com/sse",
+        authMode: "static_bearer",
+        token: "Bearer fixed-value",
+      }),
+    ).toEqual({
+      server: {
+        name: "remote",
+        type: "sse",
+        url: "https://example.com/sse",
+        auth: { mode: "static_bearer", token: "Bearer fixed-value" },
+      },
+    });
+  });
+
+  it("requires a fixed token when creating manual authentication", () => {
+    expect(
+      buildMcpServerInfo({
+        ...createDefaultMcpServerForm(),
+        name: "remote",
+        type: "http",
+        url: "https://example.com/mcp",
+        authMode: "static_bearer",
+      }).error,
+    ).toBe("手动认证需要填写固定 Bearer Token");
+  });
+
+  it("preserves a configured fixed token when editing with an empty field", () => {
+    const form = createMcpServerForm({
+      name: "remote",
+      type: "http",
+      url: "https://example.com/mcp",
+      auth: { mode: "static_bearer", credential_configured: true },
+    });
+
+    expect(form.token).toBe("");
+    expect(buildMcpServerInfo(form).server?.auth).toEqual({ mode: "static_bearer" });
+  });
+
+  it("hydrates request authentication without exposing a token", () => {
+    const form = createMcpServerForm({
+      name: "remote",
+      type: "http",
+      url: "https://example.com/mcp",
+      auth: { mode: "request_bearer", credential_configured: true },
+    });
+
+    expect(form.authMode).toBe("request_bearer");
+    expect(form.token).toBe("");
   });
 
   it("requires a command for stdio servers", () => {

@@ -5,8 +5,62 @@ from unittest.mock import AsyncMock
 import pytest
 
 from datus.api.enterprise.defaults import InMemoryEnterpriseAgentStore
-from datus.api.models.mcp_models import AddServerInput
+from datus.api.models.downstream import UpdateServerInput
+from datus.api.models.mcp_models import AddServerInput, MCPAuthInput
 from datus_enterprise.services.mcp_service import EnterpriseMCPService
+
+
+class TestMCPServerAuthUpdate:
+    def test_blank_static_token_preserves_existing_credential(self, real_agent_config):
+        service = EnterpriseMCPService(agent_config=real_agent_config)
+        service.add_server(
+            AddServerInput(
+                name="secured",
+                type="http",
+                url="http://example.com/mcp",
+                auth=MCPAuthInput(mode="static_bearer", token="original-value"),
+            )
+        )
+
+        result = service.update_server(
+            "secured",
+            UpdateServerInput(
+                type="http",
+                url="http://example.com/v2/mcp",
+                auth=MCPAuthInput(mode="static_bearer", token=""),
+            ),
+        )
+
+        assert result.success is True
+        updated = service.manager.get_server_config("secured")
+        assert updated.auth.token == "original-value"
+        assert "original-value" not in str(result.model_dump())
+
+    def test_switch_to_request_bearer_removes_static_credential(self, real_agent_config):
+        service = EnterpriseMCPService(agent_config=real_agent_config)
+        service.add_server(
+            AddServerInput(
+                name="secured",
+                type="http",
+                url="http://example.com/mcp",
+                auth=MCPAuthInput(mode="static_bearer", token="old-value"),
+            )
+        )
+
+        result = service.update_server(
+            "secured",
+            UpdateServerInput(
+                type="http",
+                url="http://example.com/mcp",
+                auth=MCPAuthInput(mode="request_bearer"),
+            ),
+        )
+
+        assert result.success is True
+        updated = service.manager.get_server_config("secured")
+        assert updated.auth.mode == "request_bearer"
+        assert updated.auth.token is None
+        assert "old-value" not in service.manager.config_path.read_text()
 
 
 @pytest.mark.asyncio

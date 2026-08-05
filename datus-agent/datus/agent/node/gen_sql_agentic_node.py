@@ -587,9 +587,10 @@ class GenSQLAgenticNode(AgenticNode):
 
         logger.debug(f"Setup {len(mcp_servers)} MCP servers: {list(mcp_servers.keys())}")
 
-        # Debug: Log detailed info about each server
+        # Avoid rendering SDK server instances here: their repr may include
+        # connection params such as the request-scoped Authorization header.
         for name, server in mcp_servers.items():
-            logger.debug(f"MCP server '{name}': type={type(server)}, instance={server}")
+            logger.debug(f"MCP server '{name}': type={type(server).__name__}")
 
         return mcp_servers
 

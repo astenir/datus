@@ -337,7 +337,9 @@ def test_mcp_list_tools_ignores_client_filter_bypass(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["success"] is True
-    svc.mcp.list_tools.assert_awaited_once_with("srv", True)
+    call = svc.mcp.list_tools.await_args
+    assert call.args == ("srv", True)
+    assert call.kwargs["request_credentials"].bearer_token is None
 
 
 def test_mcp_tool_call_requires_fine_grained_tool_permission(monkeypatch):
@@ -403,6 +405,31 @@ def test_mcp_tool_call_allows_matching_fine_grained_tool_permission(monkeypatch)
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.mcp.call_tool.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "permission", "service_attr"),
+    [
+        ("get", "/api/v1/mcp/servers/srv/connectivity", "mcp.server.connectivity", "check_connectivity"),
+        ("get", "/api/v1/mcp/servers/srv/tools", "mcp.server.tools", "list_tools"),
+        ("post", "/api/v1/mcp/servers/srv/tools/tool_a/call", "mcp.srv.tool_a", "call_tool"),
+    ],
+)
+def test_mcp_execution_routes_forward_request_bearer(monkeypatch, method, path, permission, service_attr):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.mcp", permission})
+
+    with _client(ctx, svc) as client:
+        kwargs = {"headers": {"Authorization": "Bearer request-value"}}
+        if method == "post":
+            kwargs["json"] = {"parameters": {"x": 1}}
+        response = getattr(client, method)(path, **kwargs)
+
+    assert response.status_code == 200
+    service_method = getattr(svc.mcp, service_attr)
+    credentials = service_method.await_args.kwargs["request_credentials"]
+    assert credentials.bearer_token == "request-value"
 
 
 @pytest.mark.parametrize(
