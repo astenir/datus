@@ -23,7 +23,7 @@ from datus.api.routes import dashboard_routes as upstream_dashboard_routes
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
-from datus_enterprise.artifact_acl import require_artifact_access, require_artifact_edit_access
+from datus_enterprise.artifacts.acl import require_artifact_access, require_artifact_edit_access
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.quota import consume_enterprise_quota
 

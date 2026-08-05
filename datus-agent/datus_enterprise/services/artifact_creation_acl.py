@@ -31,7 +31,7 @@ async def create_default_artifact_acl_after_manifest(
         return None
 
     try:
-        from datus_enterprise.artifact_acl import ensure_default_private_acl
+        from datus_enterprise.artifacts.acl import ensure_default_private_acl
 
         acl = await ensure_default_private_acl(
             store,

@@ -17,7 +17,6 @@ from datus.api.models.base_models import Result
 from datus.api.models.downstream import ProbeResultData
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
-from datus_enterprise.api.config_routes import _probe_datasource_sync
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.personal_datasources import (
     datasource_record_to_db_config,
@@ -33,6 +32,9 @@ from datus_enterprise.personal_datasources import (
     personal_datasource_options,
     redact_db_config,
     validate_personal_datasource_policy,
+)
+from datus_enterprise.services.connectivity_probe import (
+    probe_datasource_connection as _probe_datasource_sync,
 )
 
 logger = get_logger(__name__)

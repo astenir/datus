@@ -86,7 +86,7 @@ async def configure_chat_plan_mode_delegation(
 def _parent_policy_denies_task(parent_agent_record: dict[str, Any] | None) -> bool:
     if not isinstance(parent_agent_record, dict):
         return False
-    from datus_enterprise.agent_registry import agent_policy_metadata
+    from datus_enterprise.agents.registry import agent_policy_metadata
 
     denied_patterns = agent_policy_metadata(parent_agent_record)["tool_policy"]["denied"]
     return any(fnmatchcase("sub_agent_tools.task", pattern) for pattern in denied_patterns)

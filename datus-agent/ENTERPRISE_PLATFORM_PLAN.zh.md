@@ -28,14 +28,14 @@ Datus Agent 从本地 agent/API 服务演进为企业内网单租户、多用户
 | --- | --- | --- |
 | 请求上下文 | `datus/api/auth/context.py` | `AppContext` 已包含 roles、permissions、datasource_grants、principal、is_admin 等字段。 |
 | 默认本地认证 | `datus/api/auth/no_auth_provider.py` | 只适合本地兼容模式；生产企业模式不能信任裸 header。 |
-| 企业身份 provider | `datus_enterprise/auth_provider.py` | 当前重点是 `UserInfoBearerAuthProvider` 和 `SignedHeaderAuthProvider`。 |
+| 企业身份 provider | `datus_enterprise/auth/providers.py` | 当前重点是 `UserInfoBearerAuthProvider` 和 `SignedHeaderAuthProvider`；`datus_enterprise/auth_provider.py` 保留旧类路径兼容。 |
 | route dependency | `datus/api/enterprise/deps.py` | 模块权限、platform status、session/artifact/datasource helper 应集中在这里。 |
 | route 暴露面 | `datus/api/enterprise/route_security_matrix.py` | 新增或修改 FastAPI route 必须同步分类并测试。 |
 | service cache | `datus/api/services/datus_service_cache.py` | 企业模式 cache key 必须和本地兼容模式隔离。 |
-| session owner | `datus/api/enterprise/defaults.py`、`datus/models/session_manager.py` | owner/index metadata 决定可见性；正文 store 不授予访问权。 |
+| session owner | `datus_enterprise/storage/local/`、`datus/models/session_manager.py` | owner/index metadata 决定可见性；`datus/api/enterprise/defaults.py` 保留旧类路径兼容导出，正文 store 不授予访问权。 |
 | config projection | `datus_enterprise/projection.py` | 用户级 datasource/principal 限制只能进入请求级 `AgentConfig` clone。 |
 | PostgreSQL metadata | `datus_enterprise/postgres_stores.py` | 试点/生产 metadata store 起点；当前不是完整 migration runner。 |
-| PG session body | `datus_enterprise/postgres_session_store.py` | 可选正文/history/state backend，不替代 owner store，不迁移历史 `.db`。 |
+| PG session body | `datus_enterprise/storage/postgres/session.py` | 可选正文/history/state backend；`datus_enterprise/postgres_session_store.py` 保留旧类路径兼容，不替代 owner store，不迁移历史 `.db`。 |
 
 ## 核心链路
 
