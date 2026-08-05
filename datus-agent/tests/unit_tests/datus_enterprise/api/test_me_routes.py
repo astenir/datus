@@ -179,6 +179,20 @@ def test_me_does_not_mark_catalog_support_permission_as_knowledge_view(monkeypat
     assert body["data"]["views"]["profile"] is True
 
 
+def test_personal_mcp_permission_opens_mcp_view_without_enterprise_mcp_feature(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(user_id="mcp_user", permissions={"module.mcp.personal"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["features"]["mcp"] is False
+    assert body["features"]["mcp_personal"] is True
+    assert body["views"]["mcp"] is True
+
+
 @pytest.mark.parametrize(
     "path",
     [

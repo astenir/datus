@@ -1,4 +1,5 @@
 import type {
+  AgentInfo,
   CatalogRecord,
   ActiveUserInteraction,
   ChatDisplayMessage,
@@ -29,7 +30,28 @@ export type ChatStreamRequestInput = {
   language: string;
   planMode: boolean;
   permissionMode: string;
+  personalMcpIds?: readonly string[];
 };
+
+export function agentAllowsPersonalMcpSelection(
+  agents: readonly AgentInfo[],
+  selectedAgent: string,
+  defaultAgentId: string,
+  artifactEditing: boolean,
+): boolean {
+  if (artifactEditing) return false;
+  const effectiveAgentId = selectedAgent.trim() || defaultAgentId.trim();
+  if (!effectiveAgentId) return false;
+  return agents.find(agent => agent.agent_id === effectiveAgentId)?.personal_mcp_mode === "selectable";
+}
+
+export function personalMcpIdsForChat(
+  permitted: boolean,
+  agentAllowsPersonalMcp: boolean,
+  selectedIds: readonly string[],
+): string[] {
+  return permitted && agentAllowsPersonalMcp ? [...selectedIds] : [];
+}
 
 const MODEL_CREDENTIAL_VALUE_PREFIX = "credential:";
 
@@ -53,7 +75,8 @@ export function buildChatStreamRequest({
   schema,
   language,
   planMode,
-  permissionMode
+  permissionMode,
+  personalMcpIds = [],
 }: ChatStreamRequestInput) {
   const modelSelection = resolveChatModelSelection(model);
   return {
@@ -68,7 +91,8 @@ export function buildChatStreamRequest({
     source: "web",
     stream_response: true,
     plan_mode: planMode,
-    permission_mode: permissionMode || null
+    permission_mode: permissionMode || null,
+    personal_mcp_ids: [...personalMcpIds],
   };
 }
 
@@ -201,6 +225,38 @@ const friendlyChatErrors: Record<string, { title: string; message: string; tone?
   AGENT_FORBIDDEN: {
     title: "无法使用当前 Agent",
     message: "当前账号不在这个 Agent 的授权范围内。请选择其他可用 Agent，或联系管理员调整访问范围。",
+  },
+  PERSONAL_MCP_AGENT_DISABLED: {
+    title: "当前 Agent 不支持个人 MCP",
+    message: "这个 Agent 未开放个人 MCP 选择。请新建会话并选择已开放该能力的 Agent，或联系管理员调整 Agent 策略。",
+    tone: "warning",
+  },
+  PERSONAL_MCP_SESSION_LOCKED: {
+    title: "个人 MCP 选择已锁定",
+    message: "会话建立后不能更换个人 MCP。请继续使用当前绑定，或新建会话重新选择。",
+    tone: "warning",
+  },
+  PERSONAL_MCP_REVISION_CHANGED: {
+    title: "个人 MCP 配置已变化",
+    message: "当前会话绑定的个人 MCP 已被修改。为保持能力快照一致，请新建会话后重新选择。",
+    tone: "warning",
+  },
+  PERSONAL_MCP_DISABLED: {
+    title: "个人 MCP 暂不可用",
+    message: "组织当前未开放个人 MCP。请新建不带个人 MCP 的会话，或联系管理员确认组织配置。",
+  },
+  PERSONAL_MCP_SELECTION_LIMIT_EXCEEDED: {
+    title: "个人 MCP 选择过多",
+    message: "所选个人 MCP 数量超过组织限制。请减少选择后重新发送。",
+    tone: "warning",
+  },
+  PERSONAL_MCP_DESTINATION_DENIED: {
+    title: "个人 MCP 目标不可访问",
+    message: "所选个人 MCP 不再符合组织的连接策略。请检查服务地址或联系管理员。",
+  },
+  PERSONAL_MCP_NOT_FOUND: {
+    title: "个人 MCP 不可用",
+    message: "所选个人 MCP 已被停用、删除或不属于当前账号。请新建会话并重新选择。",
   },
   DATASOURCE_ACCESS_DENIED: {
     title: "数据源访问受限",

@@ -33,6 +33,7 @@ class AgentRuntimePolicy(BaseModel):
 class AgentPolicy(BaseModel):
     tool_policy: AgentToolPolicy = Field(default_factory=AgentToolPolicy)
     runtime_policy: AgentRuntimePolicy = Field(default_factory=AgentRuntimePolicy)
+    personal_mcp_mode: str = Field(default="disabled", description="disabled / selectable")
 
 
 class UpsertEnterpriseAgentRequest(BaseModel):
@@ -56,6 +57,7 @@ class UpsertEnterpriseAgentRequest(BaseModel):
     acl: AgentAcl = Field(default_factory=AgentAcl)
     tool_policy: AgentToolPolicy = Field(default_factory=AgentToolPolicy)
     runtime_policy: AgentRuntimePolicy = Field(default_factory=AgentRuntimePolicy)
+    personal_mcp_mode: str = Field(default="disabled", description="disabled / selectable")
 
 
 class SetAgentStatusRequest(BaseModel):
@@ -79,6 +81,7 @@ class EnterpriseAgentSummary(BaseModel):
     acl: AgentAcl | None = None
     tool_policy: AgentToolPolicy = Field(default_factory=AgentToolPolicy)
     runtime_policy: AgentRuntimePolicy = Field(default_factory=AgentRuntimePolicy)
+    personal_mcp_mode: str = "disabled"
     enterprise_default: bool = False
     created_at: str | None = None
     updated_at: str | None = None

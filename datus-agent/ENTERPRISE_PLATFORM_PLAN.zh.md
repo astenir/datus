@@ -98,6 +98,7 @@ module.dashboard.export
 module.dashboard.edit
 module.kb
 module.mcp
+module.mcp.personal
 mcp.server.list
 mcp.server.add
 mcp.server.edit
@@ -108,6 +109,13 @@ mcp.filter.view
 mcp.filter.set
 mcp.filter.remove
 mcp.{server}.{tool}
+mcp.personal.list
+mcp.personal.create
+mcp.personal.edit
+mcp.personal.remove
+mcp.personal.connectivity
+mcp.personal.tools
+mcp.personal.use
 module.config.view
 module.config.edit
 module.admin.users
@@ -127,10 +135,29 @@ module.system.status
 
 - `view` 只表示列表/详情/静态 HTML 可见，不自动包含实时查询、导出、编辑。
 - `module.chat.permission_mode` 只允许请求 `auto` / `dangerous` 对话模式；该模式只调整本轮工具确认策略，不授予 Agent 新工具，也不绕过 Agent Tool Policy、文件路径或 Artifact ACL。
+- `module.mcp` 与 `mcp.server.*` 管理企业 MCP；`module.mcp.personal` 与 `mcp.personal.*` 管理或使用当前用户自己的 MCP，二者不互相授权。
 - `query` 表示实时查数或执行保存 SQL，必须叠加 datasource grant、SQL policy、quota、audit。
 - `export` 单独授权，并需要 ACL、quota、审计、脱敏策略。
 - admin 也必须拆成显式 permission，不用硬编码超级用户绕过授权链。
 - 新增 key 必须同步 route security matrix、测试 fixture、`/me` 能力返回和文档。
+
+## MCP 权限合成与个人 MCP
+
+MCP 采用“企业能力代理 + 请求级个人能力”的合成模式，而不是让 Agent 定义保存端到端用户 Tool RBAC：
+
+- 企业 MCP 是组织管理的公共 catalog。只有企业 MCP 的稳定名称可以写入 Agent 定义；Agent Tool Policy 决定该 Agent 最终可见的企业 MCP server/tool 面。
+- 个人 MCP 归当前认证用户所有，不进入企业 MCP catalog，也不能写入 Agent 定义。Agent 只保存 `personal_mcp_mode=disabled|selectable`，默认 `disabled`；该字段表示是否允许用户在新会话前叠加个人 MCP，不授予任何具体个人资源。
+- 使用个人 MCP 时必须同时满足 `module.mcp.personal`、`mcp.personal.use`、Agent `personal_mcp_mode=selectable`、资源 owner、资源 enabled、组织 allowlist、会话数量上限和当前 revision。最终能力取这些约束的交集，任一层拒绝即 fail closed。
+- 个人 MCP 选择由服务端绑定到 `(project_id, session_id, user_id)`。会话建立后不能新增、移除或切换；资源 revision 改变后旧会话拒绝继续使用并要求新建会话。
+- 个人 MCP 仅投影到本次请求的 `AgentConfig` clone 和当前目标 Agent Tool Policy，不修改共享配置或 `.mcp.json`，也不自动传播给子 Agent、workflow、feedback 或 Artifact create/edit。
+- 普通用户管理 API 固定为 `/api/v1/me/mcp-servers/*`；owner 来自认证后的 `AppContext`，不存在和他人资源统一按不可见处理。Token 不通过 API 回显，mutation/connectivity 写脱敏审计。
+
+个人 MCP 的受限 MVP 网络边界：
+
+- 只接受 HTTPS 的 HTTP/SSE transport；禁止 STDIO、URL userinfo/query/fragment 和 `request_bearer`。
+- 只允许无认证或用户个人静态 Bearer；Token 使用 `DATUS_USER_MCP_SECRET` 加密后存储。
+- 组织必须显式开启 `enterprise.user_mcp.enabled` 并配置非空 `allowed_hosts`；连接前解析 DNS，任一目标地址不是公网地址即拒绝。
+- 当前 allowlist 与连接前 DNS 检查不能替代独立出口代理，也未证明 SDK redirect 后逐跳重验或把解析结果固定到实际连接。完成 redirect 重验、DNS rebinding 防护、egress 隔离、调用频率/并发/结果体积和 Tool schema 上限前，只能标注为本地开发或受限 MVP，不能宣称生产 SSRF 防护完成。
 
 ## API 分区
 
@@ -271,6 +298,10 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
 
 用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。企业默认 Agent、内置 Agent overlay、Tool Policy 和委派 runtime policy 写入现有 enterprise agent 记录的保留策略元数据，API 和运行时会从业务 `scoped_context` 中剥离该保留键。默认解析顺序固定为“用户个人默认 -> 企业默认 -> ACL 可用的内置 `chat` -> 第一个 ACL 可用 Agent -> 无可用 Agent”；`chat` 不可用时仍只在当前用户已经通过状态与 ACL 过滤的 Agent 中回退，不得在安全 Agent 失效时静默回退到权限更大的系统 Agent。该用户偏好表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+
+个人 MCP 使用两张增量表：`user_mcp_servers` 保存 owner、连接定义、加密 Token、Tool Filter、enabled 和 revision；`enterprise_session_mcp_bindings` 保存会话建立时选中的 MCP ID/revision 快照。二者不带到现有 session 表的数据库外键，应用层必须先校验 session owner 再读取绑定，并在删除 session 时清理对应绑定；被任何仍存在绑定引用的个人 MCP 不允许删除。当前仓库仍没有正式 migration runner：生产发布应先备份 enterprise metadata，按目标 PostgreSQL/OceanBase 方言执行仓库 `_SCHEMA_SQL` 中的同构 `CREATE TABLE IF NOT EXISTS` 与索引，再发布读写新表的应用。滚动发布时旧版本忽略新表；回滚应用不需要删除表，但应停止个人 MCP 新建、编辑、选择和连接测试。确认不再回滚且完成 metadata 备份后，才可人工制定清理方案。
+
+`DATUS_USER_MCP_SECRET` 是个人静态 Bearer 的解密根密钥，至少 32 字符，不得写入配置仓库、日志、session、trace 或审计。备份恢复必须把 metadata 快照与对应密钥版本作为同一恢复单元；只恢复数据库不恢复原密钥会使既有 Token 不可解密。轮换前应提供逐条重加密或双密钥读取方案；当前未实现自动轮换，不能直接替换环境变量后假设旧数据仍可用。
 
 Agent Tool Policy 使用 deny 优先规则；`mode=allowlist` 时只暴露允许工具，并在调用前追加服务端 DENY 规则形成二次校验。交互节点的澄清、计划确认和会话 Todo 控件统一归入 `tools.*`，进入管理目录并在交互型 Agent 的工具参考中默认启用；orchestrator 和 Skill 作者工具使用独立类别，不能被 `tools.*` 隐式授权；管理员仍可通过精确 deny 关闭某个交互控件。Visual Report/Dashboard 的受限文件方法和 Artifact 创建、绑定、保存、校验方法，以及 Chat 默认启用的平台文档方法，都必须进入各自节点的管理目录与默认引用，避免默认 allowlist 删除节点必需工具或让下拉框只能显示不可展开的默认占位。新建、更新 Agent 或单独更新策略时，服务端必须校验 allowed/denied 模式：allowed 只能引用该节点管理目录内的原生工具或当前 Agent 已绑定的 MCP Server，不能通过策略启用 Bash 或未绑定 MCP；denied 独立保留 Bash、BI、scheduler、sub-agent、Skill、Web、orchestrator、Skill 作者和 MCP 等已知运行时类别的防御性规则，但拒绝未知类别或方法。历史已存记录在只读加载时不强制迁移。workflow、sub-agent、Artifact create/edit 状态和 Plan Mode 继续由执行模式、ACL 与节点状态决定实际注册哪些工具，allowlist 不会凭空创建未注册工具。运行时必须先完成本轮工具装配、再应用 Tool Policy，系统 Prompt 随后基于最终 LLM 工具面生成；所有节点的 Prompt 能力标记都从过滤后的最终工具面计算，Prompt 快照身份包含执行模式、最终原生工具面以及可宣传的 MCP server/tool 面，避免旧快照宣称已被策略移除的工具。对话 permission mode 属于用户和本轮会话的确认策略，由 `module.chat.permission_mode` 控制，Agent 不再配置第二套模式上限。`allow_subagent_delegation=false` 时移除 `task()`；允许委派时，`task()` 由 runtime policy 保留而不要求混入普通工具 allowlist，但显式 Tool Policy deny 仍优先，被委派 Agent 仍重新校验自己的 ACL 和 Tool Policy。
 

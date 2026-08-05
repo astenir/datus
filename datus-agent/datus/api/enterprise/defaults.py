@@ -18,6 +18,7 @@ from datus_enterprise.storage.local.stores import (
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     InMemoryUserDatasourceStore,
+    InMemoryUserMcpServerStore,
     InMemoryUserModelCredentialStore,
     NoopAuditSink,
     SqliteAuditSink,
@@ -26,6 +27,7 @@ from datus_enterprise.storage.local.stores import (
     SqliteEnterpriseUserStore,
     SqliteSessionOwnerStore,
     SqliteUserDatasourceStore,
+    SqliteUserMcpServerStore,
     SqliteUserModelCredentialStore,
 )
 
@@ -101,6 +103,7 @@ __all__ = [
     "InMemorySessionOwnerStore",
     "InMemoryUserDatasourceStore",
     "InMemoryUserModelCredentialStore",
+    "InMemoryUserMcpServerStore",
     "NoopAuditSink",
     "SqliteAuditSink",
     "SqliteEnterpriseDatasourceGrantStore",
@@ -109,4 +112,5 @@ __all__ = [
     "SqliteSessionOwnerStore",
     "SqliteUserDatasourceStore",
     "SqliteUserModelCredentialStore",
+    "SqliteUserMcpServerStore",
 ]

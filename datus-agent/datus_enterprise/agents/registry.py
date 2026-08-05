@@ -26,6 +26,7 @@ ENTERPRISE_AGENT_NODE_CLASSES = {capability.node_class for capability in ENTERPR
 ENTERPRISE_BUILTIN_AGENT_IDS = set(ENTERPRISE_DELEGATABLE_BUILTIN_AGENT_IDS) | {DEFAULT_CHAT_AGENT_ID}
 ENTERPRISE_RESERVED_AGENT_IDS = ENTERPRISE_BUILTIN_AGENT_IDS | HIDDEN_SYS_SUB_AGENTS
 AGENT_POLICY_CONTEXT_KEY = "_enterprise_agent_policy"
+PERSONAL_MCP_MODES = {"disabled", "selectable"}
 
 _RUNTIME_DENY_TOOL_METHODS: dict[str, set[str]] = {
     "bash_tools": {"bash"},
@@ -106,6 +107,13 @@ def normalize_acl(raw_acl: dict[str, Any] | None) -> dict[str, Any]:
             {str(user_id).strip() for user_id in raw.get("allowed_user_ids") or [] if str(user_id).strip()}
         ),
     }
+
+
+def normalize_personal_mcp_mode(value: Any) -> str:
+    mode = str(value or "disabled").strip().lower()
+    if mode not in PERSONAL_MCP_MODES:
+        raise ValueError(f"Personal MCP mode must be one of: {', '.join(sorted(PERSONAL_MCP_MODES))}.")
+    return mode
 
 
 def normalize_enterprise_agent_tool_policy(
@@ -204,6 +212,9 @@ def normalize_agent_payload(
             payload.get("runtime_policy", existing_metadata.get("runtime_policy"))
         ),
         "enterprise_default": bool(existing_metadata.get("enterprise_default", False)),
+        "personal_mcp_mode": normalize_personal_mcp_mode(
+            payload.get("personal_mcp_mode", existing_metadata.get("personal_mcp_mode"))
+        ),
     }
     return {
         "agent_id": agent_id,
@@ -256,6 +267,7 @@ def agent_record_to_runtime_entry(record: dict[str, Any]) -> dict[str, Any]:
         "max_turns": int(record.get("max_turns") or 30),
         "tool_policy": policy["tool_policy"],
         "runtime_policy": policy["runtime_policy"],
+        "personal_mcp_mode": policy["personal_mcp_mode"],
     }
     if record.get("datasource_id"):
         entry.setdefault("scoped_context", {})["datasource"] = record["datasource_id"]
@@ -345,6 +357,7 @@ def builtin_agent_summary(agent_id: str) -> dict[str, Any]:
                 "tool_policy": normalize_tool_policy(None),
                 "runtime_policy": normalize_runtime_policy(None),
                 "enterprise_default": False,
+                "personal_mcp_mode": "disabled",
             }
         },
         "rules": [],
@@ -378,6 +391,7 @@ def builtin_overlay_payload(
     tool_policy: dict[str, Any],
     runtime_policy: dict[str, Any],
     enterprise_default: bool = False,
+    personal_mcp_mode: str = "disabled",
     actor_user_id: str | None = None,
 ) -> dict[str, Any]:
     base = builtin_agent_summary(agent_id)
@@ -391,6 +405,7 @@ def builtin_overlay_payload(
                     "tool_policy": normalize_tool_policy(tool_policy),
                     "runtime_policy": normalize_runtime_policy(runtime_policy),
                     "enterprise_default": bool(enterprise_default),
+                    "personal_mcp_mode": normalize_personal_mcp_mode(personal_mcp_mode),
                 }
             },
         }
@@ -415,6 +430,7 @@ def agent_policy_metadata(record: dict[str, Any] | None) -> dict[str, Any]:
         "tool_policy": normalize_tool_policy(metadata.get("tool_policy", default_tool_policy)),
         "runtime_policy": normalize_runtime_policy(metadata.get("runtime_policy")),
         "enterprise_default": bool(metadata.get("enterprise_default", False)),
+        "personal_mcp_mode": normalize_personal_mcp_mode(metadata.get("personal_mcp_mode")),
     }
 
 
@@ -430,6 +446,7 @@ def with_agent_policy_metadata(
     tool_policy: dict[str, Any] | None = None,
     runtime_policy: dict[str, Any] | None = None,
     enterprise_default: bool | None = None,
+    personal_mcp_mode: str | None = None,
 ) -> dict[str, Any]:
     updated = dict(record)
     scoped_context = dict(record.get("scoped_context") or {})
@@ -450,6 +467,9 @@ def with_agent_policy_metadata(
         ),
         "enterprise_default": (
             bool(enterprise_default) if enterprise_default is not None else current["enterprise_default"]
+        ),
+        "personal_mcp_mode": normalize_personal_mcp_mode(
+            personal_mcp_mode if personal_mcp_mode is not None else current["personal_mcp_mode"]
         ),
     }
     updated["scoped_context"] = scoped_context

@@ -396,6 +396,7 @@ async function sendMessage(opts: {
   datasource: string;
   database: string;
   schema: string;
+  personalMcpIds?: readonly string[];
 }) {
   const runtimeKey = ensureSelectedRuntime();
   if (streamControllers.has(runtimeKey) || runtimes.value.get(runtimeKey)?.isStreaming) return;
@@ -432,6 +433,7 @@ async function sendMessage(opts: {
     language: language.value,
     planMode: planMode.value,
     permissionMode: permissionMode.value,
+    personalMcpIds: opts.personalMcpIds,
   });
   const controller = new AbortController();
   const context: StreamContext = { runtimeKey, sessionId, controller };

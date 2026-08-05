@@ -67,6 +67,7 @@ def _summary_from_record(record: dict[str, Any]) -> EnterpriseAgentSummary:
         acl=AgentAcl(**normalize_acl(record.get("acl"))),
         tool_policy=AgentToolPolicy(**policy["tool_policy"]),
         runtime_policy=AgentRuntimePolicy(**policy["runtime_policy"]),
+        personal_mcp_mode=policy["personal_mcp_mode"],
         enterprise_default=policy["enterprise_default"],
         created_at=record.get("created_at"),
         updated_at=record.get("updated_at"),
@@ -383,6 +384,7 @@ async def _persist_effective_record(store, record: dict[str, Any], *, actor_user
             tool_policy=policy["tool_policy"],
             runtime_policy=policy["runtime_policy"],
             enterprise_default=policy["enterprise_default"],
+            personal_mcp_mode=policy["personal_mcp_mode"],
             actor_user_id=actor_user_id,
         )
     else:

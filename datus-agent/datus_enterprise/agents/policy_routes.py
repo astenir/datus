@@ -123,6 +123,7 @@ async def set_admin_agent_policy(agent_id: str, body: AgentPolicy, ctx: AdminAge
             record,
             tool_policy=body.tool_policy.model_dump(),
             runtime_policy=body.runtime_policy.model_dump(),
+            personal_mcp_mode=body.personal_mcp_mode,
         )
         persisted = await _persist_effective_record(
             deps.get_enterprise_extensions().agent_store,

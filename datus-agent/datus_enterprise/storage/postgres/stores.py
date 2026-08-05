@@ -20,6 +20,7 @@ from datus_enterprise.storage.postgres.governance import (
     PgSessionOwnerStore,
 )
 from datus_enterprise.storage.postgres.identity import PgEnterpriseRoleStore, PgEnterpriseUserStore
+from datus_enterprise.storage.postgres.personal_mcp import PgUserMcpServerStore
 from datus_enterprise.storage.postgres.records import _agent_record
 from datus_enterprise.storage.postgres.resources import (
     PgEnterpriseAgentStore,
@@ -50,4 +51,5 @@ __all__ = [
     "PgSessionOwnerStore",
     "PgUserDatasourceStore",
     "PgUserModelCredentialStore",
+    "PgUserMcpServerStore",
 ]

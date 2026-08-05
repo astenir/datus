@@ -12,6 +12,7 @@ from datus_enterprise.storage.postgres.stores import (
     PgEnterpriseUserStore,
     PgSessionOwnerStore,
     PgUserDatasourceStore,
+    PgUserMcpServerStore,
     PgUserModelCredentialStore,
 )
 
@@ -29,4 +30,5 @@ __all__ = [
     "PgSessionBodyStore",
     "PgUserDatasourceStore",
     "PgUserModelCredentialStore",
+    "PgUserMcpServerStore",
 ]

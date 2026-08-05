@@ -10,6 +10,7 @@ the client can reconnect and resume from where it left off.
 import asyncio
 import copy
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
 
@@ -414,6 +415,7 @@ class ChatTaskManager:
         user_id: Optional[str] = None,
         principal: Optional[Dict[str, Any]] = None,
         mcp_request_credentials: Optional[MCPRequestCredentials] = None,
+        on_task_start: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> ChatTask:
         """Create a background task for the agentic loop.
             :param sub_agent_id: builtin name or custom sub-agent DB ID
@@ -497,11 +499,20 @@ class ChatTaskManager:
         task.user_query = request.message
         task.admission_token = admission_token
         self._tasks[session_id] = task
+        owner_existed = False
         try:
             if user_id and self._session_owner_store is not None:
+                owner_existed = await self._session_owner_store.get_owner(self._project_id, session_id) is not None
                 await self._session_owner_store.set_owner(self._project_id, session_id, user_id)
+            if on_task_start is not None:
+                await on_task_start(session_id)
         except Exception:
             self._tasks.pop(session_id, None)
+            if user_id and self._session_owner_store is not None and not owner_existed:
+                try:
+                    await self._session_owner_store.delete_owner(self._project_id, session_id)
+                except Exception:
+                    logger.warning("Failed to roll back session owner for %s", session_id, exc_info=True)
             if self._chat_admission is not None:
                 await self._chat_admission.release(admission_token)
             raise

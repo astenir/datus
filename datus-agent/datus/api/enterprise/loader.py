@@ -14,6 +14,7 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     InMemoryUserDatasourceStore,
+    InMemoryUserMcpServerStore,
     InMemoryUserModelCredentialStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
@@ -33,6 +34,7 @@ from datus.api.enterprise.protocols import (
     SessionBodyStore,
     SessionOwnerStore,
     UserDatasourceStore,
+    UserMcpServerStore,
     UserModelCredentialStore,
 )
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -66,6 +68,7 @@ class EnterpriseExtensions:
     secret_store: EnterpriseSecretStore | None = None
     user_model_credential_store: UserModelCredentialStore = field(default_factory=InMemoryUserModelCredentialStore)
     user_datasource_store: UserDatasourceStore = field(default_factory=InMemoryUserDatasourceStore)
+    user_mcp_server_store: UserMcpServerStore = field(default_factory=InMemoryUserMcpServerStore)
     user_auto_provisioning: UserAutoProvisioningConfig = field(default_factory=UserAutoProvisioningConfig)
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
     role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
@@ -88,6 +91,7 @@ class EnterpriseExtensions:
             self.secret_store,
             self.user_model_credential_store,
             self.user_datasource_store,
+            self.user_mcp_server_store,
             self.user_store,
             self.role_store,
             self.datasource_grant_store,
@@ -141,6 +145,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             secret_store=None,
             user_model_credential_store=InMemoryUserModelCredentialStore(),
             user_datasource_store=InMemoryUserDatasourceStore(),
+            user_mcp_server_store=InMemoryUserMcpServerStore(),
             user_auto_provisioning=UserAutoProvisioningConfig(),
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
@@ -219,6 +224,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         UserDatasourceStore,
         InMemoryUserDatasourceStore(),
     )
+    user_mcp_server_store = _load_optional_component(
+        raw,
+        "user_mcp_server_store",
+        UserMcpServerStore,
+        InMemoryUserMcpServerStore(),
+    )
     agent_store = _load_optional_component(
         raw,
         "agent_store",
@@ -239,6 +250,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         secret_store=secret_store,
         user_model_credential_store=user_model_credential_store,
         user_datasource_store=user_datasource_store,
+        user_mcp_server_store=user_mcp_server_store,
         user_auto_provisioning=user_auto_provisioning,
         user_store=user_store,
         role_store=role_store,

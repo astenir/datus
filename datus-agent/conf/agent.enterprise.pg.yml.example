@@ -71,6 +71,14 @@ enterprise:
       mysql: "3306"
       oceanbase: "2881"
 
+  # 普通用户个人 MCP，默认关闭。仅允许 HTTPS HTTP/SSE；allowed_hosts 不能为空。
+  user_mcp:
+    enabled: false
+    allowed_hosts: []
+    max_servers_per_user: 10
+    max_selected_per_session: 3
+    timeout_seconds: 30
+
   user_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
     kwargs:
@@ -166,6 +174,15 @@ enterprise:
       min_size: 1
       max_size: 2
       encryption_secret: ${DATUS_USER_DATASOURCE_SECRET}
+
+  # 个人 MCP 静态 Bearer Token 加密存储；密钥必须随 PG 备份纳入恢复 runbook。
+  user_mcp_server_store:
+    class: datus_enterprise.postgres_stores:PgUserMcpServerStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
+      encryption_secret: ${DATUS_USER_MCP_SECRET}
 
 # 可选：SQL policy。
 # 当 datasource grant 还需要通过 SQL rewrite/deny 兜底时，配置具体 provider。

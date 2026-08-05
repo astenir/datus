@@ -10,6 +10,7 @@ import pytest
 from datus.api.enterprise.models import AuditEvent
 from datus.utils.exceptions import DatusException
 from datus_enterprise.postgres_stores import (
+    _SCHEMA_SQL,
     PgArtifactAclStore,
     PgAuditSink,
     PgEnterpriseDatasourceGrantStore,
@@ -19,10 +20,40 @@ from datus_enterprise.postgres_stores import (
     PgEnterpriseUserStore,
     PgSessionOwnerStore,
     PgUserDatasourceStore,
+    PgUserMcpServerStore,
     PgUserModelCredentialStore,
 )
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def test_pg_schema_includes_personal_mcp_servers_and_session_bindings():
+    normalized = " ".join(_SCHEMA_SQL.lower().split())
+    assert "create table if not exists user_mcp_servers" in normalized
+    assert "create table if not exists enterprise_session_mcp_bindings" in normalized
+    assert "primary key (user_id, mcp_id)" in normalized
+    assert "primary key (project_id, session_id)" in normalized
+    assert PgUserMcpServerStore.__name__ == "PgUserMcpServerStore"
+
+
+@pytest.mark.asyncio
+async def test_pg_personal_mcp_store_counts_and_deletes_owned_bindings():
+    store = PgUserMcpServerStore(
+        dsn="postgresql://metadata",
+        encryption_secret="test-user-mcp-secret-32-characters",
+    )
+    store._fetch = AsyncMock(
+        return_value=[
+            Row(servers_json=[{"mcp_id": "a" * 32, "revision": 1}]),
+            Row(servers_json=[{"mcp_id": "b" * 32, "revision": 1}]),
+        ]
+    )
+    store._execute = AsyncMock(return_value="DELETE 1")
+
+    assert await store.count_session_bindings("alice", "a" * 32) == 1
+    assert await store.delete_session_binding("project", "session-1", "alice") is True
+    assert store._fetch.await_args.args[1:] == ("alice",)
+    assert store._execute.await_args.args[1:] == ("project", "session-1", "alice")
 
 
 class Row(dict):

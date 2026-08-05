@@ -21,6 +21,7 @@ import type {
   CreateAgentPromptVersionInput,
   EditAgentInput,
   McpServerInfo,
+  PersonalMcpMode,
 } from "@/types";
 import type { AdminArtifact, AdminDatasource } from "@/types/admin";
 
@@ -49,6 +50,7 @@ export interface AgentFormState {
   allowSubagentDelegation: boolean;
   allowedSubagentIds: string[];
   defaultUserIds: string[];
+  personalMcpMode: PersonalMcpMode;
 }
 
 export type AgentFormMode = "create" | "edit";
@@ -109,6 +111,7 @@ function emptyForm(): AgentFormState {
     allowSubagentDelegation: false,
     allowedSubagentIds: [],
     defaultUserIds: [],
+    personalMcpMode: "disabled",
   };
 }
 
@@ -246,6 +249,7 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     allowSubagentDelegation: agent.runtime_policy?.allow_subagent_delegation ?? false,
     allowedSubagentIds: [...(agent.runtime_policy?.allowed_subagents ?? [])],
     defaultUserIds: [],
+    personalMcpMode: agent.personal_mcp_mode === "selectable" ? "selectable" : "disabled",
   };
 }
 
@@ -280,6 +284,7 @@ function createInputFromForm(form: AgentFormState, supportsMcp: boolean): Create
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
+    personal_mcp_mode: form.personalMcpMode,
   };
 }
 
@@ -294,6 +299,7 @@ function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentP
       allow_subagent_delegation: Boolean(form.allowSubagentDelegation),
       allowed_subagents: form.allowSubagentDelegation ? form.allowedSubagentIds : [],
     },
+    personal_mcp_mode: form.personalMcpMode,
   };
 }
 
@@ -946,6 +952,7 @@ export function useAgentManager() {
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
+      personalMcpMode: "disabled",
     };
     selectedAgent.value = null;
     formMode.value = "create";

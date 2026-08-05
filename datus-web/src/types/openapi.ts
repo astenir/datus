@@ -1646,6 +1646,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/mcp-servers/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_personal_mcp_options_api_v1_me_mcp_servers_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-servers/session-binding/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_personal_mcp_session_binding_api_v1_me_mcp_servers_session_binding__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_personal_mcp_servers_api_v1_me_mcp_servers_get"];
+        put?: never;
+
+        post: operations["create_personal_mcp_server_api_v1_me_mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-servers/{mcp_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__get"];
+
+        put: operations["update_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__put"];
+        post?: never;
+
+        delete: operations["delete_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-servers/{mcp_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["test_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mcp-servers/{mcp_id}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_personal_mcp_tools_api_v1_me_mcp_servers__mcp_id__tools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboards": {
         parameters: {
             query?: never;
@@ -3195,6 +3300,8 @@ export interface components {
         AgentPolicy: {
             tool_policy?: components["schemas"]["AgentToolPolicy"];
             runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+
+            personal_mcp_mode: string;
         };
 
         AgentPreferenceSummary: {
@@ -3955,6 +4062,8 @@ export interface components {
             tool_policy?: components["schemas"]["AgentToolPolicy"];
             runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
 
+            personal_mcp_mode: string;
+
             enterprise_default: boolean;
 
             created_at?: string | null;
@@ -4029,6 +4138,8 @@ export interface components {
             acl?: components["schemas"]["AgentAcl"] | null;
             tool_policy?: components["schemas"]["AgentToolPolicy"];
             runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+
+            personal_mcp_mode: string;
 
             enterprise_default: boolean;
 
@@ -4577,6 +4688,62 @@ export interface components {
             display_name?: string | null;
 
             enabled: boolean;
+
+            last_used_at?: string | null;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
+        };
+
+        PersonalMcpOptions: {
+
+            enabled: boolean;
+
+            allowed_hosts?: string[];
+
+            max_servers_per_user: number;
+
+            max_selected_per_session: number;
+        };
+
+        PersonalMcpSessionBinding: {
+
+            session_id: string;
+
+            servers?: components["schemas"]["PersonalMcpSessionBindingItem"][];
+        };
+
+        PersonalMcpSessionBindingItem: {
+
+            mcp_id: string;
+
+            revision: number;
+        };
+
+        PersonalMcpSummary: {
+
+            id: string;
+
+            display_name: string;
+
+            transport: "http" | "sse";
+
+            url: string;
+
+            auth_mode: "none" | "static_bearer";
+
+            credential_configured: boolean;
+
+            token_hint?: string | null;
+
+            allowed_tools?: string[];
+
+            blocked_tools?: string[];
+
+            enabled: boolean;
+
+            revision: number;
 
             last_used_at?: string | null;
 
@@ -5302,6 +5469,39 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_PersonalMcpOptions_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpOptions"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_PersonalMcpSessionBinding_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpSessionBinding"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_PersonalMcpSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpSummary"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_ProbeResultData_: {
 
             success: boolean;
@@ -5561,6 +5761,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_list_PersonalMcpSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_list_dict_str__Any___: {
 
             success: boolean;
@@ -5756,6 +5967,8 @@ export interface components {
             permission_mode?: ("normal" | "auto" | "dangerous") | null;
 
             model_credential_id?: string | null;
+
+            personal_mcp_ids?: string[];
         };
 
         SubjectListData: {
@@ -6055,6 +6268,8 @@ export interface components {
             acl?: components["schemas"]["AgentAcl"];
             tool_policy?: components["schemas"]["AgentToolPolicy"];
             runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+
+            personal_mcp_mode: string;
         };
 
         UpsertModelCredentialRequest: {
@@ -6091,6 +6306,23 @@ export interface components {
             catalog_name?: string | null;
 
             display_name?: string | null;
+
+            enabled: boolean;
+        };
+
+        UpsertPersonalMcpRequest: {
+
+            display_name: string;
+
+            transport: "http" | "sse";
+
+            url: string;
+
+            token?: string | null;
+
+            allowed_tools?: string[];
+
+            blocked_tools?: string[];
 
             enabled: boolean;
         };
@@ -9555,6 +9787,269 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_ProbeResultData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_personal_mcp_options_api_v1_me_mcp_servers_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpOptions_"];
+                };
+            };
+        };
+    };
+    get_personal_mcp_session_binding_api_v1_me_mcp_servers_session_binding__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpSessionBinding_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_personal_mcp_servers_api_v1_me_mcp_servers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_PersonalMcpSummary__"];
+                };
+            };
+        };
+    };
+    create_personal_mcp_server_api_v1_me_mcp_servers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertPersonalMcpRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertPersonalMcpRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__bool__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__Any__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_personal_mcp_tools_api_v1_me_mcp_servers__mcp_id__tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_dict_str__Any___"];
                 };
             };
 

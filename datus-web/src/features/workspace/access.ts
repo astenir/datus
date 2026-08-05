@@ -35,7 +35,12 @@ export function workspaceAccessFromPermission(permission: WorkspacePermissionRea
       ["module.kb"],
       ["kb"],
     ),
-    canViewMcp: admin || hasViewOrPermission(permission, "mcp", ["module.mcp"], ["mcp"]),
+    canViewMcp: admin || hasViewOrPermission(
+      permission,
+      "mcp",
+      ["module.mcp", "module.mcp.personal"],
+      ["mcp", "mcp_personal"],
+    ),
     canViewAgents: admin || hasViewOrPermission(permission, "agents", ["module.admin.agents"]),
     canViewConfiguration: admin || hasViewOrPermission(
       permission,

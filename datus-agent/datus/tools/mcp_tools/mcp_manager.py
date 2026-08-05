@@ -127,6 +127,9 @@ class MCPManager:
             "_mcp_request_credentials",
             None,
         )
+        self.request_server_configs: Dict[str, AnyMCPServerConfig] = dict(
+            getattr(agent_config, "_request_mcp_servers", {}) or {}
+        )
 
         # Load existing config
         self.load_config()
@@ -271,7 +274,7 @@ class MCPManager:
         Returns:
             Server config or None if not found
         """
-        return self.config.get_server(name)
+        return self.request_server_configs.get(name) or self.config.get_server(name)
 
     async def check_connectivity(
         self,

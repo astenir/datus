@@ -9,6 +9,7 @@ read from disk each time (no in-memory state).
 # ruff: noqa: F401, I001
 
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from typing import TYPE_CHECKING
 
@@ -92,6 +93,7 @@ class ChatService(EnterpriseChatServiceMixin):
         principal: Optional[Dict[str, Any]] = None,
         agent_config: Optional[AgentConfig] = None,
         mcp_request_credentials: Optional[MCPRequestCredentials] = None,
+        on_task_start: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Start a background chat task and yield SSE events."""
         task_manager = self._task_manager
@@ -104,6 +106,7 @@ class ChatService(EnterpriseChatServiceMixin):
                 user_id=user_id,
                 principal=principal,
                 mcp_request_credentials=mcp_request_credentials,
+                on_task_start=on_task_start,
             )
         except ChatCapacityError as e:
             yield self._stream_start_error_event(e, "CHAT_CAPACITY_EXCEEDED", request.session_id)

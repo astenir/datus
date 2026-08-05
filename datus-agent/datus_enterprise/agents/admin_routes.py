@@ -12,6 +12,7 @@ from datus.api.enterprise.prompt_versions import (
     PromptVersionConflictError,
 )
 from datus.api.models.base_models import Result
+from datus.tools.mcp_tools.mcp_manager import MCPManager
 from datus_enterprise.agents.context import AdminAgentsCtx, _require_admin_agents
 from datus_enterprise.agents.helpers import (
     _agent_error,
@@ -213,6 +214,22 @@ async def upsert_admin_agent(
     except (TypeError, ValueError) as exc:
         await _audit_agent(ctx, agent_id=agent_id, operation="upsert_admin_agent", decision="deny", reason=str(exc))
         return _agent_error("AGENT_INVALID", str(exc))
+    try:
+        public_mcp_names = {server.name for server in MCPManager(agent_config=agent_config).list_servers()}
+    except Exception:
+        await _audit_agent(
+            ctx,
+            agent_id=agent_id,
+            operation="upsert_admin_agent",
+            decision="deny",
+            reason="enterprise MCP catalog unavailable",
+        )
+        return _agent_error("MCP_CATALOG_UNAVAILABLE", "Enterprise MCP catalog is unavailable.")
+    missing_mcp_names = sorted(set(payload["mcp"]) - public_mcp_names)
+    if missing_mcp_names:
+        reason = f"Only existing enterprise MCP servers may be bound: {', '.join(missing_mcp_names)}."
+        await _audit_agent(ctx, agent_id=agent_id, operation="upsert_admin_agent", decision="deny", reason=reason)
+        return _agent_error("AGENT_MCP_INVALID", reason)
     active_prompt_version = None
     stored_prompt_versions: list[dict[str, Any]] = []
     if before is not None:

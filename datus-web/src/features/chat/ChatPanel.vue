@@ -47,6 +47,7 @@ import type { SelectOption, SuccessStorySource } from "@/types"
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
+import ChatMcpPicker from "@/features/chat/ChatMcpPicker.vue"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 import TodoExecutionDock from "@/features/chat/TodoExecutionDock.vue"
 import { deriveTodoExecutionDisplay } from "@/lib/todo-execution"
@@ -402,6 +403,19 @@ function saveSuccessStory(source: SuccessStorySource) {
                 @set-default-agent="workspace.setDefaultAgent"
                 @request-catalog="workspace.ensureCatalogLoaded"
                 @request-agents="workspace.loadAgentOptions"
+              />
+              <ChatMcpPicker
+                v-if="workspace.showPersonalMcpPicker.value"
+                :servers="workspace.personalMcp.servers.value"
+                :selected-ids="workspace.personalMcp.selectedIds.value"
+                :locked="workspace.personalMcp.selectionLocked.value"
+                :loading="workspace.personalMcp.loading.value || workspace.personalMcp.bindingLoading.value"
+                :disabled="workspace.isStreaming.value && !workspace.personalMcp.selectionLocked.value"
+                :max-selected="workspace.personalMcp.maxSelected.value"
+                :agent-allows-personal-mcp="workspace.agentAllowsPersonalMcp.value"
+                :organization-available="workspace.personalMcp.isAvailable.value"
+                @toggle="workspace.personalMcp.toggleSelection"
+                @refresh="workspace.personalMcp.load"
               />
             </PromptInputTools>
 

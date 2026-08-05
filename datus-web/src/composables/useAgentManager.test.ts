@@ -853,6 +853,7 @@ describe("useAgentManager", () => {
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
+      personalMcpMode: "disabled",
     };
 
     await manager.saveForm();
@@ -890,6 +891,7 @@ describe("useAgentManager", () => {
         allow_subagent_delegation: false,
         allowed_subagents: [],
       },
+      personal_mcp_mode: "disabled",
     });
     expect(toastSuccess).toHaveBeenCalledWith("Agent 已创建");
   });
@@ -948,6 +950,7 @@ describe("useAgentManager", () => {
     const manager = useAgentManager();
     await manager.selectAgent("analyst");
     manager.form.value.promptTemplate = "Updated prompt";
+    manager.form.value.personalMcpMode = "selectable";
 
     await manager.saveForm();
 
@@ -955,6 +958,7 @@ describe("useAgentManager", () => {
       name: "analyst",
       node_class: "gen_sql",
       prompt_template: "Updated prompt",
+      personal_mcp_mode: "selectable",
       acl: {
         visibility: "role",
         allowed_roles: ["analyst"],
