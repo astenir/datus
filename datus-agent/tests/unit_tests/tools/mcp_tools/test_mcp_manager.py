@@ -74,9 +74,7 @@ class TestCreateStaticToolFilter:
 
 class TestSafeOperationError:
     def test_redacts_bearer_and_url_from_http_error(self):
-        error = RuntimeError(
-            "HTTP 403 for https://private.example/mcp Authorization: Bearer should-not-appear"
-        )
+        error = RuntimeError("HTTP 403 for https://private.example/mcp Authorization: Bearer should-not-appear")
 
         message = _safe_operation_error(error)
 
