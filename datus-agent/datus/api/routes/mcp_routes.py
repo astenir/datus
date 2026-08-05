@@ -4,7 +4,7 @@ API routes for MCP (Model Context Protocol) endpoints.
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Path, Query, Request
 
 from datus.api.deps import ServiceDep
 from datus.api.models.base_models import Result
@@ -13,6 +13,7 @@ from datus.api.models.mcp_models import (
     CallToolInput,
     ToolFilterInput,
 )
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
 
@@ -75,10 +76,12 @@ async def remove_server(
 )
 async def check_connectivity(
     svc: ServiceDep,
+    http_request: Request,
     server_name: str = SERVER_NAME_CHECK_PATH,
 ) -> Result[Dict[str, Any]]:
     """Check server connectivity status."""
-    return await svc.mcp.check_connectivity(server_name)
+    credentials = MCPRequestCredentials.from_authorization_header(http_request.headers.get("Authorization"))
+    return await svc.mcp.check_connectivity(server_name, request_credentials=credentials)
 
 
 @router.get(
@@ -89,11 +92,13 @@ async def check_connectivity(
 )
 async def list_tools(
     svc: ServiceDep,
+    http_request: Request,
     server_name: str = SERVER_NAME_PATH,
     apply_filter: bool = APPLY_FILTER_QUERY,
 ) -> Result[Dict[str, Any]]:
     """List tools available on an MCP server."""
-    return await svc.mcp.list_tools(server_name, apply_filter)
+    credentials = MCPRequestCredentials.from_authorization_header(http_request.headers.get("Authorization"))
+    return await svc.mcp.list_tools(server_name, apply_filter, request_credentials=credentials)
 
 
 @router.post(
@@ -103,13 +108,15 @@ async def list_tools(
     description="Call a tool on an MCP server",
 )
 async def call_tool(
-    request: CallToolInput,
+    tool_request: CallToolInput,
     svc: ServiceDep,
+    http_request: Request,
     server_name: str = SERVER_NAME_PATH,
     tool_name: str = TOOL_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Call a tool on an MCP server."""
-    return await svc.mcp.call_tool(server_name, tool_name, request)
+    credentials = MCPRequestCredentials.from_authorization_header(http_request.headers.get("Authorization"))
+    return await svc.mcp.call_tool(server_name, tool_name, tool_request, request_credentials=credentials)
 
 
 @router.get(

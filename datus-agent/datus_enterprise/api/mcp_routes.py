@@ -231,9 +231,10 @@ async def remove_server(
 async def check_connectivity(
     svc: ServiceDep,
     _ctx: McpModuleCtx,
+    http_request: Request,
     server_name: str = upstream_mcp_routes.SERVER_NAME_CHECK_PATH,
 ) -> Result[Dict[str, Any]]:
-    return await upstream_mcp_routes.check_connectivity(svc, server_name)
+    return await upstream_mcp_routes.check_connectivity(svc, http_request, server_name)
 
 
 @router.get(
@@ -246,9 +247,10 @@ async def check_connectivity(
 async def list_tools(
     svc: ServiceDep,
     _ctx: McpModuleCtx,
+    http_request: Request,
     server_name: str = upstream_mcp_routes.SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
-    return await upstream_mcp_routes.list_tools(svc, server_name, True)
+    return await upstream_mcp_routes.list_tools(svc, http_request, server_name, True)
 
 
 @router.post(
@@ -270,7 +272,7 @@ async def call_tool(
     tool_name: str = upstream_mcp_routes.TOOL_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
-    return await upstream_mcp_routes.call_tool(request, svc, server_name, tool_name)
+    return await upstream_mcp_routes.call_tool(request, svc, http_request, server_name, tool_name)
 
 
 @router.get(

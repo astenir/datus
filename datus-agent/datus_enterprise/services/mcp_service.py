@@ -5,8 +5,7 @@ from typing import Any, Dict
 from datus.api.enterprise.protocols import EnterpriseAgentStore
 from datus.api.models.base_models import Result
 from datus.api.models.downstream import UpdateServerInput
-from datus.api.services.mcp_service import MCPService
-from datus.tools.mcp_tools.mcp_config import MCPServerConfig
+from datus.api.services.mcp_service import MCPService, _server_summary
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -29,16 +28,25 @@ class EnterpriseMCPService(MCPService):
     def update_server(self, server_name: str, server_input: UpdateServerInput) -> Result[Dict[str, Any]]:
         """Update an existing MCP server configuration."""
         try:
-            config_data = server_input.model_dump(exclude_none=True)
-            server_config = MCPServerConfig.from_config_format(server_name, config_data)
+            existing = self.manager.get_server_config(server_name)
+            if existing is None:
+                return Result(success=False, errorMessage=f"Server '{server_name}' not found")
+            server_config = self._server_config_from_input(server_name, server_input, existing=existing)
 
             success, message = self.manager.update_server(server_name, server_config)
             if success:
-                return Result(success=True, data={"server": server_config.model_dump(), "message": message})
+                return Result(success=True, data={"server": _server_summary(server_config), "message": message})
             return Result(success=False, errorMessage=message)
-        except Exception as e:
-            logger.error(f"Error updating server: {e}")
-            return Result(success=False, errorMessage=f"Error updating server: {e}")
+        except ValueError:
+            logger.warning("Invalid MCP server update for %s", server_name)
+            return Result(
+                success=False,
+                errorCode="MCP_SERVER_CONFIG_INVALID",
+                errorMessage="Invalid MCP server configuration.",
+            )
+        except Exception:
+            logger.error("Error updating MCP server %s", server_name, exc_info=True)
+            return Result(success=False, errorMessage="Error updating MCP server.")
 
     async def remove_server_if_unreferenced(
         self,

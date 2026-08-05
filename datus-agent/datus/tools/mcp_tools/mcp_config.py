@@ -14,7 +14,7 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class MCPServerType(str, Enum):
@@ -23,6 +23,69 @@ class MCPServerType(str, Enum):
     STDIO = "stdio"  # Standard input/output communication
     SSE = "sse"  # Server-sent events communication
     HTTP = "http"  # HTTP communication protocol
+
+
+class MCPAuthMode(str, Enum):
+    """Authentication strategy for remote MCP servers."""
+
+    NONE = "none"
+    STATIC_BEARER = "static_bearer"
+    REQUEST_BEARER = "request_bearer"
+
+
+class MCPAuthConfig(BaseModel):
+    """Persisted remote MCP authentication configuration.
+
+    ``token`` is intentionally excluded from ordinary ``model_dump`` calls so
+    API responses and debug serialization cannot expose it accidentally. The
+    MCP config writer persists it explicitly for backwards-compatible manual
+    credentials.
+    """
+
+    mode: MCPAuthMode = Field(default=MCPAuthMode.NONE, description="Remote MCP authentication mode")
+    token: Optional[str] = Field(default=None, exclude=True, repr=False, description="Static bearer token")
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "MCPAuthConfig":
+        token = normalize_bearer_token(self.token)
+        if self.mode == MCPAuthMode.STATIC_BEARER and not token:
+            raise ValueError("static_bearer authentication requires a token")
+        if self.mode != MCPAuthMode.STATIC_BEARER and token:
+            raise ValueError(f"{self.mode.value} authentication must not include a token")
+        self.token = token
+        return self
+
+    @property
+    def credential_configured(self) -> bool:
+        """Whether the selected strategy has a usable credential source."""
+
+        return self.mode == MCPAuthMode.REQUEST_BEARER or bool(self.token)
+
+
+def normalize_bearer_token(value: Optional[str]) -> Optional[str]:
+    """Normalize a pasted bearer credential without logging or serializing it."""
+
+    token = (value or "").strip()
+    if not token:
+        return None
+    if "\r" in token or "\n" in token:
+        raise ValueError("Bearer token must not contain line breaks")
+    scheme, separator, credential = token.partition(" ")
+    if separator and scheme.lower() == "bearer":
+        token = credential.strip()
+    if not token:
+        raise ValueError("Bearer token is empty")
+    return token
+
+
+def _pop_header(headers: Dict[str, str], name: str) -> Optional[str]:
+    """Remove and return one HTTP header using case-insensitive matching."""
+
+    target = name.casefold()
+    for key in list(headers):
+        if key.casefold() == target:
+            return headers.pop(key)
+    return None
 
 
 class ToolFilterConfig(BaseModel):
@@ -190,6 +253,15 @@ class MCPServerConfig(BaseModel):
             elif isinstance(filter_config, ToolFilterConfig):
                 tool_filter = filter_config
 
+        headers = dict(expanded_config.get("headers") or {})
+        auth_config = expanded_config.get("auth")
+        auth = MCPAuthConfig(**auth_config) if isinstance(auth_config, dict) else auth_config
+        legacy_authorization = _pop_header(headers, "Authorization")
+        if auth is None and legacy_authorization:
+            auth = MCPAuthConfig(mode=MCPAuthMode.STATIC_BEARER, token=legacy_authorization)
+        elif auth is not None and legacy_authorization:
+            raise ValueError("Authorization must be configured through auth when auth mode is present")
+
         # Create appropriate subclass based on server type
         if server_type == MCPServerType.STDIO:
             return STDIOServerConfig(
@@ -204,7 +276,8 @@ class MCPServerConfig(BaseModel):
             return SSEServerConfig(
                 name=name,
                 url=expanded_config.get("url"),
-                headers=expanded_config.get("headers"),
+                headers=headers or None,
+                auth=auth,
                 timeout=expanded_config.get("timeout"),
                 tool_filter=tool_filter,
             )
@@ -212,7 +285,8 @@ class MCPServerConfig(BaseModel):
             return HTTPServerConfig(
                 name=name,
                 url=expanded_config.get("url"),
-                headers=expanded_config.get("headers"),
+                headers=headers or None,
+                auth=auth,
                 timeout=expanded_config.get("timeout"),
                 tool_filter=tool_filter,
             )
@@ -246,6 +320,7 @@ class SSEServerConfig(MCPServerConfig):
     type: MCPServerType = Field(default=MCPServerType.SSE, description="Server communication type")
     url: str = Field(..., description="Server URL")
     headers: Optional[Dict[str, str]] = Field(None, description="HTTP headers")
+    auth: Optional[MCPAuthConfig] = Field(None, description="Remote authentication strategy")
     timeout: Optional[float] = Field(None, description="Connection timeout")
 
     @field_validator("timeout")
@@ -272,6 +347,7 @@ class HTTPServerConfig(MCPServerConfig):
     type: MCPServerType = Field(default=MCPServerType.HTTP, description="Server communication type")
     url: str = Field(..., description="Server URL")
     headers: Optional[Dict[str, str]] = Field(None, description="HTTP headers")
+    auth: Optional[MCPAuthConfig] = Field(None, description="Remote authentication strategy")
     timeout: Optional[float] = Field(None, description="Connection timeout")
 
     @field_validator("timeout")
@@ -381,6 +457,7 @@ class MCPConfig(BaseModel):
                     server_config["headers"] = server.headers
                 if server.timeout:
                     server_config["timeout"] = server.timeout
+                self._add_auth_config(server_config, server.auth)
 
             elif server.type == MCPServerType.HTTP:
                 if server.url:
@@ -389,7 +466,19 @@ class MCPConfig(BaseModel):
                     server_config["headers"] = server.headers
                 if server.timeout:
                     server_config["timeout"] = server.timeout
+                self._add_auth_config(server_config, server.auth)
 
             config["mcpServers"][name] = server_config
 
         return config
+
+    @staticmethod
+    def _add_auth_config(server_config: Dict[str, Any], auth: Optional[MCPAuthConfig]) -> None:
+        """Persist auth explicitly because raw tokens are excluded from model dumps."""
+
+        if auth is None or auth.mode == MCPAuthMode.NONE:
+            return
+        auth_config: Dict[str, Any] = {"mode": auth.mode.value}
+        if auth.mode == MCPAuthMode.STATIC_BEARER:
+            auth_config["token"] = auth.token
+        server_config["auth"] = auth_config

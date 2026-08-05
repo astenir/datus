@@ -1,11 +1,10 @@
-import type { McpServerInfo } from "@/types";
+import type { McpAuthMode, McpServerInfo, McpServerInput } from "@/types";
 
 export const MCP_SERVER_TYPES = ["stdio", "sse", "http"] as const;
 
 export type McpServerType = (typeof MCP_SERVER_TYPES)[number];
 
 export type RemoteMcpHeadersInput = {
-  token?: string;
   headersJson?: string;
 };
 
@@ -105,13 +104,11 @@ export function buildRemoteMcpHeaders(input: RemoteMcpHeadersInput): RemoteMcpHe
       if (!headerName) {
         return { error: "Headers 不能包含空键名" };
       }
+      if (headerName.toLowerCase() === "authorization") {
+        return { error: "Authorization 请通过认证方式配置，不能写入 Headers JSON" };
+      }
       headers[headerName] = value;
     }
-  }
-
-  const token = input.token?.trim() ?? "";
-  if (token) {
-    headers.Authorization = token.toLowerCase().startsWith("bearer ") ? token : `Bearer ${token}`;
   }
 
   return Object.keys(headers).length > 0 ? { headers } : {};
@@ -124,14 +121,16 @@ export type McpServerFormInput = {
   argsText: string;
   url: string;
   headersJson: string;
+  authMode: Exclude<McpAuthMode, "none">;
   token: string;
+  staticCredentialConfigured: boolean;
   timeoutText: string;
   envJson: string;
   cwd: string;
 };
 
 export type BuildMcpServerResult = {
-  server?: McpServerInfo;
+  server?: McpServerInput;
   error?: string;
 };
 
@@ -143,7 +142,9 @@ export function createDefaultMcpServerForm(): McpServerFormInput {
     argsText: "",
     url: "",
     headersJson: "",
+    authMode: "request_bearer",
     token: "",
+    staticCredentialConfigured: false,
     timeoutText: "",
     envJson: "",
     cwd: "",
@@ -160,7 +161,9 @@ export function createMcpServerForm(server: McpServerInfo | null | undefined): M
     argsText: server.args?.join("\n") ?? "",
     url: server.url ?? "",
     headersJson: jsonRecordText(server.headers),
+    authMode: server.auth?.mode === "static_bearer" ? "static_bearer" : "request_bearer",
     token: "",
+    staticCredentialConfigured: server.auth?.mode === "static_bearer" && server.auth.credential_configured,
     timeoutText: typeof server.timeout === "number" ? String(server.timeout) : "",
     envJson: jsonRecordText(server.env),
     cwd: server.cwd ?? "",
@@ -177,7 +180,7 @@ export function buildMcpServerInfo(input: McpServerFormInput): BuildMcpServerRes
     return { error: "类型必须是 stdio、sse 或 http" };
   }
 
-  const server: McpServerInfo = {
+  const server: McpServerInput = {
     name,
     type: input.type,
   };
@@ -210,10 +213,21 @@ export function buildMcpServerInfo(input: McpServerFormInput): BuildMcpServerRes
 
   const headers = buildRemoteMcpHeaders({
     headersJson: input.headersJson,
-    token: input.token,
   });
   if (headers.error) return { error: headers.error };
   if (headers.headers) server.headers = headers.headers;
+
+  if (input.authMode === "request_bearer") {
+    server.auth = { mode: "request_bearer" };
+  } else {
+    const token = input.token.trim();
+    if (!token && !input.staticCredentialConfigured) {
+      return { error: "手动认证需要填写固定 Bearer Token" };
+    }
+    server.auth = token
+      ? { mode: "static_bearer", token }
+      : { mode: "static_bearer" };
+  }
 
   const timeoutRaw = input.timeoutText.trim();
   if (timeoutRaw) {

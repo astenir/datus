@@ -29,7 +29,7 @@ import {
   createDefaultMcpServerForm,
   createMcpServerForm,
 } from "@/lib/mcp"
-import type { McpServerInfo } from "@/types"
+import type { McpServerInfo, McpServerInput } from "@/types"
 
 const open = defineModel<boolean>("open", { default: false })
 
@@ -40,12 +40,13 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [server: McpServerInfo];
+  submit: [server: McpServerInput];
 }>()
 
 const form = reactive(createDefaultMcpServerForm())
 const error = shallowRef("")
 const isStdio = computed(() => form.type === "stdio")
+const usesStaticBearer = computed(() => form.authMode === "static_bearer")
 const isEdit = computed(() => props.mode === "edit")
 const title = computed(() => isEdit.value ? "编辑 MCP Server" : "添加 MCP Server")
 const description = computed(() =>
@@ -195,14 +196,27 @@ function submitForm() {
 
             <div class="grid gap-4 md:grid-cols-2">
               <Field>
-                <FieldLabel for="mcp-server-token">Bearer Token</FieldLabel>
-                <Input
-                  id="mcp-server-token"
-                  v-model="form.token"
-                  autocomplete="off"
-                  placeholder="token"
-                  type="password"
-                />
+                <FieldLabel for="mcp-server-auth-mode">认证方式</FieldLabel>
+                <Select v-model="form.authMode">
+                  <SelectTrigger
+                    id="mcp-server-auth-mode"
+                    class="w-full"
+                  >
+                    <SelectValue placeholder="选择认证方式" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="request_bearer">使用当前登录凭证</SelectItem>
+                      <SelectItem value="static_bearer">手动填写固定 Token</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription v-if="!usesStaticBearer">
+                  每次调用使用当前用户的登录凭证，Token 不会保存到 MCP 配置。
+                </FieldDescription>
+                <FieldDescription v-else>
+                  固定 Token 会作为共享服务凭证保存，请勿填写个人临时凭证。
+                </FieldDescription>
               </Field>
 
               <Field>
@@ -216,6 +230,20 @@ function submitForm() {
               </Field>
             </div>
 
+            <Field v-if="usesStaticBearer">
+              <FieldLabel for="mcp-server-token">Bearer Token</FieldLabel>
+              <Input
+                id="mcp-server-token"
+                v-model="form.token"
+                autocomplete="new-password"
+                placeholder="token"
+                type="password"
+              />
+              <FieldDescription v-if="isEdit && form.staticCredentialConfigured">
+                已配置固定 Token，留空表示保持不变。
+              </FieldDescription>
+            </Field>
+
             <Field>
               <FieldLabel for="mcp-server-headers">Headers JSON</FieldLabel>
               <Textarea
@@ -225,7 +253,7 @@ function submitForm() {
                 placeholder="{&quot;X-Project&quot;:&quot;demo&quot;}"
                 spellcheck="false"
               />
-              <FieldDescription>Bearer Token 会覆盖 Headers JSON 里的 Authorization。</FieldDescription>
+              <FieldDescription>Authorization 由上方认证方式管理，Headers JSON 中不可重复填写。</FieldDescription>
             </Field>
           </template>
         </FieldGroup>

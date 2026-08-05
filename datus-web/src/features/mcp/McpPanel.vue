@@ -38,7 +38,7 @@ import { usePermission } from "@/composables/usePermission"
 import { ApiResultError } from "@/lib/chat"
 import { friendlyMcpConnectionError } from "@/lib/mcp"
 import { handleError } from "@/lib/utils"
-import type { McpConnectivityResult, McpServerInfo, McpToolInfo } from "@/types"
+import type { McpConnectivityResult, McpServerInfo, McpServerInput, McpToolInfo } from "@/types"
 
 interface McpAgentReference {
   agent_id: string
@@ -184,6 +184,13 @@ function serverTarget(server: McpServerInfo) {
   return server.command || server.url || server.cwd || "local"
 }
 
+function serverAuthLabel(server: McpServerInfo) {
+  if (server.type === "stdio" || !server.auth) return ""
+  if (server.auth.mode === "request_bearer") return "当前用户凭证"
+  if (server.auth.mode === "static_bearer") return "固定 Token"
+  return "无认证"
+}
+
 function connectivityLabel(result?: McpConnectivityResult) {
   if (!result) return ""
   const suffix = typeof result.tools_count === "number" ? `，${result.tools_count} 个工具` : ""
@@ -202,7 +209,7 @@ function openEditDialog(server: McpServerInfo) {
   serverDialogOpen.value = true
 }
 
-async function submitServer(server: McpServerInfo) {
+async function submitServer(server: McpServerInput) {
   if (serverDialogMode.value === "edit" && !canEditServer.value) return
   if (serverDialogMode.value === "create" && !canAddServer.value) return
 
@@ -347,7 +354,15 @@ onMounted(() => {
                       <span class="min-w-0 flex-1">
                         <span class="flex items-center justify-between gap-2">
                           <span class="truncate font-medium">{{ server.name }}</span>
-                          <Badge variant="secondary">{{ server.type }}</Badge>
+                          <span class="flex shrink-0 items-center gap-1">
+                            <Badge
+                              v-if="serverAuthLabel(server)"
+                              variant="outline"
+                            >
+                              {{ serverAuthLabel(server) }}
+                            </Badge>
+                            <Badge variant="secondary">{{ server.type }}</Badge>
+                          </span>
                         </span>
                         <span class="mt-1 block break-all text-xs text-muted-foreground">
                           {{ serverTarget(server) }}
@@ -362,7 +377,15 @@ onMounted(() => {
                       <span class="min-w-0 flex-1">
                         <span class="flex items-center justify-between gap-2">
                           <span class="truncate font-medium">{{ server.name }}</span>
-                          <Badge variant="secondary">{{ server.type }}</Badge>
+                          <span class="flex shrink-0 items-center gap-1">
+                            <Badge
+                              v-if="serverAuthLabel(server)"
+                              variant="outline"
+                            >
+                              {{ serverAuthLabel(server) }}
+                            </Badge>
+                            <Badge variant="secondary">{{ server.type }}</Badge>
+                          </span>
                         </span>
                         <span class="mt-1 block truncate text-xs text-muted-foreground">
                           {{ serverTarget(server) }}

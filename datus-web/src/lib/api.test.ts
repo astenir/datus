@@ -590,16 +590,15 @@ describe("api client", () => {
     });
   });
 
-  it("preserves remote MCP headers when adding an SSE or HTTP server", async () => {
+  it("sends remote MCP authentication separately from custom headers", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: {} }));
 
     await mcpApi.addServer("http://localhost:8000", {
       name: "remote-mcp",
       type: "http",
       url: "https://example.com/mcp",
-      headers: {
-        Authorization: "Bearer token",
-      },
+      headers: { "X-Project": "demo" },
+      auth: { mode: "static_bearer", token: "fixed-value" },
       timeout: 30,
     });
 
@@ -608,9 +607,8 @@ describe("api client", () => {
       name: "remote-mcp",
       type: "http",
       url: "https://example.com/mcp",
-      headers: {
-        Authorization: "Bearer token",
-      },
+      headers: { "X-Project": "demo" },
+      auth: { mode: "static_bearer", token: "fixed-value" },
       timeout: 30,
     });
   });
@@ -622,9 +620,8 @@ describe("api client", () => {
       name: "remote-mcp",
       type: "http",
       url: "https://example.com/mcp",
-      headers: {
-        Authorization: "Bearer token",
-      },
+      headers: { "X-Project": "demo" },
+      auth: { mode: "request_bearer" },
       timeout: 30,
     });
 
@@ -634,9 +631,8 @@ describe("api client", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       type: "http",
       url: "https://example.com/mcp",
-      headers: {
-        Authorization: "Bearer token",
-      },
+      headers: { "X-Project": "demo" },
+      auth: { mode: "request_bearer" },
       timeout: 30,
     });
   });

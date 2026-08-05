@@ -528,6 +528,18 @@ export type DatabaseInfo = {
 
 // ─── MCP ─────────────────────────────────────────────────────────────────────
 
+export type McpAuthMode = "none" | "static_bearer" | "request_bearer";
+
+export type McpAuthSummary = {
+  mode: McpAuthMode;
+  credential_configured: boolean;
+};
+
+export type McpAuthInput =
+  | { mode: "none" }
+  | { mode: "request_bearer" }
+  | { mode: "static_bearer"; token?: string };
+
 export type McpServerInfo = {
   name: string;
   type: string;
@@ -536,9 +548,14 @@ export type McpServerInfo = {
   args?: string[];
   url?: string;
   headers?: Record<string, string>;
+  auth?: McpAuthSummary;
   timeout?: number;
   env?: Record<string, string>;
   cwd?: string;
+};
+
+export type McpServerInput = Omit<McpServerInfo, "status" | "auth"> & {
+  auth?: McpAuthInput;
 };
 
 export type McpConnectivityResult = {

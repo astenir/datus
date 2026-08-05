@@ -12,6 +12,8 @@ and status monitoring.
 
 import asyncio
 import json
+import os
+import re
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -22,12 +24,14 @@ from agents.mcp.server import MCPServerSse, MCPServerSseParams, MCPServerStreama
 from datus.tools.mcp_tools import mcp_manager_downstream as downstream
 from datus.tools.mcp_tools.mcp_config import (
     AnyMCPServerConfig,
+    MCPAuthMode,
     MCPConfig,
     MCPServerType,
     STDIOServerConfig,
     ToolFilterConfig,
     expand_config_env_vars,
 )
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 from datus.tools.mcp_tools.mcp_server import SilentMCPServerStdio
 from datus.utils.loggings import get_logger
 
@@ -35,6 +39,21 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.utils.path_manager import DatusPathManager
+
+
+def _safe_operation_error(error: BaseException) -> str:
+    """Classify an SDK failure without returning request details or headers."""
+
+    error_type = type(error).__name__
+    raw = str(error)
+    if "ConnectError" in error_type or "ConnectError" in raw:
+        return "Failed to connect to server. Please check the server address and network connectivity."
+    if "Timeout" in error_type or "timed out" in raw.casefold():
+        return "MCP server operation timed out."
+    status = re.search(r"\b([45]\d{2})\b", raw)
+    if status:
+        return f"MCP server returned HTTP {status.group(1)}."
+    return f"MCP server operation failed ({error_type})."
 
 
 def create_static_tool_filter(
@@ -103,6 +122,11 @@ class MCPManager:
 
         self.config: MCPConfig = MCPConfig()
         self._lock = threading.Lock()
+        self.request_credentials: Optional[MCPRequestCredentials] = getattr(
+            agent_config,
+            "_mcp_request_credentials",
+            None,
+        )
 
         # Load existing config
         self.load_config()
@@ -134,8 +158,11 @@ class MCPManager:
                 else:
                     logger.info(f"No config file found at {self.config_path}, using defaults")
                 return True
-        except Exception as e:
-            logger.error(f"Error loading config: {e}")
+        except Exception:
+            # Validation errors can echo rejected input values. MCP config can
+            # contain credentials, so keep both logs and tracebacks generic.
+            logger.error("Failed to load MCP config; using defaults")
+            self.config = MCPConfig()
             return False
 
     def save_config(self) -> bool:
@@ -149,7 +176,9 @@ class MCPManager:
             # Ensure config directory exists
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.config_path, "w", encoding="utf-8") as f:
+            fd = os.open(self.config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                os.fchmod(f.fileno(), 0o600)
                 config_data = self.config.to_config_format()
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
 
@@ -244,14 +273,21 @@ class MCPManager:
         """
         return self.config.get_server(name)
 
-    async def check_connectivity(self, name: str) -> Tuple[bool, str, Dict[str, Any]]:
+    async def check_connectivity(
+        self,
+        name: str,
+        request_credentials: Optional[MCPRequestCredentials] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
         """Check server connectivity by attempting to connect and list tools."""
         valid, error_msg, config = _validate_server_exists(self, name)
         if not valid:
             return False, error_msg, {}
 
         # Create server instance
-        server_instance, connectivity_details = self._create_server_instance(config)
+        server_instance, connectivity_details = self._create_server_instance(
+            config,
+            request_credentials=request_credentials,
+        )
         if not server_instance:
             error_msg = connectivity_details.get("error", "Failed to create server instance")
             return False, f"Failed to create server instance for '{name}': {error_msg}", connectivity_details
@@ -267,7 +303,12 @@ class MCPManager:
             error_msg = tools_data.get("error", "Connectivity test failed")
             return False, f"Server '{name}' connectivity test failed: {error_msg}", connectivity_details
 
-    async def list_tools(self, server_name: str, apply_filter: bool = True) -> Tuple[bool, str, List[Dict[str, Any]]]:
+    async def list_tools(
+        self,
+        server_name: str,
+        apply_filter: bool = True,
+        request_credentials: Optional[MCPRequestCredentials] = None,
+    ) -> Tuple[bool, str, List[Dict[str, Any]]]:
         """List tools available on the specified MCP server."""
         try:
             valid, error_msg, config = _validate_server_exists(self, server_name)
@@ -275,7 +316,10 @@ class MCPManager:
                 return False, error_msg, []
 
             # Create server instance
-            server_instance, details = self._create_server_instance(config)
+            server_instance, details = self._create_server_instance(
+                config,
+                request_credentials=request_credentials,
+            )
             if not server_instance:
                 error_msg = details.get("error", "Failed to create server instance")
                 return False, f"Failed to connect to server '{server_name}': {error_msg}", []
@@ -309,7 +353,11 @@ class MCPManager:
         return await self.list_tools(server_name, apply_filter=True)
 
     async def call_tool(
-        self, server_name: str, tool_name: str, arguments: Dict[str, Any]
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        request_credentials: Optional[MCPRequestCredentials] = None,
     ) -> Tuple[bool, str, Dict[str, Any]]:
         """Call a tool on the specified MCP server."""
         try:
@@ -322,7 +370,10 @@ class MCPManager:
                 return False, f"Tool '{tool_name}' is blocked by server filter configuration", {}
 
             # Create server instance
-            server_instance, details = self._create_server_instance(config)
+            server_instance, details = self._create_server_instance(
+                config,
+                request_credentials=request_credentials,
+            )
             if not server_instance:
                 error_msg = details.get("error", "Failed to create server instance")
                 return False, f"Failed to connect to server '{server_name}': {error_msg}", {}
@@ -376,7 +427,11 @@ class MCPManager:
             logger.error(f"Error getting tool filter for server {server_name}: {e}")
             return False, f"Error getting tool filter: {e}", None
 
-    def _create_server_instance(self, config: AnyMCPServerConfig) -> Tuple[Any, Dict[str, Any]]:
+    def _create_server_instance(
+        self,
+        config: AnyMCPServerConfig,
+        request_credentials: Optional[MCPRequestCredentials] = None,
+    ) -> Tuple[Any, Dict[str, Any]]:
         """Create MCP server instance based on config type."""
         try:
             # Expand environment variables in config
@@ -386,14 +441,29 @@ class MCPManager:
             if config.type == MCPServerType.STDIO:
                 return self._create_stdio_server(config, expanded_config)
             elif config.type == MCPServerType.SSE:
-                return self._create_sse_server(expanded_config, config=config)
+                return self._create_sse_server(
+                    expanded_config,
+                    config=config,
+                    request_credentials=request_credentials or self.request_credentials,
+                )
             elif config.type == MCPServerType.HTTP:
-                return self._create_http_server(expanded_config, config=config)
+                return self._create_http_server(
+                    expanded_config,
+                    config=config,
+                    request_credentials=request_credentials or self.request_credentials,
+                )
             else:
                 return None, {"error": f"Unsupported server type: {config.type}"}
-        except Exception as e:
-            logger.error(f"Failed to create server instance: {e}")
-            return None, {"error": str(e)}
+        except ValueError as e:
+            error_code = str(e)
+            if error_code in {"MCP_AUTH_CONTEXT_UNAVAILABLE", "MCP_STATIC_CREDENTIAL_UNAVAILABLE"}:
+                return None, {"error": error_code}
+            logger.error("Invalid MCP server connection configuration")
+            return None, {"error": "MCP_SERVER_CONNECTION_CONFIG_INVALID"}
+        except Exception:
+            # SDK validation errors may echo header values.
+            logger.error("Failed to create MCP server instance")
+            return None, {"error": "MCP_SERVER_INSTANCE_CREATE_FAILED"}
 
     def _create_stdio_server(self, config: STDIOServerConfig, expanded_config: Dict[str, Any]):
         """Create STDIO server instance."""
@@ -424,13 +494,18 @@ class MCPManager:
         expanded_config: Dict[str, Any],
         *,
         config: Optional[AnyMCPServerConfig] = None,
+        request_credentials: Optional[MCPRequestCredentials] = None,
     ):
         """Create SSE server instance."""
         url = expanded_config.get("url")
         if not url:
             return None, {"error": "URL is required for SSE server"}
 
-        headers = expanded_config.get("headers") or {}
+        headers = self._resolve_remote_headers(
+            expanded_config.get("headers") or {},
+            config=config,
+            request_credentials=request_credentials,
+        )
         timeout = 30.0 if not expanded_config.get("timeout") else float(expanded_config.get("timeout"))
         headers["Accept"] = "text/event-stream"
 
@@ -448,13 +523,18 @@ class MCPManager:
         expanded_config: Dict[str, Any],
         *,
         config: Optional[AnyMCPServerConfig] = None,
+        request_credentials: Optional[MCPRequestCredentials] = None,
     ):
         """Create HTTP server instance."""
         url = expanded_config.get("url")
         if not url:
             return None, {"error": "URL is required for HTTP server"}
 
-        headers = expanded_config.get("headers", {}) or {}
+        headers = self._resolve_remote_headers(
+            expanded_config.get("headers", {}) or {},
+            config=config,
+            request_credentials=request_credentials,
+        )
         timeout = float(expanded_config.get("timeout")) if expanded_config.get("timeout") else 30.0
 
         # Merge default headers with user-provided headers
@@ -475,6 +555,38 @@ class MCPManager:
         details = {"url": url, "headers_count": len(merged_headers), "timeout": timeout}
         return server_instance, details
 
+    @staticmethod
+    def _resolve_remote_headers(
+        configured_headers: Dict[str, str],
+        *,
+        config: Optional[AnyMCPServerConfig],
+        request_credentials: Optional[MCPRequestCredentials],
+    ) -> Dict[str, str]:
+        """Build per-connection headers without mutating persisted config."""
+
+        headers = dict(configured_headers)
+        auth = getattr(config, "auth", None) if config is not None else None
+        if auth is None or auth.mode == MCPAuthMode.NONE:
+            return headers
+
+        for header_name in list(headers):
+            if header_name.casefold() == "authorization":
+                headers.pop(header_name)
+
+        if auth.mode == MCPAuthMode.REQUEST_BEARER:
+            token = request_credentials.bearer_token if request_credentials is not None else None
+            if not token:
+                raise ValueError("MCP_AUTH_CONTEXT_UNAVAILABLE")
+        elif auth.mode == MCPAuthMode.STATIC_BEARER:
+            token = auth.token
+            if not token:
+                raise ValueError("MCP_STATIC_CREDENTIAL_UNAVAILABLE")
+        else:
+            return headers
+
+        headers["Authorization"] = f"Bearer {token}"
+        return headers
+
     async def _run_tools_operation_async(
         self, server_instance: SilentMCPServerStdio, server_name: str, operation: str, timeout=30.0, **kwargs
     ) -> Tuple[bool, Dict[str, Any]]:
@@ -492,17 +604,11 @@ class MCPManager:
                     server_instance, server_name, operation, agent, run_context, **kwargs
                 )
         except Exception as e:
-            error_msg = str(e)
-            if "ConnectError" in str(type(e)):
-                error_msg = "Failed to connect to server. Please check the server address and network connectivity."
-
+            error_msg = _safe_operation_error(e)
             logger.error(f"Error executing {operation} on server '{server_name}': {error_msg}")
             return False, {"error": error_msg}
         except (asyncio.CancelledError, ExceptionGroup) as e:
-            error_msg = str(e)
-            if "ConnectError" in str(type(e)):
-                error_msg = "Failed to connect to server. Please check the server address and network connectivity."
-
+            error_msg = _safe_operation_error(e)
             logger.error(f"Error executing {operation} on server '{server_name}': {error_msg}")
             return False, {"error": error_msg}
         finally:

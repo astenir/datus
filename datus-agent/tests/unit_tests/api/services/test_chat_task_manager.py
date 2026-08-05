@@ -24,6 +24,7 @@ from datus.api.services.chat_task_manager import (
     _is_stream_delta,
     _should_include_final_response,
 )
+from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 
 
 class TestFillDatabaseContext:
@@ -1082,6 +1083,27 @@ class TestStartChat:
             "database": "configured_database",
             "db_schema": "configured_schema",
         }
+
+    async def test_request_mcp_credentials_are_scoped_to_cloned_config(self, real_agent_config, monkeypatch):
+        from datus.api.models.cli_models import StreamChatInput
+
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["credentials"] = agent_config._mcp_request_credentials
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        credentials = MCPRequestCredentials(bearer_token="request-value", user_id="alice")
+        manager = ChatTaskManager()
+        task = await manager.start_chat(
+            real_agent_config,
+            StreamChatInput(message="hello", session_id="mcp-request-scope"),
+            mcp_request_credentials=credentials,
+        )
+        await task.asyncio_task
+
+        assert captured["credentials"] is credentials
+        assert not hasattr(real_agent_config, "_mcp_request_credentials")
 
     async def test_start_chat_forces_immutable_config(self, real_agent_config, monkeypatch):
         """The per-request clone is marked read-only (filesystem + config)
