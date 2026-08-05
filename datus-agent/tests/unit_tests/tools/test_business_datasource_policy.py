@@ -53,6 +53,5 @@ def test_rejects_mutating_or_unverifiable_statement(sql: str, operation: str) ->
 
 def test_delete_message_matches_product_copy() -> None:
     assert business_datasource_read_only_message("DELETE") == (
-        "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。"
-        "如需删除业务数据，请通过受控的数据维护流程联系管理员。"
+        "企业模式下业务数据源仅支持只读查询，DELETE 操作未执行。如需删除业务数据，请通过受控的数据维护流程联系管理员。"
     )

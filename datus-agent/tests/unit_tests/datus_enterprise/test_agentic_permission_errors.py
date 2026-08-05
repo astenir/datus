@@ -6,8 +6,7 @@ from datus_enterprise.services.agentic_permission_errors import format_permissio
 
 def test_formats_business_datasource_delete_denial_with_exact_user_copy() -> None:
     exc = PermissionDeniedException(
-        "PERMISSION_DENIED: ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY: "
-        "operation='DELETE' kind='delete'. STOP retrying.",
+        "PERMISSION_DENIED: ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY: operation='DELETE' kind='delete'. STOP retrying.",
         tool_category="db_tools",
         tool_name="execute_sql",
     )

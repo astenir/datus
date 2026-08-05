@@ -186,9 +186,7 @@ class CompareAgenticNode(AgenticNode):
         prompt is stashed in ``ctx.extras`` for ``_build_template_context`` to
         surface as ``user_message_override``.
         """
-        _, raw_user_prompt, _ = self._prepare_prompt_components(
-            ctx.user_input, agent_config=self.agent_config
-        )
+        _, raw_user_prompt, _ = self._prepare_prompt_components(ctx.user_input, agent_config=self.agent_config)
         ctx.extras["compare_user_prompt"] = raw_user_prompt
 
     def _build_template_context(self, ctx: StreamRunContext) -> Optional[dict]:

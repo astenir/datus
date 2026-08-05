@@ -55,6 +55,7 @@ router = APIRouter(prefix="/api/v1", tags=["enterprise-roles"])
 _require_admin_roles = require_module("module.admin.roles")
 AdminRolesCtx = Annotated[AppContext, Depends(_require_admin_roles)]
 
+
 @router.get("/admin/roles", response_model=AdminListResult[AdminRoleSummary], summary="List Admin Roles")
 async def list_admin_roles(
     ctx: AdminRolesCtx,
