@@ -3,123 +3,136 @@ import { ActivityIcon, PencilIcon, ServerIcon, Trash2Icon } from "@lucide/vue"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableEmpty,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import type { PersonalMcpSummary } from "@/types/profile"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Spinner } from "@/components/ui/spinner"
+import type { McpServerListItem } from "@/features/mcp/types"
 
 defineProps<{
-  servers: readonly PersonalMcpSummary[]
+  servers: readonly McpServerListItem[]
   selectedId: string
+  countLabel: string
   loading: boolean
   checkingId: string | null
   canEdit: boolean
   canRemove: boolean
   canTest: boolean
+  emptyLabel: string
 }>()
 
 const emit = defineEmits<{
   select: [id: string]
-  edit: [server: PersonalMcpSummary]
-  remove: [server: PersonalMcpSummary]
+  edit: [id: string]
+  remove: [id: string]
   test: [id: string]
 }>()
 </script>
 
 <template>
-  <div class="overflow-x-auto rounded-md border">
-    <Table class="min-w-3xl">
-      <TableHeader>
-        <TableRow>
-          <TableHead>名称</TableHead>
-          <TableHead>连接</TableHead>
-          <TableHead>凭据</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead class="w-[12rem] text-right">操作</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        <TableRow
-          v-for="server in servers"
-          :key="server.id"
-          class="cursor-pointer"
-          :data-state="server.id === selectedId ? 'selected' : undefined"
-          @click="emit('select', server.id)"
-        >
-          <TableCell>
-            <div class="flex min-w-0 items-center gap-2">
-              <ServerIcon class="shrink-0 text-muted-foreground" />
-              <div class="min-w-0">
-                <div class="truncate text-sm font-medium">{{ server.display_name }}</div>
-                <div class="truncate font-mono text-xs text-muted-foreground">{{ server.id }}</div>
+  <Card class="min-h-0">
+    <CardHeader class="shrink-0">
+      <div class="flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <CardTitle class="text-lg">MCP Server</CardTitle>
+          <CardDescription class="text-sm">{{ countLabel }}</CardDescription>
+        </div>
+        <Spinner v-if="loading" />
+      </div>
+    </CardHeader>
+    <CardContent class="flex min-h-0 flex-1 flex-col">
+      <ScrollArea class="min-h-0 flex-1">
+        <div class="flex flex-col gap-2 pr-3">
+          <div
+            v-for="server in servers"
+            :key="server.id"
+            class="rounded-lg border p-2"
+            :class="server.id === selectedId ? 'border-primary bg-accent/60' : 'bg-background'"
+          >
+            <div class="flex items-start gap-2">
+              <Button
+                variant="ghost"
+                class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left"
+                @click="emit('select', server.id)"
+              >
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="flex min-w-0 items-center gap-2">
+                      <ServerIcon class="shrink-0 text-muted-foreground" />
+                      <span class="truncate font-medium">{{ server.name }}</span>
+                    </span>
+                    <span class="flex shrink-0 items-center gap-1">
+                      <Badge variant="outline">{{ server.transport }}</Badge>
+                      <Badge
+                        v-if="server.statusLabel"
+                        variant="secondary"
+                      >
+                        {{ server.statusLabel }}
+                      </Badge>
+                    </span>
+                  </span>
+                  <span class="mt-1 block truncate text-xs text-muted-foreground">
+                    {{ server.target }}
+                  </span>
+                  <span
+                    v-if="server.authLabel"
+                    class="mt-1 block truncate text-xs text-muted-foreground"
+                  >
+                    {{ server.authLabel }}
+                  </span>
+                </span>
+              </Button>
+              <div class="flex shrink-0 items-center gap-1">
+                <Button
+                  v-if="canTest"
+                  variant="ghost"
+                  size="icon-sm"
+                  :aria-label="`检查 ${server.name} 连接`"
+                  :title="`检查 ${server.name} 连接`"
+                  :disabled="checkingId === server.id"
+                  @click.stop="emit('test', server.id)"
+                >
+                  <Spinner v-if="checkingId === server.id" />
+                  <ActivityIcon v-else />
+                </Button>
+                <Button
+                  v-if="canEdit"
+                  variant="ghost"
+                  size="icon-sm"
+                  :aria-label="`编辑 ${server.name}`"
+                  :title="`编辑 ${server.name}`"
+                  @click.stop="emit('edit', server.id)"
+                >
+                  <PencilIcon />
+                </Button>
+                <Button
+                  v-if="canRemove"
+                  variant="ghost"
+                  size="icon-sm"
+                  class="text-destructive hover:text-destructive"
+                  :aria-label="`删除 ${server.name}`"
+                  :title="`删除 ${server.name}`"
+                  @click.stop="emit('remove', server.id)"
+                >
+                  <Trash2Icon />
+                </Button>
               </div>
             </div>
-          </TableCell>
-          <TableCell>
-            <div class="min-w-0">
-              <Badge variant="outline">{{ server.transport.toUpperCase() }}</Badge>
-              <div class="mt-1 max-w-64 truncate text-xs text-muted-foreground">{{ server.url }}</div>
-            </div>
-          </TableCell>
-          <TableCell>
-            <span class="text-sm">{{ server.credential_configured ? server.token_hint || "已配置" : "无认证" }}</span>
-          </TableCell>
-          <TableCell>
-            <Badge :variant="server.enabled ? 'secondary' : 'outline'">
-              {{ server.enabled ? "启用" : "停用" }}
-            </Badge>
-          </TableCell>
-          <TableCell @click.stop>
-            <div class="flex justify-end gap-1.5">
-              <Button
-                v-if="canTest"
-                variant="outline"
-                size="sm"
-                :disabled="checkingId === server.id || loading"
-                @click="emit('test', server.id)"
-              >
-                <ActivityIcon data-icon="inline-start" />
-                {{ checkingId === server.id ? "测试中" : "测试" }}
-              </Button>
-              <Button
-                v-if="canEdit"
-                variant="ghost"
-                size="icon-sm"
-                :disabled="loading"
-                title="编辑"
-                aria-label="编辑个人 MCP"
-                @click="emit('edit', server)"
-              >
-                <PencilIcon />
-              </Button>
-              <Button
-                v-if="canRemove"
-                variant="ghost"
-                size="icon-sm"
-                class="text-destructive hover:text-destructive"
-                :disabled="loading"
-                title="删除"
-                aria-label="删除个人 MCP"
-                @click="emit('remove', server)"
-              >
-                <Trash2Icon />
-              </Button>
-            </div>
-          </TableCell>
-        </TableRow>
-        <TableEmpty
-          v-if="servers.length === 0"
-          :colspan="5"
-        >
-          {{ loading ? "正在加载个人 MCP..." : "还没有个人 MCP。" }}
-        </TableEmpty>
-      </TableBody>
-    </Table>
-  </div>
+            <p
+              v-if="server.connectionLabel"
+              class="px-2 pt-1 text-xs text-muted-foreground"
+            >
+              {{ server.connectionLabel }}
+            </p>
+          </div>
+
+          <div
+            v-if="servers.length === 0 && !loading"
+            class="rounded-lg border p-4 text-sm text-muted-foreground"
+          >
+            {{ emptyLabel }}
+          </div>
+        </div>
+      </ScrollArea>
+    </CardContent>
+  </Card>
 </template>

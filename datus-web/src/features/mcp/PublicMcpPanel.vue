@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef } from "vue"
-import { ActivityIcon, AlertTriangleIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "@lucide/vue"
+import { useMediaQuery } from "@vueuse/core"
+import { AlertTriangleIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -14,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Sheet,
   SheetContent,
@@ -23,15 +23,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import McpManagementShell from "@/features/mcp/McpManagementShell.vue"
+import McpServerDetail from "@/features/mcp/McpServerDetail.vue"
 import McpServerDialog from "@/features/mcp/McpServerDialog.vue"
+import McpServerList from "@/features/mcp/McpServerList.vue"
+import type { McpScope, McpServerDetailModel, McpServerListItem, McpToolView } from "@/features/mcp/types"
 import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import { usePermission } from "@/composables/usePermission"
@@ -44,6 +40,20 @@ interface McpAgentReference {
   agent_id: string
   name: string
   status: string
+}
+
+defineProps<{
+  scope: McpScope
+  canViewPublic: boolean
+  canViewPersonal: boolean
+}>()
+
+const emit = defineEmits<{
+  "update:scope": [value: McpScope]
+}>()
+
+function updateScope(scope: McpScope): void {
+  emit("update:scope", scope)
 }
 
 const { effectiveBase } = useConnection()
@@ -63,6 +73,7 @@ const serverDialogMode = shallowRef<"create" | "edit">("create")
 const editingServer = shallowRef<McpServerInfo | null>(null)
 const deleteTarget = shallowRef<McpServerInfo | null>(null)
 const deleteBlockedAgents = ref<McpAgentReference[]>([])
+const isCompact = useMediaQuery("(max-width: 1279px)")
 
 const selected = computed(() => servers.value.find((server) => server.name === selectedServer.value))
 const selectedConnectivity = computed(() => selectedServer.value ? connectivityResults.value[selectedServer.value] : undefined)
@@ -82,6 +93,38 @@ const deleteDialogOpen = computed({
   set: (value: boolean) => {
     if (!value) closeDeleteDialog()
   },
+})
+const listServers = computed<McpServerListItem[]>(() => servers.value.map((server) => ({
+  id: server.name,
+  name: server.name,
+  target: serverTarget(server),
+  transport: server.type.toUpperCase(),
+  authLabel: serverAuthLabel(server) || undefined,
+  statusLabel: server.status || undefined,
+  connectionLabel: connectivityResults.value[server.name]
+    ? connectivityLabel(connectivityResults.value[server.name])
+    : undefined,
+})))
+const detailTools = computed<McpToolView[]>(() => tools.value.map(tool => ({
+  name: tool.name,
+  description: tool.description,
+})))
+const selectedDetail = computed<McpServerDetailModel | null>(() => {
+  const server = selected.value
+  if (!server) return null
+  const connectivity = selectedConnectivity.value
+
+  return {
+    name: server.name,
+    target: serverTarget(server),
+    badges: [server.status || "", serverAuthLabel(server)].filter(Boolean),
+    fields: [
+      { label: "传输协议", value: server.type.toUpperCase() },
+      { label: "认证", value: serverAuthLabel(server) || "无认证" },
+      { label: "工作目录", value: server.cwd || "-", monospace: true },
+      { label: "连接状态", value: connectivity ? connectivityLabel(connectivity) : "未测试" },
+    ],
+  }
 })
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -170,14 +213,9 @@ async function loadTools() {
 }
 
 function selectServer(serverName: string) {
-  if (selectedServer.value === serverName) return
   selectedServer.value = serverName
+  if (isCompact.value) mobileDetailOpen.value = true
   void loadTools()
-}
-
-function openMobileServerDetail(serverName: string) {
-  selectServer(serverName)
-  mobileDetailOpen.value = true
 }
 
 function serverTarget(server: McpServerInfo) {
@@ -207,6 +245,16 @@ function openEditDialog(server: McpServerInfo) {
   serverDialogMode.value = "edit"
   editingServer.value = server
   serverDialogOpen.value = true
+}
+
+function openEditServer(serverName: string) {
+  const server = servers.value.find(item => item.name === serverName)
+  if (server) openEditDialog(server)
+}
+
+function openDeleteServer(serverName: string) {
+  const server = servers.value.find(item => item.name === serverName)
+  if (server) openDeleteDialog(server)
 }
 
 async function submitServer(server: McpServerInput) {
@@ -291,271 +339,80 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
-    <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <ActivityIcon class="shrink-0 text-muted-foreground" />
-            <h1 class="font-medium">企业 MCP</h1>
-          </div>
-          <Badge variant="secondary">{{ serverCountLabel }}</Badge>
-          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
-            <span class="truncate">管理可静态绑定到 Agent 的企业 MCP Server。</span>
-          </div>
-        </div>
-        <div class="ml-auto flex shrink-0 items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="loading || !canListServers"
-            @click="loadServers()"
-          >
-            <RefreshCwIcon data-icon="inline-start" />
-            刷新
-          </Button>
-          <Button
-            v-if="canAddServer"
-            size="sm"
-            @click="openAddDialog"
-          >
-            <PlusIcon data-icon="inline-start" />
-            添加
-          </Button>
-        </div>
-      </div>
+  <McpManagementShell
+    :scope="scope"
+    :can-view-public="canViewPublic"
+    :can-view-personal="canViewPersonal"
+    description="管理可静态绑定到 Agent 的企业 MCP Server。"
+    :count-label="serverCountLabel"
+    :loading="loading"
+    :can-refresh="canListServers"
+    :can-create="canAddServer"
+    :can-list="canListServers"
+    @refresh="loadServers()"
+    @add="openAddDialog"
+    @update:scope="updateScope"
+  >
+    <template #access>
+      <Alert>
+        <AlertTitle>没有 MCP Server 列表权限</AlertTitle>
+        <AlertDescription>当前角色可以进入 MCP 页面，但不能查看企业 MCP Server 资源。</AlertDescription>
+      </Alert>
+    </template>
 
-      <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[380px_1fr]">
-        <Card class="min-h-0">
-          <CardHeader class="shrink-0">
-            <div class="flex items-center justify-between gap-3">
-              <div class="min-w-0">
-                <CardTitle class="text-lg">MCP Servers</CardTitle>
-                <CardDescription class="text-sm">{{ serverCountLabel }}</CardDescription>
-              </div>
-              <Spinner v-if="loading" />
-            </div>
-          </CardHeader>
-          <CardContent class="flex min-h-0 flex-1 flex-col">
-            <ScrollArea class="min-h-0 flex-1">
-              <div class="flex flex-col gap-2 pr-3">
-                <div
-                  v-for="server in servers"
-                  :key="server.name"
-                  class="rounded-lg border p-2"
-                  :class="server.name === selectedServer ? 'border-primary bg-accent/60' : 'bg-background'"
-                >
-                  <div class="flex items-start gap-2">
-                    <Button
-                      variant="ghost"
-                      class="h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:hidden"
-                      @click="openMobileServerDetail(server.name)"
-                    >
-                      <span class="min-w-0 flex-1">
-                        <span class="flex items-center justify-between gap-2">
-                          <span class="truncate font-medium">{{ server.name }}</span>
-                          <span class="flex shrink-0 items-center gap-1">
-                            <Badge
-                              v-if="serverAuthLabel(server)"
-                              variant="outline"
-                            >
-                              {{ serverAuthLabel(server) }}
-                            </Badge>
-                            <Badge variant="secondary">{{ server.type }}</Badge>
-                          </span>
-                        </span>
-                        <span class="mt-1 block break-all text-xs text-muted-foreground">
-                          {{ serverTarget(server) }}
-                        </span>
-                      </span>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      class="hidden h-auto min-w-0 flex-1 justify-start px-2 py-1.5 text-left xl:flex"
-                      @click="selectServer(server.name)"
-                    >
-                      <span class="min-w-0 flex-1">
-                        <span class="flex items-center justify-between gap-2">
-                          <span class="truncate font-medium">{{ server.name }}</span>
-                          <span class="flex shrink-0 items-center gap-1">
-                            <Badge
-                              v-if="serverAuthLabel(server)"
-                              variant="outline"
-                            >
-                              {{ serverAuthLabel(server) }}
-                            </Badge>
-                            <Badge variant="secondary">{{ server.type }}</Badge>
-                          </span>
-                        </span>
-                        <span class="mt-1 block truncate text-xs text-muted-foreground">
-                          {{ serverTarget(server) }}
-                        </span>
-                      </span>
-                    </Button>
-                    <div class="flex shrink-0 items-center gap-1">
-                      <Button
-                        v-if="canCheckConnectivity"
-                        variant="ghost"
-                        size="icon-sm"
-                        :aria-label="`检查 ${server.name} 连接`"
-                        :disabled="checkingServer === server.name"
-                        @click="checkConnectivity(server.name)"
-                      >
-                        <Spinner
-                          v-if="checkingServer === server.name"
-                        />
-                        <ActivityIcon v-else />
-                      </Button>
-                      <Button
-                        v-if="canEditServer"
-                        variant="ghost"
-                        size="icon-sm"
-                        :aria-label="`编辑 ${server.name}`"
-                        @click="openEditDialog(server)"
-                      >
-                        <PencilIcon />
-                      </Button>
-                      <Button
-                        v-if="canRemoveServer"
-                        variant="ghost"
-                        size="icon-sm"
-                        :aria-label="`删除 ${server.name}`"
-                        @click="openDeleteDialog(server)"
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </div>
-                  </div>
-                  <p
-                    v-if="connectivityResults[server.name]"
-                    class="px-2 pt-1 text-xs text-muted-foreground"
-                  >
-                    {{ connectivityLabel(connectivityResults[server.name]) }}
-                  </p>
-                </div>
+    <template #list>
+      <McpServerList
+        :servers="listServers"
+        :selected-id="selectedServer"
+        :count-label="serverCountLabel"
+        :loading="loading"
+        :checking-id="checkingServer || null"
+        :can-edit="canEditServer"
+        :can-remove="canRemoveServer"
+        :can-test="canCheckConnectivity"
+        empty-label="暂无 MCP Server"
+        @select="selectServer"
+        @edit="openEditServer"
+        @remove="openDeleteServer"
+        @test="checkConnectivity"
+      />
+    </template>
 
-                <div
-                  v-if="!canListServers"
-                  class="rounded-lg border p-4 text-sm text-muted-foreground"
-                >
-                  当前角色没有查看 MCP Server 列表的权限
-                </div>
-                <div
-                  v-else-if="servers.length === 0 && !loading"
-                  class="rounded-lg border p-4 text-sm text-muted-foreground"
-                >
-                  暂无 MCP Server
-                </div>
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
+    <template #detail>
+      <Card class="hidden min-h-0 xl:flex">
+        <McpServerDetail
+          :server="selectedDetail"
+          :tools="detailTools"
+          :tools-loading="toolsLoading"
+          :can-view-tools="canListTools"
+          :tools-empty-label="toolsEmptyLabel"
+        />
+      </Card>
+    </template>
 
-        <Card class="hidden min-h-0 xl:flex">
-          <CardHeader class="shrink-0">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <CardTitle class="text-lg">{{ selected?.name || "Tools" }}</CardTitle>
-                <CardDescription class="text-sm">
-                  {{ selectedConnectivity ? connectivityLabel(selectedConnectivity) : (selected ? serverTarget(selected) : "未选择 Server") }}
-                </CardDescription>
-              </div>
-              <Badge
-                v-if="selected?.status"
-                variant="outline"
-              >
-                {{ selected.status }}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent class="flex min-h-0 flex-1 flex-col">
-            <ScrollArea class="min-h-0 flex-1">
-              <div class="pr-3">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Tool</TableHead>
-                      <TableHead>Description</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow
-                      v-for="tool in tools"
-                      :key="tool.name"
-                    >
-                      <TableCell class="font-medium">{{ tool.name }}</TableCell>
-                      <TableCell>{{ tool.description || "-" }}</TableCell>
-                    </TableRow>
-                    <TableRow v-if="tools.length === 0">
-                      <TableCell
-                        class="h-24 text-center text-muted-foreground"
-                        colspan="2"
-                      >
-                        {{ toolsEmptyLabel }}
-                      </TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-
-    <Sheet v-model:open="mobileDetailOpen">
-      <SheetContent
-        side="right"
-        class="gap-0 data-[side=right]:w-full sm:data-[side=right]:max-w-xl xl:hidden"
-      >
-        <SheetHeader class="border-b">
-          <SheetTitle>{{ selected?.name || "MCP Server 详情" }}</SheetTitle>
-          <SheetDescription class="break-all">
-            {{ selectedConnectivity ? connectivityLabel(selectedConnectivity) : (selected ? serverTarget(selected) : "未选择 Server") }}
-          </SheetDescription>
-        </SheetHeader>
-        <div class="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <span class="text-sm font-medium">可用工具</span>
-            <Badge
-              v-if="selected?.status"
-              variant="outline"
-            >
-              {{ selected.status }}
-            </Badge>
-          </div>
-          <ScrollArea class="min-h-0 flex-1">
-            <div class="pr-3">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Tool</TableHead>
-                    <TableHead>Description</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow
-                    v-for="tool in tools"
-                    :key="tool.name"
-                  >
-                    <TableCell class="font-medium">{{ tool.name }}</TableCell>
-                    <TableCell class="whitespace-normal">{{ tool.description || "-" }}</TableCell>
-                  </TableRow>
-                  <TableRow v-if="tools.length === 0">
-                    <TableCell
-                      class="h-24 text-center text-muted-foreground"
-                      colspan="2"
-                    >
-                      {{ toolsEmptyLabel }}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
-          </ScrollArea>
-        </div>
-      </SheetContent>
-    </Sheet>
+    <template #mobile-detail>
+      <Sheet v-model:open="mobileDetailOpen">
+        <SheetContent
+          side="right"
+          class="gap-0 data-[side=right]:w-full sm:data-[side=right]:max-w-xl xl:hidden"
+        >
+          <SheetHeader class="border-b">
+            <SheetTitle>{{ selected?.name || "MCP Server 详情" }}</SheetTitle>
+            <SheetDescription class="break-all">
+              {{ selectedConnectivity ? connectivityLabel(selectedConnectivity) : (selected ? serverTarget(selected) : "未选择 Server") }}
+            </SheetDescription>
+          </SheetHeader>
+          <McpServerDetail
+            :server="selectedDetail"
+            :tools="detailTools"
+            :tools-loading="toolsLoading"
+            :can-view-tools="canListTools"
+            :tools-empty-label="toolsEmptyLabel"
+            :show-header="false"
+          />
+        </SheetContent>
+      </Sheet>
+    </template>
 
     <McpServerDialog
       v-model:open="serverDialogOpen"
@@ -620,5 +477,5 @@ onMounted(() => {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </section>
+  </McpManagementShell>
 </template>
