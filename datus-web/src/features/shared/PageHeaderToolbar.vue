@@ -17,12 +17,12 @@ const accessibleLabel = computed(() => props.ariaLabel.trim() || `${props.title}
   <header
     role="toolbar"
     :aria-label="accessibleLabel"
-    class="flex min-h-15 shrink-0 flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm"
+    class="flex min-h-15 shrink-0 flex-wrap items-center gap-3 rounded-4xl border bg-muted/30 px-3 py-2 text-sm"
   >
     <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
       <div
         v-if="$slots.leading"
-        class="flex size-8 shrink-0 items-center justify-center rounded-md bg-background/70 text-muted-foreground ring-1 ring-border/60 [&>svg]:size-4"
+        class="flex size-8 shrink-0 items-center justify-center rounded-md bg-background/70 text-muted-foreground ring-1 ring-border/60 [&>svg]:size-4 [&>svg]:shrink-0"
       >
         <slot name="leading" />
       </div>
@@ -34,7 +34,7 @@ const accessibleLabel = computed(() => props.ariaLabel.trim() || `${props.title}
           </h1>
           <div
             v-if="$slots.meta"
-            class="flex shrink-0 flex-wrap items-center gap-1.5"
+            class="flex shrink-0 flex-wrap items-center gap-1.5 [&_svg:not([class*=size-])]:size-4 [&_svg]:shrink-0"
           >
             <slot name="meta" />
           </div>

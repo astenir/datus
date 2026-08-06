@@ -117,6 +117,10 @@ test("keeps MCP scope tabs in the management toolbar", async ({ page }, testInfo
   const yPositions = boxes.flatMap(box => box ? [box.y] : [])
   expect(Math.max(...yPositions) - Math.min(...yPositions)).toBeLessThan(8)
 
+  const toolbarRadius = await toolbar.evaluate((element) => getComputedStyle(element).borderRadius)
+  const cardRadius = await page.locator('[data-slot="card"]').first().evaluate((element) => getComputedStyle(element).borderRadius)
+  expect(toolbarRadius).toBe(cardRadius)
+
   await page.screenshot({ path: testInfo.outputPath("mcp-toolbar-desktop.png"), fullPage: true })
 
   await personalTab.click()

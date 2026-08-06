@@ -301,7 +301,7 @@ onMounted(() => {
 
           <template #meta>
             <div class="flex min-w-0 items-center gap-2">
-              <DatabaseIcon class="shrink-0 text-muted-foreground" />
+              <DatabaseIcon class="size-4 shrink-0 text-muted-foreground" />
               <span class="text-xs text-muted-foreground">数据源</span>
               <span class="max-w-48 truncate font-medium">
                 {{ currentDatasourceLabel }}
@@ -318,11 +318,11 @@ onMounted(() => {
             <div class="flex min-w-0 max-w-48 items-center gap-2 text-xs text-muted-foreground">
               <Table2Icon
                 v-if="treeMode === 'catalog'"
-                class="shrink-0"
+                class="size-4 shrink-0"
               />
               <GitBranchIcon
                 v-else
-                class="shrink-0"
+                class="size-4 shrink-0"
               />
               <span class="truncate">{{ currentKnowledgeContextLabel }}</span>
             </div>

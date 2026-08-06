@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, shallowRef } from "vue"
 import {
   ActivityIcon,
+  DatabaseIcon,
+  GaugeIcon,
   PlusIcon,
   RefreshCwIcon,
   SlidersHorizontalIcon,
@@ -64,7 +66,9 @@ const modelsSource = computed(() => manager.modelsData.value?.source || "-")
 const modelsFetchedAt = computed(() => formatOptionalDate(manager.modelsData.value?.fetched_at))
 const platformStatus = computed(() => systemStatus.status.value?.platform_status || "unknown")
 const systemProjectId = computed(() => systemStatus.status.value?.project_id || "-")
-const enterpriseEnabledLabel = computed(() => systemStatus.status.value?.enterprise_enabled ? "已启用" : "未启用")
+const isEnterpriseEnabled = computed(() => systemStatus.status.value?.enterprise_enabled === true)
+const enterpriseStatusLabel = computed(() => isEnterpriseEnabled.value ? "active" : "inactive")
+const activeStatusBadgeClass = "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
 const isRefreshingConfiguration = computed(() => manager.loading.value || systemStatus.loading.value)
 const providerModelGroups = computed(() => {
   const groups = new Map<string, typeof manager.availableModels.value>()
@@ -171,21 +175,33 @@ onMounted(() => {
 
           <template #meta>
             <div class="flex min-w-0 items-center gap-2">
+              <DatabaseIcon class="size-4 shrink-0 text-muted-foreground" />
               <span class="text-xs text-muted-foreground">项目默认数据源</span>
               <span class="max-w-56 truncate font-medium">{{ currentDatasource }}</span>
             </div>
             <template v-if="canViewSystemStatus">
               <div class="flex items-center gap-2">
+                <GaugeIcon class="size-4 shrink-0 text-muted-foreground" />
                 <span class="text-xs text-muted-foreground">平台模式</span>
-                <Badge :variant="platformBadgeVariant(platformStatus)">{{ platformStatus }}</Badge>
+                <Badge
+                  :variant="platformBadgeVariant(platformStatus)"
+                  :class="platformStatus === 'active' ? activeStatusBadgeClass : undefined"
+                >
+                  {{ platformStatus }}
+                </Badge>
               </div>
               <div class="flex items-center gap-2">
-                <ShieldCheckIcon class="size-4 text-muted-foreground" />
+                <ShieldCheckIcon class="size-4 shrink-0 text-muted-foreground" />
                 <span class="text-xs text-muted-foreground">企业扩展</span>
-                <span class="font-medium">{{ enterpriseEnabledLabel }}</span>
+                <Badge
+                  :variant="isEnterpriseEnabled ? 'secondary' : 'outline'"
+                  :class="isEnterpriseEnabled ? activeStatusBadgeClass : undefined"
+                >
+                  {{ enterpriseStatusLabel }}
+                </Badge>
               </div>
               <div class="flex items-center gap-2">
-                <ActivityIcon class="size-4 text-muted-foreground" />
+                <ActivityIcon class="size-4 shrink-0 text-muted-foreground" />
                 <span class="text-xs text-muted-foreground">运行任务</span>
                 <span class="font-medium">{{ systemStatus.taskSummary.value }}</span>
                 <span class="text-xs text-muted-foreground">active / known</span>

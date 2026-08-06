@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page header toolbar fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from "vue"
+      import { DatabaseIcon, GaugeIcon } from "@lucide/vue"
+      import "/src/style.css"
+      import PageHeaderToolbar from "/src/features/shared/PageHeaderToolbar.vue"
+
+      createApp({
+        render: () => h(
+          PageHeaderToolbar,
+          {
+            title: "配置管理",
+            ariaLabel: "页头工具栏尺寸测试",
+          },
+          {
+            leading: () => h(DatabaseIcon),
+            meta: () => h("div", { class: "flex items-center gap-2" }, [
+              h(DatabaseIcon),
+              h("span", "项目默认数据源"),
+              h(GaugeIcon),
+              h("span", "平台模式"),
+            ]),
+          },
+        ),
+      }).mount("#app")
+    </script>
+  </body>
+</html>
