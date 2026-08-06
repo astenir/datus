@@ -65,6 +65,7 @@ const modelsFetchedAt = computed(() => formatOptionalDate(manager.modelsData.val
 const platformStatus = computed(() => systemStatus.status.value?.platform_status || "unknown")
 const systemProjectId = computed(() => systemStatus.status.value?.project_id || "-")
 const enterpriseEnabledLabel = computed(() => systemStatus.status.value?.enterprise_enabled ? "已启用" : "未启用")
+const isRefreshingConfiguration = computed(() => manager.loading.value || systemStatus.loading.value)
 const providerModelGroups = computed(() => {
   const groups = new Map<string, typeof manager.availableModels.value>()
   for (const model of manager.availableModels.value) {
@@ -125,6 +126,16 @@ async function applyDatasourcesJson() {
 async function applyDatasourceConfigs(datasources: Parameters<typeof manager.replaceDatasourceConfigs>[0]) {
   manager.replaceDatasourceConfigs(datasources)
   await manager.saveDatasources()
+}
+
+async function refreshConfiguration() {
+  if (isRefreshingConfiguration.value) return
+
+  const loaders: Promise<void>[] = [manager.loadConfiguration()]
+  if (canViewSystemStatus.value) {
+    loaders.push(systemStatus.loadStatus())
+  }
+  await Promise.all(loaders)
 }
 
 async function initializeConfigPanel() {
@@ -191,17 +202,16 @@ onMounted(() => {
 
           <template #actions>
             <Button
-              v-if="canViewSystemStatus"
-              variant="ghost"
+              variant="outline"
               size="sm"
-              :disabled="systemStatus.loading.value"
-              @click="systemStatus.loadStatus"
+              :disabled="isRefreshingConfiguration"
+              @click="refreshConfiguration"
             >
               <RefreshCwIcon
                 data-icon="inline-start"
-                :class="systemStatus.loading.value && 'animate-spin'"
+                :class="isRefreshingConfiguration && 'animate-spin'"
               />
-              刷新状态
+              {{ isRefreshingConfiguration ? "刷新中" : "刷新配置" }}
             </Button>
             <Dialog>
               <DialogTrigger as-child>
