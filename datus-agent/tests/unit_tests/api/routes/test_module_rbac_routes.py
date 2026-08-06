@@ -652,6 +652,7 @@ def test_chat_stream_materializes_report_edit_session_subagent(monkeypatch):
     projected_config = svc.chat.stream_chat.call_args.kwargs["agent_config"]
     edit_entry = projected_config.agentic_nodes[session.subagent_id]
     assert edit_entry["node_class"] == "gen_visual_report"
+    assert edit_entry["system_prompt"] == "gen_visual_report"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
     assert edit_entry["_acl_authorized_artifact_edit"] is True
@@ -688,6 +689,7 @@ def test_chat_stream_materializes_dashboard_edit_session_subagent(monkeypatch):
     projected_config = svc.chat.stream_chat.call_args.kwargs["agent_config"]
     edit_entry = projected_config.agentic_nodes[session.subagent_id]
     assert edit_entry["node_class"] == "gen_visual_dashboard"
+    assert edit_entry["system_prompt"] == "gen_visual_dashboard"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
     assert edit_entry["_acl_authorized_artifact_edit"] is True

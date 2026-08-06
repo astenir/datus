@@ -302,6 +302,7 @@ def materialize_artifact_edit_agent(agent_config: Any, session: Any) -> None:
         "id": session.subagent_id,
         "type": node_type,
         "node_class": node_type,
+        "system_prompt": node_type,
         "artifact_slug": session.artifact_slug,
         "edit_locked": True,
         # This internal capability marker is added only after the route's
