@@ -575,8 +575,14 @@ export function useChatWorkspace() {
     }
   }, { immediate: true });
 
-  watch([effectiveAgentId, agentAllowsPersonalMcp], ([, allowsPersonalMcp]) => {
-    if (!selectedSession.value && !allowsPersonalMcp) personalMcp.resetDraftSelection();
+  watch([effectiveAgentId, agentAllowsPersonalMcp], ([, allowsPersonalMcp], [, wasAllowed]) => {
+    if (!selectedSession.value && !allowsPersonalMcp) {
+      const hadDraftSelection = personalMcp.selectedIds.value.length > 0;
+      personalMcp.resetDraftSelection();
+      if (hadDraftSelection && wasAllowed) {
+        toast.info("当前 Agent 不支持个人 MCP，已清除本次会话的个人 MCP 选择");
+      }
+    }
   });
 
   watch([isPermissionSummaryLoaded, canUseElevatedPermissionMode, permissionMode], ([loaded, canUseElevated, mode]) => {
