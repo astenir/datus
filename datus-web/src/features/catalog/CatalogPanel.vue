@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { useConnection } from "@/composables/useConnection"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import DetailLoadingIndicator from "@/features/workspace/DetailLoadingIndicator.vue"
 import { tableApi } from "@/lib/api"
@@ -107,23 +108,30 @@ watch(
 
 <template>
   <section class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-    <div class="flex flex-wrap items-center gap-3">
-      <div class="min-w-0 flex-1">
-        <h1 class="text-lg font-semibold">数据目录</h1>
-        <p class="text-sm text-muted-foreground">
-          浏览当前数据源中的数据库、Schema 和表结构。
-        </p>
-      </div>
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="workspace.isLoadingCatalog.value"
-        @click="workspace.loadCatalog()"
-      >
-        <RefreshCwIcon data-icon="inline-start" />
-        刷新目录
-      </Button>
-    </div>
+    <PageHeaderToolbar
+      title="数据目录"
+      description="浏览当前数据源中的数据库、Schema 和表结构。"
+      aria-label="数据目录页头工具栏"
+    >
+      <template #leading>
+        <DatabaseIcon />
+      </template>
+
+      <template #actions>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="workspace.isLoadingCatalog.value"
+          @click="workspace.loadCatalog()"
+        >
+          <RefreshCwIcon
+            data-icon="inline-start"
+            :class="workspace.isLoadingCatalog.value && 'animate-spin'"
+          />
+          刷新目录
+        </Button>
+      </template>
+    </PageHeaderToolbar>
 
     <div class="grid gap-3 md:grid-cols-3">
       <Card>

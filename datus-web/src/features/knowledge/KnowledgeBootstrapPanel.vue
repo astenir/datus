@@ -43,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
 import KnowledgeUploadField from "@/features/knowledge/KnowledgeUploadField.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import type {
   BootstrapBuildMode,
   BootstrapComponent,
@@ -168,42 +169,55 @@ function updateBuildMode(value: unknown) {
   <section class="min-h-0 flex-1 overflow-visible">
     <TooltipProvider>
       <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-        <Badge :variant="statusBadgeVariant(manager.status.value)">
-          <component
-            :is="statusIcon"
-            :class="{ 'animate-spin': manager.status.value === 'running' }"
-            data-icon="inline-start"
-          />
-          {{ statusLabel }}
-        </Badge>
-        <Badge variant="outline">{{ activeModeLabel }}</Badge>
-        <span class="min-w-0 truncate text-xs text-muted-foreground">
-          {{ streamLabel }}
-        </span>
-        <div class="ml-auto flex shrink-0 items-center gap-2">
-          <span class="text-xs text-muted-foreground">日志 {{ manager.logs.value.length }}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
-            @click="manager.clearLogs"
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
+          <Tabs
+            default-value="kb"
+            class="flex flex-col gap-4"
           >
-            <RotateCcwIcon data-icon="inline-start" />
-            清空
-          </Button>
-        </div>
-      </div>
+          <PageHeaderToolbar
+            title="知识构建"
+            description="运行业务知识库和平台文档构建任务。"
+            aria-label="知识构建页头工具栏"
+          >
+            <template #leading>
+              <BookMarkedIcon />
+            </template>
 
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <Tabs
-          default-value="kb"
-          class="flex flex-col gap-4"
-        >
-          <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
-            <TabsTrigger value="kb">业务知识库</TabsTrigger>
-            <TabsTrigger value="docs">平台文档</TabsTrigger>
-          </TabsList>
+            <template #meta>
+              <Badge :variant="statusBadgeVariant(manager.status.value)">
+                <component
+                  :is="statusIcon"
+                  :class="{ 'animate-spin': manager.status.value === 'running' }"
+                  data-icon="inline-start"
+                />
+                {{ statusLabel }}
+              </Badge>
+              <Badge variant="outline">{{ activeModeLabel }}</Badge>
+              <span class="max-w-48 truncate text-xs text-muted-foreground">
+                {{ streamLabel }}
+              </span>
+              <span class="text-xs text-muted-foreground">日志 {{ manager.logs.value.length }}</span>
+            </template>
+
+            <template #navigation>
+              <TabsList class="flex h-auto max-w-full !flex-row flex-nowrap justify-start">
+                <TabsTrigger value="kb">业务知识库</TabsTrigger>
+                <TabsTrigger value="docs">平台文档</TabsTrigger>
+              </TabsList>
+            </template>
+
+            <template #actions>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
+                @click="manager.clearLogs"
+              >
+                <RotateCcwIcon data-icon="inline-start" />
+                清空
+              </Button>
+            </template>
+          </PageHeaderToolbar>
 
           <TabsContent value="kb">
             <Card
@@ -595,27 +609,27 @@ function updateBuildMode(value: unknown) {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
+          </Tabs>
 
-        <Terminal
-          :output="terminalText"
-          :is-streaming="manager.isRunning.value"
-          class="min-h-[28rem]"
-          @clear="manager.clearLogs"
-        >
-          <TerminalHeader>
-            <TerminalTitle>构建事件流</TerminalTitle>
-            <div class="flex items-center gap-2">
-              <TerminalStatus />
-              <TerminalActions>
-                <TerminalCopyButton />
-                <TerminalClearButton />
-              </TerminalActions>
-            </div>
-          </TerminalHeader>
-          <TerminalContent class="min-h-96 text-xs leading-6" />
-        </Terminal>
-      </div>
+          <Terminal
+            :output="terminalText"
+            :is-streaming="manager.isRunning.value"
+            class="min-h-[28rem]"
+            @clear="manager.clearLogs"
+          >
+            <TerminalHeader>
+              <TerminalTitle>构建事件流</TerminalTitle>
+              <div class="flex items-center gap-2">
+                <TerminalStatus />
+                <TerminalActions>
+                  <TerminalCopyButton />
+                  <TerminalClearButton />
+                </TerminalActions>
+              </div>
+            </TerminalHeader>
+            <TerminalContent class="min-h-96 text-xs leading-6" />
+          </Terminal>
+        </div>
       </div>
     </TooltipProvider>
   </section>

@@ -4,6 +4,7 @@ import {
   ActivityIcon,
   PlusIcon,
   RefreshCwIcon,
+  SlidersHorizontalIcon,
   ShieldCheckIcon,
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
@@ -35,6 +36,7 @@ import AdvancedJsonDialog from "@/features/config/AdvancedJsonDialog.vue"
 import DatasourceConfigEditor from "@/features/config/DatasourceConfigEditor.vue"
 import ModelConfigEditor from "@/features/config/ModelConfigEditor.vue"
 import ProviderConfigEditor from "@/features/config/ProviderConfigEditor.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import { datasourceLabel } from "@/lib/datasource-display"
 
 const props = withDefaults(defineProps<{
@@ -143,83 +145,102 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-md border px-3 py-2 text-sm">
-        <div class="flex min-w-0 items-center gap-2">
-            <span class="text-xs text-muted-foreground">项目默认数据源</span>
-            <span class="max-w-56 truncate font-medium">{{ currentDatasource }}</span>
-          </div>
-          <template v-if="canViewSystemStatus">
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-muted-foreground">平台模式</span>
-              <Badge :variant="platformBadgeVariant(platformStatus)">{{ platformStatus }}</Badge>
+      <Tabs
+        default-value="models"
+        class="flex min-h-0 flex-1 flex-col gap-4"
+      >
+        <PageHeaderToolbar
+          title="配置管理"
+          description="管理项目模型、数据源和运行状态。"
+          aria-label="配置管理页头工具栏"
+        >
+          <template #leading>
+            <SlidersHorizontalIcon />
+          </template>
+
+          <template #meta>
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="text-xs text-muted-foreground">项目默认数据源</span>
+              <span class="max-w-56 truncate font-medium">{{ currentDatasource }}</span>
             </div>
-            <div class="flex items-center gap-2">
-              <ShieldCheckIcon class="size-4 text-muted-foreground" />
-              <span class="text-xs text-muted-foreground">企业扩展</span>
-              <span class="font-medium">{{ enterpriseEnabledLabel }}</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <ActivityIcon class="size-4 text-muted-foreground" />
-              <span class="text-xs text-muted-foreground">运行任务</span>
-              <span class="font-medium">{{ systemStatus.taskSummary.value }}</span>
-              <span class="text-xs text-muted-foreground">active / known</span>
-            </div>
+            <template v-if="canViewSystemStatus">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-muted-foreground">平台模式</span>
+                <Badge :variant="platformBadgeVariant(platformStatus)">{{ platformStatus }}</Badge>
+              </div>
+              <div class="flex items-center gap-2">
+                <ShieldCheckIcon class="size-4 text-muted-foreground" />
+                <span class="text-xs text-muted-foreground">企业扩展</span>
+                <span class="font-medium">{{ enterpriseEnabledLabel }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <ActivityIcon class="size-4 text-muted-foreground" />
+                <span class="text-xs text-muted-foreground">运行任务</span>
+                <span class="font-medium">{{ systemStatus.taskSummary.value }}</span>
+                <span class="text-xs text-muted-foreground">active / known</span>
+              </div>
+            </template>
+          </template>
+
+          <template #navigation>
+            <TabsList class="flex h-auto max-w-full !flex-row flex-nowrap justify-start">
+              <TabsTrigger value="models">模型</TabsTrigger>
+              <TabsTrigger value="datasources">数据源</TabsTrigger>
+            </TabsList>
+          </template>
+
+          <template #actions>
             <Button
+              v-if="canViewSystemStatus"
               variant="ghost"
               size="sm"
               :disabled="systemStatus.loading.value"
               @click="systemStatus.loadStatus"
             >
-              <RefreshCwIcon data-icon="inline-start" />
+              <RefreshCwIcon
+                data-icon="inline-start"
+                :class="systemStatus.loading.value && 'animate-spin'"
+              />
               刷新状态
             </Button>
+            <Dialog>
+              <DialogTrigger as-child>
+                <Button variant="outline" size="sm">配置详情</Button>
+              </DialogTrigger>
+              <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>配置详情</DialogTitle>
+                  <DialogDescription>当前项目和运行配置的低频信息。</DialogDescription>
+                </DialogHeader>
+                <dl class="grid gap-3 text-sm">
+                  <div v-if="canViewSystemStatus" class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                    <dt class="text-muted-foreground">项目</dt>
+                    <dd class="min-w-0 truncate font-medium">{{ systemProjectId }}</dd>
+                  </div>
+                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                    <dt class="text-muted-foreground">Agent Home</dt>
+                    <dd class="min-w-0 break-all font-medium">{{ configHome }}</dd>
+                  </div>
+                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                    <dt class="text-muted-foreground">模型来源</dt>
+                    <dd class="min-w-0 truncate font-medium">{{ modelsSource }}</dd>
+                  </div>
+                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                    <dt class="text-muted-foreground">目录时间</dt>
+                    <dd class="min-w-0 truncate font-medium">{{ modelsFetchedAt }}</dd>
+                  </div>
+                  <div
+                    v-if="canViewSystemStatus && systemStatus.error.value"
+                    class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3"
+                  >
+                    <dt class="text-muted-foreground">状态读取</dt>
+                    <dd class="min-w-0 font-medium text-destructive">{{ systemStatus.error.value }}</dd>
+                  </div>
+                </dl>
+              </DialogContent>
+            </Dialog>
           </template>
-          <Dialog>
-            <DialogTrigger as-child>
-              <Button variant="outline" size="sm" class="ml-auto">配置详情</Button>
-            </DialogTrigger>
-            <DialogContent class="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>配置详情</DialogTitle>
-                <DialogDescription>当前项目和运行配置的低频信息。</DialogDescription>
-              </DialogHeader>
-              <dl class="grid gap-3 text-sm">
-                <div v-if="canViewSystemStatus" class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                  <dt class="text-muted-foreground">项目</dt>
-                  <dd class="min-w-0 truncate font-medium">{{ systemProjectId }}</dd>
-                </div>
-                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                  <dt class="text-muted-foreground">Agent Home</dt>
-                  <dd class="min-w-0 break-all font-medium">{{ configHome }}</dd>
-                </div>
-                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                  <dt class="text-muted-foreground">模型来源</dt>
-                  <dd class="min-w-0 truncate font-medium">{{ modelsSource }}</dd>
-                </div>
-                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                  <dt class="text-muted-foreground">目录时间</dt>
-                  <dd class="min-w-0 truncate font-medium">{{ modelsFetchedAt }}</dd>
-                </div>
-                <div
-                  v-if="canViewSystemStatus && systemStatus.error.value"
-                  class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3"
-                >
-                  <dt class="text-muted-foreground">状态读取</dt>
-                  <dd class="min-w-0 font-medium text-destructive">{{ systemStatus.error.value }}</dd>
-                </div>
-              </dl>
-            </DialogContent>
-        </Dialog>
-      </div>
-
-      <Tabs
-        default-value="models"
-        class="flex min-h-0 flex-1 flex-col gap-4"
-      >
-        <TabsList class="flex h-auto shrink-0 !flex-row flex-wrap justify-start">
-          <TabsTrigger value="models">模型</TabsTrigger>
-          <TabsTrigger value="datasources">数据源</TabsTrigger>
-        </TabsList>
+        </PageHeaderToolbar>
 
         <TabsContent
           value="models"
@@ -383,7 +404,6 @@ onMounted(() => {
             </Card>
           </div>
         </TabsContent>
-
       </Tabs>
     </div>
   </section>

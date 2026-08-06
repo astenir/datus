@@ -2,7 +2,7 @@
 import { Building2Icon, UserRoundIcon } from "@lucide/vue"
 
 import { Badge } from "@/components/ui/badge"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { McpScope } from "@/features/mcp/types"
 
 const props = defineProps<{
@@ -28,25 +28,26 @@ function updateScope(value: unknown): void {
 </script>
 
 <template>
-  <ToggleGroup
+  <Tabs
     v-if="canViewPublic && canViewPersonal"
-    type="single"
-    variant="outline"
-    size="sm"
     :model-value="modelValue"
-    aria-label="选择 MCP 范围"
     class="shrink-0"
     @update:model-value="updateScope"
   >
-    <ToggleGroupItem value="public">
-      <Building2Icon data-icon="inline-start" />
-      企业 MCP
-    </ToggleGroupItem>
-    <ToggleGroupItem value="personal">
-      <UserRoundIcon data-icon="inline-start" />
-      我的 MCP
-    </ToggleGroupItem>
-  </ToggleGroup>
+    <TabsList
+      aria-label="选择 MCP 范围"
+      class="flex h-auto max-w-full !flex-row flex-nowrap justify-start"
+    >
+      <TabsTrigger value="public">
+        <Building2Icon data-icon="inline-start" />
+        企业 MCP
+      </TabsTrigger>
+      <TabsTrigger value="personal">
+        <UserRoundIcon data-icon="inline-start" />
+        我的 MCP
+      </TabsTrigger>
+    </TabsList>
+  </Tabs>
   <Badge
     v-else-if="canViewPublic || canViewPersonal"
     variant="outline"

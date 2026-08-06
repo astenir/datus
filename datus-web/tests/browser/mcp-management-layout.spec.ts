@@ -97,8 +97,8 @@ test("keeps MCP scope tabs in the management toolbar", async ({ page }, testInfo
 
   const toolbar = page.getByRole("toolbar", { name: "MCP 管理页头工具栏" })
   await expect(toolbar).toBeVisible()
-  const enterpriseTab = toolbar.getByRole("button", { name: "企业 MCP", exact: true })
-  const personalTab = toolbar.getByRole("button", { name: "我的 MCP", exact: true })
+  const enterpriseTab = toolbar.getByRole("tab", { name: "企业 MCP", exact: true })
+  const personalTab = toolbar.getByRole("tab", { name: "我的 MCP", exact: true })
   const refreshButton = toolbar.getByRole("button", { name: "刷新", exact: true })
   const addButton = toolbar.getByRole("button", { name: "添加", exact: true })
 

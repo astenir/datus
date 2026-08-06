@@ -52,6 +52,7 @@ import { usePermission } from "@/composables/usePermission"
 import AdminMobileRecord from "@/features/admin/AdminMobileRecord.vue"
 import AdminPaginationBar from "@/features/admin/AdminPaginationBar.vue"
 import type { AdminManagementTabProps } from "@/features/admin/types"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
 import { adminSessionRuntimeValueLabel, adminSessionStatusLabel } from "@/lib/admin-session"
@@ -434,68 +435,83 @@ function setPermittedActiveTab(value: unknown): void {
     class="flex min-h-0 min-w-0 flex-1 flex-col gap-4"
     @update:model-value="setPermittedActiveTab"
   >
-    <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
-      <TabsList class="flex h-auto max-w-full !flex-row flex-wrap justify-start overflow-x-auto">
-        <TabsTrigger
-          v-if="canViewUsers"
-          value="users"
-        >
-          用户
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewRoles"
-          value="roles"
-        >
-          角色
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewDatasourceGrants"
-          value="grants"
-        >
-          数据授权
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewSessions"
-          value="sessions"
-        >
-          会话
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewArtifacts"
-          value="artifacts"
-        >
-          产物
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewQuotas"
-          value="quotas"
-        >
-          额度
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewSecrets"
-          value="secrets"
-        >
-          密钥
-        </TabsTrigger>
-        <TabsTrigger
-          v-if="canViewAudit"
-          value="audit"
-        >
-          审计
-        </TabsTrigger>
-      </TabsList>
+    <PageHeaderToolbar
+      title="权限管理"
+      description="管理用户、角色、数据授权、会话、额度、产物和审计记录。"
+      aria-label="权限管理页头工具栏"
+    >
+      <template #leading>
+        <ShieldCheckIcon />
+      </template>
 
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="refreshing"
-        @click="requestRefreshActiveTab"
-      >
-        <RefreshCwIcon data-icon="inline-start" />
-        刷新
-      </Button>
-    </div>
+      <template #navigation>
+        <TabsList class="flex h-auto max-w-full !flex-row flex-nowrap justify-start">
+          <TabsTrigger
+            v-if="canViewUsers"
+            value="users"
+          >
+            用户
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewRoles"
+            value="roles"
+          >
+            角色
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewDatasourceGrants"
+            value="grants"
+          >
+            数据授权
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewSessions"
+            value="sessions"
+          >
+            会话
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewArtifacts"
+            value="artifacts"
+          >
+            产物
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewQuotas"
+            value="quotas"
+          >
+            额度
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewSecrets"
+            value="secrets"
+          >
+            密钥
+          </TabsTrigger>
+          <TabsTrigger
+            v-if="canViewAudit"
+            value="audit"
+          >
+            审计
+          </TabsTrigger>
+        </TabsList>
+      </template>
+
+      <template #actions>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="refreshing"
+          @click="requestRefreshActiveTab"
+        >
+          <RefreshCwIcon
+            data-icon="inline-start"
+            :class="refreshing && 'animate-spin'"
+          />
+          刷新
+        </Button>
+      </template>
+    </PageHeaderToolbar>
 
     <TabsContent
       v-if="canViewUsers"

@@ -20,6 +20,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 
 const props = defineProps<{
@@ -73,14 +74,15 @@ watch(
 <template>
   <section class="min-h-0 flex-1 overflow-y-auto p-4">
     <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">语义模型工作台</h1>
-          <p class="text-sm text-muted-foreground">
-            维护表级语义 YAML 与字段说明。
-          </p>
-        </div>
-      </div>
+      <PageHeaderToolbar
+        title="语义模型工作台"
+        description="维护表级语义 YAML 与字段说明。"
+        aria-label="语义模型工作台页头工具栏"
+      >
+        <template #leading>
+          <Table2Icon />
+        </template>
+      </PageHeaderToolbar>
 
       <div class="grid gap-3 md:grid-cols-4">
         <Card>

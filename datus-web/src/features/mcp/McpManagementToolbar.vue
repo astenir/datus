@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { PlusIcon, RefreshCwIcon } from "@lucide/vue"
+import { PlusIcon, RefreshCwIcon, ServerIcon } from "@lucide/vue"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import McpScopeSwitcher from "@/features/mcp/McpScopeSwitcher.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import type { McpScope } from "@/features/mcp/types"
 
 defineProps<{
@@ -30,29 +31,39 @@ function updateScope(scope: McpScope): void {
 </script>
 
 <template>
-  <div
-    role="toolbar"
+  <PageHeaderToolbar
+    title="MCP 管理"
+    :description="description"
     aria-label="MCP 管理页头工具栏"
-    class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm"
   >
-    <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+    <template #leading>
+      <ServerIcon />
+    </template>
+
+    <template #meta>
+      <Badge variant="secondary">{{ countLabel }}</Badge>
+    </template>
+
+    <template #navigation>
       <McpScopeSwitcher
         :model-value="scope"
         :can-view-public="canViewPublic"
         :can-view-personal="canViewPersonal"
         @update:model-value="updateScope"
       />
-      <span class="min-w-0 truncate text-sm text-muted-foreground">{{ description }}</span>
-      <Badge variant="secondary">{{ countLabel }}</Badge>
-    </div>
-    <div class="ml-auto flex shrink-0 items-center gap-2">
+    </template>
+
+    <template #actions>
       <Button
         variant="outline"
         size="sm"
         :disabled="loading || !canRefresh"
         @click="emit('refresh')"
       >
-        <RefreshCwIcon data-icon="inline-start" />
+        <RefreshCwIcon
+          data-icon="inline-start"
+          :class="loading && 'animate-spin'"
+        />
         刷新
       </Button>
       <Button
@@ -64,6 +75,6 @@ function updateScope(scope: McpScope): void {
         <PlusIcon data-icon="inline-start" />
         添加
       </Button>
-    </div>
-  </div>
+    </template>
+  </PageHeaderToolbar>
 </template>
