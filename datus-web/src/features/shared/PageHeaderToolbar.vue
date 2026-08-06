@@ -29,12 +29,15 @@ const accessibleLabel = computed(() => props.ariaLabel.trim() || `${props.title}
 
       <div class="min-w-0">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <h1 class="truncate text-sm font-semibold">
+          <h1
+            v-if="props.title"
+            class="truncate text-sm font-semibold"
+          >
             {{ props.title }}
           </h1>
           <div
             v-if="$slots.meta"
-            class="flex shrink-0 flex-wrap items-center gap-1.5 [&_svg:not([class*=size-])]:size-4 [&_svg]:shrink-0"
+            class="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 [&_svg:not([class*=size-])]:size-4 [&_svg]:shrink-0"
           >
             <slot name="meta" />
           </div>

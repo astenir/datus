@@ -9,7 +9,6 @@ import {
   UserRoundIcon,
 } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,6 +27,7 @@ import { useProfileOverview } from "@/composables/useProfileOverview"
 import { usePermission } from "@/composables/usePermission"
 import ModelCredentialsPanel from "@/features/profile/ModelCredentialsPanel.vue"
 import PersonalDatasourcesPanel from "@/features/profile/PersonalDatasourcesPanel.vue"
+import ProfileHeaderMeta from "@/features/profile/ProfileHeaderMeta.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import type { AuthState } from "@/composables/useAuth"
@@ -42,14 +42,10 @@ const activeProfileTab = shallowRef("access")
 const visitedProfileTabs = reactive(new Set(["access"]))
 
 const principalUserId = computed(() => profile.userId.value === "-" ? props.auth.user?.username ?? "-" : profile.userId.value)
-const displayName = computed(() => {
-  if (props.auth.user?.username === principalUserId.value) {
-    return props.auth.user.realname || props.auth.user.username
-  }
-  return principalUserId.value
+const principalUser = computed(() => {
+  const user = props.auth.user
+  return user?.username === principalUserId.value ? user : null
 })
-const username = computed(() => principalUserId.value)
-const userFallback = computed(() => displayName.value.slice(0, 1).toUpperCase())
 const hasChatFeature = computed(() =>
   profile.features.value.chat === true ||
   profile.permissions.value.includes("*") ||
@@ -94,12 +90,22 @@ onMounted(loadProfile)
         @update:model-value="setActiveProfileTab"
       >
         <PageHeaderToolbar
-          title="个人设置"
+          title=""
           description="查看账号权限，并管理仅对自己生效的模型和数据源。"
           aria-label="个人设置页头工具栏"
         >
           <template #leading>
             <UserRoundIcon />
+          </template>
+
+          <template #meta>
+            <ProfileHeaderMeta
+              :user="principalUser"
+              :user-id="principalUserId"
+              :roles="profile.roles.value"
+              :is-admin="profile.isAdmin.value"
+              :loaded="profile.loaded.value"
+            />
           </template>
 
           <template #navigation>
@@ -175,54 +181,6 @@ onMounted(loadProfile)
         </div>
 
         <template v-else>
-          <Card
-            size="sm"
-            class="shrink-0"
-          >
-            <CardContent class="grid gap-4 md:grid-cols-[minmax(14rem,1fr)_minmax(18rem,1.4fr)] md:items-center">
-              <div class="flex min-w-0 items-center gap-3">
-                <Avatar class="size-12 shrink-0 text-primary">
-                  <AvatarFallback class="bg-primary/10 font-semibold text-primary">{{ userFallback }}</AvatarFallback>
-                </Avatar>
-                <div class="min-w-0 flex-1">
-                  <div class="truncate text-lg font-semibold">{{ displayName }}</div>
-                  <div class="truncate text-xs text-muted-foreground">
-                    {{ username }} · 项目 {{ profile.projectId.value }}
-                  </div>
-                </div>
-              </div>
-
-              <div class="flex min-w-0 flex-col gap-2 md:border-l md:pl-4">
-                <div class="text-xs font-medium text-muted-foreground">当前角色</div>
-                <div class="flex min-h-6 flex-wrap items-center gap-1.5">
-                  <Badge
-                    v-if="profile.isAdmin.value"
-                    variant="default"
-                  >
-                    全局管理
-                  </Badge>
-                  <Badge
-                    v-for="role in profile.roles.value"
-                    :key="role"
-                    variant="outline"
-                  >
-                    {{ role }}
-                  </Badge>
-                  <span
-                    v-if="profile.roles.value.length === 0"
-                    class="text-sm text-muted-foreground"
-                  >
-                    无角色
-                  </span>
-                </div>
-                <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>{{ profile.enabledFeatures.value.length }} 项功能可用</span>
-                  <span>{{ profile.allowedDatasourceCount.value }} 个数据源可访问</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
           <TabsContent
             value="access"
             class="mt-0"

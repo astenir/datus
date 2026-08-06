@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Profile header meta fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from "vue"
+      import "/src/style.css"
+      import PageHeaderToolbar from "/src/features/shared/PageHeaderToolbar.vue"
+      import ProfileHeaderMeta from "/src/features/profile/ProfileHeaderMeta.vue"
+      import { UserRoundIcon } from "@lucide/vue"
+
+      const profile = {
+        user: {
+          userId: 7,
+          username: "zhangsan",
+          realname: "张三",
+          email: "zhangsan@example.com",
+          userStatus: "正常",
+        },
+        userId: "zhangsan",
+        roles: ["analyst", "viewer", "auditor"],
+        isAdmin: false,
+        loaded: true,
+      }
+
+      createApp({
+        render: () => h(
+          "main",
+          { class: "min-h-screen bg-background p-4 text-foreground sm:p-6" },
+          [h(PageHeaderToolbar, {
+            title: "",
+            description: "查看账号权限，并管理仅对自己生效的模型和数据源。",
+            ariaLabel: "个人设置页头工具栏",
+          }, {
+            leading: () => h(UserRoundIcon),
+            meta: () => h(ProfileHeaderMeta, profile),
+          })],
+        ),
+      }).mount("#app")
+    </script>
+  </body>
+</html>
