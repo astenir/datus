@@ -113,6 +113,15 @@ def _delta_content_type(event: SSEEvent) -> str:
     return ""
 
 
+def _stream_delta_char_count(event: SSEEvent) -> int:
+    if not _is_stream_delta(event):
+        return 0
+    data = event.data
+    if not isinstance(data, SSEMessageData):
+        return 0
+    return sum(len(str((getattr(item, "payload", {}) or {}).get("content", "") or "")) for item in data.payload.content)
+
+
 def _has_visible_content(event: SSEEvent) -> bool:
     if event.event != "message" or not isinstance(event.data, SSEMessageData):
         return False
@@ -267,7 +276,7 @@ def _merge_delta_run(run: list[SSEEvent]) -> SSEEvent:
     merged_data = SSEMessageData(type=first.data.type, payload=merged_payload)  # type: ignore[union-attr]
 
     return SSEEvent(
-        id=first.id,
+        id=run[-1].id,
         event=first.event,
         data=merged_data,
         timestamp=first.timestamp,
@@ -1004,6 +1013,24 @@ class ChatTaskManager:
                 assistant_response_sent = False
                 tool_result_seen = False
                 seen_assistant_message_fingerprints: set[str] = set()
+                pending_delta_events: list[SSEEvent] = []
+                pending_delta_chars = 0
+                pending_delta_started_at: Optional[float] = None
+                loop = asyncio.get_running_loop()
+                delta_batch_interval = self._buffer_limits.stream_delta_batch_interval_ms / 1000
+                delta_batch_chars = self._buffer_limits.stream_delta_batch_chars
+
+                async def _flush_delta_events() -> None:
+                    nonlocal event_id, pending_delta_chars, pending_delta_started_at
+                    if not pending_delta_events:
+                        return
+                    for merged_event in _coalesce_deltas(pending_delta_events):
+                        await self._push_event(task, merged_event.model_copy(update={"id": event_id}))
+                        event_id += 1
+                    pending_delta_events.clear()
+                    pending_delta_chars = 0
+                    pending_delta_started_at = None
+
                 async for action in node.execute_stream_with_interactions(action_history):
                     action_count += 1
 
@@ -1045,6 +1072,7 @@ class ChatTaskManager:
                     )
                     terminal_outcome = self._terminal_outcome_from_action(action)
                     if terminal_outcome is not None:
+                        await _flush_delta_events()
                         terminal_type, terminal_error, terminal_error_type = terminal_outcome
                         await self._persist_terminal_event(
                             task=task,
@@ -1057,6 +1085,29 @@ class ChatTaskManager:
                     if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
                         tool_execution_queue.put_nowait(action)
                     if sse:
+                        is_stream_delta = action.action_type in {
+                            "thinking_delta",
+                            "response_delta",
+                        } and _is_stream_delta(sse)
+                        if is_stream_delta:
+                            if pending_delta_events and (
+                                _delta_message_id(pending_delta_events[-1]) != _delta_message_id(sse)
+                                or _delta_content_type(pending_delta_events[-1]) != _delta_content_type(sse)
+                            ):
+                                await _flush_delta_events()
+                            if not pending_delta_events:
+                                pending_delta_started_at = loop.time()
+                            pending_delta_events.append(sse)
+                            pending_delta_chars += _stream_delta_char_count(sse)
+                            _remember_assistant_message(sse, seen_assistant_message_fingerprints)
+                            if pending_delta_chars >= delta_batch_chars or (
+                                pending_delta_started_at is not None
+                                and loop.time() - pending_delta_started_at >= delta_batch_interval
+                            ):
+                                await _flush_delta_events()
+                            continue
+
+                        await _flush_delta_events()
                         # Per-LLM-call usage event: the converter has no access
                         # to the service-level session ids, so we stamp them
                         # here before fan-out. Skip the assistant-message dedup
@@ -1086,6 +1137,8 @@ class ChatTaskManager:
                             assistant_response_sent = True
                         if action.role == ActionRole.TOOL and action.status != ActionStatus.PROCESSING:
                             tool_result_seen = True
+
+                await _flush_delta_events()
 
             # Mid-run insert (steering) auto-continuation: a message queued
             # AFTER the final LLM turn is never seen by the SDK's

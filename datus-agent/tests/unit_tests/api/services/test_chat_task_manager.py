@@ -1732,7 +1732,7 @@ class TestCoalesceDeltas:
         result = _coalesce_deltas(evts)
         assert len(result) == 1
         merged = result[0]
-        assert merged.id == 0  # retains first event's id
+        assert merged.id == 2  # uses the last event id for resume cursor alignment
         data = merged.data
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "part0part1part2"
@@ -1826,6 +1826,7 @@ class TestConsumeEventsCoalescing:
 
         # Should receive 1 merged event instead of 3
         assert len(events) == 1
+        assert events[0].id == 2
         data = events[0].data
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "chunk0chunk1chunk2"

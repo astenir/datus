@@ -35,6 +35,8 @@ class ChatBufferLimits:
 
     max_events: int = 5000
     max_bytes: int = 16 * 1024 * 1024
+    stream_delta_batch_interval_ms: int = 50
+    stream_delta_batch_chars: int = 1024
     completed_ttl_seconds: int = 300
     cleanup_interval_seconds: int = 60
     stop_grace_seconds: int = 5
@@ -47,6 +49,10 @@ class ChatBufferLimits:
         return cls(
             max_events=_positive_int(raw.get("max_buffer_events"), cls.max_events),
             max_bytes=_positive_int(raw.get("max_buffer_bytes"), cls.max_bytes),
+            stream_delta_batch_interval_ms=_positive_int(
+                raw.get("stream_delta_batch_interval_ms"), cls.stream_delta_batch_interval_ms
+            ),
+            stream_delta_batch_chars=_positive_int(raw.get("stream_delta_batch_chars"), cls.stream_delta_batch_chars),
             completed_ttl_seconds=_positive_int(raw.get("completed_task_ttl_seconds"), cls.completed_ttl_seconds),
             cleanup_interval_seconds=_positive_int(raw.get("cleanup_interval_seconds"), cls.cleanup_interval_seconds),
             stop_grace_seconds=_positive_int(raw.get("stop_grace_seconds"), cls.stop_grace_seconds),
