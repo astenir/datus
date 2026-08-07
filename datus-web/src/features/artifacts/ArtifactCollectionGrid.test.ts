@@ -19,6 +19,18 @@ async function renderGrid(items: ArtifactManifest[], loading = false): Promise<s
 }
 
 describe("ArtifactCollectionGrid", () => {
+  it("keeps artifact cards at a fixed width instead of stretching to three columns", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+    }]);
+
+    expect(html).toContain("flex flex-wrap items-start gap-3");
+    expect(html).toContain("h-52 w-80 max-w-full flex-none");
+    expect(html).not.toContain("xl:grid-cols-3");
+  });
+
   it("does not expose edit when the owner can share but lacks edit capability", async () => {
     const html = await renderGrid([{
       slug: "fund-overview",

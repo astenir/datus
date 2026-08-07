@@ -7,9 +7,11 @@ import { useChatState } from "@/composables/useChatState";
 import { useConnection } from "@/composables/useConnection";
 import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
+import { usePersonalMcp } from "@/composables/usePersonalMcp";
 import { useTheme } from "@/composables/useTheme";
 import { workspaceAccessFromPermission } from "@/features/workspace/access";
 import { agentApi, meApi } from "@/lib/api";
+import { agentAllowsPersonalMcpSelection, personalMcpIdsForChat } from "@/lib/chat";
 import type { AgentInfo, ArtifactEditSession, NormalizedProbeResult, SelectOption } from "@/types";
 import type { AgentPreferenceSummary, ApiResponse } from "@/types/profile";
 
@@ -64,6 +66,7 @@ export function useChatWorkspace() {
     setApiBase,
   } = useConnection();
   const permission = usePermission();
+  const personalMcp = usePersonalMcp();
   const {
     messages,
     sessions,
@@ -135,6 +138,31 @@ export function useChatWorkspace() {
   const isSavingDefaultAgent = shallowRef(false);
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
+  const canUsePersonalMcp = computed(() =>
+    permission.isAdmin()
+    || (
+      permission.hasPermission("module.mcp.personal")
+      && permission.hasPermission("mcp.personal.list")
+      && permission.hasPermission("mcp.personal.use")
+    )
+  );
+  const showPersonalMcpPicker = computed(() =>
+    canUsePersonalMcp.value
+    || (
+      permission.hasFeaturePermission("mcp_personal")
+      && permission.hasPermission("mcp.personal.list")
+      && permission.hasPermission("mcp.personal.use")
+    )
+  );
+  const effectiveAgentId = computed(() => selectedAgent.value.trim() || defaultAgentId.value.trim());
+  const agentAllowsPersonalMcp = computed(() =>
+    agentAllowsPersonalMcpSelection(
+      availableAgents.value,
+      selectedAgent.value,
+      defaultAgentId.value,
+      artifactEditSession.value !== null,
+    )
+  );
   const isTestingCatalogDatasource = shallowRef(false);
   const grantedDatasourceOptions = computed<SelectOption[]>(() =>
     (permission.permissions?.value?.datasources ?? [])
@@ -271,6 +299,11 @@ export function useChatWorkspace() {
       datasource: currentDatasource.value,
       database: database.value,
       schema: schema.value,
+      personalMcpIds: personalMcpIdsForChat(
+        showPersonalMcpPicker.value,
+        agentAllowsPersonalMcp.value,
+        personalMcp.selectedIds.value,
+      ),
     });
   }
 
@@ -290,6 +323,7 @@ export function useChatWorkspace() {
     artifactEditSession.value = session;
     selectedAgent.value = session.subagent_id;
     selectSession(null);
+    personalMcp.resetDraftSelection();
   }
 
   function startReportEditSession(session: ArtifactEditSession) {
@@ -300,6 +334,7 @@ export function useChatWorkspace() {
     artifactEditSession.value = null;
     selectedAgent.value = "";
     selectSession(null);
+    personalMcp.resetDraftSelection();
   }
 
   function handleRefreshConnection() {
@@ -498,6 +533,9 @@ export function useChatWorkspace() {
       if (viewAccess.value.canViewChat) {
         startupTasks.push(loadSessions(), loadAgentOptions().then(() => loadAgentPreference()));
       }
+      if (showPersonalMcpPicker.value) {
+        startupTasks.push(personalMcp.load());
+      }
       if (canReadModelOptions.value) {
         startupTasks.push(loadModels());
       }
@@ -522,6 +560,28 @@ export function useChatWorkspace() {
   watch(database, (db) => {
     if (db && canQueryDatasourceCatalog(currentDatasource.value)) {
       void loadCatalog(db, currentDatasource.value);
+    }
+  });
+
+  watch(selectedSession, (sessionId) => {
+    if (!showPersonalMcpPicker.value) {
+      personalMcp.resetDraftSelection();
+      return;
+    }
+    if (sessionId) {
+      void personalMcp.loadSessionBinding(sessionId);
+    } else {
+      personalMcp.resetDraftSelection();
+    }
+  }, { immediate: true });
+
+  watch([effectiveAgentId, agentAllowsPersonalMcp], ([, allowsPersonalMcp], [, wasAllowed]) => {
+    if (!selectedSession.value && !allowsPersonalMcp) {
+      const hadDraftSelection = personalMcp.selectedIds.value.length > 0;
+      personalMcp.resetDraftSelection();
+      if (hadDraftSelection && wasAllowed) {
+        toast.info("当前 Agent 不支持个人 MCP，已清除本次会话的个人 MCP 选择");
+      }
     }
   });
 
@@ -556,6 +616,10 @@ export function useChatWorkspace() {
     isLoadingAgents,
     isSavingDefaultAgent,
     activeInteractionKey,
+    personalMcp,
+    showPersonalMcpPicker,
+    agentAllowsPersonalMcp,
+    effectiveAgentId,
     selectSession,
     stopSession,
     deleteSession,

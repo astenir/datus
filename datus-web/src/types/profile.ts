@@ -125,3 +125,56 @@ export interface UpsertPersonalDatasourceInput {
 }
 
 export type PersonalDatasourceProbeResult = ModelProbeResult;
+
+export type PersonalMcpTransport = "http" | "sse";
+
+export interface PersonalMcpOptions {
+  enabled: boolean;
+  allowed_hosts: readonly string[];
+  max_servers_per_user: number;
+  max_selected_per_session: number;
+}
+
+export interface PersonalMcpSummary {
+  id: string;
+  display_name: string;
+  transport: PersonalMcpTransport;
+  url: string;
+  auth_mode: "none" | "static_bearer";
+  credential_configured: boolean;
+  token_hint?: string | null;
+  allowed_tools: readonly string[];
+  blocked_tools: readonly string[];
+  enabled: boolean;
+  revision: number;
+  last_used_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface UpsertPersonalMcpInput {
+  display_name: string;
+  transport: PersonalMcpTransport;
+  url: string;
+  token?: string | null;
+  allowed_tools: string[];
+  blocked_tools: string[];
+  enabled: boolean;
+}
+
+export interface PersonalMcpConnectivityResult {
+  connected: boolean;
+  message: string;
+  tools_count?: number | null;
+}
+
+export interface PersonalMcpToolSummary {
+  name: string;
+  description?: string | null;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface PersonalMcpSessionBinding {
+  session_id: string;
+  servers: Array<{ mcp_id: string; revision: number }>;
+}

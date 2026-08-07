@@ -22,6 +22,11 @@ const props = defineProps<{
 const policyModeLabel = computed(() =>
   props.manager.form.value.toolPolicyMode === "allowlist" ? "仅允许所选工具" : "继承节点全部工具"
 )
+const personalMcpModeLabel = computed(() =>
+  props.manager.form.value.personalMcpMode === "selectable"
+    ? "允许用户在新会话选择"
+    : "禁用"
+)
 </script>
 
 <template>
@@ -42,6 +47,24 @@ const policyModeLabel = computed(() =>
     </Alert>
 
     <FieldGroup class="grid gap-5 md:grid-cols-2">
+      <Field class="md:col-span-2">
+        <FieldLabel for="agent-personal-mcp-mode">个人 MCP</FieldLabel>
+        <Select v-model="props.manager.form.value.personalMcpMode">
+          <SelectTrigger id="agent-personal-mcp-mode" class="w-full">
+            <SelectValue>{{ personalMcpModeLabel }}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="disabled">禁用</SelectItem>
+              <SelectItem value="selectable">允许用户在新会话选择</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          这里仅开放选择能力，不绑定任何个人资源。用户在 Chat 新会话中选择自己的 MCP；企业 MCP 仍在“扩展能力”中静态绑定。
+        </FieldDescription>
+      </Field>
+
       <Field class="md:col-span-2">
         <FieldLabel for="agent-tool-policy-mode">工具策略</FieldLabel>
         <Select v-model="props.manager.form.value.toolPolicyMode">

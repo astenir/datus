@@ -137,6 +137,7 @@ const transportError = computed(() => selectedRuntime.value.transportError);
 const activeInteractionKey = computed(() =>
   activeUserInteractionKey(messages.value, {
     isStreaming: isStreaming.value,
+    isAwaitingUser: streamActivity.value.phase === "awaiting_user",
     submittedInteractionKeys: selectedRuntime.value.submittedInteractionKeys,
   })
 );
@@ -396,6 +397,7 @@ async function sendMessage(opts: {
   datasource: string;
   database: string;
   schema: string;
+  personalMcpIds?: readonly string[];
 }) {
   const runtimeKey = ensureSelectedRuntime();
   if (streamControllers.has(runtimeKey) || runtimes.value.get(runtimeKey)?.isStreaming) return;
@@ -432,6 +434,7 @@ async function sendMessage(opts: {
     language: language.value,
     planMode: planMode.value,
     permissionMode: permissionMode.value,
+    personalMcpIds: opts.personalMcpIds,
   });
   const controller = new AbortController();
   const context: StreamContext = { runtimeKey, sessionId, controller };
@@ -634,10 +637,20 @@ async function sendInteraction(interactionKey: string, answers: string | string[
       buildUserInteractionInput(sessionId, interactionKey, answers),
     );
     if (!result) throw new Error("后端未接受本次交互提交");
-    updateRuntime(sessionId, runtime => ({
-      ...runtime,
-      streamActivity: continuingChatStreamActivity(runtime.streamActivity),
-    }));
+    updateRuntime(sessionId, runtime => {
+      const pendingInteractionKey = activeUserInteractionKey(runtime.messages, {
+        isStreaming: runtime.isStreaming,
+        isAwaitingUser: runtime.streamActivity.phase === "awaiting_user",
+        submittedInteractionKeys: runtime.submittedInteractionKeys,
+      });
+
+      return {
+        ...runtime,
+        streamActivity: pendingInteractionKey && pendingInteractionKey !== interactionKey
+          ? runtime.streamActivity
+          : continuingChatStreamActivity(runtime.streamActivity),
+      };
+    });
   } catch (error) {
     updateRuntime(sessionId, runtime => {
       const next = new Set(runtime.submittedInteractionKeys);

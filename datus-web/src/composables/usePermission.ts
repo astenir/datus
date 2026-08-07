@@ -99,7 +99,11 @@ function deriveViews(payload: MeSummaryPayload): Record<string, boolean> {
     knowledge: isAdmin
       || hasFeature("kb")
       || hasPermission("module.kb"),
-    mcp: isAdmin || hasFeature("mcp") || hasPermission("module.mcp"),
+    mcp: isAdmin
+      || hasFeature("mcp")
+      || hasFeature("mcp_personal")
+      || hasPermission("module.mcp")
+      || hasPermission("module.mcp.personal"),
     agents: isAdmin || hasPermission("module.admin.agents"),
     configuration: isAdmin
       || hasFeature("config_view")

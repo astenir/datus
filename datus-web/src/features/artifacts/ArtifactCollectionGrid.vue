@@ -59,14 +59,14 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
     role="status"
     aria-live="polite"
     aria-busy="true"
-    class="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+    class="flex flex-wrap items-start gap-3"
   >
     <span class="sr-only">正在加载产物列表...</span>
     <Card
       v-for="index in 3"
       :key="index"
       size="sm"
-      class="h-52"
+      class="h-52 w-80 max-w-full flex-none"
     >
       <CardHeader class="min-w-0">
         <Skeleton class="h-5 w-36" />
@@ -87,7 +87,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
     </Card>
   </div>
 
-  <Card v-else-if="props.items.length === 0">
+  <Card v-else-if="props.items.length === 0" class="gap-4">
     <CardHeader>
       <CardTitle class="text-lg">{{ props.emptyTitle }}</CardTitle>
     </CardHeader>
@@ -99,7 +99,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
   <div
     v-else
     :aria-busy="props.loading"
-    class="grid gap-3 md:grid-cols-2 xl:grid-cols-3"
+    class="flex flex-wrap items-start gap-3"
   >
     <span
       v-if="props.loading"
@@ -113,11 +113,11 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
       v-for="item in props.items"
       :key="item.slug"
       size="sm"
-      class="h-52"
+      class="h-52 w-80 max-w-full flex-none"
     >
       <CardHeader class="min-w-0">
         <CardTitle
-          class="truncate text-base font-semibold"
+          class="truncate text-base"
           :title="item.name"
         >
           {{ item.name }}

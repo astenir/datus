@@ -151,4 +151,24 @@ describe("usePermission", () => {
     expect(permission.hasFeaturePermission("datasource_catalog")).toBe(true);
     expect(permission.hasPermission("module.datasource_catalog")).toBe(true);
   });
+
+  it("derives the MCP view for a personal-MCP-only role", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({
+      success: true,
+      data: {
+        user_id: "personal_mcp_user",
+        is_admin: false,
+        permissions: ["module.mcp.personal", "mcp.personal.list", "mcp.personal.use"],
+        features: { mcp_personal: true },
+        datasource_grants: {},
+      },
+    }));
+
+    const permission = (await import("./usePermission")).usePermission();
+    const result = await permission.fetchPermissions();
+
+    expect(result?.views).toContain("mcp");
+    expect(permission.hasViewPermission("mcp")).toBe(true);
+    expect(permission.hasPermission("module.mcp")).toBe(false);
+  });
 });

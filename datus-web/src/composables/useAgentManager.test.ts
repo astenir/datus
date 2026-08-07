@@ -320,6 +320,121 @@ describe("useAgentManager", () => {
     expect(listPromptVersions).toHaveBeenCalledWith("http://api.test", "analyst");
   });
 
+  it("loads the selected agent for the tool panel without editor-only dependencies", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.inspectAgent("analyst");
+
+    expect(getAgent).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(agentUseTools).toHaveBeenCalledWith("http://api.test", "gen_sql");
+    expect(agentDefaultUsers).not.toHaveBeenCalled();
+    expect(listPromptVersions).not.toHaveBeenCalled();
+    expect(manager.formMode.value).toBe("create");
+    expect(manager.selectedAgentId.value).toBe("analyst");
+    expect(manager.selectedConfiguredTools.value).toEqual(["read_query"]);
+    expect(manager.selectedConfiguredToolCount.value).toBe(1);
+  });
+
+  it("reuses an inspected detail when opening the Agent editor", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.inspectAgent("analyst");
+    getAgent.mockClear();
+
+    await manager.openAgentEditor("analyst");
+
+    expect(getAgent).not.toHaveBeenCalled();
+    expect(agentDefaultUsers).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(listPromptVersions).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(manager.formMode.value).toBe("edit");
+    expect(manager.form.value.toolsText).toBe("read_query");
+  });
+
+  it("waits for an in-flight inspection before opening the editor", async () => {
+    const detailRequest = deferred<{
+      agent_id: string;
+      name: string;
+      node_class: string;
+      status: string;
+      source: string;
+      tools: string[];
+    }>();
+    getAgent.mockReturnValueOnce(detailRequest.promise);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    const inspection = manager.inspectAgent("analyst");
+    const editor = manager.openAgentEditor("analyst");
+
+    expect(getAgent).toHaveBeenCalledTimes(1);
+    expect(agentDefaultUsers).not.toHaveBeenCalled();
+    detailRequest.resolve({
+      agent_id: "analyst",
+      name: "analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      source: "custom",
+      tools: ["read_query"],
+    });
+    await Promise.all([inspection, editor]);
+
+    expect(getAgent).toHaveBeenCalledTimes(1);
+    expect(agentDefaultUsers).toHaveBeenCalledWith("http://api.test", "analyst");
+    expect(manager.formMode.value).toBe("edit");
+  });
+
+  it("does not let a stale tool-panel selection overwrite the latest Agent", async () => {
+    const firstRequest = deferred<{
+      agent_id: string;
+      name: string;
+      node_class: string;
+      status: string;
+      source: string;
+      tools: string[];
+    }>();
+    const secondRequest = deferred<{
+      agent_id: string;
+      name: string;
+      node_class: string;
+      status: string;
+      source: string;
+      tools: string[];
+    }>();
+    getAgent.mockImplementation((_baseUrl: string, agentId: string) =>
+      agentId === "analyst" ? firstRequest.promise : secondRequest.promise);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    const firstSelection = manager.inspectAgent("analyst");
+    const secondSelection = manager.inspectAgent("writer");
+
+    secondRequest.resolve({
+      agent_id: "writer",
+      name: "writer",
+      node_class: "text",
+      status: "published",
+      source: "custom",
+      tools: ["write_text"],
+    });
+    await secondSelection;
+
+    firstRequest.resolve({
+      agent_id: "analyst",
+      name: "analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      source: "custom",
+      tools: ["read_query"],
+    });
+    await firstSelection;
+
+    expect(manager.selectedAgentId.value).toBe("writer");
+    expect(manager.selectedAgent.value?.agent_id).toBe("writer");
+    expect(manager.selectedConfiguredTools.value).toEqual(["write_text"]);
+  });
+
   it("does not keep the main detail loader waiting for prompt versions", async () => {
     const versionRequest = deferred<{
       active_version_id: string | null;
@@ -853,6 +968,7 @@ describe("useAgentManager", () => {
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
       defaultUserIds: [],
+      personalMcpMode: "disabled",
     };
 
     await manager.saveForm();
@@ -890,6 +1006,7 @@ describe("useAgentManager", () => {
         allow_subagent_delegation: false,
         allowed_subagents: [],
       },
+      personal_mcp_mode: "disabled",
     });
     expect(toastSuccess).toHaveBeenCalledWith("Agent 已创建");
   });
@@ -948,6 +1065,7 @@ describe("useAgentManager", () => {
     const manager = useAgentManager();
     await manager.selectAgent("analyst");
     manager.form.value.promptTemplate = "Updated prompt";
+    manager.form.value.personalMcpMode = "selectable";
 
     await manager.saveForm();
 
@@ -955,6 +1073,7 @@ describe("useAgentManager", () => {
       name: "analyst",
       node_class: "gen_sql",
       prompt_template: "Updated prompt",
+      personal_mcp_mode: "selectable",
       acl: {
         visibility: "role",
         allowed_roles: ["analyst"],

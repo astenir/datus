@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from datus.api.enterprise.defaults import InMemorySessionOwnerStore
 from datus.api.models.cli_models import (
     IMessageContent,
     SSEDataType,
@@ -16,6 +17,7 @@ from datus.api.models.cli_models import (
     SSEMessagePayload,
     SSEPingData,
 )
+from datus.api.models.downstream import StreamChatInput
 from datus.api.services.chat_task_manager import (
     ChatTask,
     ChatTaskManager,
@@ -1058,6 +1060,44 @@ class TestStartChat:
         # Clean up
         await manager.shutdown()
 
+    async def test_start_chat_commits_request_binding_after_owner_and_rolls_back_on_failure(
+        self, real_agent_config, monkeypatch
+    ):
+        owner_store = InMemorySessionOwnerStore()
+        calls = []
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            calls.append(("run", task.session_id))
+
+        async def commit(session_id):
+            calls.append(("commit", await owner_store.get_owner("project", session_id)))
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager(project_id="project", session_owner_store=owner_store)
+        task = await manager.start_chat(
+            real_agent_config,
+            StreamChatInput(message="hello", session_id="binding-session"),
+            user_id="alice",
+            on_task_start=commit,
+        )
+        await task.asyncio_task
+
+        assert calls == [("commit", "alice"), ("run", "binding-session")]
+
+        async def reject(_session_id):
+            raise RuntimeError("binding failed")
+
+        with pytest.raises(RuntimeError, match="binding failed"):
+            await manager.start_chat(
+                real_agent_config,
+                StreamChatInput(message="hello", session_id="rejected-binding"),
+                user_id="alice",
+                on_task_start=reject,
+            )
+        assert await owner_store.get_owner("project", "rejected-binding") is None
+        assert manager.get_task("rejected-binding") is None
+        await manager.shutdown()
+
     async def test_start_chat_fills_request_database_context(self, real_agent_config, monkeypatch):
         """start_chat fills omitted request database context before the run loop."""
         from datus.api.models.cli_models import StreamChatInput
@@ -1692,7 +1732,7 @@ class TestCoalesceDeltas:
         result = _coalesce_deltas(evts)
         assert len(result) == 1
         merged = result[0]
-        assert merged.id == 0  # retains first event's id
+        assert merged.id == 2  # uses the last event id for resume cursor alignment
         data = merged.data
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "part0part1part2"
@@ -1786,6 +1826,7 @@ class TestConsumeEventsCoalescing:
 
         # Should receive 1 merged event instead of 3
         assert len(events) == 1
+        assert events[0].id == 2
         data = events[0].data
         assert isinstance(data, SSEMessageData)
         assert data.payload.content[0].payload["content"] == "chunk0chunk1chunk2"

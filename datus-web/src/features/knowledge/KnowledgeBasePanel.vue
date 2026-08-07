@@ -10,8 +10,7 @@ import {
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ButtonGroup } from "@/components/ui/button-group"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogDescription,
@@ -26,11 +25,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useConnection } from "@/composables/useConnection"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import KnowledgeBootstrapPanel from "@/features/knowledge/KnowledgeBootstrapPanel.vue"
 import KnowledgeDetailPanel from "@/features/knowledge/KnowledgeDetailPanel.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import SubjectTree from "@/features/workspace/SubjectTree.vue"
 import { subjectApi } from "@/lib/api"
@@ -130,7 +132,8 @@ function showMobileDetail() {
   }
 }
 
-function switchTreeMode(mode: KnowledgeTreeMode) {
+function switchTreeMode(mode: unknown) {
+  if (mode !== "catalog" && mode !== "subject") return
   if (mode === "subject" && !canUseSubjectTree.value) return
 
   treeMode.value = mode
@@ -283,130 +286,153 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <DatabaseIcon class="shrink-0 text-muted-foreground" />
-            <span class="text-xs text-muted-foreground">数据源</span>
-            <span class="max-w-48 truncate font-medium">
-              {{ currentDatasourceLabel }}
-            </span>
-          </div>
-          <Badge variant="secondary">模式 {{ schemaRows.length }}</Badge>
-          <Badge variant="secondary">表 {{ tableRows.length }}</Badge>
-          <Badge
-            v-if="canUseSubjectTree"
-            variant="secondary"
-          >
-            主题 {{ subjects.length }}
-          </Badge>
-          <Badge variant="outline">
-            {{ treeMode === "catalog" ? "目录树" : "主题树" }}
-          </Badge>
-          <div class="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
-            <Table2Icon
-              v-if="treeMode === 'catalog'"
-              class="shrink-0"
-            />
-            <GitBranchIcon
-              v-else
-              class="shrink-0"
-            />
-            <span class="truncate">{{ currentKnowledgeContextLabel }}</span>
-          </div>
-        </div>
-        <Button
-          class="ml-auto shrink-0"
-          size="sm"
-          @click="buildDialogOpen = true"
+      <Tabs
+        :model-value="treeMode"
+        class="flex min-h-0 flex-1 flex-col gap-4"
+        @update:model-value="switchTreeMode"
+      >
+        <PageHeaderToolbar
+          title="知识库"
+          description="浏览数据目录、主题树，并运行知识构建任务。"
+          aria-label="知识库页头工具栏"
         >
-          <BookMarkedIcon data-icon="inline-start" />
-          知识构建
-        </Button>
-      </div>
+          <template #leading>
+            <BookMarkedIcon />
+          </template>
 
-      <div class="-m-3 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4 overflow-hidden p-3 xl:grid-cols-[24rem_minmax(0,1fr)]">
-        <Card class="flex min-h-0 min-w-0 flex-col">
-          <CardHeader class="shrink-0">
-            <div class="flex flex-col gap-2">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <CardTitle class="text-lg">
-                  {{ treeMode === "catalog" ? "目录树" : "主题树" }}
-                </CardTitle>
-                <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  <ButtonGroup orientation="horizontal">
-                    <Button
-                      size="sm"
-                      :variant="treeMode === 'catalog' ? 'default' : 'outline'"
-                      @click="switchTreeMode('catalog')"
-                    >
-                      <Table2Icon data-icon="inline-start" />
-                      目录树
-                    </Button>
-                    <Button
-                      v-if="canUseSubjectTree"
-                      size="sm"
-                      :variant="treeMode === 'subject' ? 'default' : 'outline'"
-                      @click="switchTreeMode('subject')"
-                    >
-                      <GitBranchIcon data-icon="inline-start" />
-                      主题树
-                    </Button>
-                  </ButtonGroup>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    :disabled="treeRefreshing"
-                    @click="refreshTree"
-                  >
-                    <RefreshCwIcon data-icon="inline-start" />
-                    刷新
-                  </Button>
-                </div>
-              </div>
-              <CardDescription class="text-sm">
-                {{ treePanelDescription }}
-              </CardDescription>
+          <template #meta>
+            <div class="flex min-w-0 items-center gap-2">
+              <DatabaseIcon class="size-4 shrink-0 text-muted-foreground" />
+              <span class="text-xs text-muted-foreground">数据源</span>
+              <span class="max-w-48 truncate font-medium">
+                {{ currentDatasourceLabel }}
+              </span>
             </div>
-          </CardHeader>
-          <CardContent class="flex min-h-0 flex-1 flex-col">
-            <CatalogTree
-              v-if="treeMode === 'catalog'"
-              class="min-h-0 flex-1"
-              embedded
-              :entries="workspace.catalogEntries.value"
-              :selected-table="selectedTable"
-              :loading="workspace.isLoadingCatalog.value"
-              @refresh="workspace.loadCatalog()"
-              @select-table="requestTableLoad"
-            />
-            <SubjectTree
-              v-else-if="canUseSubjectTree"
-              class="min-h-0 flex-1"
-              embedded
-              :subjects="subjects"
-              :selected-path="selectedSubjectPath"
-              :loading="loadingSubjects"
-              @refresh="loadSubjects"
-              @select-subject="selectSubject"
-            />
-          </CardContent>
-        </Card>
+            <Badge variant="secondary">模式 {{ schemaRows.length }}</Badge>
+            <Badge variant="secondary">表 {{ tableRows.length }}</Badge>
+            <Badge
+              v-if="canUseSubjectTree"
+              variant="secondary"
+            >
+              主题 {{ subjects.length }}
+            </Badge>
+            <div class="flex min-w-0 max-w-48 items-center gap-2 text-xs text-muted-foreground">
+              <Table2Icon
+                v-if="treeMode === 'catalog'"
+                class="size-4 shrink-0"
+              />
+              <GitBranchIcon
+                v-else
+                class="size-4 shrink-0"
+              />
+              <span class="truncate">{{ currentKnowledgeContextLabel }}</span>
+            </div>
+          </template>
 
-        <KnowledgeDetailPanel
-          class="hidden xl:flex"
-          :tree-mode="treeMode"
-          :selected-subject="selectedSubject"
-          :detail-loading="detailLoading"
-          :detail-loading-label="detailLoadingLabel"
-          :metric-info="metricInfo"
-          :metric-dimensions="metricDimensions"
-          :reference-sql="referenceSql"
-          :table-detail-title="tableDetailTitle"
-          :table-detail-description="tableDetailDescription"
-          :semantic="semantic"
-        />
-      </div>
+          <template #navigation>
+            <TabsList class="flex h-auto max-w-full !flex-row flex-nowrap justify-start">
+              <TabsTrigger value="catalog">
+                <Table2Icon data-icon="inline-start" />
+                目录树
+              </TabsTrigger>
+              <TabsTrigger
+                v-if="canUseSubjectTree"
+                value="subject"
+              >
+                <GitBranchIcon data-icon="inline-start" />
+                主题树
+              </TabsTrigger>
+            </TabsList>
+          </template>
+
+          <template #actions>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="treeRefreshing"
+              @click="refreshTree"
+            >
+              <RefreshCwIcon
+                data-icon="inline-start"
+                :class="treeRefreshing && 'animate-spin'"
+              />
+              刷新
+            </Button>
+            <Button
+              size="sm"
+              @click="buildDialogOpen = true"
+            >
+              <BookMarkedIcon data-icon="inline-start" />
+              知识构建
+            </Button>
+          </template>
+        </PageHeaderToolbar>
+
+        <div class="-m-3 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4 overflow-hidden p-3 xl:grid-cols-[24rem_minmax(0,1fr)]">
+          <Card class="flex min-h-0 min-w-0 flex-col gap-4">
+            <PanelCardHeader
+              :title="treeMode === 'catalog' ? '目录树' : '主题树'"
+              :description="treePanelDescription"
+            >
+              <template #icon>
+                <Table2Icon
+                  v-if="treeMode === 'catalog'"
+                  aria-hidden="true"
+                />
+                <GitBranchIcon
+                  v-else
+                  aria-hidden="true"
+                />
+              </template>
+            </PanelCardHeader>
+            <CardContent class="flex min-h-0 flex-1 flex-col">
+              <TabsContent
+                value="catalog"
+                class="flex min-h-0 flex-1 flex-col"
+              >
+                <CatalogTree
+                  class="min-h-0 flex-1"
+                  embedded
+                  :entries="workspace.catalogEntries.value"
+                  :selected-table="selectedTable"
+                  :loading="workspace.isLoadingCatalog.value"
+                  @refresh="workspace.loadCatalog()"
+                  @select-table="requestTableLoad"
+                />
+              </TabsContent>
+              <TabsContent
+                value="subject"
+                class="flex min-h-0 flex-1 flex-col"
+              >
+                <SubjectTree
+                  v-if="canUseSubjectTree"
+                  class="min-h-0 flex-1"
+                  embedded
+                  :subjects="subjects"
+                  :selected-path="selectedSubjectPath"
+                  :loading="loadingSubjects"
+                  @refresh="loadSubjects"
+                  @select-subject="selectSubject"
+                />
+              </TabsContent>
+            </CardContent>
+          </Card>
+
+          <KnowledgeDetailPanel
+            class="hidden xl:flex"
+            :tree-mode="treeMode"
+            :selected-subject="selectedSubject"
+            :detail-loading="detailLoading"
+            :detail-loading-label="detailLoadingLabel"
+            :metric-info="metricInfo"
+            :metric-dimensions="metricDimensions"
+            :reference-sql="referenceSql"
+            :table-detail-title="tableDetailTitle"
+            :table-detail-description="tableDetailDescription"
+            :semantic="semantic"
+          />
+        </div>
+      </Tabs>
     </div>
 
     <Sheet v-model:open="mobileDetailOpen">

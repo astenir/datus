@@ -47,7 +47,28 @@ async def validate_enterprise_context(
             ),
         )
         raise HTTPException(status_code=403, detail="USER_STATUS_UNAVAILABLE") from e
-    if user is not None and not bool(user.get("enabled", True)):
+    if user is None:
+        if enterprise_extensions.user_auto_provisioning.enabled:
+            await _auto_provision_enterprise_user(
+                ctx,
+                enterprise_extensions,
+                metadata_call=metadata_call,
+                write_audit=write_audit,
+            )
+            return
+        await write_audit(
+            enterprise_extensions,
+            AuditEvent(
+                user_id=ctx.user_id,
+                action="auth.enterprise_user_status",
+                resource_type="user",
+                resource_id=ctx.user_id,
+                decision="deny",
+                reason="user not provisioned",
+            ),
+        )
+        raise HTTPException(status_code=403, detail="ENTERPRISE_USER_NOT_PROVISIONED")
+    if not bool(user.get("enabled", True)):
         await write_audit(
             enterprise_extensions,
             AuditEvent(
@@ -60,13 +81,6 @@ async def validate_enterprise_context(
             ),
         )
         raise HTTPException(status_code=403, detail="USER_DISABLED")
-    if user is None and enterprise_extensions.user_auto_provisioning.enabled:
-        await _auto_provision_enterprise_user(
-            ctx,
-            enterprise_extensions,
-            metadata_call=metadata_call,
-            write_audit=write_audit,
-        )
 
 
 async def refresh_enterprise_context(

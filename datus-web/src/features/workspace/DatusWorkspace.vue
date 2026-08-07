@@ -249,10 +249,15 @@ function handleRetryAuth() {
                 v-if="viewAccess.canViewConfiguration"
                 variant="ghost"
                 size="icon-sm"
-                aria-label="刷新连接"
+                :disabled="workspace.connection.value === 'checking'"
+                aria-label="检查连接"
+                title="检查连接"
                 @click="workspace.handleRefreshConnection"
               >
-                <RefreshCwIcon data-icon="inline-start" />
+                <RefreshCwIcon
+                  data-icon="inline-start"
+                  :class="workspace.connection.value === 'checking' && 'animate-spin'"
+                />
               </Button>
               <Button
                 variant="ghost"

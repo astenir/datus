@@ -5,8 +5,9 @@ import {
   FileTree,
 } from "@/components/ai-elements/file-tree"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import SubjectTreeNodeItem from "@/features/workspace/SubjectTreeNodeItem.vue"
 import TreeLoadingIndicator from "@/features/workspace/TreeLoadingIndicator.vue"
 import { buildSubjectTree, type SubjectTreeNode } from "@/lib/subject-tree"
@@ -57,28 +58,25 @@ function handleExpandedChange(paths: Set<string>) {
 <template>
   <component
     :is="embedded ? 'div' : Card"
-    :class="embedded ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'min-h-0 min-w-0'"
+    :class="embedded ? 'flex min-h-0 min-w-0 flex-1 flex-col' : 'min-h-0 min-w-0 gap-4'"
   >
-    <CardHeader
+    <PanelCardHeader
       v-if="!embedded"
-      class="flex flex-row items-start justify-between gap-3"
+      title="主题树"
+      description="点击主题、指标或参考 SQL 查看详情。"
     >
-      <div class="min-w-0">
-        <CardTitle class="text-lg">主题树</CardTitle>
-        <CardDescription class="text-sm">
-          点击主题、指标或参考 SQL 查看详情。
-        </CardDescription>
-      </div>
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="loading"
-        @click="emit('refresh')"
-      >
-        <RefreshCwIcon data-icon="inline-start" />
-        刷新
-      </Button>
-    </CardHeader>
+      <template #action>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="loading"
+          @click="emit('refresh')"
+        >
+          <RefreshCwIcon data-icon="inline-start" />
+          刷新
+        </Button>
+      </template>
+    </PanelCardHeader>
     <CardContent :class="embedded ? 'flex min-h-0 flex-1 flex-col p-0' : 'flex min-h-0 flex-1 flex-col'">
       <ScrollArea
         type="auto"

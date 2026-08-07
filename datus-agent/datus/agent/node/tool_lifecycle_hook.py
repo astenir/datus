@@ -12,6 +12,7 @@ from typing import Any
 
 from agents.lifecycle import AgentHooks
 
+from datus.schemas.action_bus import action_bus_put_source
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.tool_summary import detect_tool_failure, summarize_tool_execution
 from datus.utils.loggings import get_logger
@@ -82,7 +83,8 @@ class ToolLifecycleHook(AgentHooks):
             end_time=datetime.now(),
         )
         try:
-            put(action)
+            with action_bus_put_source("tool_lifecycle"):
+                put(action)
         except Exception:  # noqa: BLE001 - observability must not fail the tool run
             logger.debug("ToolLifecycleHook: action_bus.put failed", exc_info=True)
             return

@@ -2,7 +2,7 @@
 import { computed } from "vue"
 import { BracesIcon, Columns3Icon, KeyRoundIcon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
@@ -55,30 +55,22 @@ const semanticTabVariant = computed<"secondary" | "destructive" | "outline">(() 
 
 <template>
   <Card
-    class="flex min-h-0 min-w-0 flex-col"
+    class="flex min-h-0 min-w-0 flex-col gap-4"
     :aria-busy="detailLoading"
   >
     <template v-if="showHeader">
-      <CardHeader
+      <KnowledgeSubjectOverview
         v-if="treeMode === 'subject'"
-        class="shrink-0"
-      >
-        <KnowledgeSubjectOverview
-          :subject="selectedSubject"
-          :loading="detailLoading"
-        />
-      </CardHeader>
-      <CardHeader
+        :subject="selectedSubject"
+        :loading="detailLoading"
+      />
+      <KnowledgeTableOverview
         v-else
-        class="shrink-0"
-      >
-        <KnowledgeTableOverview
-          :title="tableDetailTitle"
-          :path="tableDetailDescription"
-          :detail="semantic.tableDetail.value"
-          :loading="semantic.loadingTable.value"
-        />
-      </CardHeader>
+        :title="tableDetailTitle"
+        :path="tableDetailDescription"
+        :detail="semantic.tableDetail.value"
+        :loading="semantic.loadingTable.value"
+      />
     </template>
 
     <CardContent class="flex min-h-0 flex-1 flex-col p-0">

@@ -8,6 +8,7 @@ from datus_enterprise.storage.oceanbase.governance import (
     ObSessionOwnerStore,
 )
 from datus_enterprise.storage.oceanbase.identity import ObEnterpriseRoleStore, ObEnterpriseUserStore
+from datus_enterprise.storage.oceanbase.personal_mcp import ObUserMcpServerStore
 from datus_enterprise.storage.oceanbase.resources import (
     ObEnterpriseAgentStore,
     ObEnterpriseDatasourceGrantStore,
@@ -31,4 +32,5 @@ __all__ = [
     "ObSessionOwnerStore",
     "ObUserDatasourceStore",
     "ObUserModelCredentialStore",
+    "ObUserMcpServerStore",
 ]

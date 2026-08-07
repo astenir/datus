@@ -23,6 +23,8 @@ agent:
       max_active_per_user: ${DATUS_CHAT_MAX_ACTIVE_PER_USER:-4}
       max_buffer_events: ${DATUS_CHAT_MAX_BUFFER_EVENTS:-5000}
       max_buffer_bytes: ${DATUS_CHAT_MAX_BUFFER_BYTES:-16777216}
+      stream_delta_batch_interval_ms: ${DATUS_CHAT_STREAM_DELTA_BATCH_INTERVAL_MS:-50}
+      stream_delta_batch_chars: ${DATUS_CHAT_STREAM_DELTA_BATCH_CHARS:-1024}
       completed_task_ttl_seconds: ${DATUS_CHAT_COMPLETED_TTL_SECONDS:-300}
       cleanup_interval_seconds: ${DATUS_CHAT_CLEANUP_INTERVAL_SECONDS:-60}
     auth_provider:

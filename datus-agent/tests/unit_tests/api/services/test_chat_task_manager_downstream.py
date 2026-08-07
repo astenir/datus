@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from datus.api.services.chat_task_manager import ChatTask, ChatTaskManager
+from datus.api.services.chat_task_manager import ChatBufferLimits, ChatTask, ChatTaskManager
 
 
 class TestApplyPermissionModeOverride:
@@ -43,6 +43,53 @@ class TestApplyPermissionModeOverride:
 
 
 class TestChatTaskManagerBehavior:
+    @pytest.mark.asyncio
+    async def test_stream_deltas_are_batched_before_buffering(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        class DeltaNode:
+            session_id = "llm-batched-deltas"
+
+            def get_node_name(self):
+                return "chat"
+
+            async def execute_stream_with_interactions(self, action_history_manager):
+                for index in range(3):
+                    yield ActionHistory(
+                        action_id="response-stream",
+                        role=ActionRole.ASSISTANT,
+                        action_type="response_delta",
+                        messages="",
+                        input={},
+                        output={"delta": f"chunk-{index}"},
+                        status=ActionStatus.PROCESSING,
+                    )
+
+            async def get_last_turn_usage(self):
+                return None
+
+        manager = ChatTaskManager(
+            project_id="test-proj",
+            buffer_limits=ChatBufferLimits(stream_delta_batch_interval_ms=1000, stream_delta_batch_chars=1024),
+        )
+        node = DeltaNode()
+        manager._create_node = lambda *args, **kwargs: node  # type: ignore[method-assign]
+        task = ChatTask(session_id="batched-deltas", asyncio_task=MagicMock())
+
+        await manager._run_loop(
+            task,
+            real_agent_config,
+            StreamChatInput(message="stream", session_id=task.session_id, stream_response=True),
+        )
+
+        message_events = [event for event in task.events if event.event == "message"]
+        assert len(message_events) == 1
+        assert message_events[0].id == 1
+        assert message_events[0].data.payload.content[0].payload["content"] == "chunk-0chunk-1chunk-2"
+        assert [event.id for event in task.events] == [0, 1, 2]
+        assert task.events[-1].event == "end"
+
     @pytest.mark.asyncio
     async def test_tail_insert_continues_same_task_and_emits_one_user_message(self, real_agent_config):
         """An insert after a completed model turn starts one continuation before end."""

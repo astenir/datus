@@ -464,6 +464,17 @@ class TestSnapshotMeta:
         meta = node._system_prompt_snapshot_meta("1.2")
         assert meta["model_name"] == "node:gpt-5-mini"
 
+    def test_meta_includes_request_scoped_personal_mcp_alias_and_visible_tools(self, session_manager):
+        node = _SnapshotNode(session_manager, _agent_config())
+        alias = f"personal_{'a' * 32}"
+        node.mcp_servers = {alias: object(), "enterprise_search": object()}
+        node.mcp_prompt_tool_names = {f"{alias}.search", "enterprise_search.lookup"}
+
+        meta = node._system_prompt_snapshot_meta("1.2")
+
+        assert meta["mcp_server_names"] == f"enterprise_search,{alias}"
+        assert meta["mcp_tool_names"] == f"enterprise_search.lookup,{alias}.search"
+
 
 class TestDatasourceReminder:
     def test_requires_db_tool(self, session_manager):

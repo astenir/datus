@@ -72,6 +72,8 @@ agent:
       max_active_per_user: 4
       max_buffer_events: 5000
       max_buffer_bytes: 16777216
+      stream_delta_batch_interval_ms: 50
+      stream_delta_batch_chars: 1024
       completed_task_ttl_seconds: 300
       cleanup_interval_seconds: 60
 ```

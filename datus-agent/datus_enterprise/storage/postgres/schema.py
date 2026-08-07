@@ -274,4 +274,38 @@ CREATE TABLE IF NOT EXISTS user_datasources (
 
 CREATE INDEX IF NOT EXISTS idx_user_datasources_user_enabled
 ON user_datasources (user_id, enabled, created_at);
+
+CREATE TABLE IF NOT EXISTS user_mcp_servers (
+    user_id text NOT NULL,
+    mcp_id text NOT NULL,
+    display_name text NOT NULL,
+    transport text NOT NULL,
+    url text NOT NULL,
+    token_blob text,
+    token_hint text,
+    allowed_tools_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+    blocked_tools_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+    enabled boolean NOT NULL DEFAULT true,
+    revision integer NOT NULL DEFAULT 1,
+    last_used_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, mcp_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_user_enabled
+ON user_mcp_servers (user_id, enabled, created_at);
+
+CREATE TABLE IF NOT EXISTS enterprise_session_mcp_bindings (
+    project_id text NOT NULL,
+    session_id text NOT NULL,
+    user_id text NOT NULL,
+    servers_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_mcp_bindings_user
+ON enterprise_session_mcp_bindings (project_id, user_id, updated_at);
 """

@@ -16,6 +16,7 @@ from datus_enterprise.storage.oceanbase.stores import (
     ObEnterpriseUserStore,
     ObSessionOwnerStore,
     ObUserDatasourceStore,
+    ObUserMcpServerStore,
     ObUserModelCredentialStore,
 )
 
@@ -32,4 +33,5 @@ __all__ = [
     "ObSessionOwnerStore",
     "ObUserDatasourceStore",
     "ObUserModelCredentialStore",
+    "ObUserMcpServerStore",
 ]

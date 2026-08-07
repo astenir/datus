@@ -201,6 +201,7 @@ describe("workspace router", () => {
     permissionMock.isAdmin.mockReturnValue(false)
     permissionMock.hasPermission.mockImplementation((permission: string) => {
       return permission !== "module.mcp"
+        && permission !== "module.mcp.personal"
         && permission !== "module.admin.agents"
     })
 

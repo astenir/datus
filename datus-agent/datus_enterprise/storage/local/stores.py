@@ -12,6 +12,7 @@ from datus_enterprise.storage.local.identity import (
     SqliteEnterpriseRoleStore,
     SqliteEnterpriseUserStore,
 )
+from datus_enterprise.storage.local.personal_mcp import InMemoryUserMcpServerStore, SqliteUserMcpServerStore
 from datus_enterprise.storage.local.resources import (
     InMemoryEnterpriseAgentStore,
     InMemoryEnterpriseDatasourceGrantStore,
@@ -36,6 +37,7 @@ __all__ = [
     "InMemorySessionOwnerStore",
     "InMemoryUserDatasourceStore",
     "InMemoryUserModelCredentialStore",
+    "InMemoryUserMcpServerStore",
     "NoopAuditSink",
     "SqliteAuditSink",
     "SqliteEnterpriseDatasourceGrantStore",
@@ -44,4 +46,5 @@ __all__ = [
     "SqliteSessionOwnerStore",
     "SqliteUserDatasourceStore",
     "SqliteUserModelCredentialStore",
+    "SqliteUserMcpServerStore",
 ]

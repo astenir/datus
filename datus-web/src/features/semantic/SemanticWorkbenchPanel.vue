@@ -8,7 +8,7 @@ import {
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -20,6 +20,8 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 
 const props = defineProps<{
@@ -73,14 +75,15 @@ watch(
 <template>
   <section class="min-h-0 flex-1 overflow-y-auto p-4">
     <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">语义模型工作台</h1>
-          <p class="text-sm text-muted-foreground">
-            维护表级语义 YAML 与字段说明。
-          </p>
-        </div>
-      </div>
+      <PageHeaderToolbar
+        title="语义模型工作台"
+        description="维护表级语义 YAML 与字段说明。"
+        aria-label="语义模型工作台页头工具栏"
+      >
+        <template #leading>
+          <Table2Icon />
+        </template>
+      </PageHeaderToolbar>
 
       <div class="grid gap-3 md:grid-cols-4">
         <Card>
@@ -133,16 +136,15 @@ watch(
         />
 
         <div class="flex flex-col gap-4">
-          <Card>
-            <CardHeader class="flex flex-row items-center justify-between gap-3">
-              <div>
-                <CardTitle class="text-lg">表结构</CardTitle>
-                <CardDescription class="text-sm">
-                  {{ workbench.tableDetail.value?.name || "未加载表" }}
-                </CardDescription>
-              </div>
-              <Badge variant="outline">索引 {{ tableIndexCount }}</Badge>
-            </CardHeader>
+          <Card class="gap-4">
+            <PanelCardHeader
+              title="表结构"
+              :description="workbench.tableDetail.value?.name || '未加载表'"
+            >
+              <template #meta>
+                <Badge variant="outline">索引 {{ tableIndexCount }}</Badge>
+              </template>
+            </PanelCardHeader>
             <CardContent>
               <div class="rounded-md border">
                 <Table>
@@ -191,13 +193,11 @@ watch(
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">语义 YAML</CardTitle>
-              <CardDescription class="text-sm">
-                表级语义定义。
-              </CardDescription>
-            </CardHeader>
+          <Card class="gap-4">
+            <PanelCardHeader
+              title="语义 YAML"
+              description="表级语义定义。"
+            />
             <CardContent class="flex flex-col gap-4">
               <Textarea
                 v-model="workbench.semanticYaml.value"

@@ -15,7 +15,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -35,13 +35,14 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAgentManager } from "@/composables/useAgentManager"
 import AgentFormDialog from "@/features/agent/AgentFormDialog.vue"
 import {
   filterAgentsBySource,
   type AgentSourceFilter,
 } from "@/features/agent/agent-source-filter"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { cn, formatDate } from "@/lib/utils"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 
@@ -63,6 +64,7 @@ const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 const agentSourceFilter = shallowRef<AgentSourceFilter>("all")
 const mobileWorkspaceTab = shallowRef("agents")
+const toolWorkspaceTab = shallowRef("catalog")
 
 const visibleAgents = computed(() =>
   filterAgentsBySource(manager.agents.value, agentSourceFilter.value)
@@ -84,6 +86,15 @@ const agentListLoadingLabel = computed(() =>
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
+const configuredTools = computed(() => manager.selectedConfiguredTools.value)
+const toolPanelDescription = computed(() => {
+  const selectedName = manager.selectedAgentName.value
+  if (manager.detailLoading.value && selectedName) return `正在加载 ${selectedName} 的工具配置...`
+  if (manager.selectedAgent.value) {
+    return `${selectedName ?? "当前 Agent"} · ${manager.selectedAgent.value.node_class || "gen_sql"} · 已配置与节点参考`
+  }
+  return "点击左侧 Agent 查看已配置工具和节点默认工具。"
+})
 const deleteDialogOpen = computed({
   get: () => deleteTarget.value !== null,
   set: (value: boolean) => {
@@ -143,9 +154,34 @@ function agentStatusLabel(status: string | null | undefined) {
   return agentStatusOptions.find(option => option.value === normalizedStatus)?.label ?? normalizedStatus
 }
 
-function selectAgent(agent: AgentRow) {
+function inspectAgent(agent: AgentRow) {
+  mobileWorkspaceTab.value = "tools"
+  toolWorkspaceTab.value = "selection"
+  void manager.inspectAgent(agent.agent_id)
+}
+
+function openAgentEditor(agent: AgentRow) {
   formDialogOpen.value = true
-  void manager.selectAgent(agent.agent_id)
+  void manager.openAgentEditor(agent.agent_id)
+}
+
+async function selectInitialAgent() {
+  const currentAgent = manager.selectedAgentId.value
+    ? manager.agents.value.find(agent => agent.agent_id === manager.selectedAgentId.value)
+    : undefined
+  const nextAgent = currentAgent
+    ?? visibleAgents.value.find(agent => agent.agent_id === manager.enterpriseDefaultAgentId.value)
+    ?? visibleAgents.value[0]
+
+  if (!nextAgent) {
+    if (manager.selectedAgentId.value) await manager.inspectAgent(null)
+    return
+  }
+
+  if (manager.selectedAgentId.value !== nextAgent.agent_id || !manager.selectedAgent.value) {
+    toolWorkspaceTab.value = "selection"
+    await manager.inspectAgent(nextAgent.agent_id)
+  }
 }
 
 function startCreate() {
@@ -163,6 +199,7 @@ async function refreshAll() {
     manager.loadResourceCatalogs(),
     manager.loadAclDirectory(),
   ])
+  await selectInitialAgent()
 }
 
 async function confirmDelete() {
@@ -181,26 +218,31 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <BotIcon class="shrink-0 text-muted-foreground" />
-            <h1 class="font-medium">Agent 管理</h1>
-          </div>
+      <PageHeaderToolbar
+        title="Agent 管理"
+        description="配置企业 Agent、访问范围与运行工具。"
+        aria-label="Agent 管理页头工具栏"
+      >
+        <template #leading>
+          <BotIcon />
+        </template>
+
+        <template #meta>
           <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
           <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
-          <div class="hidden min-w-0 flex-1 items-center text-xs text-muted-foreground sm:flex">
-            <span class="truncate">配置企业 Agent、访问范围与运行工具。</span>
-          </div>
-        </div>
-        <div class="ml-auto flex shrink-0 items-center gap-2">
+        </template>
+
+        <template #actions>
           <Button
             variant="outline"
             size="sm"
             :disabled="manager.loading.value || manager.toolsLoading.value"
             @click="refreshAll"
           >
-            <RefreshCwIcon data-icon="inline-start" />
+            <RefreshCwIcon
+              data-icon="inline-start"
+              :class="(manager.loading.value || manager.toolsLoading.value) && 'animate-spin'"
+            />
             刷新
           </Button>
           <Button
@@ -210,8 +252,8 @@ onMounted(() => {
             <PlusIcon data-icon="inline-start" />
             新建 Agent
           </Button>
-        </div>
-      </div>
+        </template>
+      </PageHeaderToolbar>
 
       <Alert
         v-if="manager.enterpriseRoutesUnavailable.value"
@@ -241,27 +283,30 @@ onMounted(() => {
             class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
           >
             <Card
-              size="sm"
-              class="h-full min-h-0 min-w-0"
+              size="default"
+              class="h-full w-full min-h-0 min-w-0 gap-4"
             >
-          <CardHeader class="shrink-0">
-            <div class="flex flex-wrap items-start gap-3">
-              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
-                <CardTitle class="text-lg">Agent 列表</CardTitle>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  size="sm"
-                  :model-value="agentSourceFilter"
+          <PanelCardHeader
+            title="Agent 列表"
+            description="点击 Agent 查看工具，使用操作按钮编辑或管理。"
+          >
+            <template #meta>
+              <Tabs
+                :model-value="agentSourceFilter"
+                class="shrink-0"
+                @update:model-value="updateAgentSourceFilter"
+              >
+                <TabsList
                   aria-label="按 Agent 来源过滤"
-                  @update:model-value="updateAgentSourceFilter"
+                  class="grid h-auto shrink-0 grid-cols-3"
                 >
-                  <ToggleGroupItem value="all">全部 {{ manager.agentCount.value }}</ToggleGroupItem>
-                  <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
-                  <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
-                </ToggleGroup>
-                <CardDescription class="w-full text-sm">使用操作按钮查看详情或编辑。</CardDescription>
-              </div>
+                  <TabsTrigger value="all">全部 {{ manager.agentCount.value }}</TabsTrigger>
+                  <TabsTrigger value="custom">自定义 {{ customAgentCount }}</TabsTrigger>
+                  <TabsTrigger value="builtin">系统内置 {{ builtinAgentCount }}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </template>
+            <template #action>
               <Badge
                 v-if="manager.loading.value"
                 variant="outline"
@@ -272,8 +317,8 @@ onMounted(() => {
                 />
                 加载中
               </Badge>
-            </div>
-          </CardHeader>
+            </template>
+          </PanelCardHeader>
           <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
             <Alert
               v-if="manager.error.value"
@@ -297,34 +342,44 @@ onMounted(() => {
                   <TableRow
                     v-for="agent in visibleAgents"
                     :key="agent.agent_id"
+                    :aria-selected="manager.selectedAgentId.value === agent.agent_id"
+                    :class="cn(manager.selectedAgentId.value === agent.agent_id && 'bg-muted/60')"
                   >
                     <TableCell class="min-w-0 overflow-hidden whitespace-normal">
-                      <div class="flex min-w-0 flex-col gap-1">
-                        <div class="flex min-w-0 items-center gap-1.5">
-                          <span class="min-w-0 flex-1 truncate font-medium">{{ agent.name }}</span>
-                          <Badge
-                            class="shrink-0"
-                            variant="secondary"
-                          >
-                            {{ agent.node_class || "gen_sql" }}
-                          </Badge>
-                          <Badge
-                            v-if="agent.source === 'builtin'"
-                            class="shrink-0"
-                            variant="outline"
-                          >
-                            系统内置
-                          </Badge>
-                          <Badge
-                            v-if="isDefaultAgent(agent)"
-                            class="shrink-0"
-                            variant="outline"
-                          >
-                            企业默认
-                          </Badge>
+                      <Button
+                        variant="ghost"
+                        class="h-auto w-full min-w-0 justify-start px-2 py-1 text-left"
+                        :aria-label="`选择 ${agent.name}`"
+                        :aria-pressed="manager.selectedAgentId.value === agent.agent_id"
+                        @click="inspectAgent(agent)"
+                      >
+                        <div class="flex min-w-0 flex-col gap-1">
+                          <div class="flex min-w-0 items-center gap-1.5">
+                            <span class="min-w-0 flex-1 truncate font-medium">{{ agent.name }}</span>
+                            <Badge
+                              class="shrink-0"
+                              variant="secondary"
+                            >
+                              {{ agent.node_class || "gen_sql" }}
+                            </Badge>
+                            <Badge
+                              v-if="agent.source === 'builtin'"
+                              class="shrink-0"
+                              variant="outline"
+                            >
+                              系统内置
+                            </Badge>
+                            <Badge
+                              v-if="isDefaultAgent(agent)"
+                              class="shrink-0"
+                              variant="outline"
+                            >
+                              企业默认
+                            </Badge>
+                          </div>
+                          <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                         </div>
-                        <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
-                      </div>
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <div class="flex flex-col items-start gap-1">
@@ -358,7 +413,7 @@ onMounted(() => {
                           size="icon-sm"
                           :aria-label="agentEditActionLabel(agent)"
                           :title="agentEditActionLabel(agent)"
-                          @click="selectAgent(agent)"
+                          @click="openAgentEditor(agent)"
                         >
                           <PencilIcon data-icon="inline-start" />
                         </Button>
@@ -410,26 +465,25 @@ onMounted(() => {
             class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
           >
             <Card
-              size="sm"
-              class="h-full min-h-0 min-w-0"
+              size="default"
+              class="h-full w-full min-h-0 min-w-0 gap-4"
             >
-          <CardHeader class="shrink-0">
-            <div class="flex flex-wrap items-start gap-3">
-              <div class="min-w-0 flex-1">
-                <CardTitle class="text-lg">工具</CardTitle>
-                <CardDescription class="text-sm">目录与当前 Agent 默认工具。</CardDescription>
-              </div>
-              <Badge variant="outline">{{ manager.selectedUseToolCount.value }}</Badge>
-            </div>
-          </CardHeader>
+          <PanelCardHeader
+            title="Agent 工具"
+            :description="toolPanelDescription"
+          >
+            <template #meta>
+              <Badge variant="outline">{{ manager.selectedConfiguredToolCount.value }} 个已配置</Badge>
+            </template>
+          </PanelCardHeader>
           <CardContent class="min-h-0 flex-1">
             <Tabs
-              default-value="catalog"
+              v-model="toolWorkspaceTab"
               class="flex h-full min-h-0 flex-col gap-3"
             >
               <TabsList class="grid h-auto shrink-0 grid-cols-2">
                 <TabsTrigger value="catalog">工具目录</TabsTrigger>
-                <TabsTrigger value="selection">当前工具</TabsTrigger>
+                <TabsTrigger value="selection">Agent 配置</TabsTrigger>
               </TabsList>
 
               <TabsContent
@@ -475,48 +529,106 @@ onMounted(() => {
               >
                 <ScrollArea class="h-full min-h-0">
                   <div class="flex flex-col gap-3 pr-3">
-                    <div class="rounded-lg border bg-muted/20 p-3">
-                      <div class="mb-2 flex items-center gap-2">
-                        <ListChecksIcon class="text-muted-foreground" />
-                        <span class="text-sm font-medium">默认工具</span>
-                        <Badge variant="outline">{{ defaultUseTools.length }}</Badge>
-                      </div>
-                      <div class="flex flex-wrap gap-1.5">
-                        <Badge
-                          v-for="tool in defaultUseTools"
-                          :key="tool"
-                          variant="secondary"
-                        >
-                          {{ tool }}
-                        </Badge>
-                        <span
-                          v-if="defaultUseTools.length === 0"
-                          class="text-sm text-muted-foreground"
-                        >
-                          未返回默认工具。
-                        </span>
-                      </div>
+                    <div
+                      v-if="manager.detailLoading.value"
+                      class="flex min-h-24 items-center justify-center gap-2 text-sm text-muted-foreground"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <Spinner aria-hidden="true" />
+                      正在加载 Agent 工具...
                     </div>
 
-                    <div
-                      v-for="[category, tools] in useToolTypeEntries"
-                      :key="category"
-                      class="rounded-lg border bg-muted/20 p-3"
-                    >
-                      <div class="mb-2 flex items-center justify-between gap-2">
-                        <span class="truncate text-sm font-medium">{{ category }}</span>
-                        <Badge variant="outline">{{ tools.length }}</Badge>
-                      </div>
-                      <div class="flex flex-wrap gap-1.5">
-                        <Badge
-                          v-for="tool in tools"
-                          :key="tool"
-                          variant="secondary"
+                    <Alert v-else-if="manager.detailError.value" variant="destructive">
+                      <BotIcon />
+                      <AlertTitle>读取 Agent 工具失败</AlertTitle>
+                      <AlertDescription>
+                        {{ manager.detailError.value }}
+                        <Button
+                          v-if="manager.selectedAgentId.value"
+                          variant="outline"
+                          size="sm"
+                          class="mt-2"
+                          @click="manager.inspectAgent(manager.selectedAgentId.value)"
                         >
-                          {{ tool }}
-                        </Badge>
+                          重试
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+
+                    <Alert v-else-if="!manager.selectedAgent.value">
+                      <ListChecksIcon />
+                      <AlertTitle>请选择 Agent</AlertTitle>
+                      <AlertDescription>点击左侧 Agent 后，这里会显示已配置工具和节点工具参考。</AlertDescription>
+                    </Alert>
+
+                    <template v-else>
+                      <div class="rounded-lg border bg-muted/20 p-3">
+                        <div class="mb-2 flex items-center gap-2">
+                          <ListChecksIcon class="text-muted-foreground" />
+                          <span class="text-sm font-medium">已配置工具</span>
+                          <Badge variant="outline">{{ configuredTools.length }}</Badge>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                          <Badge
+                            v-for="tool in configuredTools"
+                            :key="tool"
+                            variant="secondary"
+                          >
+                            {{ tool }}
+                          </Badge>
+                          <span
+                            v-if="configuredTools.length === 0"
+                            class="text-sm text-muted-foreground"
+                          >
+                            未配置显式工具，运行时可能使用节点默认工具。
+                          </span>
+                        </div>
                       </div>
-                    </div>
+
+                      <div class="rounded-lg border bg-muted/20 p-3">
+                        <div class="mb-2 flex items-center gap-2">
+                          <ListChecksIcon class="text-muted-foreground" />
+                          <span class="text-sm font-medium">节点默认工具</span>
+                          <Badge variant="outline">{{ defaultUseTools.length }}</Badge>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                          <Badge
+                            v-for="tool in defaultUseTools"
+                            :key="tool"
+                            variant="secondary"
+                          >
+                            {{ tool }}
+                          </Badge>
+                          <span
+                            v-if="defaultUseTools.length === 0"
+                            class="text-sm text-muted-foreground"
+                          >
+                            未返回节点默认工具。
+                          </span>
+                        </div>
+                      </div>
+
+                      <div
+                        v-for="[category, tools] in useToolTypeEntries"
+                        :key="category"
+                        class="rounded-lg border bg-muted/20 p-3"
+                      >
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                          <span class="truncate text-sm font-medium">可选工具 · {{ category }}</span>
+                          <Badge variant="outline">{{ tools.length }}</Badge>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                          <Badge
+                            v-for="tool in tools"
+                            :key="tool"
+                            variant="secondary"
+                          >
+                            {{ tool }}
+                          </Badge>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </ScrollArea>
               </TabsContent>

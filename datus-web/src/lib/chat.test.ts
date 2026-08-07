@@ -4,6 +4,7 @@ import {
   activeStreamingMessageId,
   activeUserInteractionKey,
   activeUserInteractionRequest,
+  agentAllowsPersonalMcpSelection,
   buildChatStreamRequest,
   buildUserInteractionInput,
   chatSessionsPath,
@@ -20,6 +21,7 @@ import {
   mergeMessage,
   normalizeHistoryMessages,
   parseSseBuffer,
+  personalMcpIdsForChat,
   sessionUserQueryText,
   shouldExitPlanModeAfterInteraction,
   shouldResetConversationOnAgentChange,
@@ -54,7 +56,8 @@ describe("buildChatStreamRequest", () => {
       source: "web",
       stream_response: true,
       plan_mode: true,
-      permission_mode: null
+      permission_mode: null,
+      personal_mcp_ids: [],
     });
   });
 
@@ -76,6 +79,64 @@ describe("buildChatStreamRequest", () => {
       model: null,
       model_credential_id: "cred-1",
     });
+  });
+
+  it("copies selected personal MCP IDs into the new chat request", () => {
+    const selected = ["11111111111111111111111111111111"];
+
+    const request = buildChatStreamRequest({
+      message: "use my tool",
+      sessionId: "",
+      selectedAgent: "analyst",
+      model: "",
+      datasource: "",
+      database: "",
+      schema: "",
+      language: "zh",
+      planMode: false,
+      permissionMode: "normal",
+      personalMcpIds: selected,
+    });
+
+    expect(request.personal_mcp_ids).toEqual(selected);
+    expect(request.personal_mcp_ids).not.toBe(selected);
+  });
+});
+
+describe("personal MCP chat selection", () => {
+  const agents = [
+    {
+      agent_id: "chat",
+      name: "Chat",
+      node_class: "chat",
+      status: "published",
+      source: "builtin",
+      enterprise_default: false,
+      personal_mcp_mode: "disabled" as const,
+    },
+    {
+      agent_id: "analyst",
+      name: "Analyst",
+      node_class: "gen_sql",
+      status: "published",
+      source: "enterprise",
+      enterprise_default: true,
+      personal_mcp_mode: "selectable" as const,
+    },
+  ];
+
+  it("uses the selected Agent or effective default policy and blocks artifact editing", () => {
+    expect(agentAllowsPersonalMcpSelection(agents, "analyst", "chat", false)).toBe(true);
+    expect(agentAllowsPersonalMcpSelection(agents, "", "analyst", false)).toBe(true);
+    expect(agentAllowsPersonalMcpSelection(agents, "chat", "analyst", false)).toBe(false);
+    expect(agentAllowsPersonalMcpSelection(agents, "analyst", "chat", true)).toBe(false);
+  });
+
+  it("forwards IDs only when both user permission and Agent policy allow it", () => {
+    const selected = ["11111111111111111111111111111111"];
+    expect(personalMcpIdsForChat(true, true, selected)).toEqual(selected);
+    expect(personalMcpIdsForChat(false, true, selected)).toEqual([]);
+    expect(personalMcpIdsForChat(true, false, selected)).toEqual([]);
   });
 });
 
@@ -974,6 +1035,16 @@ describe("chat error display", () => {
       title: "无法使用当前 Agent",
       code: "AGENT_FORBIDDEN",
     });
+    expect(friendlyChatErrorBlock({ code: "PERSONAL_MCP_SESSION_LOCKED" })).toMatchObject({
+      title: "个人 MCP 选择已锁定",
+      code: "PERSONAL_MCP_SESSION_LOCKED",
+      tone: "warning",
+    });
+    expect(friendlyChatErrorBlock({ code: "PERSONAL_MCP_REVISION_CHANGED" })).toMatchObject({
+      title: "个人 MCP 配置已变化",
+      code: "PERSONAL_MCP_REVISION_CHANGED",
+      tone: "warning",
+    });
   });
 
   it.each([
@@ -1481,6 +1552,34 @@ describe("activeUserInteractionKey", () => {
     expect(activeUserInteractionKey([
       { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
     ], { isStreaming: true })).toBe("permission-action-1");
+  });
+
+  it("keeps a pending interaction active when a late tool result follows it", () => {
+    const messages = [
+      {
+        id: "prompt",
+        role: "assistant" as const,
+        content: "需要用户确认",
+        blocks: [interactionBlock],
+      },
+      {
+        id: "late-tool-result",
+        role: "assistant" as const,
+        content: "工具结果 todo_update",
+        blocks: [{
+          type: "tool-result" as const,
+          callToolId: "todo-call-1",
+          toolName: "todo_update",
+          result: {},
+        }],
+      },
+    ];
+
+    expect(activeUserInteractionKey(messages, {
+      isStreaming: true,
+      isAwaitingUser: true,
+    })).toBe("permission-action-1");
+    expect(activeUserInteractionKey(messages, { isStreaming: true })).toBeNull();
   });
 
   it("exposes the active nested interaction for the stable permission dock", () => {

@@ -37,6 +37,7 @@ from datus.cli.execution_state import ExecutionInterrupted, InteractionBroker, I
 from datus.configuration.agent_config import AgentConfig, CompactConfig
 from datus.models.base import LLMBaseModel
 from datus.prompts.prompt_manager import capture_prompt_template_identities, get_prompt_manager
+from datus.schemas.action_bus import action_bus_put_source
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -1893,7 +1894,8 @@ class AgenticNode(Node):
                 status=ActionStatus.SUCCESS,
             )
         try:
-            put(action)
+            with action_bus_put_source("compact_display"):
+                put(action)
         except Exception as exc:  # noqa: BLE001 — display must never crash the run loop
             logger.debug("compact display action injection failed: %s", exc)
 

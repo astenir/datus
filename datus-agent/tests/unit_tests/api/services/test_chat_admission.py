@@ -60,6 +60,14 @@ class TestChatAdmissionController:
         )
         assert limits == ChatAdmissionLimits(global_limit=12, per_project_limit=7, per_user_limit=2)
 
+    def test_stream_delta_batch_limits_load_positive_api_values(self):
+        limits = ChatBufferLimits.from_api_config(
+            {"chat": {"stream_delta_batch_interval_ms": "75", "stream_delta_batch_chars": 2048}}
+        )
+
+        assert limits.stream_delta_batch_interval_ms == 75
+        assert limits.stream_delta_batch_chars == 2048
+
 
 class TestChatEventBufferLimits:
     @pytest.mark.asyncio

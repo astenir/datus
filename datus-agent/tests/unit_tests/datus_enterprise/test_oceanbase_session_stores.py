@@ -26,6 +26,7 @@ from datus_enterprise.oceanbase_stores import (
     ObEnterpriseUserStore,
     ObSessionOwnerStore,
     ObUserDatasourceStore,
+    ObUserMcpServerStore,
     ObUserModelCredentialStore,
 )
 
@@ -130,6 +131,8 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "create table if not exists user_model_credentials" in normalized
     assert "create table if not exists user_model_preferences" in normalized
     assert "create table if not exists user_datasources" in normalized
+    assert "create table if not exists user_mcp_servers" in normalized
+    assert "create table if not exists enterprise_session_mcp_bindings" in normalized
     assert "create table if not exists enterprise_session_bodies" in normalized
     assert "create table if not exists enterprise_session_messages" in normalized
     assert "create table if not exists enterprise_session_turn_usage" in normalized
@@ -139,6 +142,29 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized
+
+
+@pytest.mark.asyncio
+async def test_ob_personal_mcp_store_counts_and_deletes_owned_bindings():
+    store = ObUserMcpServerStore(
+        host="127.0.0.1",
+        user="root@test",
+        password="testpass",
+        database="datus_enterprise",
+        encryption_secret="test-user-mcp-secret-32-characters",
+    )
+    store._fetchall = AsyncMock(
+        return_value=[
+            {"servers_json": '[{"mcp_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revision":1}]'},
+            {"servers_json": '[{"mcp_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","revision":1}]'},
+        ]
+    )
+    store._execute = AsyncMock(return_value=1)
+
+    assert await store.count_session_bindings("alice", "a" * 32) == 1
+    assert await store.delete_session_binding("project", "session-1", "alice") is True
+    assert store._fetchall.await_args.args[1] == ("alice",)
+    assert store._execute.await_args.args[1] == ("project", "session-1", "alice")
 
 
 @pytest.mark.asyncio
@@ -496,6 +522,13 @@ def test_oceanbase_session_store_loader_wires_optional_providers():
                     "encryption_secret": "test-user-datasource-secret-32xxxx",
                 },
             },
+            "user_mcp_server_store": {
+                "class": "datus_enterprise.oceanbase_stores:ObUserMcpServerStore",
+                "kwargs": {
+                    **kwargs,
+                    "encryption_secret": "test-user-mcp-secret-32-characters",
+                },
+            },
             "session_body_store": {
                 "class": "datus_enterprise.oceanbase_session_store:ObSessionBodyStore",
                 "kwargs": kwargs,
@@ -514,4 +547,5 @@ def test_oceanbase_session_store_loader_wires_optional_providers():
     assert isinstance(extensions.secret_store, ObEnterpriseSecretStore)
     assert isinstance(extensions.user_model_credential_store, ObUserModelCredentialStore)
     assert isinstance(extensions.user_datasource_store, ObUserDatasourceStore)
+    assert isinstance(extensions.user_mcp_server_store, ObUserMcpServerStore)
     assert isinstance(extensions.session_body_store, ObSessionBodyStore)

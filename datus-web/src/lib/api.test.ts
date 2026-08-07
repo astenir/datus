@@ -1055,6 +1055,7 @@ describe("api client", () => {
       prompt_language: "en",
       prompt_version: "1.0",
       max_turns: 30,
+      personal_mcp_mode: "disabled",
     });
     await agentApi.tools("http://localhost:8000/");
     await agentApi.useTools("http://localhost:8000/", "gen_sql");
@@ -1073,6 +1074,7 @@ describe("api client", () => {
       prompt_language: "en",
       prompt_version: "1.0",
       max_turns: 30,
+      personal_mcp_mode: "disabled",
     });
     expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tools");
     expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tool-reference?node_class=gen_sql");
@@ -1137,6 +1139,7 @@ describe("api client", () => {
     await agentApi.updatePolicy("http://localhost:8000/", "safe_chat", {
       tool_policy: { mode: "allowlist", allowed: ["filesystem_tools.read_file"], denied: ["bash_tools.*"] },
       runtime_policy: { allow_subagent_delegation: false, allowed_subagents: [] },
+      personal_mcp_mode: "disabled",
     });
     await agentApi.enterpriseDefault("http://localhost:8000/");
     await agentApi.updateEnterpriseDefault("http://localhost:8000/", "safe_chat");

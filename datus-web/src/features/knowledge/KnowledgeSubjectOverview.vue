@@ -8,6 +8,7 @@ import {
 } from "@lucide/vue"
 
 import { Badge } from "@/components/ui/badge"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import type { SubjectTreeNode } from "@/lib/subject-tree"
 
 const props = defineProps<{
@@ -28,8 +29,11 @@ const statusLabel = computed(() => {
 </script>
 
 <template>
-  <div class="flex min-w-0 items-start gap-3">
-    <div class="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+  <PanelCardHeader
+    :title="subject?.name || '未选择主题'"
+    :description="subject ? subject.subjectPath.join(' / ') : '从主题树选择节点后浏览详情'"
+  >
+    <template #icon>
       <ChartNoAxesCombinedIcon
         v-if="subject?.type === 'metric'"
         aria-hidden="true"
@@ -42,22 +46,15 @@ const statusLabel = computed(() => {
         v-else
         aria-hidden="true"
       />
-    </div>
-    <div class="min-w-0 flex-1">
-      <div class="flex min-w-0 flex-wrap items-center gap-2">
-        <h2 class="truncate text-lg font-semibold">
-          {{ subject?.name || "未选择主题" }}
-        </h2>
-        <Badge variant="outline">
-          {{ subjectTypeLabel }}
-        </Badge>
-        <Badge :variant="loading ? 'outline' : 'secondary'">
-          {{ statusLabel }}
-        </Badge>
-      </div>
-      <p class="truncate text-sm text-muted-foreground">
-        {{ subject ? subject.subjectPath.join(" / ") : "从主题树选择节点后浏览详情" }}
-      </p>
-    </div>
-  </div>
+    </template>
+
+    <template #meta>
+      <Badge variant="outline">
+        {{ subjectTypeLabel }}
+      </Badge>
+      <Badge :variant="loading ? 'outline' : 'secondary'">
+        {{ statusLabel }}
+      </Badge>
+    </template>
+  </PanelCardHeader>
 </template>

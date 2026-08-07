@@ -37,6 +37,7 @@ _ENTERPRISE_ROUTE_INSERTIONS: dict[RouteModule, tuple[RouteModule, ...]] = {
         ("datus_enterprise.api.me_routes", "enterprise_me"),
         ("datus_enterprise.api.model_credential_routes", "enterprise_model_credentials"),
         ("datus_enterprise.api.personal_datasource_routes", "enterprise_personal_datasources"),
+        ("datus_enterprise.api.personal_mcp_routes", "enterprise_personal_mcp"),
         ("datus_enterprise.api.artifact_routes", "enterprise_artifacts"),
         ("datus_enterprise.api.agent_routes", "enterprise_agents"),
         ("datus_enterprise.api.admin_datasource_routes", "enterprise_datasource_admin"),

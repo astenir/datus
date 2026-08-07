@@ -438,6 +438,48 @@ class UserDatasourceStore(Protocol):
 
 
 @runtime_checkable
+class UserMcpServerStore(Protocol):
+    """Persist current-user MCP definitions and immutable session selections."""
+
+    async def list_servers(self, user_id: str) -> list[dict[str, Any]]: ...
+
+    async def get_server(self, user_id: str, mcp_id: str) -> dict[str, Any] | None: ...
+
+    async def put_server(
+        self,
+        *,
+        user_id: str,
+        mcp_id: str,
+        display_name: str,
+        transport: str,
+        url: str,
+        token: str | None,
+        allowed_tools: list[str],
+        blocked_tools: list[str],
+        enabled: bool,
+    ) -> dict[str, Any]: ...
+
+    async def delete_server(self, user_id: str, mcp_id: str) -> bool: ...
+
+    async def touch_server_used(self, user_id: str, mcp_id: str) -> None: ...
+
+    async def count_session_bindings(self, user_id: str, mcp_id: str) -> int: ...
+
+    async def get_session_binding(self, project_id: str, session_id: str, user_id: str) -> dict[str, Any] | None: ...
+
+    async def set_session_binding(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        user_id: str,
+        servers: list[dict[str, Any]],
+    ) -> dict[str, Any]: ...
+
+    async def delete_session_binding(self, project_id: str, session_id: str, user_id: str) -> bool: ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

@@ -48,6 +48,11 @@ class StreamChatInput(UpstreamStreamChatInput):
             "When set, the credential's configured provider and model take priority over model."
         ),
     )
+    personal_mcp_ids: List[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Current user's personal MCP IDs selected when starting this session.",
+    )
 
 
 class FeedbackChatInput(UpstreamFeedbackChatInput):

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1176,12 +1177,20 @@ def test_available_agents_do_not_filter_by_node_class_permission(monkeypatch):
     assert "sales_sql" in ids
 
 
-def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
+def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch, tmp_path):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
     admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
 
-    with _client(admin_ctx) as client:
+    config_path = tmp_path / "conf" / ".mcp.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {"type": "http", "url": "https://mcp.example.com"}}}),
+        encoding="utf-8",
+    )
+    agent_config = SimpleNamespace(path_manager=DatusPathManager(datus_home=tmp_path))
+
+    with _client(admin_ctx, agent_config=agent_config) as client:
         response = client.put(
             "/api/v1/admin/agents/custom_chat",
             json={

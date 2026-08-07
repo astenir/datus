@@ -12,10 +12,16 @@ import type {
   PersonalDatasourceProbeResult,
   PersonalDatasourceProviderOptions,
   PersonalDatasourceSummary,
+  PersonalMcpConnectivityResult,
+  PersonalMcpOptions,
+  PersonalMcpSessionBinding,
+  PersonalMcpSummary,
+  PersonalMcpToolSummary,
   UpdateModelPreferenceInput,
   UpdateAgentPreferenceInput,
   UpsertModelCredentialInput,
   UpsertPersonalDatasourceInput,
+  UpsertPersonalMcpInput,
 } from "@/types/profile";
 
 export const meApi = {
@@ -111,5 +117,67 @@ export const meApi = {
 
   testPersonalDatasource(id: string): Promise<ApiResponse<PersonalDatasourceProbeResult>> {
     return post<ApiResponse<PersonalDatasourceProbeResult>>(`/api/v1/me/datasources/${encodeURIComponent(id)}/test`);
+  },
+
+  personalMcpOptions(signal?: AbortSignal): Promise<ApiResponse<PersonalMcpOptions>> {
+    return get<ApiResponse<PersonalMcpOptions>>("/api/v1/me/mcp-servers/options", { signal });
+  },
+
+  personalMcpServers(signal?: AbortSignal): Promise<ApiResponse<PersonalMcpSummary[]>> {
+    return get<ApiResponse<PersonalMcpSummary[]>>("/api/v1/me/mcp-servers", { signal });
+  },
+
+  createPersonalMcp(
+    input: UpsertPersonalMcpInput,
+    signal?: AbortSignal,
+  ): Promise<ApiResponse<PersonalMcpSummary>> {
+    return post<ApiResponse<PersonalMcpSummary>>("/api/v1/me/mcp-servers", input, { signal });
+  },
+
+  updatePersonalMcp(
+    id: string,
+    input: UpsertPersonalMcpInput,
+    signal?: AbortSignal,
+  ): Promise<ApiResponse<PersonalMcpSummary>> {
+    return put<ApiResponse<PersonalMcpSummary>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}`,
+      input,
+      { signal },
+    );
+  },
+
+  deletePersonalMcp(id: string, signal?: AbortSignal): Promise<ApiResponse<{ deleted: boolean }>> {
+    return del<ApiResponse<{ deleted: boolean }>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}`,
+      { signal },
+    );
+  },
+
+  testPersonalMcp(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ApiResponse<PersonalMcpConnectivityResult>> {
+    return post<ApiResponse<PersonalMcpConnectivityResult>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}/test`,
+      undefined,
+      { signal },
+    );
+  },
+
+  personalMcpTools(id: string, signal?: AbortSignal): Promise<ApiResponse<PersonalMcpToolSummary[]>> {
+    return get<ApiResponse<PersonalMcpToolSummary[]>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}/tools`,
+      { signal },
+    );
+  },
+
+  personalMcpSessionBinding(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ApiResponse<PersonalMcpSessionBinding>> {
+    return get<ApiResponse<PersonalMcpSessionBinding>>(
+      `/api/v1/me/mcp-servers/session-binding/${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
   },
 };

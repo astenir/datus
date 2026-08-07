@@ -22,7 +22,7 @@ import {
 } from "@/components/ai-elements/terminal"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   Tooltip,
@@ -43,6 +43,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
 import KnowledgeUploadField from "@/features/knowledge/KnowledgeUploadField.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import type {
   BootstrapBuildMode,
   BootstrapComponent,
@@ -168,67 +170,81 @@ function updateBuildMode(value: unknown) {
   <section class="min-h-0 flex-1 overflow-visible">
     <TooltipProvider>
       <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
-        <Badge :variant="statusBadgeVariant(manager.status.value)">
-          <component
-            :is="statusIcon"
-            :class="{ 'animate-spin': manager.status.value === 'running' }"
-            data-icon="inline-start"
-          />
-          {{ statusLabel }}
-        </Badge>
-        <Badge variant="outline">{{ activeModeLabel }}</Badge>
-        <span class="min-w-0 truncate text-xs text-muted-foreground">
-          {{ streamLabel }}
-        </span>
-        <div class="ml-auto flex shrink-0 items-center gap-2">
-          <span class="text-xs text-muted-foreground">日志 {{ manager.logs.value.length }}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
-            @click="manager.clearLogs"
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
+          <Tabs
+            default-value="kb"
+            class="flex flex-col gap-4"
           >
-            <RotateCcwIcon data-icon="inline-start" />
-            清空
-          </Button>
-        </div>
-      </div>
+          <PageHeaderToolbar
+            title="知识构建"
+            description="运行业务知识库和平台文档构建任务。"
+            aria-label="知识构建页头工具栏"
+          >
+            <template #leading>
+              <BookMarkedIcon />
+            </template>
 
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <Tabs
-          default-value="kb"
-          class="flex flex-col gap-4"
-        >
-          <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
-            <TabsTrigger value="kb">业务知识库</TabsTrigger>
-            <TabsTrigger value="docs">平台文档</TabsTrigger>
-          </TabsList>
+            <template #meta>
+              <Badge :variant="statusBadgeVariant(manager.status.value)">
+                <component
+                  :is="statusIcon"
+                  :class="{ 'animate-spin': manager.status.value === 'running' }"
+                  data-icon="inline-start"
+                />
+                {{ statusLabel }}
+              </Badge>
+              <Badge variant="outline">{{ activeModeLabel }}</Badge>
+              <span class="max-w-48 truncate text-xs text-muted-foreground">
+                {{ streamLabel }}
+              </span>
+              <span class="text-xs text-muted-foreground">日志 {{ manager.logs.value.length }}</span>
+            </template>
+
+            <template #navigation>
+              <TabsList class="flex h-auto max-w-full !flex-row flex-nowrap justify-start">
+                <TabsTrigger value="kb">业务知识库</TabsTrigger>
+                <TabsTrigger value="docs">平台文档</TabsTrigger>
+              </TabsList>
+            </template>
+
+            <template #actions>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
+                @click="manager.clearLogs"
+              >
+                <RotateCcwIcon data-icon="inline-start" />
+                清空
+              </Button>
+            </template>
+          </PageHeaderToolbar>
 
           <TabsContent value="kb">
             <Card
-              size="sm"
-              class="flex h-[29rem] flex-col"
+              size="default"
+              class="flex h-[29rem] flex-col gap-4"
             >
-              <CardHeader class="!flex flex-row items-center justify-between gap-3">
-                <CardTitle class="text-lg">业务知识库构建</CardTitle>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      class="size-6"
-                      aria-label="业务知识库构建说明"
-                    >
-                      <CircleHelpIcon />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    调用 `/api/v1/kb/bootstrap`，每次只构建一个知识组件。
-                  </TooltipContent>
-                </Tooltip>
-              </CardHeader>
+              <PanelCardHeader title="业务知识库构建">
+                <template #action>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        aria-label="业务知识库构建说明"
+                      >
+                        <CircleHelpIcon />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      调用 `/api/v1/kb/bootstrap`，每次只构建一个知识组件。
+                    </TooltipContent>
+                  </Tooltip>
+                </template>
+              </PanelCardHeader>
               <CardContent class="flex flex-1 flex-col gap-3 overflow-y-auto">
                 <div class="grid gap-3 md:grid-cols-3">
                   <Field>
@@ -474,28 +490,29 @@ function updateBuildMode(value: unknown) {
 
           <TabsContent value="docs">
             <Card
-              size="sm"
-              class="flex h-[29rem] flex-col"
+              size="default"
+              class="flex h-[29rem] flex-col gap-4"
             >
-              <CardHeader class="!flex flex-row items-center justify-between gap-3">
-                <CardTitle class="text-lg">平台文档构建</CardTitle>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      class="size-6"
-                      aria-label="平台文档构建说明"
-                    >
-                      <CircleHelpIcon />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    调用 `/api/v1/kb/bootstrap-docs`，构建平台文档检索知识库。
-                  </TooltipContent>
-                </Tooltip>
-              </CardHeader>
+              <PanelCardHeader title="平台文档构建">
+                <template #action>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        aria-label="平台文档构建说明"
+                      >
+                        <CircleHelpIcon />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      调用 `/api/v1/kb/bootstrap-docs`，构建平台文档检索知识库。
+                    </TooltipContent>
+                  </Tooltip>
+                </template>
+              </PanelCardHeader>
               <CardContent class="flex flex-1 flex-col gap-4 overflow-y-auto">
                 <div class="grid gap-4 md:grid-cols-4">
                   <Field>
@@ -595,27 +612,27 @@ function updateBuildMode(value: unknown) {
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
+          </Tabs>
 
-        <Terminal
-          :output="terminalText"
-          :is-streaming="manager.isRunning.value"
-          class="min-h-[28rem]"
-          @clear="manager.clearLogs"
-        >
-          <TerminalHeader>
-            <TerminalTitle>构建事件流</TerminalTitle>
-            <div class="flex items-center gap-2">
-              <TerminalStatus />
-              <TerminalActions>
-                <TerminalCopyButton />
-                <TerminalClearButton />
-              </TerminalActions>
-            </div>
-          </TerminalHeader>
-          <TerminalContent class="min-h-96 text-xs leading-6" />
-        </Terminal>
-      </div>
+          <Terminal
+            :output="terminalText"
+            :is-streaming="manager.isRunning.value"
+            class="min-h-[28rem]"
+            @clear="manager.clearLogs"
+          >
+            <TerminalHeader>
+              <TerminalTitle>构建事件流</TerminalTitle>
+              <div class="flex items-center gap-2">
+                <TerminalStatus />
+                <TerminalActions>
+                  <TerminalCopyButton />
+                  <TerminalClearButton />
+                </TerminalActions>
+              </div>
+            </TerminalHeader>
+            <TerminalContent class="min-h-96 text-xs leading-6" />
+          </Terminal>
+        </div>
       </div>
     </TooltipProvider>
   </section>

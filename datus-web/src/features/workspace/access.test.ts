@@ -66,6 +66,16 @@ describe("workspace access", () => {
     expect(access.canEditConfiguration).toBe(true)
   })
 
+  it("allows a personal-MCP-only user to enter the MCP workspace", () => {
+    expect(workspaceAccessFromPermission(permissionReader({
+      permissions: ["module.mcp.personal"],
+    })).canViewMcp).toBe(true)
+
+    expect(workspaceAccessFromPermission(permissionReader({
+      features: ["mcp_personal"],
+    })).canViewMcp).toBe(true)
+  })
+
   it("does not expose the knowledge view for catalog-only support permissions", () => {
     const access = workspaceAccessFromPermission(permissionReader({
       permissions: ["module.sql_executor", "module.datasource_catalog"],

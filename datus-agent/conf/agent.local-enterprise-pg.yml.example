@@ -91,6 +91,14 @@ agent:
         mysql: "3306"
         oceanbase: "2881"
 
+    # 本地联调默认关闭；开启后必须配置允许域名，且只接受 HTTPS HTTP/SSE。
+    user_mcp:
+      enabled: false
+      allowed_hosts: []
+      max_servers_per_user: 10
+      max_selected_per_session: 3
+      timeout_seconds: 30
+
     user_store:
       class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
       kwargs: &enterprise_pg
@@ -145,6 +153,12 @@ agent:
       kwargs:
         <<: *enterprise_pg
         encryption_secret: ${DATUS_USER_DATASOURCE_SECRET}
+
+    user_mcp_server_store:
+      class: datus_enterprise.postgres_stores:PgUserMcpServerStore
+      kwargs:
+        <<: *enterprise_pg
+        encryption_secret: ${DATUS_USER_MCP_SECRET}
 
   # 基础 RBAC / datasource grant smoke 测试保持关闭。
   # 只有专门验证 SQL policy 兜底时才开启。

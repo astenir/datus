@@ -231,4 +231,34 @@ CREATE TABLE IF NOT EXISTS user_datasources (
   PRIMARY KEY (user_id, datasource_id),
   INDEX idx_user_datasources_user_enabled (user_id, enabled, created_at)
 );
+
+CREATE TABLE IF NOT EXISTS user_mcp_servers (
+  user_id VARCHAR(255) NOT NULL,
+  mcp_id VARCHAR(64) NOT NULL,
+  display_name VARCHAR(255) NOT NULL,
+  transport VARCHAR(16) NOT NULL,
+  url VARCHAR(2048) NOT NULL,
+  token_blob LONGTEXT,
+  token_hint VARCHAR(32),
+  allowed_tools_json LONGTEXT NOT NULL,
+  blocked_tools_json LONGTEXT NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  revision INTEGER NOT NULL DEFAULT 1,
+  last_used_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, mcp_id),
+  INDEX idx_user_mcp_servers_user_enabled (user_id, enabled, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS enterprise_session_mcp_bindings (
+  project_id VARCHAR(255) NOT NULL,
+  session_id VARCHAR(255) NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  servers_json LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (project_id, session_id),
+  INDEX idx_session_mcp_bindings_user (project_id, user_id, updated_at)
+);
 """

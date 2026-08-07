@@ -24,6 +24,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.configuration.inherited_memory_overrides import inherited_memory
 from datus.configuration.node_type import NodeType
 from datus.configuration.scoped_context_overrides import effective_subagent
+from datus.schemas.action_bus import action_bus_put_source
 from datus.schemas.action_history import (
     SUBAGENT_COMPLETE_ACTION_TYPE,
     ActionHistory,
@@ -908,7 +909,8 @@ class SubAgentTaskTool:
                             role=str(action.role),
                             status=str(action.status),
                         )
-                        self._action_bus.put(action)
+                        with action_bus_put_source("subagent.forward"):
+                            self._action_bus.put(action)
 
                     if action.role == ActionRole.TOOL:
                         tool_count += 1
@@ -934,7 +936,14 @@ class SubAgentTaskTool:
             finally:
                 func_result = self._convert_to_func_result(final_output, session_id=node.session_id)
                 complete_status = ActionStatus.SUCCESS if func_result.success else ActionStatus.FAILED
-                self._emit_complete_action(subagent_type, call_id, stream_start_time, tool_count, complete_status)
+                self._emit_complete_action(
+                    subagent_type,
+                    call_id,
+                    stream_start_time,
+                    tool_count,
+                    complete_status,
+                    agent_session_id=getattr(node, "session_id", None),
+                )
                 # Release in-memory handles WITHOUT deleting the .db file — the parent
                 # LLM may resume this session_id on a later turn.
                 try:
@@ -992,6 +1001,7 @@ class SubAgentTaskTool:
         stream_start_time: datetime,
         tool_count: int,
         status: ActionStatus,
+        agent_session_id: Optional[str] = None,
     ) -> None:
         """Emit a ``subagent_complete`` action to signal that a sub-agent has finished."""
         if self._action_bus is None:
@@ -1009,7 +1019,10 @@ class SubAgentTaskTool:
         complete.end_time = datetime.now()
         complete.start_time = stream_start_time
         complete.output = {"subagent_type": subagent_type, "tool_count": tool_count}
-        self._action_bus.put(complete)
+        if isinstance(agent_session_id, str) and agent_session_id:
+            complete.output["agent_session_id"] = agent_session_id
+        with action_bus_put_source("subagent.complete"):
+            self._action_bus.put(complete)
 
     # ── input building ─────────────────────────────────────────────────
 

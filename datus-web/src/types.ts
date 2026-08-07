@@ -305,13 +305,21 @@ export type AgentToolPolicy = components["schemas"]["AgentToolPolicy"];
 
 export type AgentRuntimePolicy = components["schemas"]["AgentRuntimePolicy"];
 
-export type AgentPolicy = components["schemas"]["AgentPolicy"];
+export type PersonalMcpMode = "disabled" | "selectable";
+
+export type AgentPolicy = components["schemas"]["AgentPolicy"] & {
+  personal_mcp_mode?: PersonalMcpMode;
+};
 
 export type AgentPreferenceSummary = components["schemas"]["AgentPreferenceSummary"];
 
-export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"];
+export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"] & {
+  personal_mcp_mode?: PersonalMcpMode;
+};
 
-export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];
+export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"] & {
+  personal_mcp_mode?: PersonalMcpMode;
+};
 
 export type AgentNodeType = components["schemas"]["EnterpriseAgentNodeType"];
 
@@ -325,9 +333,13 @@ export type CreateAgentPromptVersionInput = components["schemas"]["CreateAgentPr
 
 export type ActivateAgentPromptVersionInput = components["schemas"]["ActivateAgentPromptVersionRequest"];
 
-export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
+export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"] & {
+  personal_mcp_mode?: PersonalMcpMode;
+};
 
-export type EditAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
+export type EditAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"] & {
+  personal_mcp_mode?: PersonalMcpMode;
+};
 
 // ─── Chat Extensions ─────────────────────────────────────────────────────────
 

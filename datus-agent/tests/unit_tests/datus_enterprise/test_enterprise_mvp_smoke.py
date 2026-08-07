@@ -287,7 +287,7 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
         assert enterprise[key]["kwargs"]["min_size"] == 1
         assert enterprise[key]["kwargs"]["max_size"] == 2
 
-    for key in ("user_model_credential_store", "user_datasource_store"):
+    for key in ("user_model_credential_store", "user_datasource_store", "user_mcp_server_store"):
         enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
         enterprise[key]["kwargs"]["encryption_secret"] = "test-only-enterprise-credential-secret"
 
@@ -302,3 +302,4 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
     assert extensions.audit_sink.__class__.__name__ == "PgAuditSink"
     assert extensions.quota_store.__class__.__name__ == "PgEnterpriseQuotaStore"
     assert extensions.secret_store.__class__.__name__ == "PgEnterpriseSecretStore"
+    assert extensions.user_mcp_server_store.__class__.__name__ == "PgUserMcpServerStore"

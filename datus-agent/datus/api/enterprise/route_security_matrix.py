@@ -575,6 +575,74 @@ _add_many(
     _policy(MODULE_RBAC, TOOL_PERMISSION, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.mcp"),
 )
 
+_add_many(
+    "GET",
+    [
+        "/api/v1/me/mcp-servers",
+        "/api/v1/me/mcp-servers/options",
+        "/api/v1/me/mcp-servers/{mcp_id}",
+        "/api/v1/me/mcp-servers/{mcp_id}/tools",
+    ],
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        SYSTEM_READONLY,
+        module_permission="module.mcp.personal",
+        note="Personal MCP resources are owner-scoped by the authenticated current-user store key.",
+    ),
+)
+_add(
+    "GET",
+    "/api/v1/me/mcp-servers/session-binding/{session_id}",
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        SESSION_OWNER,
+        SYSTEM_READONLY,
+        module_permission="module.mcp.personal",
+        note="Personal MCP binding is visible only after the canonical session owner check.",
+    ),
+)
+_add_many(
+    "POST",
+    [
+        "/api/v1/me/mcp-servers",
+        "/api/v1/me/mcp-servers/{mcp_id}/test",
+    ],
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        AUDIT,
+        module_permission="module.mcp.personal",
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/me/mcp-servers/{mcp_id}",
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        AUDIT,
+        module_permission="module.mcp.personal",
+    ),
+)
+_add(
+    "DELETE",
+    "/api/v1/me/mcp-servers/{mcp_id}",
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        AUDIT,
+        module_permission="module.mcp.personal",
+    ),
+)
+
 _add(
     "POST",
     "/api/v1/kb/bootstrap",

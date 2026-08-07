@@ -59,6 +59,9 @@ describe("knowledge subject workbenches", () => {
     expect(html).toContain("fund / nav / fund_nav")
     expect(html).toContain("指标")
     expect(html).toContain("已加载")
+    expect(html).toContain('data-slot="card-title"')
+    expect(html).toContain("font-medium")
+    expect(html).toContain("size-9")
   })
 
   it("renders metric dimensions in a fixed-tab workbench", async () => {

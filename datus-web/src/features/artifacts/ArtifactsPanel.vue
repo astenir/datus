@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue"
-import { EyeIcon, FilePenLineIcon, RefreshCwIcon, Share2Icon } from "@lucide/vue"
+import {
+  BarChart3Icon,
+  EyeIcon,
+  FilePenLineIcon,
+  RefreshCwIcon,
+  Share2Icon,
+} from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -17,6 +23,7 @@ import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
 import ArtifactViewerFrame from "@/features/artifacts/ArtifactViewerFrame.vue"
+import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import type { ArtifactPreviewQueryRequest } from "@/lib/artifact-preview-bridge"
 import type { ArtifactEditSession, ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
@@ -43,6 +50,12 @@ const detailTargetSlug = shallowRef<string | null>(null)
 const selectedViewerSlug = computed(() => props.selectedSlug?.trim() || null)
 const selectedDetailSlug = computed(() => detailTargetSlug.value)
 const detailKindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘")
+const artifactPageDescription = computed(() => props.tab === "report"
+  ? "浏览、预览和管理报表产物。"
+  : "浏览、预览和管理仪表盘产物。")
+const artifactCount = computed(() => props.tab === "report"
+  ? artifacts.reports.value.length
+  : artifacts.dashboards.value.length)
 const detailDialogTitle = computed(() => {
   if (artifacts.detailLoading.value) return `${detailKindLabel.value}详情`
   return artifacts.activeDetail.value?.name?.trim() || `${detailKindLabel.value}详情`
@@ -233,20 +246,34 @@ watch(
       v-else
       class="flex h-full flex-col gap-4 overflow-y-auto p-4"
     >
-      <div class="flex items-center justify-end">
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="artifacts.listLoading.value"
-          @click="artifacts.loadArtifacts(props.tab)"
-        >
-          <RefreshCwIcon
-            data-icon="inline-start"
-            :class="artifacts.listLoading.value && 'animate-spin'"
-          />
-          {{ artifacts.listLoading.value ? "刷新中" : "刷新" }}
-        </Button>
-      </div>
+      <PageHeaderToolbar
+        :title="detailKindLabel"
+        :description="artifactPageDescription"
+        aria-label="产物页头工具栏"
+      >
+        <template #leading>
+          <BarChart3Icon />
+        </template>
+
+        <template #meta>
+          <Badge variant="secondary">{{ artifactCount }} 个</Badge>
+        </template>
+
+        <template #actions>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="artifacts.listLoading.value"
+            @click="artifacts.loadArtifacts(props.tab)"
+          >
+            <RefreshCwIcon
+              data-icon="inline-start"
+              :class="artifacts.listLoading.value && 'animate-spin'"
+            />
+            {{ artifacts.listLoading.value ? "刷新中" : "刷新" }}
+          </Button>
+        </template>
+      </PageHeaderToolbar>
 
       <template v-if="props.tab === 'dashboard'">
         <ArtifactCollectionGrid

@@ -11,6 +11,7 @@ asyncio.Task so that client disconnects do not cancel the computation.
 """
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -60,6 +61,7 @@ from datus.api.models.downstream import (
 from datus.api.services.background_drain import track_background_task
 from datus.api.services.chat_task_manager import EventBufferExpiredError
 from datus.api.utils.stream_errors import humanize_stream_error
+from datus.models.session_manager import SessionManager
 from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
@@ -83,6 +85,7 @@ from datus_enterprise.services.chat_request_policy import (
     default_enterprise_chat_permission_mode,
     enforce_chat_model_policy,
 )
+from datus_enterprise.services.personal_mcp_chat import commit_personal_mcp_session, project_personal_mcp_for_chat
 
 logger = get_logger(__name__)
 
@@ -302,6 +305,7 @@ async def stream_chat(
     sub_agent_id = request.subagent_id
     enterprise_agent_record: Optional[dict[str, Any]] = None
     artifact_edit_session: Optional[ArtifactEditSession] = None
+    new_session = not bool(request.session_id)
     if enterprise_extensions.enabled:
         if sub_agent_id and _resolve_artifact_edit_session(svc, sub_agent_id) is not None:
             artifact_edit_session = _resolve_artifact_edit_session(svc, sub_agent_id)
@@ -410,6 +414,35 @@ async def stream_chat(
                 headers=_sse_headers(),
             )
 
+        if new_session and request.personal_mcp_ids:
+            safe_name = str(sub_agent_id or "chat").replace(" ", "_")
+            request.session_id = f"{safe_name}_session_{str(uuid.uuid4())[:8]}"
+            SessionManager._validate_session_id(request.session_id)
+        try:
+            personal_mcp_records = await project_personal_mcp_for_chat(
+                ctx,
+                request,
+                agent_config=projection.config,
+                agent_record=enterprise_agent_record,
+                project_id=svc.project_id,
+                new_session=new_session,
+            )
+        except HTTPException as exc:
+            return StreamingResponse(
+                _emit_pre_check_denial(
+                    request,
+                    ChatPreCheckOutcome(
+                        allow=False,
+                        error=str(exc.detail),
+                        error_type=str(exc.detail),
+                    ),
+                ),
+                media_type="text/event-stream",
+                headers=_sse_headers(),
+            )
+    else:
+        personal_mcp_records = []
+
     requested_credential_id = getattr(request, "model_credential_id", None)
     try:
         applied_credential = await apply_user_model_credential(
@@ -487,6 +520,14 @@ async def stream_chat(
         user_id=ctx.user_id,
     )
 
+    async def commit_personal_mcp_binding(session_id: str) -> None:
+        await commit_personal_mcp_session(
+            project_id=svc.project_id,
+            session_id=session_id,
+            user_id=ctx.user_id or "",
+            records=personal_mcp_records,
+        )
+
     async def generate_sse():
         async for chunk in _stream_with_post_hook(
             svc.chat.stream_chat(
@@ -496,6 +537,7 @@ async def stream_chat(
                 principal=projection.principal,
                 agent_config=projection.config,
                 mcp_request_credentials=mcp_request_credentials,
+                on_task_start=commit_personal_mcp_binding if personal_mcp_records else None,
             ),
             http_request=http_request,
             request=request,
@@ -858,6 +900,14 @@ async def delete_session(
             timeout=_FUSE_IO_TIMEOUT,
         )
         if result.success:
+            try:
+                await api_deps.get_enterprise_extensions().user_mcp_server_store.delete_session_binding(
+                    svc.project_id,
+                    session_id,
+                    access.user_id or "",
+                )
+            except Exception:
+                logger.warning("Failed to delete personal MCP session binding for %s", session_id, exc_info=True)
             await delete_session_owner(svc, session_id)
         return result
     except TimeoutError:

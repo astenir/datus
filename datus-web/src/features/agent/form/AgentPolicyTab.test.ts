@@ -11,6 +11,7 @@ function policyManagerStub(): AgentManagerController {
       toolPolicyMode: "inherit",
       allowSubagentDelegation: false,
       allowedSubagentIds: [],
+      personalMcpMode: "disabled",
     }),
     toolOptions: ref([]),
     selectedTools: ref([]),
@@ -31,5 +32,7 @@ describe("AgentPolicyTab", () => {
     expect(html).toContain("服务端 Bash 已禁用")
     expect(html).toContain("下方策略不能重新启用 Bash")
     expect(html).toContain("其他工具仍遵循拒绝优先")
+    expect(html).toContain("个人 MCP")
+    expect(html).toContain("不绑定任何个人资源")
   })
 })

@@ -6,10 +6,12 @@
 
 import asyncio
 from typing import AsyncGenerator
+from unittest.mock import Mock
 
 import pytest
 
-from datus.schemas.action_bus import ActionBus
+import datus.schemas.action_bus as action_bus_module
+from datus.schemas.action_bus import ActionBus, action_bus_put_source
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -258,6 +260,34 @@ class TestClose:
         bus.close()
         bus.put(_action("ignored"))
         # The queue should only contain the sentinel, not the ignored action
+        assert bus._queue.qsize() == 1
+
+    def test_put_after_close_logs_action_context(self, monkeypatch):
+        """Closed puts expose enough metadata to identify the late producer."""
+        bus = ActionBus()
+        bus.close()
+        action = _action("subagent_complete", role=ActionRole.SYSTEM)
+        action.depth = 1
+        action.parent_action_id = "parent-call"
+        action.output = {"agent_session_id": "child-session"}
+        warning = Mock()
+        monkeypatch.setattr(action_bus_module.logger, "warning", warning)
+
+        with action_bus_put_source("subagent.complete"):
+            bus.put(action)
+
+        warning.assert_called_once()
+        assert warning.call_args.args == ("ActionBus.put() called after close()",)
+        fields = warning.call_args.kwargs
+        assert fields["action_type"] == "subagent_complete"
+        assert fields["action_id"] == action.action_id
+        assert fields["role"] == "system"
+        assert fields["depth"] == 1
+        assert fields["parent_action_id"] == "parent-call"
+        assert fields["source"] == "subagent.complete"
+        assert fields["bus_id"] == f"0x{id(bus):x}"
+        assert fields["task_name"] is None
+        assert fields["agent_session_id"] == "child-session"
         assert bus._queue.qsize() == 1
 
     @pytest.mark.asyncio

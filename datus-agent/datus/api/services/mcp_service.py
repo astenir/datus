@@ -81,6 +81,7 @@ class MCPService:
         manager.config = MCPConfig()
         manager._lock = threading.Lock()
         manager.request_credentials = None
+        manager.request_server_configs = dict(getattr(agent_config, "_request_mcp_servers", {}) or {})
         manager.load_config()
 
         logger.info(f"Created MCPManager with config path: {config_path}")

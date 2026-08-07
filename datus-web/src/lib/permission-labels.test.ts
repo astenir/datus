@@ -105,6 +105,7 @@ describe("permission labels", () => {
       "artifact-editor",
       "artifact-operator",
       "mcp-operator",
+      "personal-mcp-user",
       "user-role-admin",
       "governance-admin",
       "audit-viewer",
@@ -131,7 +132,7 @@ describe("permission labels", () => {
       },
       {
         label: "增强能力",
-        presets: ["artifact-editor", "artifact-operator", "mcp-operator"],
+        presets: ["artifact-editor", "artifact-operator", "mcp-operator", "personal-mcp-user"],
       },
       {
         label: "治理权限",
@@ -152,6 +153,16 @@ describe("permission labels", () => {
       "module.mcp",
       "mcp.server.list",
       "mcp.server.tools",
+    ]);
+    expect(applyPermissionPresetSelection([], "personal-mcp-user")).toEqual([
+      "module.mcp.personal",
+      "mcp.personal.list",
+      "mcp.personal.create",
+      "mcp.personal.edit",
+      "mcp.personal.remove",
+      "mcp.personal.connectivity",
+      "mcp.personal.tools",
+      "mcp.personal.use",
     ]);
     expect(applyPermissionPresetSelection([], "view-sql")).toEqual([
       "module.sql_executor",
