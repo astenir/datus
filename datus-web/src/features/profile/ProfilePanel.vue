@@ -156,11 +156,11 @@ onMounted(loadProfile)
 
         <div
           v-if="profile.loading.value && !profile.loaded.value"
-          class="flex min-h-0 flex-1 flex-col gap-3"
+          class="grid min-h-0 flex-1 gap-3 md:grid-cols-2"
         >
           <Card
             size="default"
-            class="min-h-0 w-full flex-1 gap-4"
+            class="min-h-0 min-w-0 w-full flex-1 gap-4"
           >
             <PanelCardHeader
               title="加载中"
@@ -174,7 +174,7 @@ onMounted(loadProfile)
           </Card>
           <Card
             size="default"
-            class="min-h-0 w-full flex-1 gap-4"
+            class="min-h-0 min-w-0 w-full flex-1 gap-4"
           >
             <PanelCardHeader title="概要" />
             <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
@@ -190,10 +190,10 @@ onMounted(loadProfile)
             value="access"
             class="mt-0 flex min-h-0 flex-1 flex-col"
           >
-            <div class="flex min-h-0 flex-1 flex-col gap-3">
+            <div class="grid min-h-0 flex-1 gap-3 md:grid-cols-2">
               <Card
                 size="default"
-                class="min-h-0 w-full flex-1 gap-4"
+                class="min-h-0 min-w-0 w-full flex-1 gap-4"
               >
                 <PanelCardHeader
                   title="可用功能"
@@ -225,7 +225,7 @@ onMounted(loadProfile)
 
               <Card
                 size="default"
-                class="min-h-0 w-full flex-1 gap-4"
+                class="min-h-0 min-w-0 w-full flex-1 gap-4"
               >
                 <PanelCardHeader
                   title="数据源访问"
