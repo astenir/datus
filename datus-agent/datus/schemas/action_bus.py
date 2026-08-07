@@ -24,12 +24,27 @@ function); a mismatch is logged as a warning.
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator, Callable, List, Optional, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import AsyncGenerator, Callable, Iterator, List, Optional, Tuple
 
 from datus.schemas.action_history import ActionHistory
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+_put_source: ContextVar[str] = ContextVar("datus_action_bus_put_source", default="unknown")
+
+
+@contextmanager
+def action_bus_put_source(source: str) -> Iterator[None]:
+    """Attach a request-local producer label to the next ``ActionBus.put`` call."""
+    token = _put_source.set(source or "unknown")
+    try:
+        yield
+    finally:
+        _put_source.reset(token)
 
 
 class ActionBus:
@@ -85,7 +100,25 @@ class ActionBus:
     def put(self, action: ActionHistory) -> None:
         """Inject an action (non-blocking, must run on the event-loop thread)."""
         if self._closed:
-            logger.warning("ActionBus.put() called after close()")
+            role = getattr(action, "role", None)
+            role = getattr(role, "value", role)
+            output = getattr(action, "output", None)
+            agent_session_id = None
+            if isinstance(output, dict):
+                agent_session_id = output.get("agent_session_id") or output.get("session_id")
+            logger.warning(
+                "ActionBus.put() called after close()",
+                action_type=getattr(action, "action_type", "?"),
+                action_id=getattr(action, "action_id", "?"),
+                role=role,
+                depth=getattr(action, "depth", "?"),
+                parent_action_id=getattr(action, "parent_action_id", None),
+                source=_put_source.get(),
+                bus_id=f"0x{id(self):x}",
+                merge_loop_id=f"0x{id(self._loop):x}" if self._loop is not None else None,
+                task_name=self._current_task_name(),
+                agent_session_id=agent_session_id,
+            )
             return
         current = self._running_loop()
         if self._loop is not None and current is not self._loop:
@@ -101,6 +134,15 @@ class ActionBus:
                 "delivered — put() must run on the event-loop thread"
             )
         self._ensure_queue().put_nowait(action)
+
+    @staticmethod
+    def _current_task_name() -> Optional[str]:
+        """Return the current asyncio task name when called from an event loop."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return None
+        return task.get_name() if task is not None else None
 
     @property
     def has_pending(self) -> bool:

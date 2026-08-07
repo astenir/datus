@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from agents import RunHooks
 
+from datus.schemas.action_bus import action_bus_put_source
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 from datus_enterprise.services.agentic_session_runtime import persist_running_turn_usage
@@ -261,7 +262,8 @@ class TokenUsageHook(RunHooks):
         put = getattr(action_bus, "put", None) if action_bus is not None else None
         if callable(put):
             try:
-                put(action)
+                with action_bus_put_source("token_usage"):
+                    put(action)
             except Exception:  # noqa: BLE001
                 logger.debug("TokenUsageHook: action_bus.put failed", exc_info=True)
 

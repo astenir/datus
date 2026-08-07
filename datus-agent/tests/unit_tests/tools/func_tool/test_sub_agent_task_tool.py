@@ -5,6 +5,7 @@
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1131,6 +1132,26 @@ class TestActionBusIntegration:
         bus = ActionBus()
         task_tool.set_action_bus(bus)
         assert task_tool._action_bus is bus
+
+    def test_complete_action_records_child_session_id(self, task_tool):
+        """A late-completion warning can be tied back to the child session."""
+        from datus.schemas.action_bus import ActionBus
+
+        bus = ActionBus()
+        task_tool.set_action_bus(bus)
+
+        task_tool._emit_complete_action(
+            "gen_sql",
+            "parent-call",
+            datetime.now(),
+            2,
+            ActionStatus.SUCCESS,
+            agent_session_id="child-session",
+        )
+
+        complete = bus._queue.get_nowait()
+        assert complete.action_type == SUBAGENT_COMPLETE_ACTION_TYPE
+        assert complete.output["agent_session_id"] == "child-session"
 
     @pytest.mark.asyncio
     async def test_actions_forwarded_to_bus(self, task_tool):
