@@ -274,11 +274,14 @@ onMounted(() => {
           class="-m-1 min-h-0 flex-1 overflow-auto p-1 xl:overflow-visible"
         >
           <div class="flex min-h-full flex-col gap-4 xl:h-full xl:min-h-0">
-            <Card class="shrink-0">
-              <CardContent class="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+            <Card
+              size="default"
+              class="shrink-0 gap-4"
+            >
+              <CardContent class="flex flex-col gap-2 px-6 py-0 sm:flex-row sm:items-center sm:justify-between">
                 <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <CardTitle class="text-sm">默认模型</CardTitle>
-                    <CardDescription class="text-xs">选择后立即保存，个人配置优先。</CardDescription>
+                  <CardTitle class="text-lg font-medium">默认模型</CardTitle>
+                  <CardDescription class="text-sm">选择后立即保存，个人配置优先。</CardDescription>
                 </div>
                 <div class="flex min-w-0 flex-1 items-center gap-2 sm:justify-end">
                   <Field class="min-w-0 flex-1 sm:max-w-80 lg:max-w-96">
