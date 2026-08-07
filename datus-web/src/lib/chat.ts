@@ -832,6 +832,7 @@ export function activeUserInteractionKey(
   messages: readonly ChatMessage[],
   options: {
     isStreaming?: boolean;
+    isAwaitingUser?: boolean;
     submittedInteractionKeys?: ReadonlySet<string>;
   } = {},
 ) {
@@ -839,9 +840,19 @@ export function activeUserInteractionKey(
 
   const latestMessage = messages[messages.length - 1];
   const latestBlock = latestUserInteractionBlock(latestMessage);
-  if (latestBlock?.type !== "user-interaction") return null;
+  const pendingBlock = latestBlock?.type === "user-interaction"
+    ? latestBlock
+    : options.isAwaitingUser
+      ? [...messages]
+        .reverse()
+        .map(latestUserInteractionBlock)
+        .find((block): block is Extract<MessageBlock, { type: "user-interaction" }> =>
+          block?.type === "user-interaction"
+        )
+      : null;
+  if (!pendingBlock) return null;
 
-  const interactionKey = latestBlock.interactionKey.trim();
+  const interactionKey = pendingBlock.interactionKey.trim();
   if (!interactionKey || options.submittedInteractionKeys?.has(interactionKey)) return null;
 
   return interactionKey;

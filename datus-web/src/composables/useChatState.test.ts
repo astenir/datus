@@ -399,6 +399,85 @@ describe("useChatState", () => {
     await resumeTask;
   });
 
+  it("keeps a resumed permission active after a late todo result", async () => {
+    const stream = controlledSseResponse();
+    const request = vi.fn().mockResolvedValue(stream.response);
+    const requestJson = vi.fn().mockResolvedValue({ success: true, data: { messages: [] } });
+
+    vi.doMock("@/lib/api", () => ({ chatApi }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({ effectiveBase: () => "" }),
+    }));
+    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/chat", async () => ({
+      ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
+      requestJson,
+    }));
+
+    const { useChatState } = await import("./useChatState");
+    const state = useChatState();
+    state.selectSession("session-a");
+    await vi.waitFor(() => expect(requestJson).toHaveBeenCalledTimes(1));
+
+    const resumeTask = state.resumeSession("session-a");
+    stream.emit("message", {
+      type: "createMessage",
+      payload: {
+        message_id: "write-call",
+        role: "assistant",
+        content: [{
+          type: "call-tool",
+          payload: {
+            callToolId: "write-call",
+            toolName: "write_file",
+            toolParams: { path: "report.md" },
+          },
+        }],
+      },
+    }, 3744);
+    stream.emit("message", {
+      type: "createMessage",
+      payload: {
+        message_id: "permission-action-1",
+        role: "assistant",
+        content: [{
+          type: "user-interaction",
+          payload: {
+            interactionKey: "permission-action-1",
+            actionType: "request_choice",
+            requests: [{
+              content: "Permission Request",
+              options: [{ key: "y", title: "Allow" }, { key: "n", title: "Deny" }],
+            }],
+          },
+        }],
+      },
+    }, 3746);
+    stream.emit("message", {
+      type: "createMessage",
+      payload: {
+        message_id: "late-todo-result",
+        role: "assistant",
+        content: [{
+          type: "call-tool-result",
+          payload: {
+            callToolId: "todo-call-1",
+            toolName: "todo_update",
+            result: {},
+          },
+        }],
+      },
+    }, 3747);
+
+    await vi.waitFor(() => {
+      expect(state.streamActivity.value.phase).toBe("awaiting_user");
+      expect(state.activeInteractionKey.value).toBe("permission-action-1");
+    });
+
+    stream.close();
+    await resumeTask;
+  });
+
   it("propagates a ready supplemental-message rejection without turning it into a stream error", async () => {
     const stream = controlledSseResponse();
     const request = vi.fn().mockResolvedValue(stream.response);

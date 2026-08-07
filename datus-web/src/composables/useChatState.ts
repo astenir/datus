@@ -137,6 +137,7 @@ const transportError = computed(() => selectedRuntime.value.transportError);
 const activeInteractionKey = computed(() =>
   activeUserInteractionKey(messages.value, {
     isStreaming: isStreaming.value,
+    isAwaitingUser: streamActivity.value.phase === "awaiting_user",
     submittedInteractionKeys: selectedRuntime.value.submittedInteractionKeys,
   })
 );

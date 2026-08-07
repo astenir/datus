@@ -1554,6 +1554,34 @@ describe("activeUserInteractionKey", () => {
     ], { isStreaming: true })).toBe("permission-action-1");
   });
 
+  it("keeps a pending interaction active when a late tool result follows it", () => {
+    const messages = [
+      {
+        id: "prompt",
+        role: "assistant" as const,
+        content: "需要用户确认",
+        blocks: [interactionBlock],
+      },
+      {
+        id: "late-tool-result",
+        role: "assistant" as const,
+        content: "工具结果 todo_update",
+        blocks: [{
+          type: "tool-result" as const,
+          callToolId: "todo-call-1",
+          toolName: "todo_update",
+          result: {},
+        }],
+      },
+    ];
+
+    expect(activeUserInteractionKey(messages, {
+      isStreaming: true,
+      isAwaitingUser: true,
+    })).toBe("permission-action-1");
+    expect(activeUserInteractionKey(messages, { isStreaming: true })).toBeNull();
+  });
+
   it("exposes the active nested interaction for the stable permission dock", () => {
     const messages = [
       {
