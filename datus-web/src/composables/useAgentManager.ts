@@ -444,6 +444,7 @@ export function useAgentManager() {
 
   const agents = ref<AgentInfo[]>([]);
   const selectedAgent = ref<AgentDetail | null>(null);
+  const selectedAgentId = shallowRef<string | null>(null);
   const nodeTypes = ref<AgentNodeType[]>([]);
   const toolCatalog = ref<AgentToolsData | null>(null);
   const selectedUseTools = ref<AgentUseToolsData | null>(null);
@@ -475,10 +476,15 @@ export function useAgentManager() {
   const error = shallowRef<string | null>(null);
   const enterpriseRoutesUnavailable = shallowRef(false);
   let selectionRequestId = 0;
+  const toolReferenceCache = new Map<string, Promise<AgentUseToolsData | null>>();
+  let pendingInspection: { agentName: string; promise: Promise<AgentDetail | null> } | null = null;
 
   const agentCount = computed(() => agents.value.length);
-  const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
-  const selectedAgentName = computed(() => selectedAgent.value?.name ?? null);
+  const selectedAgentName = computed(() =>
+    selectedAgent.value?.name
+    ?? agents.value.find(agent => agent.agent_id === selectedAgentId.value)?.name
+    ?? null
+  );
   const selectedIsBuiltin = computed(() => isBuiltinAgent(selectedAgent.value));
   const selectedCanCloneBuiltin = computed(() =>
     selectedIsBuiltin.value
@@ -491,6 +497,8 @@ export function useAgentManager() {
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
+  const selectedConfiguredTools = computed(() => [...(selectedAgent.value?.tools ?? [])]);
+  const selectedConfiguredToolCount = computed(() => selectedConfiguredTools.value.length);
   const selectedTools = computed(() => parseListText(form.value.toolsText) ?? []);
   const deniedTools = computed(() => parseListText(form.value.deniedToolsText) ?? []);
   const selectedSkills = computed(() => parseListText(form.value.skillsText) ?? []);
@@ -650,7 +658,10 @@ export function useAgentManager() {
     try {
       enterpriseRoutesUnavailable.value = false;
       agents.value = normalizeAgentList(await agentApi.list(connection.effectiveBase()));
-      if (selectedAgent.value && !agents.value.some(agent => agentIdentifier(agent) === selectedAgent.value?.agent_id)) {
+      if (selectedAgentId.value && !agents.value.some(agent => agentIdentifier(agent) === selectedAgentId.value)) {
+        selectionRequestId += 1;
+        pendingInspection = null;
+        selectedAgentId.value = null;
         selectedAgent.value = null;
         selectedUseTools.value = null;
         form.value = emptyForm();
@@ -766,7 +777,17 @@ export function useAgentManager() {
 
   async function fetchUseToolsForNodeClass(nodeClass: string) {
     const normalized = nodeClass.trim() || "gen_sql";
-    return agentApi.useTools(connection.effectiveBase(), normalized);
+    const baseUrl = connection.effectiveBase();
+    const cacheKey = `${baseUrl}\u0000${normalized}`;
+    const cached = toolReferenceCache.get(cacheKey);
+    if (cached) return cached;
+
+    const request = agentApi.useTools(baseUrl, normalized).catch((err: unknown) => {
+      toolReferenceCache.delete(cacheKey);
+      throw err;
+    });
+    toolReferenceCache.set(cacheKey, request);
+    return request;
   }
 
   function handleUseToolsError(err: unknown) {
@@ -845,34 +866,26 @@ export function useAgentManager() {
     }
   }
 
-  async function selectAgent(agentName: string | null) {
+  async function loadAgentSelection(agentName: string, forEditor: boolean): Promise<AgentDetail | null> {
     const requestId = ++selectionRequestId;
-
-    if (!agentName) {
-      promptVersions.reset();
-      selectedAgent.value = null;
-      selectedUseTools.value = null;
-      form.value = emptyForm();
-      formMode.value = "create";
-      detailLoading.value = false;
-      detailError.value = null;
-      return;
-    }
 
     detailLoading.value = true;
     detailError.value = null;
+    selectedAgentId.value = agentName;
     selectedAgent.value = null;
     selectedUseTools.value = null;
-    promptVersions.reset();
-    form.value = emptyForm();
-    formMode.value = "edit";
+    if (forEditor) {
+      promptVersions.reset();
+      form.value = emptyForm();
+      formMode.value = "edit";
+    }
 
     try {
       const detail = await agentApi.get(connection.effectiveBase(), agentName);
-      if (requestId !== selectionRequestId) return;
+      if (requestId !== selectionRequestId) return null;
       if (!detail) {
         detailError.value = "未找到 Agent 详情，请刷新列表后重试。";
-        return;
+        return null;
       }
 
       const nodeClass = detail.node_class || "gen_sql";
@@ -884,37 +897,142 @@ export function useAgentManager() {
             return null;
           })
         : Promise.resolve(null);
-      if (!isBuiltinAgent(detail)) {
+      const defaultUserIdsPromise = forEditor
+        ? agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id)
+        : Promise.resolve(null);
+
+      if (forEditor && !isBuiltinAgent(detail)) {
         void promptVersions.load(detail.agent_id).catch((err: unknown) => {
           if (requestId === selectionRequestId) console.error("读取 Agent 提示词版本失败:", err);
         });
       }
+
       const [defaultUserIds, useTools] = await Promise.all([
-        agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id),
+        defaultUserIdsPromise,
         useToolsPromise,
       ]);
+      if (requestId !== selectionRequestId) return null;
+
+      selectedAgent.value = detail;
+      selectedUseTools.value = useTools;
+      if (forEditor) {
+        const nextForm = formFromDetail(detail);
+        nextForm.defaultUserIds = defaultUserIds ?? [];
+        form.value = nextForm;
+        formMode.value = "edit";
+      }
+      return detail;
+    } catch (err) {
+      if (requestId !== selectionRequestId) return null;
+      const message = agentRouteErrorMessage(err, "读取 Agent 详情失败");
+      detailError.value = message;
+      console.error("读取 Agent 详情失败:", err);
+      toast.error(message);
+      return null;
+    } finally {
+      if (requestId === selectionRequestId) detailLoading.value = false;
+    }
+  }
+
+  async function hydrateEditorSelection(detail: AgentDetail): Promise<void> {
+    const requestId = selectionRequestId;
+    detailLoading.value = true;
+    detailError.value = null;
+    promptVersions.reset();
+    form.value = emptyForm();
+    formMode.value = "edit";
+
+    if (!isBuiltinAgent(detail)) {
+      void promptVersions.load(detail.agent_id).catch((err: unknown) => {
+        if (requestId === selectionRequestId) console.error("读取 Agent 提示词版本失败:", err);
+      });
+    }
+
+    try {
+      const defaultUserIds = await agentApi.defaultUsers(connection.effectiveBase(), detail.agent_id);
       if (requestId !== selectionRequestId) return;
 
       const nextForm = formFromDetail(detail);
       nextForm.defaultUserIds = defaultUserIds ?? [];
-      selectedAgent.value = detail;
-      selectedUseTools.value = useTools;
       form.value = nextForm;
       formMode.value = "edit";
     } catch (err) {
       if (requestId !== selectionRequestId) return;
       const message = agentRouteErrorMessage(err, "读取 Agent 详情失败");
       detailError.value = message;
-      console.error("读取 Agent 详情失败:", err);
+      console.error("读取 Agent 编辑数据失败:", err);
       toast.error(message);
     } finally {
       if (requestId === selectionRequestId) detailLoading.value = false;
     }
   }
 
+  async function inspectAgent(agentName: string | null): Promise<void> {
+    if (!agentName) {
+      selectionRequestId += 1;
+      pendingInspection = null;
+      selectedAgentId.value = null;
+      selectedAgent.value = null;
+      selectedUseTools.value = null;
+      detailLoading.value = false;
+      detailError.value = null;
+      return;
+    }
+
+    const promise = loadAgentSelection(agentName, false);
+    pendingInspection = { agentName, promise };
+    try {
+      await promise;
+    } finally {
+      if (pendingInspection?.promise === promise) pendingInspection = null;
+    }
+  }
+
+  async function selectAgent(agentName: string | null, options: { force?: boolean } = {}) {
+    if (!agentName) {
+      selectionRequestId += 1;
+      pendingInspection = null;
+      promptVersions.reset();
+      selectedAgentId.value = null;
+      selectedAgent.value = null;
+      selectedUseTools.value = null;
+      form.value = emptyForm();
+      formMode.value = "create";
+      detailLoading.value = false;
+      detailError.value = null;
+      return;
+    }
+
+    if (!options.force && pendingInspection?.agentName === agentName) {
+      const detail = await pendingInspection.promise;
+      if (detail && selectedAgentId.value === agentName) {
+        await hydrateEditorSelection(detail);
+      }
+      return;
+    }
+
+    if (
+      !options.force
+      && selectedAgentId.value === agentName
+      && selectedAgent.value
+      && !detailLoading.value
+    ) {
+      await hydrateEditorSelection(selectedAgent.value);
+      return;
+    }
+
+    await loadAgentSelection(agentName, true);
+  }
+
+  async function openAgentEditor(agentName: string | null) {
+    await selectAgent(agentName);
+  }
+
   function startCreate() {
     selectionRequestId += 1;
+    pendingInspection = null;
     promptVersions.reset();
+    selectedAgentId.value = null;
     selectedAgent.value = null;
     selectedUseTools.value = null;
     form.value = emptyForm();
@@ -954,6 +1072,7 @@ export function useAgentManager() {
       defaultUserIds: [],
       personalMcpMode: "disabled",
     };
+    selectedAgentId.value = null;
     selectedAgent.value = null;
     formMode.value = "create";
     toast.success("已复制为企业 Agent 草稿，可选择 MCP 后保存。");
@@ -1069,7 +1188,7 @@ export function useAgentManager() {
 
       const nextSelection = agentId;
       await loadAgents();
-      await selectAgent(nextSelection);
+      await selectAgent(nextSelection, { force: true });
       return true;
     } catch (err) {
       const message = agentRouteErrorMessage(
@@ -1119,7 +1238,7 @@ export function useAgentManager() {
       const activated = await promptVersions.activate(agentId, versionId);
       if (!activated) return false;
       toast.success(`提示词版本 v${activated.version} 已设为当前版本`);
-      await selectAgent(agentId);
+      await selectAgent(agentId, { force: true });
       return true;
     } catch (err) {
       console.error("激活提示词版本失败:", err);
@@ -1179,6 +1298,7 @@ export function useAgentManager() {
 
   return {
     agents: readonly(agents),
+    selectedAgentId: readonly(selectedAgentId),
     selectedAgent: readonly(selectedAgent),
     nodeTypes: readonly(nodeTypes),
     selectedUseTools: readonly(selectedUseTools),
@@ -1211,7 +1331,6 @@ export function useAgentManager() {
     error: readonly(error),
     enterpriseRoutesUnavailable: readonly(enterpriseRoutesUnavailable),
     agentCount,
-    selectedAgentId,
     selectedAgentName,
     selectedIsBuiltin,
     selectedCanCloneBuiltin,
@@ -1219,6 +1338,8 @@ export function useAgentManager() {
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
+    selectedConfiguredTools,
+    selectedConfiguredToolCount,
     selectedTools,
     deniedTools,
     selectedSkills,
@@ -1243,6 +1364,8 @@ export function useAgentManager() {
     loadResourceCatalogs,
     loadAclDirectory,
     loadUseToolsForNodeClass,
+    inspectAgent,
+    openAgentEditor,
     selectAgent,
     startCreate,
     startCreateFromSelectedBuiltin,
