@@ -51,6 +51,9 @@ describe("knowledge table workbench", () => {
     expect(html).toContain("fund_nav")
     expect(html).toContain("fund / public")
     expect(html).toContain("基金净值明细")
+    expect(html).toContain('data-slot="card-title"')
+    expect(html).toContain("font-medium")
+    expect(html).toContain("size-9")
     expect(html).not.toContain("主键字段")
   })
 

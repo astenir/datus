@@ -22,7 +22,7 @@ import {
 } from "@/components/ai-elements/terminal"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   Tooltip,
@@ -44,6 +44,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
 import KnowledgeUploadField from "@/features/knowledge/KnowledgeUploadField.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import type {
   BootstrapBuildMode,
   BootstrapComponent,
@@ -221,28 +222,29 @@ function updateBuildMode(value: unknown) {
 
           <TabsContent value="kb">
             <Card
-              size="sm"
-              class="flex h-[29rem] flex-col"
+              size="default"
+              class="flex h-[29rem] flex-col gap-4"
             >
-              <CardHeader class="!flex flex-row items-center justify-between gap-3">
-                <CardTitle class="text-lg">业务知识库构建</CardTitle>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      class="size-6"
-                      aria-label="业务知识库构建说明"
-                    >
-                      <CircleHelpIcon />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    调用 `/api/v1/kb/bootstrap`，每次只构建一个知识组件。
-                  </TooltipContent>
-                </Tooltip>
-              </CardHeader>
+              <PanelCardHeader title="业务知识库构建">
+                <template #action>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        aria-label="业务知识库构建说明"
+                      >
+                        <CircleHelpIcon />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      调用 `/api/v1/kb/bootstrap`，每次只构建一个知识组件。
+                    </TooltipContent>
+                  </Tooltip>
+                </template>
+              </PanelCardHeader>
               <CardContent class="flex flex-1 flex-col gap-3 overflow-y-auto">
                 <div class="grid gap-3 md:grid-cols-3">
                   <Field>
@@ -488,28 +490,29 @@ function updateBuildMode(value: unknown) {
 
           <TabsContent value="docs">
             <Card
-              size="sm"
-              class="flex h-[29rem] flex-col"
+              size="default"
+              class="flex h-[29rem] flex-col gap-4"
             >
-              <CardHeader class="!flex flex-row items-center justify-between gap-3">
-                <CardTitle class="text-lg">平台文档构建</CardTitle>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      class="size-6"
-                      aria-label="平台文档构建说明"
-                    >
-                      <CircleHelpIcon />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    调用 `/api/v1/kb/bootstrap-docs`，构建平台文档检索知识库。
-                  </TooltipContent>
-                </Tooltip>
-              </CardHeader>
+              <PanelCardHeader title="平台文档构建">
+                <template #action>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        class="size-6"
+                        aria-label="平台文档构建说明"
+                      >
+                        <CircleHelpIcon />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">
+                      调用 `/api/v1/kb/bootstrap-docs`，构建平台文档检索知识库。
+                    </TooltipContent>
+                  </Tooltip>
+                </template>
+              </PanelCardHeader>
               <CardContent class="flex flex-1 flex-col gap-4 overflow-y-auto">
                 <div class="grid gap-4 md:grid-cols-4">
                   <Field>

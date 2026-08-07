@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { McpServerDetailModel, McpToolView } from "@/features/mcp/types"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 
 withDefaults(defineProps<{
   server: McpServerDetailModel | null
@@ -26,13 +27,16 @@ withDefaults(defineProps<{
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col gap-4 p-4">
-    <div
+  <div
+    class="flex min-h-0 flex-1 flex-col gap-4"
+    :class="!showHeader && 'p-4'"
+  >
+    <PanelCardHeader
       v-if="showHeader"
-      class="shrink-0"
+      :title="server?.name || 'MCP Server 详情'"
+      :description="server?.target || '未选择 Server'"
     >
-      <div class="flex flex-wrap items-center gap-2">
-        <h3 class="truncate text-lg font-semibold">{{ server?.name || "MCP Server 详情" }}</h3>
+      <template #meta>
         <Badge
           v-for="badge in server?.badges ?? []"
           :key="badge"
@@ -40,11 +44,8 @@ withDefaults(defineProps<{
         >
           {{ badge }}
         </Badge>
-      </div>
-      <p class="mt-1 break-all text-sm text-muted-foreground">
-        {{ server?.target || "未选择 Server" }}
-      </p>
-    </div>
+      </template>
+    </PanelCardHeader>
 
     <template v-if="server">
       <dl class="grid shrink-0 gap-3 text-sm sm:grid-cols-2">

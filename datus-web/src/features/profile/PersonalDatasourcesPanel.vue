@@ -3,7 +3,7 @@ import { computed, onMounted, shallowRef, watch } from "vue"
 import { DatabaseIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { usePersonalDatasources } from "@/composables/usePersonalDatasources"
 import PersonalDatasourceList from "@/features/profile/PersonalDatasourceList.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import type { PersonalDatasourceSummary } from "@/types/profile"
 
 const manager = usePersonalDatasources()
@@ -85,18 +86,18 @@ onMounted(refresh)
 </script>
 
 <template>
-  <Card class="shrink-0">
-    <CardHeader class="px-4 py-3">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <CardTitle class="flex items-center gap-2 text-lg">
-            <DatabaseIcon class="text-muted-foreground" />
-            个人数据源
-          </CardTitle>
-          <CardDescription class="text-sm">
-            默认仅当前用户可见；连接密码只保存在后端，不会回显明文。
-          </CardDescription>
-        </div>
+  <Card
+    size="default"
+    class="shrink-0 gap-4"
+  >
+    <PanelCardHeader
+      title="个人数据源"
+      description="默认仅当前用户可见；连接密码只保存在后端，不会回显明文。"
+    >
+      <template #icon>
+        <DatabaseIcon />
+      </template>
+      <template #action>
         <div class="flex gap-2">
           <Button
             variant="outline"
@@ -116,8 +117,8 @@ onMounted(refresh)
             添加
           </Button>
         </div>
-      </div>
-    </CardHeader>
+      </template>
+    </PanelCardHeader>
     <CardContent class="flex flex-col gap-3">
       <Alert v-if="manager.error.value || !manager.isEnabled.value">
         <ShieldAlertIcon />

@@ -10,7 +10,7 @@ import {
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogDescription,
@@ -32,6 +32,7 @@ import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import KnowledgeBootstrapPanel from "@/features/knowledge/KnowledgeBootstrapPanel.vue"
 import KnowledgeDetailPanel from "@/features/knowledge/KnowledgeDetailPanel.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import SubjectTree from "@/features/workspace/SubjectTree.vue"
 import { subjectApi } from "@/lib/api"
@@ -368,17 +369,22 @@ onMounted(() => {
         </PageHeaderToolbar>
 
         <div class="-m-3 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-4 overflow-hidden p-3 xl:grid-cols-[24rem_minmax(0,1fr)]">
-          <Card class="flex min-h-0 min-w-0 flex-col">
-            <CardHeader class="shrink-0">
-              <div class="flex flex-col gap-2">
-                <CardTitle class="text-lg">
-                  {{ treeMode === "catalog" ? "目录树" : "主题树" }}
-                </CardTitle>
-                <CardDescription class="text-sm">
-                  {{ treePanelDescription }}
-                </CardDescription>
-              </div>
-            </CardHeader>
+          <Card class="flex min-h-0 min-w-0 flex-col gap-4">
+            <PanelCardHeader
+              :title="treeMode === 'catalog' ? '目录树' : '主题树'"
+              :description="treePanelDescription"
+            >
+              <template #icon>
+                <Table2Icon
+                  v-if="treeMode === 'catalog'"
+                  aria-hidden="true"
+                />
+                <GitBranchIcon
+                  v-else
+                  aria-hidden="true"
+                />
+              </template>
+            </PanelCardHeader>
             <CardContent class="flex min-h-0 flex-1 flex-col">
               <TabsContent
                 value="catalog"

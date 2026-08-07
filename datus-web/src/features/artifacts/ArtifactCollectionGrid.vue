@@ -87,7 +87,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
     </Card>
   </div>
 
-  <Card v-else-if="props.items.length === 0">
+  <Card v-else-if="props.items.length === 0" class="gap-4">
     <CardHeader>
       <CardTitle class="text-lg">{{ props.emptyTitle }}</CardTitle>
     </CardHeader>
@@ -117,7 +117,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
     >
       <CardHeader class="min-w-0">
         <CardTitle
-          class="truncate text-base font-semibold"
+          class="truncate text-base"
           :title="item.name"
         >
           {{ item.name }}

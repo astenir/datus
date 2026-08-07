@@ -518,7 +518,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="users"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">用户</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -720,7 +720,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="roles"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">角色</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -915,7 +915,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="grants"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">数据授权</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -1075,7 +1075,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="sessions"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">会话</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -1250,7 +1250,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="quotas"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">额度与用量</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -1415,7 +1415,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="secrets"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">密钥引用</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -1575,7 +1575,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="artifacts"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="min-h-0 flex-1">
+      <Card class="min-h-0 flex-1 gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">产物</CardTitle>
           <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
@@ -1703,7 +1703,7 @@ function setPermittedActiveTab(value: unknown): void {
       value="audit"
       class="-m-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-1"
     >
-      <Card class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <Card class="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
         <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div class="flex items-center gap-2">
             <CardTitle class="text-lg">审计</CardTitle>

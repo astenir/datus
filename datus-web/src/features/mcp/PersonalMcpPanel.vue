@@ -252,7 +252,10 @@ onMounted(async () => {
     </template>
 
     <template #detail>
-      <Card class="hidden min-h-0 xl:flex">
+      <Card
+        size="default"
+        class="hidden min-h-0 gap-4 xl:flex"
+      >
         <McpServerDetail
           :server="selectedDetail"
           :tools="detailTools"

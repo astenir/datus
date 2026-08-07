@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Knowledge panel header fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from "vue"
+      import { FolderTreeIcon, Table2Icon } from "@lucide/vue"
+      import { Card, CardContent } from "/src/components/ui/card/index.ts"
+      import PanelCardHeader from "/src/features/shared/PanelCardHeader.vue"
+      import "/src/style.css"
+
+      function knowledgeCard({ title, description, Icon, meta }) {
+        return h(Card, { class: "min-w-0 gap-4" }, [
+          h(PanelCardHeader, { title, description }, {
+            icon: () => h(Icon, { "aria-hidden": "true" }),
+            meta: () => h("span", { class: "text-xs text-muted-foreground" }, meta),
+          }),
+          h(CardContent, { class: "min-h-24" }, [
+            h("p", { class: "text-sm text-muted-foreground" }, "知识库面板内容"),
+          ]),
+        ])
+      }
+
+      createApp({
+        render: () => h("main", { class: "min-h-screen bg-background p-6" }, [
+          h("div", { class: "grid gap-4 xl:grid-cols-2" }, [
+            knowledgeCard({
+              title: "目录树",
+              description: "点击表节点加载结构和语义 YAML。",
+              Icon: Table2Icon,
+              meta: "目录",
+            }),
+            knowledgeCard({
+              title: "fund_nav",
+              description: "fund / public",
+              Icon: FolderTreeIcon,
+              meta: "已加载",
+            }),
+          ]),
+        ]),
+      }).mount("#app")
+    </script>
+  </body>
+</html>

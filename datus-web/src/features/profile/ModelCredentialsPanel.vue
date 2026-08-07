@@ -3,7 +3,7 @@ import { computed, onMounted, shallowRef, watch } from "vue"
 import { KeyRoundIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -26,6 +26,7 @@ import { Switch } from "@/components/ui/switch"
 import { useModelCredentials } from "@/composables/useModelCredentials"
 import ModelCredentialList from "@/features/profile/ModelCredentialList.vue"
 import ModelPreferenceForm from "@/features/profile/ModelPreferenceForm.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import type { ModelCredentialSummary } from "@/types/profile"
 
 const manager = useModelCredentials()
@@ -94,18 +95,18 @@ onMounted(refresh)
 </script>
 
 <template>
-  <Card class="shrink-0">
-    <CardHeader class="px-4 py-3">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div class="min-w-0 flex-1">
-          <CardTitle class="flex items-center gap-2 text-lg">
-            <KeyRoundIcon class="text-muted-foreground" />
-            我的模型
-          </CardTitle>
-          <CardDescription class="text-sm">
-            个人 API key 只保存在后端；页面不会缓存或回显明文。
-          </CardDescription>
-        </div>
+  <Card
+    size="default"
+    class="shrink-0 gap-4"
+  >
+    <PanelCardHeader
+      title="我的模型"
+      description="个人 API key 只保存在后端；页面不会缓存或回显明文。"
+    >
+      <template #icon>
+        <KeyRoundIcon />
+      </template>
+      <template #action>
         <div class="flex justify-end gap-2">
           <Button
             variant="outline"
@@ -125,8 +126,8 @@ onMounted(refresh)
             添加
           </Button>
         </div>
-      </div>
-    </CardHeader>
+      </template>
+    </PanelCardHeader>
     <CardContent class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div class="flex min-w-0 flex-col gap-3">
         <Alert v-if="manager.error.value">

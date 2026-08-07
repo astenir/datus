@@ -8,7 +8,7 @@ import {
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -20,6 +20,7 @@ import {
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { useConnection } from "@/composables/useConnection"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import DetailLoadingIndicator from "@/features/workspace/DetailLoadingIndicator.vue"
 import { tableApi } from "@/lib/api"
@@ -177,24 +178,23 @@ watch(
       />
 
       <Card
-        class="min-w-0"
+        class="min-w-0 gap-4"
         :aria-busy="loadingDetail"
       >
-        <CardHeader class="flex flex-row items-start justify-between gap-3">
-          <div class="min-w-0">
-            <CardTitle class="truncate text-lg">{{ displayedDetailName }}</CardTitle>
-            <CardDescription class="text-sm">
-              {{ selectedTableRow ? `${selectedTableRow.database || "-"} / ${selectedTableRow.schema || "-"}` : "选择左侧表后加载详情" }}
-            </CardDescription>
-          </div>
-          <Badge :variant="!loadingDetail && tableDetail ? 'secondary' : 'outline'">
-            <CheckCircle2Icon
-              v-if="tableDetail && !loadingDetail"
-              data-icon="inline-start"
-            />
-            {{ loadingDetail ? "加载中" : tableDetail ? "已加载" : "未加载" }}
-          </Badge>
-        </CardHeader>
+        <PanelCardHeader
+          :title="displayedDetailName"
+          :description="selectedTableRow ? `${selectedTableRow.database || '-'} / ${selectedTableRow.schema || '-'}` : '选择左侧表后加载详情'"
+        >
+          <template #meta>
+            <Badge :variant="!loadingDetail && tableDetail ? 'secondary' : 'outline'">
+              <CheckCircle2Icon
+                v-if="tableDetail && !loadingDetail"
+                data-icon="inline-start"
+              />
+              {{ loadingDetail ? "加载中" : tableDetail ? "已加载" : "未加载" }}
+            </Badge>
+          </template>
+        </PanelCardHeader>
         <CardContent class="flex flex-col gap-4">
           <DetailLoadingIndicator
             v-if="loadingDetail"
@@ -294,24 +294,23 @@ watch(
       </Card>
     </div>
 
-    <Card>
-      <CardHeader class="flex-row items-center justify-between">
-        <div>
-          <CardTitle class="text-lg">Schema 汇总</CardTitle>
-          <CardDescription class="text-sm">
-            当前目录响应中的数据库和 Schema 分布。
-          </CardDescription>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="workspace.isLoadingCatalog.value"
-          @click="workspace.loadCatalog()"
-        >
-          <RefreshCwIcon data-icon="inline-start" />
-          刷新
-        </Button>
-      </CardHeader>
+    <Card class="gap-4">
+      <PanelCardHeader
+        title="Schema 汇总"
+        description="当前目录响应中的数据库和 Schema 分布。"
+      >
+        <template #action>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="workspace.isLoadingCatalog.value"
+            @click="workspace.loadCatalog()"
+          >
+            <RefreshCwIcon data-icon="inline-start" />
+            刷新
+          </Button>
+        </template>
+      </PanelCardHeader>
       <CardContent>
         <div class="overflow-x-auto rounded-md border">
           <Table>

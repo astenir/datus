@@ -15,7 +15,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -43,6 +43,7 @@ import {
   type AgentSourceFilter,
 } from "@/features/agent/agent-source-filter"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { cn, formatDate } from "@/lib/utils"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 
@@ -247,27 +248,28 @@ onMounted(() => {
             class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
           >
             <Card
-              size="sm"
-              class="h-full min-h-0 min-w-0"
+              size="default"
+              class="h-full min-h-0 min-w-0 gap-4"
             >
-          <CardHeader class="shrink-0">
-            <div class="flex flex-wrap items-start gap-3">
-              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
-                <CardTitle class="text-lg">Agent 列表</CardTitle>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  size="sm"
-                  :model-value="agentSourceFilter"
-                  aria-label="按 Agent 来源过滤"
-                  @update:model-value="updateAgentSourceFilter"
-                >
-                  <ToggleGroupItem value="all">全部 {{ manager.agentCount.value }}</ToggleGroupItem>
-                  <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
-                  <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
-                </ToggleGroup>
-                <CardDescription class="w-full text-sm">使用操作按钮查看详情或编辑。</CardDescription>
-              </div>
+          <PanelCardHeader
+            title="Agent 列表"
+            description="使用操作按钮查看详情或编辑。"
+          >
+            <template #meta>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                :model-value="agentSourceFilter"
+                aria-label="按 Agent 来源过滤"
+                @update:model-value="updateAgentSourceFilter"
+              >
+                <ToggleGroupItem value="all">全部 {{ manager.agentCount.value }}</ToggleGroupItem>
+                <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
+                <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
+              </ToggleGroup>
+            </template>
+            <template #action>
               <Badge
                 v-if="manager.loading.value"
                 variant="outline"
@@ -278,8 +280,8 @@ onMounted(() => {
                 />
                 加载中
               </Badge>
-            </div>
-          </CardHeader>
+            </template>
+          </PanelCardHeader>
           <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
             <Alert
               v-if="manager.error.value"
@@ -416,18 +418,17 @@ onMounted(() => {
             class="m-0 flex min-h-0 min-w-0 data-[state=inactive]:hidden xl:data-[state=inactive]:flex"
           >
             <Card
-              size="sm"
-              class="h-full min-h-0 min-w-0"
+              size="default"
+              class="h-full min-h-0 min-w-0 gap-4"
             >
-          <CardHeader class="shrink-0">
-            <div class="flex flex-wrap items-start gap-3">
-              <div class="min-w-0 flex-1">
-                <CardTitle class="text-lg">工具</CardTitle>
-                <CardDescription class="text-sm">目录与当前 Agent 默认工具。</CardDescription>
-              </div>
+          <PanelCardHeader
+            title="工具"
+            description="目录与当前 Agent 默认工具。"
+          >
+            <template #meta>
               <Badge variant="outline">{{ manager.selectedUseToolCount.value }}</Badge>
-            </div>
-          </CardHeader>
+            </template>
+          </PanelCardHeader>
           <CardContent class="min-h-0 flex-1">
             <Tabs
               default-value="catalog"

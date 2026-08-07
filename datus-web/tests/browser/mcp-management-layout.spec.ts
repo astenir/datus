@@ -108,6 +108,31 @@ test("keeps MCP scope tabs in the management toolbar", async ({ page }, testInfo
   await expect(addButton).toBeVisible()
   await expect(page.getByRole("banner").getByRole("button", { name: "企业 MCP", exact: true })).toHaveCount(0)
 
+  const cardMetrics = await page.locator('[data-slot="card"]').evaluateAll((elements) => elements.map((card) => {
+    const title = card.querySelector('[data-slot="card-title"]')
+    if (!(title instanceof HTMLElement)) throw new Error("MCP card title was not rendered")
+
+    const cardBox = card.getBoundingClientRect()
+    const titleBox = title.getBoundingClientRect()
+    const styles = getComputedStyle(title)
+
+    return {
+      title: title.textContent?.trim(),
+      size: card.getAttribute("data-size"),
+      titleOffsetLeft: titleBox.left - cardBox.left,
+      titleOffsetTop: titleBox.top - cardBox.top,
+      fontSize: styles.fontSize,
+      fontWeight: styles.fontWeight,
+    }
+  }))
+
+  expect(cardMetrics.map((metric) => metric.title)).toEqual(["MCP Server", "metrics-mcp"])
+  expect(cardMetrics.map((metric) => metric.size)).toEqual(["default", "default"])
+  expect(cardMetrics.map((metric) => metric.fontSize)).toEqual(["18px", "18px"])
+  expect(cardMetrics.map((metric) => metric.fontWeight)).toEqual(["500", "500"])
+  expect(Math.abs(cardMetrics[0].titleOffsetLeft - cardMetrics[1].titleOffsetLeft)).toBeLessThan(1)
+  expect(Math.abs(cardMetrics[0].titleOffsetTop - cardMetrics[1].titleOffsetTop)).toBeLessThan(1)
+
   const boxes = await Promise.all([
     enterpriseTab.boundingBox(),
     refreshButton.boundingBox(),

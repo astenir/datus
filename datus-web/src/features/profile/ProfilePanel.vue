@@ -11,7 +11,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -29,6 +29,7 @@ import ModelCredentialsPanel from "@/features/profile/ModelCredentialsPanel.vue"
 import PersonalDatasourcesPanel from "@/features/profile/PersonalDatasourcesPanel.vue"
 import ProfileHeaderMeta from "@/features/profile/ProfileHeaderMeta.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import type { AuthState } from "@/composables/useAuth"
 
@@ -157,21 +158,25 @@ onMounted(loadProfile)
           v-if="profile.loading.value && !profile.loaded.value"
           class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]"
         >
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle class="text-lg">加载中</CardTitle>
-              <CardDescription class="text-sm">正在读取账号和权限信息。</CardDescription>
-            </CardHeader>
+          <Card
+            size="default"
+            class="gap-4"
+          >
+            <PanelCardHeader
+              title="加载中"
+              description="正在读取账号和权限信息。"
+            />
             <CardContent class="flex flex-col gap-3">
               <Skeleton class="h-8 w-full" />
               <Skeleton class="h-8 w-5/6" />
               <Skeleton class="h-8 w-2/3" />
             </CardContent>
           </Card>
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle class="text-lg">概要</CardTitle>
-            </CardHeader>
+          <Card
+            size="default"
+            class="gap-4"
+          >
+            <PanelCardHeader title="概要" />
             <CardContent class="flex flex-col gap-3">
               <Skeleton class="h-7 w-full" />
               <Skeleton class="h-7 w-4/5" />
@@ -186,13 +191,14 @@ onMounted(loadProfile)
             class="mt-0"
           >
             <div class="grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-              <Card size="sm">
-                <CardHeader class="px-4 py-3">
-                  <CardTitle class="text-lg">可用功能</CardTitle>
-                  <CardDescription class="text-sm">
-                    这里只展示当前账号已经开放的能力。
-                  </CardDescription>
-                </CardHeader>
+              <Card
+                size="default"
+                class="gap-4"
+              >
+                <PanelCardHeader
+                  title="可用功能"
+                  description="这里只展示当前账号已经开放的能力。"
+                />
                 <CardContent class="px-4 pb-4">
                   <div
                     v-if="profile.enabledFeatures.value.length > 0"
@@ -217,13 +223,14 @@ onMounted(loadProfile)
                 </CardContent>
               </Card>
 
-              <Card size="sm">
-                <CardHeader class="px-4 py-3">
-                  <CardTitle class="text-lg">数据源访问</CardTitle>
-                  <CardDescription class="text-sm">
-                    展示当前账号可访问或被明确拒绝的数据源范围。
-                  </CardDescription>
-                </CardHeader>
+              <Card
+                size="default"
+                class="gap-4"
+              >
+                <PanelCardHeader
+                  title="数据源访问"
+                  description="展示当前账号可访问或被明确拒绝的数据源范围。"
+                />
                 <CardContent class="overflow-x-auto px-4 pb-4">
                   <div class="min-w-full">
                     <Table>

@@ -3,10 +3,11 @@ import { ActivityIcon, PencilIcon, ServerIcon, Trash2Icon } from "@lucide/vue"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Spinner } from "@/components/ui/spinner"
 import type { McpServerListItem } from "@/features/mcp/types"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 
 defineProps<{
   servers: readonly McpServerListItem[]
@@ -29,16 +30,18 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <Card class="min-h-0">
-    <CardHeader class="shrink-0">
-      <div class="flex items-center justify-between gap-3">
-        <div class="min-w-0">
-          <CardTitle class="text-lg">MCP Server</CardTitle>
-          <CardDescription class="text-sm">{{ countLabel }}</CardDescription>
-        </div>
+  <Card
+    size="default"
+    class="min-h-0 gap-4"
+  >
+    <PanelCardHeader
+      title="MCP Server"
+      :description="countLabel"
+    >
+      <template #action>
         <Spinner v-if="loading" />
-      </div>
-    </CardHeader>
+      </template>
+    </PanelCardHeader>
     <CardContent class="flex min-h-0 flex-1 flex-col">
       <ScrollArea class="min-h-0 flex-1">
         <div class="flex flex-col gap-2 pr-3">

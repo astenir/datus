@@ -11,7 +11,7 @@ import {
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +39,7 @@ import DatasourceConfigEditor from "@/features/config/DatasourceConfigEditor.vue
 import ModelConfigEditor from "@/features/config/ModelConfigEditor.vue"
 import ProviderConfigEditor from "@/features/config/ProviderConfigEditor.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
+import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { datasourceLabel } from "@/lib/datasource-display"
 
 const props = withDefaults(defineProps<{
@@ -315,17 +316,21 @@ onMounted(() => {
             </Card>
 
             <div class="grid min-h-0 flex-1 gap-4 2xl:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
-              <Card class="flex min-h-0 flex-col">
-                <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <CardTitle class="text-lg">Provider 凭据</CardTitle>
-                    <CardDescription class="text-sm">添加、编辑或删除后立即保存项目共享凭据。</CardDescription>
-                  </div>
-                  <Button size="sm" :disabled="!props.canEdit || manager.savingProviders.value" @click="providerEditor?.openCreate()">
-                    <PlusIcon data-icon="inline-start" />
-                    添加
-                  </Button>
-                </CardHeader>
+              <Card
+                size="default"
+                class="flex min-h-0 flex-col gap-4"
+              >
+                <PanelCardHeader
+                  title="Provider 凭据"
+                  description="添加、编辑或删除后立即保存项目共享凭据。"
+                >
+                  <template #action>
+                    <Button size="sm" :disabled="!props.canEdit || manager.savingProviders.value" @click="providerEditor?.openCreate()">
+                      <PlusIcon data-icon="inline-start" />
+                      添加
+                    </Button>
+                  </template>
+                </PanelCardHeader>
                 <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                   <ProviderConfigEditor
                     ref="providerEditor"
@@ -343,13 +348,16 @@ onMounted(() => {
                 </CardContent>
               </Card>
 
-              <Card class="flex min-h-0 flex-col">
-                <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <CardTitle class="text-lg">自定义模型</CardTitle>
-                    <CardDescription class="text-sm">添加、编辑或删除后立即保存独立模型配置。</CardDescription>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
+              <Card
+                size="default"
+                class="flex min-h-0 flex-col gap-4"
+              >
+                <PanelCardHeader
+                  title="自定义模型"
+                  description="添加、编辑或删除后立即保存独立模型配置。"
+                >
+                  <template #action>
+                    <div class="flex shrink-0 items-center gap-2">
                     <AdvancedJsonDialog
                       v-model:open="modelsJsonOpen"
                       v-model:text="manager.forms.value.modelsText"
@@ -365,8 +373,9 @@ onMounted(() => {
                       <PlusIcon data-icon="inline-start" />
                       添加
                     </Button>
-                  </div>
-                </CardHeader>
+                    </div>
+                  </template>
+                </PanelCardHeader>
                 <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                   <ModelConfigEditor
                     ref="modelEditor"
@@ -390,13 +399,16 @@ onMounted(() => {
           class="-m-1 min-h-0 flex-1 overflow-hidden p-1"
         >
           <div class="h-full min-h-0 w-full">
-            <Card class="flex h-full min-h-0 w-full flex-col">
-              <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <CardTitle class="text-lg">数据源配置</CardTitle>
-                  <CardDescription class="text-sm">添加、编辑或删除后会立即保存并刷新连接状态。</CardDescription>
-                </div>
-                <div class="flex shrink-0 items-center gap-2">
+            <Card
+              size="default"
+              class="flex h-full min-h-0 w-full flex-col gap-4"
+            >
+              <PanelCardHeader
+                title="数据源配置"
+                description="添加、编辑或删除后会立即保存并刷新连接状态。"
+              >
+                <template #action>
+                  <div class="flex shrink-0 items-center gap-2">
                   <AdvancedJsonDialog
                     v-model:open="datasourcesJsonOpen"
                     v-model:text="manager.forms.value.datasourcesText"
@@ -412,8 +424,9 @@ onMounted(() => {
                     <PlusIcon data-icon="inline-start" />
                     添加
                   </Button>
-                </div>
-              </CardHeader>
+                  </div>
+                </template>
+              </PanelCardHeader>
               <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <DatasourceConfigEditor
                   ref="datasourceEditor"
