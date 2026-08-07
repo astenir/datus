@@ -248,7 +248,7 @@ onMounted(() => {
           >
             <Card
               size="default"
-              class="h-full min-h-0 min-w-0 gap-4"
+              class="h-full w-full min-h-0 min-w-0 gap-4"
             >
           <PanelCardHeader
             title="Agent 列表"
@@ -420,7 +420,7 @@ onMounted(() => {
           >
             <Card
               size="default"
-              class="h-full min-h-0 min-w-0 gap-4"
+              class="h-full w-full min-h-0 min-w-0 gap-4"
             >
           <PanelCardHeader
             title="工具"
