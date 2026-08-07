@@ -88,7 +88,7 @@ onMounted(refresh)
 <template>
   <Card
     size="default"
-    class="shrink-0 gap-4"
+    class="min-h-0 w-full flex-1 gap-4"
   >
     <PanelCardHeader
       title="个人数据源"
@@ -119,7 +119,7 @@ onMounted(refresh)
         </div>
       </template>
     </PanelCardHeader>
-    <CardContent class="flex flex-col gap-3">
+    <CardContent class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
       <Alert v-if="manager.error.value || !manager.isEnabled.value">
         <ShieldAlertIcon />
         <AlertTitle>{{ manager.error.value ? "个人数据源加载失败" : "个人数据源未开启" }}</AlertTitle>

@@ -97,7 +97,7 @@ onMounted(refresh)
 <template>
   <Card
     size="default"
-    class="shrink-0 gap-4"
+    class="min-h-0 w-full flex-1 gap-4"
   >
     <PanelCardHeader
       title="我的模型"
@@ -128,7 +128,7 @@ onMounted(refresh)
         </div>
       </template>
     </PanelCardHeader>
-    <CardContent class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+    <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
       <div class="flex min-w-0 flex-col gap-3">
         <Alert v-if="manager.error.value">
           <ShieldAlertIcon />
@@ -148,7 +148,7 @@ onMounted(refresh)
         />
       </div>
 
-      <div class="rounded-md border p-3">
+      <div class="w-full rounded-md border p-3">
         <div class="mb-3">
           <div class="text-sm font-medium">默认模型</div>
           <div class="text-xs text-muted-foreground">

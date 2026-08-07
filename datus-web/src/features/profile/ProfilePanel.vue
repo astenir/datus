@@ -82,12 +82,12 @@ onMounted(loadProfile)
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-y-auto p-4">
-    <div class="mx-auto flex w-full max-w-7xl min-w-0 flex-col gap-4">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-4">
       <Tabs
         :model-value="activeProfileTab"
         :unmount-on-hide="false"
-        class="flex min-w-0 flex-col gap-4"
+        class="flex min-h-0 min-w-0 flex-1 flex-col gap-4"
         @update:model-value="setActiveProfileTab"
       >
         <PageHeaderToolbar
@@ -156,17 +156,17 @@ onMounted(loadProfile)
 
         <div
           v-if="profile.loading.value && !profile.loaded.value"
-          class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem]"
+          class="flex min-h-0 flex-1 flex-col gap-3"
         >
           <Card
             size="default"
-            class="gap-4"
+            class="min-h-0 w-full flex-1 gap-4"
           >
             <PanelCardHeader
               title="加载中"
               description="正在读取账号和权限信息。"
             />
-            <CardContent class="flex flex-col gap-3">
+            <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
               <Skeleton class="h-8 w-full" />
               <Skeleton class="h-8 w-5/6" />
               <Skeleton class="h-8 w-2/3" />
@@ -174,10 +174,10 @@ onMounted(loadProfile)
           </Card>
           <Card
             size="default"
-            class="gap-4"
+            class="min-h-0 w-full flex-1 gap-4"
           >
             <PanelCardHeader title="概要" />
-            <CardContent class="flex flex-col gap-3">
+            <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
               <Skeleton class="h-7 w-full" />
               <Skeleton class="h-7 w-4/5" />
               <Skeleton class="h-7 w-3/5" />
@@ -188,18 +188,18 @@ onMounted(loadProfile)
         <template v-else>
           <TabsContent
             value="access"
-            class="mt-0"
+            class="mt-0 flex min-h-0 flex-1 flex-col"
           >
-            <div class="grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <div class="flex min-h-0 flex-1 flex-col gap-3">
               <Card
                 size="default"
-                class="gap-4"
+                class="min-h-0 w-full flex-1 gap-4"
               >
                 <PanelCardHeader
                   title="可用功能"
                   description="这里只展示当前账号已经开放的能力。"
                 />
-                <CardContent class="px-4 pb-4">
+                <CardContent class="min-h-0 flex-1 px-4 pb-4">
                   <div
                     v-if="profile.enabledFeatures.value.length > 0"
                     class="flex flex-wrap gap-2"
@@ -225,13 +225,13 @@ onMounted(loadProfile)
 
               <Card
                 size="default"
-                class="gap-4"
+                class="min-h-0 w-full flex-1 gap-4"
               >
                 <PanelCardHeader
                   title="数据源访问"
                   description="展示当前账号可访问或被明确拒绝的数据源范围。"
                 />
-                <CardContent class="overflow-x-auto px-4 pb-4">
+                <CardContent class="min-h-0 flex-1 overflow-auto px-4 pb-4">
                   <div class="min-w-full">
                     <Table>
                       <TableHeader>
@@ -273,7 +273,7 @@ onMounted(loadProfile)
           <TabsContent
             v-if="hasChatFeature"
             value="models"
-            class="mt-0"
+            class="mt-0 flex min-h-0 flex-1 flex-col"
           >
             <ModelCredentialsPanel v-if="visitedProfileTabs.has('models')" />
           </TabsContent>
@@ -281,7 +281,7 @@ onMounted(loadProfile)
           <TabsContent
             v-if="canManagePersonalDatasources"
             value="datasources"
-            class="mt-0"
+            class="mt-0 flex min-h-0 flex-1 flex-col"
           >
             <PersonalDatasourcesPanel v-if="visitedProfileTabs.has('datasources')" />
           </TabsContent>
