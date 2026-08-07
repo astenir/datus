@@ -29,7 +29,7 @@ withDefaults(defineProps<{
 <template>
   <div
     class="flex min-h-0 flex-1 flex-col gap-4"
-    :class="!showHeader && 'p-4'"
+    :class="!showHeader && 'p-6'"
   >
     <PanelCardHeader
       v-if="showHeader"
@@ -48,7 +48,10 @@ withDefaults(defineProps<{
     </PanelCardHeader>
 
     <template v-if="server">
-      <dl class="grid shrink-0 gap-3 text-sm sm:grid-cols-2">
+      <dl
+        class="grid shrink-0 gap-3 text-sm sm:grid-cols-2"
+        :class="showHeader && 'px-6'"
+      >
         <div
           v-for="field in server.fields"
           :key="field.label"
@@ -67,57 +70,66 @@ withDefaults(defineProps<{
       <Separator />
     </template>
 
-    <div class="flex min-h-0 flex-1 flex-col gap-2">
-      <div class="flex shrink-0 items-center justify-between gap-2">
-        <h4 class="text-sm font-medium">可用工具</h4>
-        <Spinner v-if="toolsLoading" />
+    <div
+      class="flex min-h-0 flex-1 flex-col gap-2"
+      :class="showHeader && 'px-6'"
+    >
+      <div
+        v-if="server && toolsLoading"
+        class="flex shrink-0 justify-end"
+      >
+        <Spinner />
       </div>
-      <p
+
+      <div
         v-if="!server"
-        class="py-8 text-center text-sm text-muted-foreground"
+        class="rounded-lg border p-4 text-sm text-muted-foreground"
       >
         选择一个 MCP Server 查看详情。
-      </p>
-      <p
-        v-else-if="!canViewTools"
-        class="text-sm text-muted-foreground"
-      >
-        当前角色没有查看 MCP 工具的权限。
-      </p>
-      <p
-        v-else-if="toolsLoading"
-        class="text-sm text-muted-foreground"
-      >
-        正在加载工具...
-      </p>
-      <p
-        v-else-if="tools.length === 0"
-        class="text-sm text-muted-foreground"
-      >
-        {{ toolsEmptyLabel }}
-      </p>
-      <ScrollArea
-        v-else-if="canViewTools && !toolsLoading"
-        class="min-h-0 flex-1"
-      >
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>工具</TableHead>
-              <TableHead>说明</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow
-              v-for="tool in tools"
-              :key="tool.name"
-            >
-              <TableCell class="font-mono text-xs font-medium">{{ tool.name }}</TableCell>
-              <TableCell class="whitespace-normal">{{ tool.description || "-" }}</TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </ScrollArea>
+      </div>
+
+      <template v-else>
+        <p
+          v-if="!canViewTools"
+          class="text-sm text-muted-foreground"
+        >
+          当前角色没有查看 MCP 工具的权限。
+        </p>
+        <p
+          v-else-if="toolsLoading"
+          class="text-sm text-muted-foreground"
+        >
+          正在加载工具...
+        </p>
+        <p
+          v-else-if="tools.length === 0"
+          class="text-sm text-muted-foreground"
+        >
+          {{ toolsEmptyLabel }}
+        </p>
+        <ScrollArea
+          v-else-if="canViewTools && !toolsLoading"
+          class="min-h-0 flex-1"
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>工具</TableHead>
+                <TableHead>说明</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow
+                v-for="tool in tools"
+                :key="tool.name"
+              >
+                <TableCell class="font-mono text-xs font-medium">{{ tool.name }}</TableCell>
+                <TableCell class="whitespace-normal">{{ tool.description || "-" }}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </ScrollArea>
+      </template>
     </div>
   </div>
 </template>

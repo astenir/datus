@@ -8,7 +8,7 @@ function response(data: unknown) {
   }
 }
 
-async function mockMcpApi(page: Page): Promise<void> {
+async function mockMcpApi(page: Page, options: { emptyPublic?: boolean } = {}): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -38,7 +38,7 @@ async function mockMcpApi(page: Page): Promise<void> {
 
     if (url.pathname === "/api/v1/mcp/servers" && request.method() === "GET") {
       await route.fulfill(response({
-        servers: [{
+        servers: options.emptyPublic ? [] : [{
           name: "metrics-mcp",
           type: "sse",
           status: "启用",
@@ -133,6 +133,8 @@ test("keeps MCP scope tabs in the management toolbar", async ({ page }, testInfo
   expect(Math.abs(cardMetrics[0].titleOffsetLeft - cardMetrics[1].titleOffsetLeft)).toBeLessThan(1)
   expect(Math.abs(cardMetrics[0].titleOffsetTop - cardMetrics[1].titleOffsetTop)).toBeLessThan(1)
 
+  expect(page.getByText("可用工具", { exact: true })).toHaveCount(0)
+
   const boxes = await Promise.all([
     enterpriseTab.boundingBox(),
     refreshButton.boundingBox(),
@@ -166,4 +168,15 @@ test("keeps MCP scope tabs in the management toolbar", async ({ page }, testInfo
     viewportWidth: window.innerWidth,
   }))
   expect(dimensions.bodyScrollWidth).toBeLessThanOrEqual(dimensions.viewportWidth)
+})
+
+test("uses the list empty-state style when no MCP Server is selected", async ({ page }) => {
+  await mockMcpApi(page, { emptyPublic: true })
+  await page.goto("/mcp")
+
+  const emptyState = page.getByText("选择一个 MCP Server 查看详情。", { exact: true })
+  await expect(emptyState).toBeVisible()
+  await expect(emptyState).toHaveClass(/rounded-lg/)
+  await expect(emptyState).toHaveClass(/border/)
+  await expect(emptyState).toHaveClass(/p-4/)
 })
