@@ -637,10 +637,20 @@ async function sendInteraction(interactionKey: string, answers: string | string[
       buildUserInteractionInput(sessionId, interactionKey, answers),
     );
     if (!result) throw new Error("后端未接受本次交互提交");
-    updateRuntime(sessionId, runtime => ({
-      ...runtime,
-      streamActivity: continuingChatStreamActivity(runtime.streamActivity),
-    }));
+    updateRuntime(sessionId, runtime => {
+      const pendingInteractionKey = activeUserInteractionKey(runtime.messages, {
+        isStreaming: runtime.isStreaming,
+        isAwaitingUser: runtime.streamActivity.phase === "awaiting_user",
+        submittedInteractionKeys: runtime.submittedInteractionKeys,
+      });
+
+      return {
+        ...runtime,
+        streamActivity: pendingInteractionKey && pendingInteractionKey !== interactionKey
+          ? runtime.streamActivity
+          : continuingChatStreamActivity(runtime.streamActivity),
+      };
+    });
   } catch (error) {
     updateRuntime(sessionId, runtime => {
       const next = new Set(runtime.submittedInteractionKeys);
