@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { AdminAuditDialogProps } from "@/features/admin/types"
 
-const props = defineProps<AdminAuditDialogProps>()
+defineProps<AdminAuditDialogProps>()
 </script>
 <template>
   <Dialog v-model:open="audits.showDetail.value">

@@ -17,7 +17,7 @@ import {
   adminSessionStatusLabel,
 } from "@/lib/admin-session"
 
-const props = defineProps<AdminSessionDialogsProps>()
+defineProps<AdminSessionDialogsProps>()
 </script>
 <template>
   <Dialog
