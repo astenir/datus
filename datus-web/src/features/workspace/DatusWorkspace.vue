@@ -1,44 +1,34 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, shallowRef, watch } from "vue"
+import { computed, shallowRef, watch } from "vue"
 import {
   BarChart3Icon,
   BotIcon,
   BookMarkedIcon,
   MessageSquareIcon,
-  MoonIcon,
   RefreshCwIcon,
   ServerIcon,
   ShieldIcon,
   SlidersHorizontalIcon,
-  SunIcon,
-  TerminalIcon,
   UserRoundIcon,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
+import { Tabs } from "@/components/ui/tabs"
 import { useAuth } from "@/composables/useAuth"
 import { useChatWorkspace } from "@/composables/useChatWorkspace"
 import { usePermission } from "@/composables/usePermission"
 import { useTheme } from "@/composables/useTheme"
-import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { WorkspaceNavItem } from "@/features/workspace/types"
 import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
+import WorkspaceHeader from "@/features/workspace/WorkspaceHeader.vue"
+import WorkspaceViewContent from "@/features/workspace/WorkspaceViewContent.vue"
 import { sessionUserQueryText } from "@/lib/chat"
 import { canViewSubjectTree as canViewSubjectTreeWithPermission } from "@/lib/knowledge-access"
 import type { ArtifactEditSession } from "@/types"
-
-const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
-const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
-const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
-const ConfigurationPanel = defineAsyncComponent(() => import("@/features/config/ConfigurationPanel.vue"))
-const KnowledgeBasePanel = defineAsyncComponent(() => import("@/features/knowledge/KnowledgeBasePanel.vue"))
-const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
-const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
 
 const workspace = useChatWorkspace()
 const { state: authState, failureMessage: authFailureMessage, checkAuth, logout } = useAuth()
@@ -54,7 +44,6 @@ const canExecuteSql = computed(() => {
     || permission.hasFeaturePermission("sql_executor")
     || permission.hasFeaturePermission("sql_generation")
 })
-const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
 
 const {
   activeView,
@@ -154,20 +143,20 @@ const headerTitle = computed(() => {
   return activeNavItem.value.label
 })
 
-function startArtifactEdit(session: ArtifactEditSession) {
+function startArtifactEdit(session: ArtifactEditSession): void {
   openChat()
   workspace.startArtifactEditSession(session)
 }
 
-function openSqlDialog() {
+function openSqlDialog(): void {
   sqlDialogOpen.value = true
 }
 
-function handleLogout() {
+function handleLogout(): void {
   void logout()
 }
 
-function handleRetryAuth() {
+function handleRetryAuth(): void {
   void checkAuth()
 }
 </script>
@@ -225,156 +214,46 @@ function handleRetryAuth() {
         />
 
         <SidebarInset class="min-h-0 min-w-0 overflow-hidden">
-          <header class="flex h-14 shrink-0 items-center gap-3 border-b px-3 md:px-5">
-            <SidebarTrigger
-              aria-label="侧边栏"
-              class="shrink-0"
-            />
+          <WorkspaceHeader
+            :can-execute-sql="canExecuteSql"
+            :can-view-configuration="viewAccess.canViewConfiguration"
+            :connection="workspace.connection.value"
+            :theme="theme"
+            :title="headerTitle"
+            @open-sql="openSqlDialog"
+            @refresh-connection="workspace.handleRefreshConnection"
+            @toggle-theme="toggleTheme"
+          />
 
-            <div class="min-w-0 flex-1 text-center">
-              <div class="truncate text-sm font-semibold">{{ headerTitle }}</div>
-            </div>
-
-            <div class="flex items-center gap-1">
-              <Button
-                v-if="canExecuteSql"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="执行 SQL"
-                @click="openSqlDialog"
-              >
-                <TerminalIcon data-icon="inline-start" />
-              </Button>
-              <Button
-                v-if="viewAccess.canViewConfiguration"
-                variant="ghost"
-                size="icon-sm"
-                :disabled="workspace.connection.value === 'checking'"
-                aria-label="检查连接"
-                title="检查连接"
-                @click="workspace.handleRefreshConnection"
-              >
-                <RefreshCwIcon
-                  data-icon="inline-start"
-                  :class="workspace.connection.value === 'checking' && 'animate-spin'"
-                />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                :aria-label="themeToggleLabel"
-                @click="toggleTheme"
-              >
-                <SunIcon
-                  v-if="theme === 'dark'"
-                  data-icon="inline-start"
-                />
-                <MoonIcon
-                  v-else
-                  data-icon="inline-start"
-                />
-              </Button>
-            </div>
-          </header>
-
-        <TabsContent
-          value="chat"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <ChatPanel
-            :workspace="workspace"
-            @open-artifact="openArtifactDetail"
-          />
-        </TabsContent>
-        <TabsContent
-          value="knowledge"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <KnowledgeBasePanel
-            :workspace="workspace"
-            :selected-table="knowledgeTable"
-            :can-view-subject-tree="canViewSubjectTree"
-            @update-table="openKnowledgeTable"
-          />
-        </TabsContent>
-        <TabsContent
-          value="mcp"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <McpPanel v-if="viewAccess.canViewMcp" />
-        </TabsContent>
-        <TabsContent
-          value="agents"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <AgentManagerPanel
-            v-if="viewAccess.canViewAgents"
-            :workspace="workspace"
-          />
-        </TabsContent>
-        <TabsContent
-          value="configuration"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <ConfigurationPanel
-            v-if="viewAccess.canViewConfiguration"
-            :can-edit="viewAccess.canEditConfiguration"
-          />
-        </TabsContent>
-        <TabsContent
-          value="artifacts"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <ArtifactsPanel
-            v-if="viewAccess.canViewArtifacts"
-            :tab="artifactTab"
-            :selected-slug="artifactSlug"
-            @open-artifact="openArtifactDetail"
-            @edit-artifact="startArtifactEdit"
-          />
-        </TabsContent>
-        <TabsContent
-          value="profile"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <ProfilePanel :auth="authState" />
-        </TabsContent>
-        <TabsContent
-          value="admin"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <AdminPanel
-            v-if="canRenderAdminPanel"
-            :active-tab="adminTab"
-            :active-user-id="adminUserId"
-            :active-role-id="adminRoleId"
-            :active-secret-name="adminSecretName"
-            :active-grant="adminGrant"
-            :active-session-id="adminSessionId"
+          <WorkspaceViewContent
             :active-artifact="adminArtifact"
             :active-audit="adminAudit"
-            @update:active-tab="openAdminTab"
-            @update:active-user-id="openAdminUser"
-            @update:active-role-id="openAdminRole"
-            @update:active-secret-name="openAdminSecret"
-            @update:active-grant="openAdminGrant"
-            @update:active-session-id="openAdminSession"
-            @update:active-artifact="openAdminArtifact"
-            @update:active-audit="openAdminAudit"
+            :active-grant="adminGrant"
+            :active-role-id="adminRoleId"
+            :active-secret-name="adminSecretName"
+            :active-session-id="adminSessionId"
+            :active-tab="adminTab"
+            :active-user-id="adminUserId"
+            :artifact-slug="artifactSlug"
+            :artifact-tab="artifactTab"
+            :auth="authState"
+            :can-render-admin-panel="canRenderAdminPanel"
+            :can-view-subject-tree="canViewSubjectTree"
+            :knowledge-table="knowledgeTable"
+            :view-access="viewAccess"
+            :workspace="workspace"
+            @edit-artifact="startArtifactEdit"
+            @open-artifact="openArtifactDetail"
+            @update-admin-artifact="openAdminArtifact"
+            @update-admin-audit="openAdminAudit"
+            @update-admin-grant="openAdminGrant"
+            @update-admin-role-id="openAdminRole"
+            @update-admin-secret-name="openAdminSecret"
+            @update-admin-session-id="openAdminSession"
+            @update-admin-tab="openAdminTab"
+            @update-admin-user-id="openAdminUser"
+            @update-knowledge-table="openKnowledgeTable"
           />
-          <section
-            v-else
-            class="flex min-h-0 flex-1 items-center justify-center p-6 text-center"
-          >
-            <div class="flex max-w-sm flex-col items-center gap-3">
-              <ShieldIcon class="size-8 text-muted-foreground" />
-              <h1 class="text-lg font-semibold">无权限访问</h1>
-              <p class="text-sm text-muted-foreground">
-                正在返回可用工作区。权限管理入口仅对授权管理员开放。
-              </p>
-            </div>
-          </section>
-        </TabsContent>
         </SidebarInset>
       </Tabs>
     </SidebarProvider>
