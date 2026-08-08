@@ -66,7 +66,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
       v-for="index in 3"
       :key="index"
       size="sm"
-      class="h-52 w-80 max-w-full flex-none"
+      class="h-52 w-88 max-w-full flex-none"
     >
       <CardHeader class="min-w-0">
         <Skeleton class="h-5 w-36" />
@@ -113,7 +113,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
       v-for="item in props.items"
       :key="item.slug"
       size="sm"
-      class="h-52 w-80 max-w-full flex-none"
+      class="h-52 w-88 max-w-full flex-none"
     >
       <CardHeader class="min-w-0">
         <CardTitle
