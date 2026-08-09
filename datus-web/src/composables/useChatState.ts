@@ -1,19 +1,14 @@
-import { readonly, shallowRef } from "vue";
 import { chatApi } from "@/lib/api";
 import {
   activeUserInteractionKey,
   buildChatStreamRequest,
   buildUserInteractionInput,
   createClientId,
-  extractResultData,
-  filterVisibleChatSessions,
   friendlyTransportErrorBlock,
   mergeMessage,
   messageFromEvent,
   normalizeBaseUrl,
-  normalizeHistoryMessages,
   parseSseBuffer,
-  requestJson,
 } from "@/lib/chat";
 import { request } from "@/lib/request";
 import {
@@ -25,17 +20,16 @@ import {
 } from "@/lib/chat-activity";
 import type {
   ChatMessage,
-  ChatSessionOption,
   InsertMessageData,
   ParsedMessage,
   SseEvent,
 } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
+import { useChatSessionHistory } from "./useChatSessionHistory";
 import {
   useChatRuntimeStore,
   type ChatRuntimeUpdater,
-  type ChatSessionRuntime,
 } from "./useChatRuntimeStore";
 
 type StreamContext = {
@@ -46,10 +40,23 @@ type StreamContext = {
 
 const { effectiveBase } = useConnection();
 const runtimeStore = useChatRuntimeStore();
-const sessions = shallowRef<ChatSessionOption[]>([]);
-const isLoadingSessions = shallowRef(false);
-const resumeAttemptedSessions = new Set<string>();
-const resumeInFlightSessions = new Set<string>();
+const sessionHistory = useChatSessionHistory({
+  effectiveBase,
+  runtime: runtimeStore,
+  resumeSession,
+});
+const {
+  sessions,
+  isLoadingSessions,
+  loadSessions,
+  loadSessionHistory,
+  markSessionActive,
+  invalidateHistory,
+  removeSession,
+  clearResumeAttempt,
+  startResume,
+  finishResume,
+} = sessionHistory;
 
 const {
   messages,
@@ -69,37 +76,7 @@ function updateRuntime(key: string, update: ChatRuntimeUpdater) {
 
 function removeRuntime(key: string) {
   runtimeStore.removeRuntime(key);
-  resumeAttemptedSessions.delete(key);
-}
-
-function invalidateHistory(runtimeKey: string) {
-  runtimeStore.invalidateHistory(runtimeKey);
-}
-
-function sessionFirstUserMessage(runtime: ChatSessionRuntime) {
-  return runtime.messages.find(message => message.role === "user" && message.content.trim())?.content;
-}
-
-function markSessionActive(sessionId: string, active: boolean, runtimeKey = sessionId) {
-  const existing = sessions.value.find(session => session.session_id === sessionId);
-  if (existing) {
-    sessions.value = sessions.value.map(session =>
-      session.session_id === sessionId ? { ...session, is_active: active } : session
-    );
-    return;
-  }
-  if (!active) return;
-
-  const now = new Date().toISOString();
-  const runtime = runtimeStore.getRuntime(runtimeKey);
-  sessions.value = [{
-    session_id: sessionId,
-    user_query: runtime ? sessionFirstUserMessage(runtime) : undefined,
-    created_at: now,
-    last_updated: now,
-    total_turns: 0,
-    is_active: true,
-  }, ...sessions.value];
+  clearResumeAttempt(key);
 }
 
 function rekeyRuntime(context: StreamContext, sessionId: string) {
@@ -110,7 +87,7 @@ function rekeyRuntime(context: StreamContext, sessionId: string) {
   }
 
   runtimeStore.rekeyRuntime(oldKey, sessionId, { controller: context.controller });
-  resumeAttemptedSessions.delete(oldKey);
+  clearResumeAttempt(oldKey);
   context.runtimeKey = sessionId;
   context.sessionId = sessionId;
   markSessionActive(sessionId, true);
@@ -193,64 +170,6 @@ async function consumeChatResponse(context: StreamContext, response: Response) {
   applyIncomingMessages(context.runtimeKey, incomingMessages);
 }
 
-async function loadSessionHistory(sessionId: string) {
-  const requestId = runtimeStore.invalidateHistory(sessionId);
-  runtimeStore.ensureRuntime(sessionId);
-  const base = effectiveBase();
-  try {
-    const payload = await requestJson<unknown>(
-      base,
-      `/api/v1/chat/history?session_id=${encodeURIComponent(sessionId)}`,
-    );
-    if (!runtimeStore.isHistoryRequestCurrent(sessionId, requestId)) return;
-    const data = extractResultData<{ messages?: unknown[] }>(payload);
-    const historyMessages = normalizeHistoryMessages(data?.messages ?? []);
-    updateRuntime(sessionId, runtime => ({
-      ...runtime,
-      messages: historyMessages,
-      transportError: null,
-      needsHistoryRefresh: false,
-    }));
-  } catch (error) {
-    if (!runtimeStore.isHistoryRequestCurrent(sessionId, requestId)) return;
-    console.error("Failed to load session history:", error);
-    updateRuntime(sessionId, runtime => ({
-      ...runtime,
-      transportError: friendlyTransportErrorBlock(error, "history"),
-    }));
-  }
-}
-
-async function loadSessions(subagentId?: string) {
-  const base = effectiveBase();
-  isLoadingSessions.value = true;
-  try {
-    const result = await chatApi.sessions(base, subagentId);
-    if (!result) return;
-    const loadedSessions = result.sessions ?? [];
-    const visibleSessions = subagentId ? loadedSessions : filterVisibleChatSessions(loadedSessions);
-    sessions.value = visibleSessions.map(session => ({
-      ...session,
-      is_active: Boolean(session.is_active || runtimeStore.hasController(session.session_id)),
-    }));
-
-    for (const session of sessions.value) {
-      if (!session.is_active) {
-        resumeAttemptedSessions.delete(session.session_id);
-        continue;
-      }
-      if (runtimeStore.getRuntime(session.session_id)?.isStopping) continue;
-      if (!runtimeStore.hasController(session.session_id) && !resumeAttemptedSessions.has(session.session_id)) {
-        void resumeSession(session.session_id);
-      }
-    }
-  } catch (error) {
-    console.error("Failed to load sessions:", error);
-  } finally {
-    isLoadingSessions.value = false;
-  }
-}
-
 function selectSession(sessionId: string | null) {
   if (!sessionId) {
     runtimeStore.selectSession(null);
@@ -304,7 +223,7 @@ async function sendMessage(opts: {
 
   const sessionId = selectedSession.value;
   invalidateHistory(runtimeKey);
-  if (sessionId) resumeAttemptedSessions.delete(sessionId);
+  if (sessionId) clearResumeAttempt(sessionId);
   const userMessage: ChatMessage = {
     id: createClientId(),
     role: "user",
@@ -408,7 +327,7 @@ async function stopSession() {
       streamActivity: idleChatStreamActivity(),
       submittedInteractionKeys: new Set(),
     }));
-    if (sessionId) resumeAttemptedSessions.delete(sessionId);
+    if (sessionId) clearResumeAttempt(sessionId);
     void loadSessions();
   }
 }
@@ -422,7 +341,7 @@ async function deleteSession(sessionId: string) {
   try {
     await chatApi.deleteSession(effectiveBase(), sessionId);
     removeRuntime(sessionId);
-    sessions.value = sessions.value.filter(session => session.session_id !== sessionId);
+    removeSession(sessionId);
     if (selectedSession.value === sessionId) selectSession(null);
     await loadSessions();
   } catch (error) {
@@ -444,16 +363,15 @@ async function compactSession(sessionId: string) {
 
 async function resumeSession(sessionId?: string) {
   const targetSession = sessionId ?? selectedSession.value;
-  if (!targetSession || runtimeStore.hasController(targetSession) || resumeInFlightSessions.has(targetSession)) return;
+  if (!targetSession || runtimeStore.hasController(targetSession)) return;
   if (runtimeStore.getRuntime(targetSession)?.isStopping) return;
-  resumeInFlightSessions.add(targetSession);
-  resumeAttemptedSessions.add(targetSession);
+  if (!startResume(targetSession)) return;
   runtimeStore.ensureRuntime(targetSession);
   if ((runtimeStore.getRuntime(targetSession)?.messages.length ?? 0) === 0) {
     await loadSessionHistory(targetSession);
   }
   if (runtimeStore.hasController(targetSession)) {
-    resumeInFlightSessions.delete(targetSession);
+    finishResume(targetSession);
     return;
   }
 
@@ -497,7 +415,7 @@ async function resumeSession(sessionId?: string) {
     }
   } finally {
     await finalizeStream(context, streamCompleted);
-    resumeInFlightSessions.delete(targetSession);
+    finishResume(targetSession);
   }
 }
 
@@ -567,22 +485,19 @@ function clearMessages() {
 
 function dispose() {
   runtimeStore.dispose();
-  resumeAttemptedSessions.clear();
-  resumeInFlightSessions.clear();
-  sessions.value = [];
-  isLoadingSessions.value = false;
+  sessionHistory.dispose();
 }
 
 export function useChatState() {
   return {
     messages,
-    sessions: readonly(sessions),
+    sessions,
     selectedSession,
     isStreaming,
     isInsertReady,
     isStopping,
     streamActivity,
-    isLoadingSessions: readonly(isLoadingSessions),
+    isLoadingSessions,
     transportError,
     activeInteractionKey,
     loadSessions,
