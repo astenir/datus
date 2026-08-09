@@ -472,6 +472,15 @@ def test_oceanbase_session_store_loader_wires_optional_providers():
         {
             "enabled": True,
             "authorization_provider": {"class": "datus.api.enterprise.defaults:LocalAuthorizationProvider"},
+            "user_model_credentials": {
+                "custom_openai_compatible": {"enabled": True, "allowed_base_urls": ["https://models.corp/*"]}
+            },
+            "user_datasources": {
+                "enabled": True,
+                "allowed_types": ["postgresql"],
+                "allowed_hosts": ["db.corp"],
+            },
+            "user_mcp": {"enabled": True, "allowed_hosts": ["mcp.corp"]},
             "user_store": {
                 "class": "datus_enterprise.oceanbase_stores:ObEnterpriseUserStore",
                 "kwargs": kwargs,

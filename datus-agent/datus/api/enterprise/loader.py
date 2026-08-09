@@ -121,7 +121,9 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
     ``enterprise.enabled=true`` requires production authorization and audit
     providers to be configured explicitly. Config projection is loaded when
     configured, but remains a passthrough skeleton until execution paths adopt
-    request-level projection in the datasource-grant phase.
+    request-level projection in the datasource-grant phase. Encrypted
+    user-owned resource stores are loaded only when their matching feature is
+    enabled, so disabled sample configurations do not require unused secrets.
     """
 
     raw = enterprise_config or {}
@@ -212,23 +214,28 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseSecretStore,
         None,
     )
-    user_model_credential_store = _load_optional_component(
+    user_model_credential_store = _load_optional_component_when_enabled(
         raw,
         "user_model_credential_store",
         UserModelCredentialStore,
         InMemoryUserModelCredentialStore(),
+        enabled=_user_resource_enabled(
+            raw, "user_model_credentials", alias="personal_models", nested_key="custom_openai_compatible"
+        ),
     )
-    user_datasource_store = _load_optional_component(
+    user_datasource_store = _load_optional_component_when_enabled(
         raw,
         "user_datasource_store",
         UserDatasourceStore,
         InMemoryUserDatasourceStore(),
+        enabled=_user_resource_enabled(raw, "user_datasources", alias="personal_datasources"),
     )
-    user_mcp_server_store = _load_optional_component(
+    user_mcp_server_store = _load_optional_component_when_enabled(
         raw,
         "user_mcp_server_store",
         UserMcpServerStore,
         InMemoryUserMcpServerStore(),
+        enabled=_user_resource_enabled(raw, "user_mcp", alias="personal_mcp"),
     )
     agent_store = _load_optional_component(
         raw,
@@ -314,6 +321,36 @@ def _load_optional_component(raw: dict[str, Any], key: str, protocol: type[Proto
     if not spec:
         return default
     return _load_component(spec, key, protocol)
+
+
+def _load_optional_component_when_enabled(
+    raw: dict[str, Any],
+    key: str,
+    protocol: type[Protocol],
+    default: T,
+    *,
+    enabled: bool,
+) -> T:
+    if not enabled:
+        return default
+    return _load_optional_component(raw, key, protocol, default)
+
+
+def _user_resource_enabled(
+    raw: dict[str, Any],
+    key: str,
+    *,
+    alias: str | None = None,
+    nested_key: str | None = None,
+) -> bool:
+    section = raw.get(key)
+    if (not isinstance(section, dict) or not section) and alias:
+        section = raw.get(alias)
+    if not isinstance(section, dict):
+        return False
+    if nested_key and isinstance(section.get(nested_key), dict):
+        section = section[nested_key]
+    return _coerce_bool(section.get("enabled"), default=False)
 
 
 def _load_component(spec: Any, key: str, protocol: type[Protocol]) -> Any:
