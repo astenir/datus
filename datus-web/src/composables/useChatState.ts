@@ -1,14 +1,7 @@
-import {
-  buildChatStreamRequest,
-  createClientId,
-} from "@/lib/chat";
-import {
-  startedChatStreamActivity,
-} from "@/lib/chat-activity";
-import type { ChatMessage } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatActions } from "./useChatActions";
 import { useChatSettings } from "./useChatSettings";
+import { useChatSessionFlow } from "./useChatSessionFlow";
 import { useChatSessionHistory } from "./useChatSessionHistory";
 import { useChatStream, type ChatStreamContext } from "./useChatStream";
 import {
@@ -18,10 +11,15 @@ import {
 
 const { effectiveBase } = useConnection();
 const runtimeStore = useChatRuntimeStore();
+
+function resumeListedSession(sessionId: string) {
+  return chatSessionFlow.resumeSession(sessionId);
+}
+
 const sessionHistory = useChatSessionHistory({
   effectiveBase,
   runtime: runtimeStore,
-  resumeSession,
+  resumeSession: resumeListedSession,
 });
 const {
   sessions,
@@ -79,6 +77,32 @@ const chatStream = useChatStream({
   },
 });
 
+const chatSettings = useChatSettings();
+const chatSessionFlow = useChatSessionFlow({
+  runtime: {
+    getSelectedSession: () => selectedSession.value,
+    ensureSelectedRuntime: runtimeStore.ensureSelectedRuntime,
+    hasController: runtimeStore.hasController,
+    getRuntime: runtimeStore.getRuntime,
+    ensureRuntime: runtimeStore.ensureRuntime,
+    updateRuntime: runtimeStore.updateRuntime,
+  },
+  history: {
+    invalidateHistory,
+    clearResumeAttempt,
+    startResume,
+    finishResume,
+    loadSessionHistory,
+  },
+  stream: chatStream,
+  getChatSettings: () => ({
+    language: chatSettings.language.value,
+    planMode: chatSettings.planMode.value,
+    permissionMode: chatSettings.permissionMode.value,
+  }),
+});
+const { sendMessage, resumeSession } = chatSessionFlow;
+
 function selectSession(sessionId: string | null) {
   if (!sessionId) {
     runtimeStore.selectSession(null);
@@ -129,100 +153,6 @@ const {
   insertMessage,
   sendInteraction,
 } = chatActions;
-
-async function sendMessage(opts: {
-  message: string;
-  selectedAgent: string;
-  model: string;
-  datasource: string;
-  database: string;
-  schema: string;
-  personalMcpIds?: readonly string[];
-}) {
-  const runtimeKey = runtimeStore.ensureSelectedRuntime();
-  if (runtimeStore.hasController(runtimeKey) || runtimeStore.getRuntime(runtimeKey)?.isStreaming) return;
-
-  const sessionId = selectedSession.value;
-  invalidateHistory(runtimeKey);
-  if (sessionId) clearResumeAttempt(sessionId);
-  const userMessage: ChatMessage = {
-    id: createClientId(),
-    role: "user",
-    content: opts.message,
-  };
-  updateRuntime(runtimeKey, runtime => ({
-    ...runtime,
-    messages: [...runtime.messages, userMessage],
-    isStreaming: true,
-    isInsertReady: false,
-    isStopping: false,
-    streamActivity: startedChatStreamActivity(),
-    transportError: null,
-    submittedInteractionKeys: new Set(),
-    nextEventCursor: 0,
-  }));
-
-  const { language, planMode, permissionMode } = useChatSettings();
-  const body = buildChatStreamRequest({
-    message: opts.message,
-    sessionId: sessionId ?? "",
-    selectedAgent: opts.selectedAgent,
-    model: opts.model,
-    datasource: opts.datasource,
-    database: opts.database,
-    schema: opts.schema,
-    language: language.value,
-    planMode: planMode.value,
-    permissionMode: permissionMode.value,
-    personalMcpIds: opts.personalMcpIds,
-  });
-  await chatStream.start({
-    runtimeKey,
-    sessionId,
-    path: "/api/v1/chat/stream",
-    body,
-    errorContext: "stream",
-  });
-}
-
-async function resumeSession(sessionId?: string) {
-  const targetSession = sessionId ?? selectedSession.value;
-  if (!targetSession || runtimeStore.hasController(targetSession)) return;
-  if (runtimeStore.getRuntime(targetSession)?.isStopping) return;
-  if (!startResume(targetSession)) return;
-  runtimeStore.ensureRuntime(targetSession);
-  if ((runtimeStore.getRuntime(targetSession)?.messages.length ?? 0) === 0) {
-    await loadSessionHistory(targetSession);
-  }
-  if (runtimeStore.hasController(targetSession)) {
-    finishResume(targetSession);
-    return;
-  }
-
-  const nextEventCursor = runtimeStore.getRuntime(targetSession)?.nextEventCursor ?? 0;
-  updateRuntime(targetSession, runtime => ({
-    ...runtime,
-    isStreaming: true,
-    isStopping: false,
-    streamActivity: startedChatStreamActivity(),
-    transportError: null,
-  }));
-  try {
-    await chatStream.start({
-      runtimeKey: targetSession,
-      sessionId: targetSession,
-      path: "/api/v1/chat/resume",
-      body: {
-        session_id: targetSession,
-        ...(nextEventCursor > 0 ? { from_event_id: nextEventCursor } : {}),
-      },
-      errorContext: "resume",
-      onError: error => console.error("Failed to resume session:", error),
-    });
-  } finally {
-    finishResume(targetSession);
-  }
-}
 
 function clearTransportError() {
   const runtimeKey = selectedRuntimeKey.value;
