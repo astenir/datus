@@ -1,21 +1,13 @@
-import { chatApi } from "@/lib/api";
 import {
-  activeUserInteractionKey,
   buildChatStreamRequest,
-  buildUserInteractionInput,
   createClientId,
-  friendlyTransportErrorBlock,
 } from "@/lib/chat";
 import {
-  continuingChatStreamActivity,
-  idleChatStreamActivity,
   startedChatStreamActivity,
 } from "@/lib/chat-activity";
-import type {
-  ChatMessage,
-  InsertMessageData,
-} from "@/types";
+import type { ChatMessage } from "@/types";
 import { useConnection } from "./useConnection";
+import { useChatActions } from "./useChatActions";
 import { useChatSettings } from "./useChatSettings";
 import { useChatSessionHistory } from "./useChatSessionHistory";
 import { useChatStream, type ChatStreamContext } from "./useChatStream";
@@ -58,11 +50,6 @@ const {
 
 function updateRuntime(key: string, update: ChatRuntimeUpdater) {
   runtimeStore.updateRuntime(key, update);
-}
-
-function removeRuntime(key: string) {
-  runtimeStore.removeRuntime(key);
-  clearResumeAttempt(key);
 }
 
 function rekeyRuntime(context: ChatStreamContext, sessionId: string) {
@@ -110,6 +97,38 @@ function selectSession(sessionId: string | null) {
     void resumeSession(sessionId);
   }
 }
+
+const chatActions = useChatActions({
+  effectiveBase,
+  runtime: {
+    getSelectedSession: () => selectedSession.value,
+    getSelectedRuntimeKey: () => selectedRuntimeKey.value,
+    getIsStreaming: () => isStreaming.value,
+    getIsInsertReady: () => isInsertReady.value,
+    getIsStopping: () => isStopping.value,
+    getActiveInteractionKey: () => activeInteractionKey.value,
+    getRuntime: runtimeStore.getRuntime,
+    getController: runtimeStore.getController,
+    deleteController: runtimeStore.deleteController,
+    updateRuntime: runtimeStore.updateRuntime,
+    removeRuntime: runtimeStore.removeRuntime,
+  },
+  history: {
+    loadSessions,
+    loadSessionHistory,
+    markSessionActive,
+    clearResumeAttempt,
+    removeSession,
+  },
+  clearSelectedSession: () => selectSession(null),
+});
+const {
+  stopSession,
+  deleteSession,
+  compactSession,
+  insertMessage,
+  sendInteraction,
+} = chatActions;
 
 async function sendMessage(opts: {
   message: string;
@@ -166,85 +185,6 @@ async function sendMessage(opts: {
   });
 }
 
-async function stopSession() {
-  const runtimeKey = selectedRuntimeKey.value;
-  if (!runtimeKey) return;
-  const sessionId = selectedSession.value;
-  const currentRuntime = runtimeStore.getRuntime(runtimeKey);
-  if (!currentRuntime?.isStreaming || currentRuntime.isStopping) return;
-  const wasInsertReady = currentRuntime.isInsertReady;
-  let stopSucceeded = false;
-
-  updateRuntime(runtimeKey, runtime => ({
-    ...runtime,
-    isStreaming: true,
-    isInsertReady: false,
-    isStopping: true,
-    streamActivity: { ...runtime.streamActivity, phase: "stopping" },
-  }));
-
-  const controller = runtimeStore.getController(runtimeKey);
-  if (controller) {
-    runtimeStore.deleteController(runtimeKey, controller);
-    controller.abort();
-  }
-
-  try {
-    if (sessionId) {
-      await chatApi.stop(effectiveBase(), sessionId);
-      stopSucceeded = true;
-      markSessionActive(sessionId, false);
-      await loadSessionHistory(sessionId);
-    }
-  } catch (error) {
-    console.error("Failed to stop session:", error);
-    updateRuntime(runtimeKey, runtime => ({
-      ...runtime,
-      transportError: friendlyTransportErrorBlock(error, "stop"),
-    }));
-  } finally {
-    updateRuntime(runtimeKey, runtime => ({
-      ...runtime,
-      isStreaming: false,
-      isInsertReady: stopSucceeded ? false : wasInsertReady,
-      isStopping: false,
-      streamActivity: idleChatStreamActivity(),
-      submittedInteractionKeys: new Set(),
-    }));
-    if (sessionId) clearResumeAttempt(sessionId);
-    void loadSessions();
-  }
-}
-
-async function deleteSession(sessionId: string) {
-  const controller = runtimeStore.getController(sessionId);
-  if (controller) {
-    runtimeStore.deleteController(sessionId, controller);
-    controller.abort();
-  }
-  try {
-    await chatApi.deleteSession(effectiveBase(), sessionId);
-    removeRuntime(sessionId);
-    removeSession(sessionId);
-    if (selectedSession.value === sessionId) selectSession(null);
-    await loadSessions();
-  } catch (error) {
-    console.error("Failed to delete session:", error);
-    throw error;
-  }
-}
-
-async function compactSession(sessionId: string) {
-  try {
-    const result = await chatApi.compact(effectiveBase(), sessionId);
-    if (result?.success) await loadSessionHistory(sessionId);
-    return result;
-  } catch (error) {
-    console.error("Failed to compact session:", error);
-    throw error;
-  }
-}
-
 async function resumeSession(sessionId?: string) {
   const targetSession = sessionId ?? selectedSession.value;
   if (!targetSession || runtimeStore.hasController(targetSession)) return;
@@ -284,64 +224,10 @@ async function resumeSession(sessionId?: string) {
   }
 }
 
-async function insertMessage(message: string): Promise<InsertMessageData> {
-  const sessionId = selectedSession.value;
-  const text = message.trim();
-  if (!sessionId) throw new Error("当前会话尚未建立，无法补充消息");
-  if (!text) throw new Error("补充内容不能为空");
-  if (!isStreaming.value) throw new Error("当前会话未在生成中，无法补充消息");
-  if (isStopping.value) throw new Error("正在停止当前任务");
-  if (!isInsertReady.value) throw new Error("正在建立会话，请稍候");
-
-  const result = await chatApi.insert(effectiveBase(), sessionId, text);
-  if (!result) throw new Error("后端未确认本次补充消息");
-  return result;
-}
-
 function clearTransportError() {
   const runtimeKey = selectedRuntimeKey.value;
   if (!runtimeKey) return;
   updateRuntime(runtimeKey, runtime => ({ ...runtime, transportError: null }));
-}
-
-async function sendInteraction(interactionKey: string, answers: string | string[][]) {
-  const sessionId = selectedSession.value;
-  if (!sessionId) throw new Error("会话未就绪");
-  if (!interactionKey) throw new Error("交互请求未就绪");
-  if (activeInteractionKey.value !== interactionKey) throw new Error("交互请求已失效");
-
-  updateRuntime(sessionId, runtime => ({
-    ...runtime,
-    submittedInteractionKeys: new Set([...runtime.submittedInteractionKeys, interactionKey]),
-  }));
-  try {
-    const result = await chatApi.userInteraction(
-      effectiveBase(),
-      buildUserInteractionInput(sessionId, interactionKey, answers),
-    );
-    if (!result) throw new Error("后端未接受本次交互提交");
-    updateRuntime(sessionId, runtime => {
-      const pendingInteractionKey = activeUserInteractionKey(runtime.messages, {
-        isStreaming: runtime.isStreaming,
-        isAwaitingUser: runtime.streamActivity.phase === "awaiting_user",
-        submittedInteractionKeys: runtime.submittedInteractionKeys,
-      });
-
-      return {
-        ...runtime,
-        streamActivity: pendingInteractionKey && pendingInteractionKey !== interactionKey
-          ? runtime.streamActivity
-          : continuingChatStreamActivity(runtime.streamActivity),
-      };
-    });
-  } catch (error) {
-    updateRuntime(sessionId, runtime => {
-      const next = new Set(runtime.submittedInteractionKeys);
-      next.delete(interactionKey);
-      return { ...runtime, submittedInteractionKeys: next };
-    });
-    throw error;
-  }
 }
 
 function clearMessages() {
