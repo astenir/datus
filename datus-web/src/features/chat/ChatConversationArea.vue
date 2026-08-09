@@ -15,7 +15,7 @@ import type {
 } from "@/types"
 import type { TodoExecutionState } from "@/lib/todo-execution"
 
-const props = defineProps<{
+defineProps<{
   displayMessages: readonly ChatDisplayMessage[]
   isStreaming: boolean
   streamingMessageId: string | null

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat panel interaction fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue"
+      import { createMemoryHistory, createRouter } from "vue-router"
+      import "/src/style.css"
+      import ChatPanel from "/src/features/chat/ChatPanel.vue"
+
+      function createWorkspace(record) {
+        const isStreaming = ref(false)
+        const isInsertReady = ref(true)
+        const isStopping = ref(false)
+        const activeInteractionKey = ref(null)
+        const messages = ref([])
+        const currentDatasource = ref("warehouse")
+        const database = ref("")
+        const schema = ref("")
+        const selectedAgent = ref("")
+        const selectedModel = ref("")
+        const selectedSession = ref(null)
+        const personalMcpSelectedIds = ref([])
+
+        const streamActivity = ref({
+          phase: "submitting",
+          startedAt: Date.now() - 2_000,
+          connectedAt: Date.now() - 1_900,
+          lastEventAt: Date.now() - 500,
+          lastContentAt: Date.now() - 500,
+          activeTools: {},
+          toolCallCount: 0,
+          toolCompletedCount: 0,
+        })
+
+        const personalMcp = {
+          servers: ref([
+            {
+              id: "personal-mcp-1",
+              display_name: "指标 MCP",
+              enabled: true,
+            },
+          ]),
+          selectedIds: personalMcpSelectedIds,
+          selectionLocked: ref(false),
+          loading: ref(false),
+          bindingLoading: ref(false),
+          maxSelected: ref(2),
+          isAvailable: ref(true),
+          toggleSelection(id) {
+            const selected = personalMcpSelectedIds.value
+            personalMcpSelectedIds.value = selected.includes(id)
+              ? selected.filter((selectedId) => selectedId !== id)
+              : [...selected, id]
+            record(`mcp:${id}`)
+            return true
+          },
+        }
+
+        function handleSend(message) {
+          record(`send:${message}`)
+        }
+
+        function handleInsert(message) {
+          record(`insert:${message}`)
+          return Promise.resolve({ queued_count: 1 })
+        }
+
+        function stopSession() {
+          record("stop")
+          isStopping.value = false
+          isStreaming.value = false
+        }
+
+        function sendInteraction(interactionKey, answers) {
+          record(`interaction:${interactionKey}:${JSON.stringify(answers)}`)
+          activeInteractionKey.value = null
+          isStreaming.value = false
+          return Promise.resolve()
+        }
+
+        function showPermissionRequest() {
+          messages.value = [{
+            id: "permission-message",
+            role: "assistant",
+            content: "",
+            blocks: [{
+              type: "user-interaction",
+              interactionKey: "permission-1",
+              actionType: "confirm",
+              requests: [{
+                title: "确认工具调用",
+                content: "Permission Request\nTool: db_tools.execute_sql\nArgs: {\"query\":\"SELECT 1\"}",
+                options: [
+                  { key: "allow", title: "允许" },
+                  { key: "deny", title: "拒绝" },
+                ],
+                allowFreeText: false,
+                multiSelect: false,
+              }],
+            }],
+          }]
+          activeInteractionKey.value = "permission-1"
+          isStreaming.value = true
+          streamActivity.value = {
+            ...streamActivity.value,
+            phase: "awaiting_user",
+          }
+        }
+
+        return {
+          activeInteractionKey,
+          agentAllowsPersonalMcp: ref(true),
+          agentOptions: ref([{ value: "analytics-agent", label: "分析 Agent" }]),
+          clearTransportError() {
+            record("clear-error")
+          },
+          currentDatasource,
+          database,
+          databaseOptions: ref([{ value: "analytics", label: "分析库" }]),
+          datasourceStatuses: ref({
+            warehouse: { status: "connected" },
+            lake: { status: "connected" },
+          }),
+          defaultAgentId: ref("analytics-agent"),
+          defaultModelLabel: ref("通用模型"),
+          ensureCatalogLoaded() {
+            record("catalog")
+          },
+          handleDatasourceSwitch(value) {
+            currentDatasource.value = value
+            record(`datasource:${value}`)
+          },
+          handleInsert,
+          handleSend,
+          isInsertReady,
+          isLoadingAgents: ref(false),
+          isLoadingCatalog: ref(false),
+          isLoadingDatabases: ref(false),
+          isLoadingModels: ref(false),
+          isLoadingSchemas: ref(false),
+          isPrewarmingCurrentDatasource: ref(false),
+          isSavingDefaultAgent: ref(false),
+          isStopping,
+          isStreaming,
+          loadAgentOptions() {
+            record("agents")
+          },
+          messages,
+          modelOptions: ref([{ value: "openai/gpt-4o", label: "GPT-4o", group: "OpenAI" }]),
+          personalMcp,
+          schema,
+          schemaOptions: ref([{ value: "public", label: "public" }]),
+          selectedAgent,
+          selectedModel,
+          selectedSession,
+          sendInteraction,
+          setDatabase(value) {
+            database.value = value
+            record(`database:${value}`)
+          },
+          setDefaultAgent(value) {
+            record(`default-agent:${value}`)
+          },
+          setPlanMode() {},
+          setSchema(value) {
+            schema.value = value
+            record(`schema:${value}`)
+          },
+          showPersonalMcpPicker: ref(true),
+          stopSession,
+          streamActivity,
+          transportError: ref(null),
+          userDefaultAgentId: ref(""),
+          visibleDatasourceOptions: ref([
+            { value: "warehouse", label: "数据仓库" },
+            { value: "lake", label: "湖仓分析库" },
+          ]),
+          showPermissionRequest,
+        }
+      }
+
+      const events = ref([])
+      function record(event) {
+        events.value = [...events.value, event]
+      }
+
+      const workspace = createWorkspace(record)
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [{ name: "chat-session", path: "/chat/:sessionId" }],
+      })
+
+      const app = createApp({
+        setup() {
+          return () => h("main", { class: "min-h-screen bg-background" }, [
+            h("div", { class: "flex gap-2 p-3" }, [
+              h("button", {
+                type: "button",
+                "data-testid": "enter-streaming",
+                onClick: () => { workspace.isStreaming.value = true },
+              }, "进入流式状态"),
+              h("button", {
+                type: "button",
+                "data-testid": "show-permission",
+                onClick: workspace.showPermissionRequest,
+              }, "显示权限请求"),
+            ]),
+            h("output", { "data-testid": "events", class: "block px-3 text-xs" }, events.value.join("|")),
+            h("output", { "data-testid": "selected-agent", class: "block px-3 text-xs" }, workspace.selectedAgent.value || "default"),
+            h("output", { "data-testid": "selected-model", class: "block px-3 text-xs" }, workspace.selectedModel.value || "default"),
+            h("output", { "data-testid": "selected-datasource", class: "block px-3 text-xs" }, workspace.currentDatasource.value),
+            h(ChatPanel, {
+              workspace,
+              onOpenArtifact: (tab, slug) => record(`artifact:${tab}:${slug}`),
+            }),
+          ])
+        },
+      })
+
+      app.use(router)
+      await router.isReady()
+      app.mount("#app")
+    </script>
+  </body>
+</html>
