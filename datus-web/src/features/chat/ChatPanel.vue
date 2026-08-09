@@ -1,36 +1,7 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, shallowRef } from "vue"
-import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
+import { computed, shallowRef } from "vue"
 import { toast } from "vue-sonner"
 import { useRouter } from "vue-router"
-import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation"
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputButton,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@/components/ai-elements/prompt-input"
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
-import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorName,
-  ModelSelectorShortcut,
-  ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector"
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import {
   activeStreamingMessageId,
   activeUserInteractionRequest,
@@ -43,14 +14,11 @@ import { useSuccessStory } from "@/composables/useSuccessStory"
 import { workspaceRouteNames } from "@/features/workspace/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { ChatWorkspaceChatContract } from "@/features/workspace/workspace-contracts"
-import type { SelectOption, SuccessStorySource } from "@/types"
-import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
-import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
-import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
-import ChatMoreSettingsMenu from "@/features/chat/ChatMoreSettingsMenu.vue"
-import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
-import TodoExecutionDock from "@/features/chat/TodoExecutionDock.vue"
+import ChatComposerArea from "@/features/chat/ChatComposerArea.vue"
+import ChatConversationArea from "@/features/chat/ChatConversationArea.vue"
 import { deriveTodoExecutionDisplay } from "@/lib/todo-execution"
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
+import type { SuccessStorySource } from "@/types"
 
 const props = defineProps<{
   workspace: ChatWorkspaceChatContract
@@ -62,15 +30,7 @@ const emit = defineEmits<{
 const router = useRouter()
 const permission = usePermission()
 const successStory = useSuccessStory()
-
-const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
 const DEFAULT_MODEL_VALUE = "__datus_default_model__"
-
-type ModelOptionGroup = {
-  provider: string
-  label: string
-  options: SelectOption[]
-}
 
 const todoDisplay = computed(() => deriveTodoExecutionDisplay(
   mergeToolExecutionMessages(props.workspace.messages.value),
@@ -78,6 +38,9 @@ const todoDisplay = computed(() => deriveTodoExecutionDisplay(
 ))
 const displayMessages = computed(() => todoDisplay.value.messages)
 const activeTodoExecution = computed(() => todoDisplay.value.activeExecution)
+const streamingMessageId = computed(() =>
+  props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
+)
 const canSaveSuccessStory = computed(() => permission.isAdmin() || permission.hasPermission("module.kb"))
 const successStorySessionLink = computed(() => {
   const sessionId = props.workspace.selectedSession.value
@@ -87,32 +50,6 @@ const successStorySessionLink = computed(() => {
     params: { sessionId },
   }).href
 })
-const isWaitingForSession = computed(() =>
-  props.workspace.isStreaming.value && !props.workspace.isInsertReady.value,
-)
-const promptSubmitDisabled = computed(() =>
-  isWaitingForSession.value || props.workspace.isStopping.value,
-)
-const promptSubmitLabel = computed(() => {
-  if (props.workspace.isStopping.value) return "正在停止当前任务"
-  if (isWaitingForSession.value) return "正在建立会话"
-  return props.workspace.isStreaming.value ? "补充当前任务" : "发送"
-})
-const promptPlaceholder = computed(() => {
-  if (!props.workspace.isStreaming.value) return "有什么想了解的？"
-  if (props.workspace.isStopping.value) return "正在停止…"
-  return isWaitingForSession.value ? "正在建立会话…" : "补充当前任务，按 Enter 发送"
-})
-const streamStatusLabel = computed(() => {
-  if (props.workspace.isStopping.value) return "正在停止当前任务"
-  return isWaitingForSession.value ? "正在建立会话" : "AI 正在生成，按 Enter 补充当前任务"
-})
-const stopButtonLabel = computed(() =>
-  props.workspace.isStopping.value ? "正在停止当前任务" : "AI 正在生成，点击停止",
-)
-const streamingMessageId = computed(() =>
-  props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
-)
 const activeInteractionKey = computed(() => props.workspace.activeInteractionKey.value)
 const activeInteraction = computed(() =>
   activeUserInteractionRequest(props.workspace.messages.value, activeInteractionKey.value),
@@ -127,40 +64,7 @@ const dockedInteraction = computed(() => {
 
   return interaction
 })
-const modelSelectorOpen = shallowRef(false)
-const schemaOptions = computed(() => props.workspace.schemaOptions.value)
-const selectedModelValue = computed({
-  get: () => props.workspace.selectedModel.value || DEFAULT_MODEL_VALUE,
-  set: (value: string) => {
-    props.workspace.selectedModel.value = value === DEFAULT_MODEL_VALUE ? "" : value
-  },
-})
-const defaultModelLabel = computed(() =>
-  props.workspace.defaultModelLabel.value ? `默认：${props.workspace.defaultModelLabel.value}` : "默认模型",
-)
-const selectedModelLabel = computed(() =>
-  optionLabel(props.workspace.selectedModel.value, props.workspace.modelOptions.value),
-)
-const modelTriggerLabel = computed(() => selectedModelLabel.value || defaultModelLabel.value)
-const modelOptionGroups = computed(() => groupModelOptions(props.workspace.modelOptions.value))
-const modelSelectorContentClass = [
-  "gap-0 overflow-hidden rounded-2xl border-border/70 shadow-2xl sm:max-w-md",
-  "[&_[data-slot=command]]:rounded-2xl [&_[data-slot=command]]:p-1",
-  "[&_[data-slot=command-input-wrapper]]:p-1 [&_[data-slot=command-input-wrapper]]:pb-1",
-  "[&_[data-slot=input-group]]:h-9 [&_[data-slot=input-group]]:rounded-xl",
-  "[&_[data-slot=command-group]]:p-1",
-  "[&_[data-slot=command-group-heading]]:px-2.5 [&_[data-slot=command-group-heading]]:py-1.5",
-].join(" ")
 const pendingInteractionKey = shallowRef<string | null>(null)
-
-const promptSuggestions = [
-  "帮我分析基金持仓的关键变化",
-  "列出当前数据源有哪些表",
-  "运行 SQL 查询近 10 条记录",
-  "查看 MCP 工具连接状态",
-  "生成一份数据质量检查思路",
-  "帮我总结这个会话的重点",
-]
 
 async function send(payload: PromptInputMessage): Promise<void> {
   const text = payload.text.trim()
@@ -186,58 +90,12 @@ function sendSuggestion(suggestion: string) {
   props.workspace.handleSend(suggestion)
 }
 
-function optionLabel(value: string, options: readonly SelectOption[]) {
-  if (!value) return ""
-  return options.find((option) => option.value === value)?.label ?? value
-}
-
-function providerKey(option: SelectOption) {
-  if (option.group) return option.group
-  const [rawProvider] = option.value.split("/")
-  if (rawProvider && rawProvider !== option.value) return rawProvider.trim().toLowerCase()
-
-  const separatorIndex = option.label.indexOf(":")
-  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim().toLowerCase()
-
-  return "other"
-}
-
-function providerLabel(option: SelectOption) {
-  if (option.group) return option.group
-  const separatorIndex = option.label.indexOf(":")
-  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim()
-
-  const [rawProvider] = option.value.split("/")
-  if (rawProvider && rawProvider !== option.value) return rawProvider.trim()
-
-  return "其他模型"
-}
-
-function groupModelOptions(options: readonly SelectOption[]) {
-  const groups = new Map<string, ModelOptionGroup>()
-
-  for (const option of options) {
-    const key = providerKey(option)
-    const group = groups.get(key)
-
-    if (group) {
-      group.options.push(option)
-      continue
-    }
-
-    groups.set(key, {
-      provider: key,
-      label: providerLabel(option),
-      options: [option],
-    })
-  }
-
-  return Array.from(groups.values())
-}
-
 function selectModel(value: string) {
-  selectedModelValue.value = value
-  modelSelectorOpen.value = false
+  props.workspace.selectedModel.value = value === DEFAULT_MODEL_VALUE ? "" : value
+}
+
+function updateAgent(value: string) {
+  props.workspace.selectedAgent.value = value
 }
 
 async function submitInteraction(interactionKey: string, answers: string[][]) {
@@ -273,270 +131,49 @@ function saveSuccessStory(source: SuccessStorySource) {
 
 <template>
   <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-    <div
-      v-if="displayMessages.length === 0"
-      class="flex min-h-0 w-full min-w-0 flex-1 flex-col items-center justify-center px-4 pb-28 pt-12 text-center md:pb-36"
-    >
-      <h1 class="max-w-full text-3xl font-bold leading-tight text-foreground md:text-4xl">
-        有什么我能帮你的吗？
-      </h1>
+    <ChatConversationArea
+      :display-messages="displayMessages"
+      :is-streaming="workspace.isStreaming.value"
+      :streaming-message-id="streamingMessageId"
+      :interaction-pending="Boolean(pendingInteractionKey)"
+      :active-interaction-key="activeInteractionKey"
+      :docked-interaction-key="dockedInteraction?.interactionKey ?? null"
+      :datasource-name="workspace.currentDatasource.value"
+      :datasource-options="workspace.visibleDatasourceOptions.value"
+      :database-name="workspace.database.value"
+      :success-story-session-id="workspace.selectedSession.value ?? undefined"
+      :success-story-session-link="successStorySessionLink"
+      :can-save-success-story="canSaveSuccessStory"
+      :success-story-version="successStory.version.value"
+      :is-success-story-saving="successStory.isSaving"
+      :is-success-story-saved="successStory.isSaved"
+      :active-todo-execution="activeTodoExecution"
+      :stream-activity="workspace.streamActivity.value"
+      @send-suggestion="sendSuggestion"
+      @submit-interaction="submitInteraction"
+      @open-artifact="openArtifact"
+      @save-success-story="saveSuccessStory"
+      @stop="workspace.stopSession"
+    />
 
-      <Suggestions class="mx-auto mt-8 flex w-full max-w-5xl flex-wrap justify-center gap-2 whitespace-normal px-1">
-        <Suggestion
-          v-for="(suggestion, index) in promptSuggestions"
-          :key="suggestion"
-          :suggestion="suggestion"
-          variant="secondary"
-          size="lg"
-          :class="[
-            'h-auto min-h-10 max-w-full rounded-2xl border-transparent bg-muted px-5 py-2.5 text-sm text-foreground hover:bg-muted/80 md:min-h-11',
-            index > 1 ? 'hidden sm:inline-flex' : '',
-          ]"
-          @click="sendSuggestion"
-        />
-      </Suggestions>
-    </div>
-
-    <Conversation
-      v-else
-      class="min-h-0"
-    >
-      <ConversationContent class="gap-5 px-4 py-6 md:px-8">
-        <ChatMessageItem
-          v-for="message in displayMessages"
-          :key="message.id"
-          v-memo="[message, message.id === streamingMessageId, workspace.isStreaming.value, Boolean(pendingInteractionKey), activeInteractionKey, workspace.currentDatasource.value, workspace.database.value, workspace.selectedSession.value, canSaveSuccessStory, successStory.version.value]"
-          :message="message"
-          :streaming="message.id === streamingMessageId"
-          :execution-active="workspace.isStreaming.value"
-          :interaction-disabled="Boolean(pendingInteractionKey)"
-          :active-interaction-key="activeInteractionKey"
-          :docked-interaction-key="dockedInteraction?.interactionKey ?? null"
-          :datasource-name="workspace.currentDatasource.value"
-          :datasource-options="workspace.visibleDatasourceOptions.value"
-          :database-name="workspace.database.value"
-          :success-story-session-id="workspace.selectedSession.value ?? undefined"
-          :success-story-session-link="successStorySessionLink"
-          :can-save-success-story="canSaveSuccessStory"
-          :success-story-version="successStory.version.value"
-          :is-success-story-saving="successStory.isSaving"
-          :is-success-story-saved="successStory.isSaved"
-          @submit-interaction="submitInteraction"
-          @open-artifact="openArtifact"
-          @save-success-story="saveSuccessStory"
-        />
-        <ChatActivityStatus
-          v-if="workspace.isStreaming.value && !activeTodoExecution"
-          :activity="workspace.streamActivity.value"
-          @stop="workspace.stopSession"
-        />
-      </ConversationContent>
-      <ConversationScrollButton />
-    </Conversation>
-
-    <footer class="shrink-0 px-4 pb-5 pt-3 md:px-8 md:pb-7">
-      <div class="mx-auto max-w-[52rem]">
-        <ChatErrorBlock
-          v-if="workspace.transportError.value"
-          :block="workspace.transportError.value"
-          dismissible
-          class="mb-3"
-          @dismiss="workspace.clearTransportError"
-        />
-
-        <TodoExecutionDock
-          :execution="activeTodoExecution"
-          @stop="workspace.stopSession"
-        />
-
-        <ActiveInteractionDock
-          :interaction="dockedInteraction"
-          :disabled="Boolean(pendingInteractionKey)"
-          @submit="submitInteraction"
-        />
-
-        <PromptInput
-          :global-drop="false"
-          :multiple="false"
-          accept=""
-          class="[&_[data-slot=input-group]]:min-h-28 [&_[data-slot=input-group]]:rounded-4xl [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-ring/30 [&_[data-slot=input-group]]:bg-background [&_[data-slot=input-group]]:shadow-xl [&_[data-slot=input-group]]:shadow-muted/70"
-          @submit="send"
-        >
-          <PromptInputBody>
-            <PromptInputTextarea
-              name="message"
-              aria-label="消息内容"
-              :placeholder="promptPlaceholder"
-              :rows="2"
-              autocomplete="off"
-              autocapitalize="sentences"
-              spellcheck="true"
-              enterkeyhint="send"
-              class="max-h-44 min-h-16 px-5 pt-5 text-sm leading-6"
-            />
-          </PromptInputBody>
-
-          <PromptInputFooter class="flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
-            <PromptInputTools class="min-w-0 flex-1 flex-wrap items-center gap-1.5">
-              <ChatMoreSettingsMenu
-                :selected-agent="workspace.selectedAgent.value"
-                :default-agent-id="workspace.defaultAgentId.value"
-                :user-default-agent-id="workspace.userDefaultAgentId.value"
-                :agent-options="workspace.agentOptions.value"
-                :loading-agents="workspace.isLoadingAgents.value"
-                :saving-default-agent="workspace.isSavingDefaultAgent.value"
-                :agent-disabled="workspace.isStreaming.value"
-                :show-personal-mcp="workspace.showPersonalMcpPicker.value"
-                :servers="workspace.personalMcp.servers.value"
-                :selected-ids="workspace.personalMcp.selectedIds.value"
-                :mcp-locked="workspace.personalMcp.selectionLocked.value"
-                :loading-mcp="workspace.personalMcp.loading.value || workspace.personalMcp.bindingLoading.value"
-                :mcp-disabled="workspace.isStreaming.value && !workspace.personalMcp.selectionLocked.value"
-                :max-selected="workspace.personalMcp.maxSelected.value"
-                :agent-allows-personal-mcp="workspace.agentAllowsPersonalMcp.value"
-                :organization-available="workspace.personalMcp.isAvailable.value"
-                @update-agent="(value) => { workspace.selectedAgent.value = value }"
-                @set-default-agent="workspace.setDefaultAgent"
-                @request-agents="workspace.loadAgentOptions"
-                @toggle-mcp="workspace.personalMcp.toggleSelection"
-              />
-              <ChatContextPicker
-                :datasource="workspace.currentDatasource.value"
-                :database="workspace.database.value"
-                :schema="workspace.schema.value"
-                :datasource-options="workspace.visibleDatasourceOptions.value"
-                :datasource-statuses="workspace.datasourceStatuses.value"
-                :database-options="workspace.databaseOptions.value"
-                :schema-options="schemaOptions"
-                :loading-catalog="workspace.isLoadingCatalog.value"
-                :loading-databases="workspace.isLoadingDatabases.value"
-                :loading-schemas="workspace.isLoadingSchemas.value"
-                :switching-datasource="workspace.isPrewarmingCurrentDatasource.value"
-                :disabled="workspace.isStreaming.value"
-                @update-datasource="workspace.handleDatasourceSwitch"
-                @update-database="workspace.setDatabase"
-                @update-schema="workspace.setSchema"
-                @request-catalog="workspace.ensureCatalogLoaded"
-              />
-            </PromptInputTools>
-
-            <div class="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              <span
-                v-if="workspace.isStreaming.value"
-                role="status"
-                aria-live="polite"
-                class="sr-only"
-              >
-                {{ streamStatusLabel }}
-              </span>
-
-              <ModelSelector v-model:open="modelSelectorOpen">
-                <ModelSelectorTrigger as-child>
-                  <PromptInputButton
-                    type="button"
-                    aria-label="选择 Model"
-                    title="Model"
-                    :disabled="workspace.isLoadingModels.value"
-                    class="h-8 max-w-44 justify-start rounded-full px-2 text-sm sm:max-w-56"
-                  >
-                    <Loader2Icon
-                      v-if="workspace.isLoadingModels.value"
-                      data-icon="inline-start"
-                      class="animate-spin"
-                    />
-                    <CpuIcon
-                      v-else
-                      data-icon="inline-start"
-                    />
-                    <span class="truncate">{{ modelTriggerLabel }}</span>
-                    <ChevronDownIcon data-icon="inline-end" />
-                  </PromptInputButton>
-                </ModelSelectorTrigger>
-
-                <ModelSelectorContent
-                  title="选择模型"
-                  :show-close-button="false"
-                  :class="modelSelectorContentClass"
-                >
-                  <ModelSelectorInput
-                    placeholder="搜索模型..."
-                    class="h-9 py-0"
-                  />
-                  <ModelSelectorList class="max-h-80 px-1 pb-1">
-                    <ModelSelectorEmpty class="py-6 text-sm">
-                      没有匹配的模型
-                    </ModelSelectorEmpty>
-
-                    <ModelSelectorGroup heading="默认">
-                      <ModelSelectorItem
-                        :value="DEFAULT_MODEL_VALUE"
-                        class="min-h-9 rounded-xl px-2.5 py-1.5"
-                        @select.prevent="selectModel(DEFAULT_MODEL_VALUE)"
-                      >
-                        <CpuIcon data-icon="inline-start" />
-                        <ModelSelectorName>
-                          {{ defaultModelLabel }}
-                        </ModelSelectorName>
-                        <ModelSelectorShortcut v-if="selectedModelValue === DEFAULT_MODEL_VALUE">
-                          当前
-                        </ModelSelectorShortcut>
-                      </ModelSelectorItem>
-                    </ModelSelectorGroup>
-
-                    <ModelSelectorGroup
-                      v-for="group in modelOptionGroups"
-                      :key="group.provider"
-                      :heading="group.label"
-                    >
-                      <ModelSelectorItem
-                        v-for="model in group.options"
-                        :key="model.value"
-                        :value="model.value"
-                        class="min-h-9 rounded-xl px-2.5 py-1.5"
-                        @select.prevent="selectModel(model.value)"
-                      >
-                        <CpuIcon data-icon="inline-start" />
-                        <ModelSelectorName>
-                          {{ model.label }}
-                        </ModelSelectorName>
-                        <ModelSelectorShortcut v-if="selectedModelValue === model.value">
-                          当前
-                        </ModelSelectorShortcut>
-                      </ModelSelectorItem>
-                    </ModelSelectorGroup>
-                  </ModelSelectorList>
-                </ModelSelectorContent>
-              </ModelSelector>
-
-              <PromptInputSubmit
-                v-show="!workspace.isStreaming.value"
-                status="ready"
-                :disabled="promptSubmitDisabled"
-                :aria-label="promptSubmitLabel"
-                :title="promptSubmitLabel"
-                class="size-10 shrink-0 rounded-full shadow-none"
-              />
-              <PromptInputButton
-                v-if="workspace.isStreaming.value"
-                variant="default"
-                size="icon-sm"
-                type="button"
-                :disabled="workspace.isStopping.value"
-                :aria-label="stopButtonLabel"
-                :title="stopButtonLabel"
-                class="size-10 shrink-0 rounded-full shadow-none"
-                @click="workspace.stopSession"
-              >
-                <Loader2Icon
-                  v-if="workspace.isStopping.value"
-                  class="animate-spin"
-                />
-                <SquareIcon v-else />
-              </PromptInputButton>
-            </div>
-          </PromptInputFooter>
-        </PromptInput>
-      </div>
-    </footer>
+    <ChatComposerArea
+      :workspace="workspace"
+      :active-todo-execution="activeTodoExecution"
+      :docked-interaction="dockedInteraction"
+      :interaction-pending="Boolean(pendingInteractionKey)"
+      @submit="send"
+      @dismiss-error="workspace.clearTransportError"
+      @stop="workspace.stopSession"
+      @submit-interaction="submitInteraction"
+      @select-model="selectModel"
+      @update-agent="updateAgent"
+      @set-default-agent="workspace.setDefaultAgent"
+      @request-agents="workspace.loadAgentOptions"
+      @toggle-mcp="workspace.personalMcp.toggleSelection"
+      @update-datasource="workspace.handleDatasourceSwitch"
+      @update-database="workspace.setDatabase"
+      @update-schema="workspace.setSchema"
+      @request-catalog="workspace.ensureCatalogLoaded"
+    />
   </section>
 </template>

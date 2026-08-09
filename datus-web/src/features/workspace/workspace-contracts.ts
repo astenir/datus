@@ -57,6 +57,46 @@ export type ChatWorkspaceChatContract = Pick<
   | "visibleDatasourceOptions"
 >
 
+export type ChatWorkspaceComposerContract = Pick<
+  ChatWorkspaceChatContract,
+  | "agentAllowsPersonalMcp"
+  | "agentOptions"
+  | "clearTransportError"
+  | "currentDatasource"
+  | "database"
+  | "databaseOptions"
+  | "datasourceStatuses"
+  | "defaultAgentId"
+  | "defaultModelLabel"
+  | "ensureCatalogLoaded"
+  | "handleDatasourceSwitch"
+  | "isInsertReady"
+  | "isLoadingAgents"
+  | "isLoadingCatalog"
+  | "isLoadingDatabases"
+  | "isLoadingModels"
+  | "isLoadingSchemas"
+  | "isPrewarmingCurrentDatasource"
+  | "isSavingDefaultAgent"
+  | "isStopping"
+  | "isStreaming"
+  | "loadAgentOptions"
+  | "modelOptions"
+  | "personalMcp"
+  | "schema"
+  | "schemaOptions"
+  | "selectedAgent"
+  | "selectedModel"
+  | "setDatabase"
+  | "setDefaultAgent"
+  | "setSchema"
+  | "showPersonalMcpPicker"
+  | "stopSession"
+  | "transportError"
+  | "userDefaultAgentId"
+  | "visibleDatasourceOptions"
+>
+
 export type ChatWorkspaceProfileContract = Pick<
   ChatWorkspace,
   | "canUseElevatedPermissionMode"
