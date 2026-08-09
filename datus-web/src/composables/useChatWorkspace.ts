@@ -1,5 +1,4 @@
-import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
-import { toast } from "vue-sonner";
+import { computed, shallowRef } from "vue";
 
 import { useCatalog } from "@/composables/useCatalog";
 import { useChatSettings } from "@/composables/useChatSettings";
@@ -9,8 +8,8 @@ import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { usePersonalMcp } from "@/composables/usePersonalMcp";
 import { useWorkspaceAgentPreferences } from "@/composables/useWorkspaceAgentPreferences";
-import { useWorkspaceBootstrap } from "@/composables/useWorkspaceBootstrap";
 import { useWorkspaceDatasourceContext } from "@/composables/useWorkspaceDatasourceContext";
+import { useWorkspaceLifecycle } from "@/composables/useWorkspaceLifecycle";
 import { useTheme } from "@/composables/useTheme";
 import { workspaceAccessFromPermission } from "@/features/workspace/access";
 import { personalMcpIdsForChat } from "@/lib/chat";
@@ -145,30 +144,52 @@ export function useChatWorkspace() {
     )
   );
 
-  watch(modelOptions, (options) => {
-    if (!selectedModel.value.startsWith("credential:")) return;
-    if (!options.some(option => option.value === selectedModel.value)) {
-      selectedModel.value = "";
-    }
-  });
   const canUseElevatedPermissionMode = computed(() =>
     permission.isAdmin() || permission.hasPermission?.("module.chat.permission_mode") === true
   );
   const isPermissionSummaryLoaded = computed(() => permission.isLoaded?.value ?? true);
 
-  const { initialize } = useWorkspaceBootstrap({
-    canReadAgentConfig,
-    canViewChat: computed(() => viewAccess.value.canViewChat),
-    showPersonalMcpPicker,
-    canReadModelOptions,
-    checkConnection,
-    initializeDatasource,
-    loadSessions,
-    loadAgentOptions,
-    loadAgentPreference,
-    loadPersonalMcp: personalMcp.load,
-    loadModels,
-    warmCurrentDatasource,
+  const { initialize } = useWorkspaceLifecycle({
+    bootstrap: {
+      canReadAgentConfig,
+      canViewChat: computed(() => viewAccess.value.canViewChat),
+      showPersonalMcpPicker,
+      canReadModelOptions,
+      checkConnection,
+      initializeDatasource,
+      loadSessions,
+      loadAgentOptions,
+      loadAgentPreference,
+      loadPersonalMcp: personalMcp.load,
+      loadModels,
+      warmCurrentDatasource,
+    },
+    model: {
+      options: modelOptions,
+      selected: selectedModel,
+    },
+    catalog: {
+      database,
+      loadCatalog,
+    },
+    personalMcp: {
+      showPicker: showPersonalMcpPicker,
+      selectedSession,
+      selectedIds: personalMcp.selectedIds,
+      loadSessionBinding: personalMcp.loadSessionBinding,
+      resetDraftSelection: personalMcp.resetDraftSelection,
+    },
+    agent: {
+      effectiveAgentId,
+      allowsPersonalMcp: agentAllowsPersonalMcp,
+    },
+    permissions: {
+      summaryLoaded: isPermissionSummaryLoaded,
+      canUseElevatedPermissionMode,
+      permissionMode,
+      setPermissionMode,
+    },
+    dispose,
   });
 
   function handleSend(message: string) {
@@ -195,42 +216,6 @@ export function useChatWorkspace() {
     if (!canReadAgentConfig.value) return;
     void checkConnection();
   }
-
-  onBeforeUnmount(() => {
-    dispose();
-  });
-
-  watch(database, (db) => {
-    if (db) void loadCatalog(db);
-  });
-
-  watch(selectedSession, (sessionId) => {
-    if (!showPersonalMcpPicker.value) {
-      personalMcp.resetDraftSelection();
-      return;
-    }
-    if (sessionId) {
-      void personalMcp.loadSessionBinding(sessionId);
-    } else {
-      personalMcp.resetDraftSelection();
-    }
-  }, { immediate: true });
-
-  watch([effectiveAgentId, agentAllowsPersonalMcp], ([, allowsPersonalMcp], [, wasAllowed]) => {
-    if (!selectedSession.value && !allowsPersonalMcp) {
-      const hadDraftSelection = personalMcp.selectedIds.value.length > 0;
-      personalMcp.resetDraftSelection();
-      if (hadDraftSelection && wasAllowed) {
-        toast.info("当前 Agent 不支持个人 MCP，已清除本次会话的个人 MCP 选择");
-      }
-    }
-  });
-
-  watch([isPermissionSummaryLoaded, canUseElevatedPermissionMode, permissionMode], ([loaded, canUseElevated, mode]) => {
-    if (loaded && !canUseElevated && mode !== "normal") {
-      setPermissionMode("normal");
-    }
-  }, { immediate: true });
 
   return {
     language,
