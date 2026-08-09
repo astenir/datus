@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BundledLanguage } from "shiki"
 import { computed } from "vue"
-import { CheckCircle2Icon, ExternalLinkIcon, WrenchIcon } from "@lucide/vue"
+import { CheckCircle2Icon, ExternalLinkIcon } from "@lucide/vue"
 import {
   Artifact,
   ArtifactAction,
@@ -25,6 +25,7 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
+import ChatInteractionBlock from "@/features/chat/ChatInteractionBlock.vue"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
 import ChatToolExecutionBlock from "@/features/chat/ChatToolExecutionBlock.vue"
@@ -32,8 +33,6 @@ import PlanConfirmationBlock from "@/features/chat/PlanConfirmationBlock.vue"
 import PlanPreviewBlock from "@/features/chat/PlanPreviewBlock.vue"
 import SubagentSummaryBlock from "@/features/chat/SubagentSummaryBlock.vue"
 import TodoExecutionSummaryBlock from "@/features/chat/TodoExecutionSummaryBlock.vue"
-import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
-import { parsePermissionRequest } from "@/lib/interaction-display"
 import { isToolDisplayBlock } from "@/lib/tool-presentation"
 import type { MessageDisplayBlock, SelectOption, SuccessStorySource } from "@/types"
 
@@ -88,31 +87,6 @@ function artifactModeLabel(mode: string | undefined) {
   if (mode === "new") return "新建"
   if (mode === "edit") return "编辑"
   return mode ?? ""
-}
-
-function isDockedInteraction(block: MessageDisplayBlock) {
-  return block.type === "user-interaction" &&
-    Boolean(props.dockedInteractionKey) &&
-    block.interactionKey === props.dockedInteractionKey
-}
-
-function isReadOnlyInteraction(block: MessageDisplayBlock) {
-  return block.type === "user-interaction" &&
-    block.interactionKey !== props.activeInteractionKey
-}
-
-function userInteractionSummary(block: MessageDisplayBlock) {
-  if (block.type !== "user-interaction") return "用户交互"
-
-  const request = block.requests[0]
-  if (!request) return "用户交互"
-
-  const permissionRequest = parsePermissionRequest(request.content)
-  return permissionRequest?.operationName ?? permissionRequest?.toolName ?? request.title ?? request.content
-}
-
-function readOnlyInteractionDescription() {
-  return props.executionActive ? "已提交，工具调用继续执行中" : "此交互请求已处理或已失效"
 }
 </script>
 
@@ -243,52 +217,13 @@ function readOnlyInteractionDescription() {
     </ArtifactContent>
   </Artifact>
 
-  <div
-    v-else-if="isDockedInteraction(block)"
-    class="flex min-w-0 items-start gap-3 rounded-md border border-dashed bg-muted/20 p-3"
-  >
-    <Badge
-      variant="secondary"
-      class="shrink-0"
-    >
-      <WrenchIcon data-icon="inline-start" />
-      等待确认
-    </Badge>
-    <div class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium text-foreground">
-        {{ userInteractionSummary(block) }}
-      </p>
-      <p class="text-xs text-muted-foreground">
-        请在输入框上方处理此工具权限请求
-      </p>
-    </div>
-  </div>
-
-  <div
-    v-else-if="isReadOnlyInteraction(block)"
-    class="flex min-w-0 items-start gap-3 rounded-md border border-dashed bg-muted/20 p-3"
-  >
-    <Badge
-      variant="secondary"
-      class="shrink-0"
-    >
-      <CheckCircle2Icon data-icon="inline-start" />
-      已处理
-    </Badge>
-    <div class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium text-foreground">
-        {{ userInteractionSummary(block) }}
-      </p>
-      <p class="text-xs text-muted-foreground">
-        {{ readOnlyInteractionDescription() }}
-      </p>
-    </div>
-  </div>
-
-  <UserInteractionBlock
+  <ChatInteractionBlock
     v-else-if="block.type === 'user-interaction'"
     :block="block"
-    :disabled="interactionDisabled || block.interactionKey !== activeInteractionKey"
+    :interaction-disabled="interactionDisabled"
+    :active-interaction-key="activeInteractionKey"
+    :docked-interaction-key="dockedInteractionKey"
+    :execution-active="executionActive"
     @submit="submitInteraction"
   />
 
