@@ -24,27 +24,18 @@ import {
 } from "@/components/ai-elements/reasoning"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
+import ChatToolExecutionBlock from "@/features/chat/ChatToolExecutionBlock.vue"
 import PlanConfirmationBlock from "@/features/chat/PlanConfirmationBlock.vue"
 import PlanPreviewBlock from "@/features/chat/PlanPreviewBlock.vue"
 import SubagentSummaryBlock from "@/features/chat/SubagentSummaryBlock.vue"
-import TodoQueueBlock from "@/features/chat/TodoQueueBlock.vue"
 import TodoExecutionSummaryBlock from "@/features/chat/TodoExecutionSummaryBlock.vue"
-import ToolExecutionCard from "@/features/chat/ToolExecutionCard.vue"
-import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
-import { todoQueueFromToolResult } from "@/lib/todo-queue"
-import {
-  isToolDisplayBlock,
-  toolPresentation,
-  visibleToolChildMessages,
-} from "@/lib/tool-presentation"
-import { isSuccessStoryEligibleToolExecution } from "@/lib/tool-display"
-import type { MessageDisplayBlock, SelectOption, SuccessStorySource, ToolChildMessage } from "@/types"
+import { isToolDisplayBlock } from "@/lib/tool-presentation"
+import type { MessageDisplayBlock, SelectOption, SuccessStorySource } from "@/types"
 
 const props = defineProps<{
   block: MessageDisplayBlock
@@ -79,61 +70,11 @@ function openArtifact(kind: string, slug: string) {
   emit("openArtifact", kind, slug)
 }
 
-function successStorySource(block: MessageDisplayBlock): SuccessStorySource | undefined {
-  if (block.type !== "tool-execution") return undefined
-  if (!props.canSaveSuccessStory || !props.successStorySessionId || !block.callToolId) return undefined
-  if (!isSuccessStoryEligibleToolExecution(block.toolName, block.resultStatus, block.errorText)) return undefined
-
-  return {
-    sessionId: props.successStorySessionId,
-    callToolId: block.callToolId,
-    ...(props.successStorySessionLink ? { sessionLink: props.successStorySessionLink } : {}),
-  }
-}
-
 function saveSuccessStory(source: SuccessStorySource) {
   emit("saveSuccessStory", source)
 }
 
-function successStorySaving(source?: SuccessStorySource) {
-  return source ? props.isSuccessStorySaving?.(source) === true : false
-}
-
-function successStorySaved(source?: SuccessStorySource) {
-  return source ? props.isSuccessStorySaved?.(source) === true : false
-}
-
 const toolBlock = computed(() => isToolDisplayBlock(props.block) ? props.block : null)
-const currentToolPresentation = computed(() => toolBlock.value
-  ? toolPresentation(toolBlock.value, { isActive: props.executionActive !== false })
-  : null)
-const toolChildMessages = computed(() => {
-  const current = toolBlock.value
-  return visibleToolChildMessages(current && "childMessages" in current ? current.childMessages : undefined)
-})
-const hasToolInput = computed(() => toolBlock.value?.type === "tool-call" || toolBlock.value?.type === "tool-execution")
-const hasToolOutput = computed(() => toolBlock.value?.type === "tool-result" || toolBlock.value?.type === "tool-execution")
-const showToolOutput = computed(() => hasToolOutput.value && currentToolPresentation.value?.isSubagent !== true)
-const toolInputValue = computed(() => {
-  const current = toolBlock.value
-  return current && current.type !== "tool-result" ? current.params : undefined
-})
-const toolOutputValue = computed(() => {
-  const current = toolBlock.value
-  return current && current.type !== "tool-call" ? current.result : undefined
-})
-const toolErrorText = computed(() => {
-  const current = toolBlock.value
-  return current && current.type !== "tool-call" ? current.errorText : undefined
-})
-const currentSuccessStorySource = computed(() => successStorySource(props.block))
-
-const todoQueue = computed(() => {
-  const current = toolBlock.value
-  if (!current || current.type === "tool-call") return null
-  if (current.errorText || current.resultStatus === "error") return null
-  return todoQueueFromToolResult(current.toolName, current.result)
-})
 
 function codeLanguage(language: string) {
   return (language.trim().toLowerCase() || "text") as BundledLanguage
@@ -147,12 +88,6 @@ function artifactModeLabel(mode: string | undefined) {
   if (mode === "new") return "新建"
   if (mode === "edit") return "编辑"
   return mode ?? ""
-}
-
-function childMessageSourceLabel(message: ToolChildMessage) {
-  if (message.role === "system") return "系统事件"
-  if (message.role === "user") return "用户输入"
-  return undefined
 }
 
 function isDockedInteraction(block: MessageDisplayBlock) {
@@ -227,107 +162,49 @@ function readOnlyInteractionDescription() {
     </CodeBlockHeader>
   </CodeBlock>
 
-  <TodoQueueBlock
-    v-else-if="todoQueue"
-    :queue="todoQueue"
-    :duration="block.type === 'tool-result' || block.type === 'tool-execution' ? block.duration : undefined"
-  />
-
   <TodoExecutionSummaryBlock
     v-else-if="block.type === 'todo-execution-summary'"
     :block="block"
   />
 
-  <ToolExecutionCard
-    v-else-if="toolBlock && currentToolPresentation"
-    :presentation="currentToolPresentation"
+  <ChatToolExecutionBlock
+    v-else-if="toolBlock"
+    :block="toolBlock"
+    :streaming="streaming"
+    :execution-active="executionActive"
+    :datasource-name="datasourceName"
+    :datasource-options="datasourceOptions"
+    :database-name="databaseName"
+    :success-story-session-id="successStorySessionId"
+    :success-story-session-link="successStorySessionLink"
+    :can-save-success-story="canSaveSuccessStory"
+    :is-success-story-saving="isSuccessStorySaving"
+    :is-success-story-saved="isSuccessStorySaved"
+    @save-success-story="saveSuccessStory"
   >
-    <ToolPayloadView
-      v-if="hasToolInput"
-      mode="input"
-      :tool-name="toolBlock.toolName"
-      :value="toolInputValue"
-      :datasource-name="datasourceName"
-      :datasource-options="datasourceOptions"
-      :database-name="databaseName"
-      :success-story-source="currentSuccessStorySource"
-      :success-story-saving="successStorySaving(currentSuccessStorySource)"
-      :success-story-saved="successStorySaved(currentSuccessStorySource)"
-      @save-success-story="saveSuccessStory"
-    />
-
-    <template v-if="toolChildMessages.length">
-      <Separator />
-      <div class="flex flex-col gap-3 p-4">
-        <div class="flex min-w-0 items-center justify-between gap-3">
-          <h4 class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            执行过程
-          </h4>
-          <Badge variant="outline">
-            {{ toolChildMessages.length }} 项
-          </Badge>
-        </div>
-
-        <div
-          v-for="child in toolChildMessages"
-          :key="child.id"
-          class="flex min-w-0 flex-col gap-2"
-          data-testid="subagent-process-item"
-        >
-          <div
-            v-if="childMessageSourceLabel(child)"
-            class="text-xs font-medium text-muted-foreground"
-          >
-            {{ childMessageSourceLabel(child) }}
-          </div>
-          <div class="flex min-w-0 flex-col gap-2 text-sm leading-6">
-            <template v-if="child.blocks?.length">
-              <ChatBlockRenderer
-                v-for="(childBlock, index) in child.blocks"
-                :key="`${child.id}-${index}`"
-                :block="childBlock"
-                :streaming="streaming"
-                :execution-active="executionActive"
-                :interaction-disabled="interactionDisabled"
-                :active-interaction-key="activeInteractionKey"
-                :docked-interaction-key="dockedInteractionKey"
-                :datasource-name="datasourceName"
-                :datasource-options="datasourceOptions"
-                :database-name="databaseName"
-                :success-story-session-id="successStorySessionId"
-                :success-story-session-link="successStorySessionLink"
-                :can-save-success-story="canSaveSuccessStory"
-                :success-story-version="successStoryVersion"
-                :is-success-story-saving="isSuccessStorySaving"
-                :is-success-story-saved="isSuccessStorySaved"
-                @submit-interaction="submitInteraction"
-                @open-artifact="openArtifact"
-                @save-success-story="saveSuccessStory"
-              />
-            </template>
-            <MessageResponse
-              v-else
-              :content="child.content"
-              :streaming="streaming"
-            />
-          </div>
-        </div>
-      </div>
-    </template>
-
-    <template v-if="showToolOutput">
-      <Separator />
-      <ToolPayloadView
-        mode="output"
-        :tool-name="toolBlock.toolName"
-        :value="toolOutputValue"
-        :error-text="toolErrorText"
+    <template #child-block="{ block: childBlock }">
+      <ChatBlockRenderer
+        :block="childBlock"
+        :streaming="streaming"
+        :execution-active="executionActive"
+        :interaction-disabled="interactionDisabled"
+        :active-interaction-key="activeInteractionKey"
+        :docked-interaction-key="dockedInteractionKey"
         :datasource-name="datasourceName"
         :datasource-options="datasourceOptions"
         :database-name="databaseName"
+        :success-story-session-id="successStorySessionId"
+        :success-story-session-link="successStorySessionLink"
+        :can-save-success-story="canSaveSuccessStory"
+        :success-story-version="successStoryVersion"
+        :is-success-story-saving="isSuccessStorySaving"
+        :is-success-story-saved="isSuccessStorySaved"
+        @submit-interaction="submitInteraction"
+        @open-artifact="openArtifact"
+        @save-success-story="saveSuccessStory"
       />
     </template>
-  </ToolExecutionCard>
+  </ChatToolExecutionBlock>
 
   <SubagentSummaryBlock
     v-else-if="block.type === 'subagent-complete'"
