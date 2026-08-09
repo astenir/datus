@@ -1,5 +1,4 @@
-import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
-import { toast } from "vue-sonner";
+import { computed, shallowRef } from "vue";
 
 import { useCatalog } from "@/composables/useCatalog";
 import { useChatSettings } from "@/composables/useChatSettings";
@@ -8,41 +7,12 @@ import { useConnection } from "@/composables/useConnection";
 import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { usePersonalMcp } from "@/composables/usePersonalMcp";
+import { useWorkspaceAgentPreferences } from "@/composables/useWorkspaceAgentPreferences";
+import { useWorkspaceDatasourceContext } from "@/composables/useWorkspaceDatasourceContext";
+import { useWorkspaceLifecycle } from "@/composables/useWorkspaceLifecycle";
 import { useTheme } from "@/composables/useTheme";
 import { workspaceAccessFromPermission } from "@/features/workspace/access";
-import { agentApi, meApi } from "@/lib/api";
-import { agentAllowsPersonalMcpSelection, personalMcpIdsForChat } from "@/lib/chat";
-import type { AgentInfo, ArtifactEditSession, NormalizedProbeResult, SelectOption } from "@/types";
-import type { AgentPreferenceSummary, ApiResponse } from "@/types/profile";
-
-const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
-const REPORT_EDIT_SESSION_PREFIX = "report_edit__";
-const DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__";
-const WILDCARD_DATASOURCE_GRANT = "*";
-
-function mergeSelectOptions(...groups: readonly SelectOption[][]): SelectOption[] {
-  const seen = new Set<string>();
-  const options: SelectOption[] = [];
-  for (const group of groups) {
-    for (const option of group) {
-      if (!option.value || seen.has(option.value)) continue;
-      seen.add(option.value);
-      options.push(option);
-    }
-  }
-  return options;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function datasourceGrantAllowsCatalog(grant: unknown): boolean {
-  if (grant === true) return true;
-  if (!isRecord(grant)) return false;
-  const effect = typeof grant.effect === "string" ? grant.effect.trim().toLowerCase() : "allow";
-  return effect === "allow" && grant.allow_catalog !== false;
-}
+import { personalMcpIdsForChat } from "@/lib/chat";
 
 export function useChatWorkspace() {
   useTheme();
@@ -55,6 +25,7 @@ export function useChatWorkspace() {
     setPermissionMode,
     setPlanMode,
   } = useChatSettings();
+  const connectionContext = useConnection();
   const {
     apiBase,
     connection,
@@ -62,11 +33,11 @@ export function useChatWorkspace() {
     datasourceOptions,
     isTestingDatasource: isTestingConfigDatasource,
     checkConnection,
-    effectiveBase,
     setApiBase,
-  } = useConnection();
+  } = connectionContext;
   const permission = usePermission();
   const personalMcp = usePersonalMcp();
+  const chatState = useChatState();
   const {
     messages,
     sessions,
@@ -90,54 +61,72 @@ export function useChatWorkspace() {
     clearMessages,
     clearTransportError,
     dispose,
-  } = useChatState();
+  } = chatState;
   const { modelOptions, defaultModelLabel, isLoadingModels, loadModels } = useModels();
+  const catalogContext = useCatalog();
+  const viewAccess = computed(() => workspaceAccessFromPermission(permission));
+  const workspaceDatasource = useWorkspaceDatasourceContext({
+    connection: {
+      config,
+      datasourceOptions,
+      isTestingDatasource: isTestingConfigDatasource,
+    },
+    permission,
+    catalog: catalogContext,
+    viewAccess,
+  });
   const {
-    catalogEntries,
+    visibleDatasourceOptions,
+    currentDatasource,
+    isTestingDatasource,
     databaseOptions,
-    database,
-    schema,
+    catalogEntries,
     schemaOptions,
     isLoadingCatalog,
     isLoadingDatabases,
     isLoadingSchemas,
     datasourceStatuses,
-    prewarmingDatasources,
-    selectCatalogDatasource,
-    hasCatalogSnapshot,
+    currentDatasourceStatus,
+    isPrewarmingCurrentDatasource,
     loadCatalog,
+    ensureCatalogLoaded,
     loadDatasourceStatuses,
     prewarmDatasource,
+    database,
+    schema,
     setDatabase,
     setSchema,
-  } = useCatalog();
-
-  const availableAgents = shallowRef<AgentInfo[]>([]);
-  const isLoadingAgents = shallowRef(false);
-  const artifactEditSession = shallowRef<ArtifactEditSession | null>(null);
-  const agentOptions = computed<SelectOption[]>(() => [
-    ...availableAgents.value
-      .filter((agent) => agent.status === "published")
-      .map((agent) => ({
-        value: agent.agent_id,
-        label: agent.name || agent.agent_id,
-      }))
-      .sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value)),
-    ...(artifactEditSession.value
-      ? [
-        {
-          value: artifactEditSession.value.subagent_id,
-          label: `编辑${artifactKindLabel(artifactEditSession.value)}：${artifactEditSession.value.artifact_slug}`,
-        },
-      ]
-      : []),
-  ]);
-  const selectedAgent = shallowRef("");
-  const defaultAgentId = shallowRef("");
-  const userDefaultAgentId = shallowRef("");
-  const isSavingDefaultAgent = shallowRef(false);
+    handleDatasourceSwitched,
+    initializeDatasource,
+    warmCurrentDatasource,
+    handleDatasourceTest,
+    handleDatasourceSwitch,
+    canUseDatasource,
+    canReadAgentConfig,
+    canReadModelOptions,
+  } = workspaceDatasource;
+  const workspaceAgent = useWorkspaceAgentPreferences({
+    effectiveBase: connectionContext.effectiveBase,
+    selectSession,
+    resetPersonalMcpSelection: personalMcp.resetDraftSelection,
+  });
+  const {
+    isLoadingAgents,
+    isSavingDefaultAgent,
+    agentAllowsPersonalMcp,
+    effectiveAgentId,
+    agentOptions,
+    selectedAgent,
+    defaultAgentId,
+    userDefaultAgentId,
+    loadAgentOptions,
+    loadAgentPreference,
+    startArtifactEditSession,
+    startReportEditSession,
+    startNewSession,
+    setDefaultAgent,
+  } = workspaceAgent;
   const selectedModel = shallowRef("");
-  const selectedDatasource = shallowRef("");
   const canUsePersonalMcp = computed(() =>
     permission.isAdmin()
     || (
@@ -154,142 +143,54 @@ export function useChatWorkspace() {
       && permission.hasPermission("mcp.personal.use")
     )
   );
-  const effectiveAgentId = computed(() => selectedAgent.value.trim() || defaultAgentId.value.trim());
-  const agentAllowsPersonalMcp = computed(() =>
-    agentAllowsPersonalMcpSelection(
-      availableAgents.value,
-      selectedAgent.value,
-      defaultAgentId.value,
-      artifactEditSession.value !== null,
-    )
-  );
-  const isTestingCatalogDatasource = shallowRef(false);
-  const grantedDatasourceOptions = computed<SelectOption[]>(() =>
-    (permission.permissions?.value?.datasources ?? [])
-      .filter((name) => name !== WILDCARD_DATASOURCE_GRANT)
-      .map((name) => ({ value: name, label: name }))
-  );
-  const statusDatasourceOptions = computed<SelectOption[]>(() =>
-    Object.keys(datasourceStatuses.value).map((name) => ({ value: name, label: name }))
-  );
-  const availableDatasourceOptions = computed(() =>
-    datasourceOptions.value.length > 0
-      ? datasourceOptions.value
-      : mergeSelectOptions(grantedDatasourceOptions.value, statusDatasourceOptions.value)
-  );
 
-  watch(modelOptions, (options) => {
-    if (!selectedModel.value.startsWith("credential:")) return;
-    if (!options.some(option => option.value === selectedModel.value)) {
-      selectedModel.value = "";
-    }
-  });
-  const viewAccess = computed(() => workspaceAccessFromPermission(permission));
   const canUseElevatedPermissionMode = computed(() =>
     permission.isAdmin() || permission.hasPermission?.("module.chat.permission_mode") === true
   );
   const isPermissionSummaryLoaded = computed(() => permission.isLoaded?.value ?? true);
-  const visibleDatasourceOptions = computed(() =>
-    availableDatasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
-  );
-  const defaultDatasource = computed(() => {
-    const configuredDatasource = config.value?.current_datasource?.trim() ?? "";
-    if (visibleDatasourceOptions.value.some((option) => option.value === configuredDatasource)) {
-      return configuredDatasource;
-    }
-    return visibleDatasourceOptions.value[0]?.value ?? "";
+
+  const { initialize } = useWorkspaceLifecycle({
+    bootstrap: {
+      canReadAgentConfig,
+      canViewChat: computed(() => viewAccess.value.canViewChat),
+      showPersonalMcpPicker,
+      canReadModelOptions,
+      checkConnection,
+      initializeDatasource,
+      loadSessions,
+      loadAgentOptions,
+      loadAgentPreference,
+      loadPersonalMcp: personalMcp.load,
+      loadModels,
+      warmCurrentDatasource,
+    },
+    model: {
+      options: modelOptions,
+      selected: selectedModel,
+    },
+    catalog: {
+      database,
+      loadCatalog,
+    },
+    personalMcp: {
+      showPicker: showPersonalMcpPicker,
+      selectedSession,
+      selectedIds: personalMcp.selectedIds,
+      loadSessionBinding: personalMcp.loadSessionBinding,
+      resetDraftSelection: personalMcp.resetDraftSelection,
+    },
+    agent: {
+      effectiveAgentId,
+      allowsPersonalMcp: agentAllowsPersonalMcp,
+    },
+    permissions: {
+      summaryLoaded: isPermissionSummaryLoaded,
+      canUseElevatedPermissionMode,
+      permissionMode,
+      setPermissionMode,
+    },
+    dispose,
   });
-  const currentDatasource = computed(() => {
-    const selected = selectedDatasource.value.trim();
-    if (visibleDatasourceOptions.value.some((option) => option.value === selected)) {
-      return selected;
-    }
-    return defaultDatasource.value;
-  });
-  const catalogDatasourceOptions = computed(() =>
-    visibleDatasourceOptions.value.filter((option) => canBrowseDatasourceCatalog(option.value))
-  );
-  const hasCatalogBrowseGrant = computed(() =>
-    catalogDatasourceOptions.value.length > 0 || hasWildcardCatalogGrant()
-  );
-  const canUseDatasourceCatalogSupport = computed(() =>
-    permission.hasPermission("module.datasource_catalog")
-    || permission.hasFeaturePermission("datasource_catalog")
-  );
-  const canAccessDatasourceCatalog = computed(() =>
-    viewAccess.value.canViewKnowledge
-    || canUseDatasourceCatalogSupport.value
-    || (viewAccess.value.canViewChat && hasCatalogBrowseGrant.value)
-  );
-  const canReadAgentConfig = computed(() =>
-    viewAccess.value.canViewConfiguration
-  );
-  const canReadModelOptions = computed(() =>
-    viewAccess.value.canViewChat || canReadAgentConfig.value
-  );
-  const isTestingDatasource = computed(() =>
-    isTestingConfigDatasource.value || isTestingCatalogDatasource.value
-  );
-  const initialized = shallowRef(false);
-  const currentDatasourceStatus = computed(() => {
-    const datasource = currentDatasource.value.trim();
-    return datasource ? (datasourceStatuses.value[datasource] ?? null) : null;
-  });
-  const isPrewarmingCurrentDatasource = computed(() => {
-    const datasource = currentDatasource.value.trim();
-    return Boolean(datasource && prewarmingDatasources.value.has(datasource));
-  });
-  let initializePromise: Promise<void> | null = null;
-  let agentOptionsPromise: Promise<boolean> | null = null;
-  const statusRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
-
-  function clearStatusRefreshTimers() {
-    for (const timer of statusRefreshTimers) {
-      clearTimeout(timer);
-    }
-    statusRefreshTimers.clear();
-  }
-
-  function scheduleDatasourceStatusRefresh(datasource: string) {
-    for (const delay of STATUS_REFRESH_DELAYS) {
-      const timer = setTimeout(() => {
-        statusRefreshTimers.delete(timer);
-        void loadAuthorizedDatasourceStatuses(datasource);
-      }, delay);
-      statusRefreshTimers.add(timer);
-    }
-  }
-
-  function canQueryDatasourceCatalog(datasource?: string) {
-    if (!canAccessDatasourceCatalog.value) return false;
-    const datasourceName = datasource?.trim();
-    if (!datasourceName) {
-      return hasCatalogBrowseGrant.value;
-    }
-    return canUseDatasource(datasourceName) && (
-      canBrowseDatasourceCatalog(datasourceName)
-      || hasWildcardCatalogGrant()
-    );
-  }
-
-  function loadAuthorizedDatasourceStatuses(datasource?: string) {
-    if (!canQueryDatasourceCatalog(datasource)) {
-      return false;
-    }
-    void loadDatasourceStatuses(datasource);
-    return true;
-  }
-
-  function warmDatasource(datasource: string) {
-    const datasourceName = datasource.trim();
-    if (!datasourceName || !canQueryDatasourceCatalog(datasourceName)) return;
-    void loadDatasourceStatuses(datasourceName);
-    void prewarmDatasource(datasourceName).then((started) => {
-      if (started) {
-        scheduleDatasourceStatusRefresh(datasourceName);
-      }
-    });
-  }
 
   function handleSend(message: string) {
     void sendMessage({
@@ -311,285 +212,10 @@ export function useChatWorkspace() {
     return insertMessage(message);
   }
 
-  function artifactKindLabel(session: ArtifactEditSession) {
-    return session.artifact_type === "dashboard" ? "仪表盘" : "报表";
-  }
-
-  function isArtifactEditAgent(agentId: string) {
-    return agentId.startsWith(REPORT_EDIT_SESSION_PREFIX) || agentId.startsWith(DASHBOARD_EDIT_SESSION_PREFIX);
-  }
-
-  function startArtifactEditSession(session: ArtifactEditSession) {
-    artifactEditSession.value = session;
-    selectedAgent.value = session.subagent_id;
-    selectSession(null);
-    personalMcp.resetDraftSelection();
-  }
-
-  function startReportEditSession(session: ArtifactEditSession) {
-    startArtifactEditSession(session);
-  }
-
-  function startNewSession() {
-    artifactEditSession.value = null;
-    selectedAgent.value = "";
-    selectSession(null);
-    personalMcp.resetDraftSelection();
-  }
-
   function handleRefreshConnection() {
     if (!canReadAgentConfig.value) return;
     void checkConnection();
   }
-
-  function handleDatasourceSwitched() {
-    selectedDatasource.value = defaultDatasource.value;
-    selectCatalogDatasource(currentDatasource.value);
-    warmDatasource(currentDatasource.value);
-  }
-
-  async function handleDatasourceTest(name?: string): Promise<NormalizedProbeResult> {
-    const datasourceName = (name?.trim() || currentDatasource.value.trim());
-    if (!datasourceName) {
-      return { ok: false, message: "当前数据源未选择" };
-    }
-    if (!canAccessDatasourceCatalog.value) {
-      return { ok: false, message: "当前用户无权访问数据源目录" };
-    }
-    if (!canUseDatasource(datasourceName)) {
-      return { ok: false, message: "当前用户无权访问该数据源" };
-    }
-
-    isTestingCatalogDatasource.value = true;
-    try {
-      const ok = await loadCatalog(undefined, datasourceName);
-      await loadDatasourceStatuses(datasourceName);
-      if (ok) {
-        return { ok: true, message: "连接正常" };
-      }
-      const status = datasourceStatuses.value[datasourceName];
-      return {
-        ok: false,
-        message: status?.error_message || "连接失败，请确认权限或数据源配置",
-      };
-    } finally {
-      isTestingCatalogDatasource.value = false;
-    }
-  }
-
-  function refreshCatalog(databaseName?: string) {
-    if (!canQueryDatasourceCatalog(currentDatasource.value)) {
-      return Promise.resolve(false);
-    }
-    return loadCatalog(databaseName, currentDatasource.value);
-  }
-
-  function ensureCatalogLoaded() {
-    if (isLoadingCatalog.value || hasCatalogSnapshot(currentDatasource.value)) {
-      return Promise.resolve(true);
-    }
-    return refreshCatalog();
-  }
-
-  function canUseDatasource(name: string) {
-    const datasourceName = name.trim();
-    return visibleDatasourceOptions.value.some((option) => option.value === datasourceName);
-  }
-
-  function hasWildcardCatalogGrant() {
-    const grants = permission.permissions?.value?.datasource_grants ?? {};
-    return datasourceGrantAllowsCatalog(grants[WILDCARD_DATASOURCE_GRANT]);
-  }
-
-  function canBrowseDatasourceCatalog(name: string) {
-    const datasourceName = name.trim();
-    if (!datasourceName) return false;
-    const grants = permission.permissions?.value?.datasource_grants ?? {};
-    return datasourceGrantAllowsCatalog(grants[datasourceName]);
-  }
-
-  async function handleDatasourceSwitch(name: string): Promise<boolean> {
-    const datasourceName = name.trim();
-    if (!datasourceName || !canUseDatasource(datasourceName)) return false;
-    if (datasourceName === currentDatasource.value) return true;
-
-    selectedDatasource.value = datasourceName;
-    selectCatalogDatasource(datasourceName);
-    if (canQueryDatasourceCatalog(datasourceName)) {
-      warmDatasource(datasourceName);
-      void loadCatalog(undefined, datasourceName);
-    }
-    return true;
-  }
-
-  function loadAgentOptions(): Promise<boolean> {
-    if (agentOptionsPromise) return agentOptionsPromise;
-
-    isLoadingAgents.value = true;
-    agentOptionsPromise = (async () => {
-      try {
-        const loadedAgents = await agentApi.availableList(effectiveBase());
-        availableAgents.value = loadedAgents ?? [];
-        if (selectedAgent.value && !isArtifactEditAgent(selectedAgent.value) && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
-          selectedAgent.value = "";
-        }
-        if (defaultAgentId.value && !agentOptions.value.some((option) => option.value === defaultAgentId.value)) {
-          defaultAgentId.value = "";
-        }
-        if (userDefaultAgentId.value && !agentOptions.value.some((option) => option.value === userDefaultAgentId.value)) {
-          userDefaultAgentId.value = "";
-        }
-        return true;
-      } catch (error) {
-        console.error("Failed to load chat agent options:", error);
-        return false;
-      } finally {
-        isLoadingAgents.value = false;
-        agentOptionsPromise = null;
-      }
-    })();
-    return agentOptionsPromise;
-  }
-
-  function preferenceData(response: ApiResponse<AgentPreferenceSummary>): AgentPreferenceSummary {
-    if (!response.success) {
-      throw new Error(response.errorMessage || response.errorCode || "Agent 偏好请求失败");
-    }
-    return response.data ?? { source: "none" };
-  }
-
-  function availableAgentId(agentId: string | null | undefined): string {
-    const normalizedAgentId = agentId?.trim() ?? "";
-    return agentOptions.value.some((option) => option.value === normalizedAgentId)
-      ? normalizedAgentId
-      : "";
-  }
-
-  function applyAgentPreference(preference: AgentPreferenceSummary) {
-    defaultAgentId.value = availableAgentId(preference.default_agent_id);
-    userDefaultAgentId.value = availableAgentId(preference.user_default_agent_id);
-  }
-
-  async function loadAgentPreference(): Promise<boolean> {
-    try {
-      const preference = preferenceData(await meApi.agentPreference());
-      applyAgentPreference(preference);
-      return true;
-    } catch (error) {
-      console.error("Failed to load default Agent preference:", error);
-      defaultAgentId.value = "";
-      userDefaultAgentId.value = "";
-      return false;
-    }
-  }
-
-  async function setDefaultAgent(agentId: string): Promise<boolean> {
-    const normalizedAgentId = agentId.trim();
-    if (normalizedAgentId && !agentOptions.value.some((option) => option.value === normalizedAgentId)) {
-      toast.error("当前 Agent 不可用，无法设为默认");
-      return false;
-    }
-
-    isSavingDefaultAgent.value = true;
-    try {
-      const preference = preferenceData(await meApi.updateAgentPreference({
-        default_agent_id: normalizedAgentId || null,
-      }));
-      applyAgentPreference(preference);
-      selectedAgent.value = normalizedAgentId;
-      if (normalizedAgentId) {
-        toast.success("已设为我的默认 Agent");
-      } else {
-        const effectiveDefaultLabel = agentOptions.value.find(
-          (option) => option.value === defaultAgentId.value,
-        )?.label ?? defaultAgentId.value;
-        toast.success(
-          effectiveDefaultLabel
-            ? `已清除我的默认设置，当前跟随 ${effectiveDefaultLabel}`
-            : "已清除我的默认设置",
-        );
-      }
-      return true;
-    } catch (error) {
-      console.error("Failed to update default Agent preference:", error);
-      toast.error("默认 Agent 设置失败");
-      return false;
-    } finally {
-      isSavingDefaultAgent.value = false;
-    }
-  }
-
-  async function initialize() {
-    if (initialized.value) return;
-    if (initializePromise) return initializePromise;
-
-    initializePromise = (async () => {
-      if (canReadAgentConfig.value) {
-        await checkConnection();
-      }
-      selectedDatasource.value = defaultDatasource.value;
-      selectCatalogDatasource(currentDatasource.value);
-      const startupTasks: Promise<unknown>[] = [];
-      if (viewAccess.value.canViewChat) {
-        startupTasks.push(loadSessions(), loadAgentOptions().then(() => loadAgentPreference()));
-      }
-      if (showPersonalMcpPicker.value) {
-        startupTasks.push(personalMcp.load());
-      }
-      if (canReadModelOptions.value) {
-        startupTasks.push(loadModels());
-      }
-      await Promise.all(startupTasks);
-      loadAuthorizedDatasourceStatuses();
-      warmDatasource(currentDatasource.value);
-      initialized.value = true;
-    })();
-
-    try {
-      await initializePromise;
-    } finally {
-      initializePromise = null;
-    }
-  }
-
-  onBeforeUnmount(() => {
-    clearStatusRefreshTimers();
-    dispose();
-  });
-
-  watch(database, (db) => {
-    if (db && canQueryDatasourceCatalog(currentDatasource.value)) {
-      void loadCatalog(db, currentDatasource.value);
-    }
-  });
-
-  watch(selectedSession, (sessionId) => {
-    if (!showPersonalMcpPicker.value) {
-      personalMcp.resetDraftSelection();
-      return;
-    }
-    if (sessionId) {
-      void personalMcp.loadSessionBinding(sessionId);
-    } else {
-      personalMcp.resetDraftSelection();
-    }
-  }, { immediate: true });
-
-  watch([effectiveAgentId, agentAllowsPersonalMcp], ([, allowsPersonalMcp], [, wasAllowed]) => {
-    if (!selectedSession.value && !allowsPersonalMcp) {
-      const hadDraftSelection = personalMcp.selectedIds.value.length > 0;
-      personalMcp.resetDraftSelection();
-      if (hadDraftSelection && wasAllowed) {
-        toast.info("当前 Agent 不支持个人 MCP，已清除本次会话的个人 MCP 选择");
-      }
-    }
-  });
-
-  watch([isPermissionSummaryLoaded, canUseElevatedPermissionMode, permissionMode], ([loaded, canUseElevated, mode]) => {
-    if (loaded && !canUseElevated && mode !== "normal") {
-      setPermissionMode("normal");
-    }
-  }, { immediate: true });
 
   return {
     language,
@@ -644,7 +270,7 @@ export function useChatWorkspace() {
     loadSessions,
     loadAgentOptions,
     loadAgentPreference,
-    loadCatalog: refreshCatalog,
+    loadCatalog,
     ensureCatalogLoaded,
     loadDatasourceStatuses,
     prewarmDatasource,

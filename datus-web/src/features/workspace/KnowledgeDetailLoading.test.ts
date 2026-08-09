@@ -4,10 +4,10 @@ import { createSSRApp, h } from "vue"
 import { renderToString } from "vue/server-renderer"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import CatalogPanel from "@/features/catalog/CatalogPanel.vue"
 import KnowledgeBasePanel from "@/features/knowledge/KnowledgeBasePanel.vue"
 import DetailLoadingIndicator from "./DetailLoadingIndicator.vue"
+import type { ChatWorkspaceCatalogContract } from "@/features/workspace/workspace-contracts"
 import type { CatalogRecord } from "@/types"
 
 const { tableDetail, getSemanticModel } = vi.hoisted(() => ({
@@ -52,7 +52,7 @@ function createWorkspace() {
     isLoadingCatalog: readonly(shallowRef(false)),
     visibleDatasourceOptions: readonly(shallowRef([])),
     loadCatalog: vi.fn(),
-  } as unknown as ChatWorkspace
+  } as unknown as ChatWorkspaceCatalogContract
 }
 
 async function renderComponent(component: Component, props: Record<string, unknown>) {

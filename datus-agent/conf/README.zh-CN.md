@@ -49,6 +49,12 @@
 
 推荐做法是把稳定、可审查的结构写在 YAML，把随环境变化或敏感的值放在进程环境、未提交的 `.env`、容器 secret 或企业密钥系统中。
 
+企业示例中的 `user_model_credential_store`、`user_datasource_store` 和
+`user_mcp_server_store` 只在对应的用户模型、个人数据源或个人 MCP 功能开启时加载。
+这些功能默认关闭时，可以直接从样例启动而不提供三类加密密钥；启用任一功能前，
+必须先配置对应的 `DATUS_USER_MODEL_CREDENTIAL_SECRET`、
+`DATUS_USER_DATASOURCE_SECRET` 或 `DATUS_USER_MCP_SECRET`，且每个密钥至少 32 个字符。
+
 ## Web 文件工具执行边界
 
 当前下游 Vue 客户端不会在浏览器中执行 `write_file`、`edit_file`、`delete_file`。下游完整配置应显式保留：

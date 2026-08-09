@@ -16,6 +16,8 @@ from datus_enterprise.personal_datasources import (
     datasource_id_from_key,
     datasource_record_to_db_config,
     personal_datasource_key,
+    personal_datasource_options,
+    validate_personal_datasource_policy,
 )
 
 
@@ -39,13 +41,25 @@ class DatasourceGrantConfigProjector:
         projected = copy.deepcopy(request.base_config)
         configured_datasources = dict(getattr(projected.services, "datasources", {}) or {})
         personal_grants: dict[str, Any] = {}
-        if request.ctx.user_id:
+        personal_options = personal_datasource_options(projected)
+        personal_datasource_denied_keys: set[str] = set()
+        if request.ctx.user_id and personal_options["enabled"]:
             personal_datasources = await _load_personal_datasources(request.ctx.user_id)
             for record in personal_datasources:
-                if not record.get("enabled"):
-                    continue
                 datasource_key = personal_datasource_key(str(record["id"]))
                 if datasource_key in configured_datasources:
+                    continue
+                if not record.get("enabled"):
+                    personal_datasource_denied_keys.add(datasource_key)
+                    continue
+                try:
+                    validate_personal_datasource_policy(
+                        projected,
+                        datasource_type=str(record.get("type") or ""),
+                        host=str(record.get("host") or ""),
+                    )
+                except DatusException:
+                    personal_datasource_denied_keys.add(datasource_key)
                     continue
                 configured_datasources[datasource_key] = datasource_record_to_db_config(record)
                 personal_grants[datasource_key] = {
@@ -54,6 +68,27 @@ class DatasourceGrantConfigProjector:
                     "allow_sql": True,
                     "owner": "user",
                 }
+        requested_datasource = (request.requested_datasource or "").strip()
+        if requested_datasource in personal_datasource_denied_keys:
+            return ProjectionResult(
+                config=projected,
+                principal=dict(request.ctx.principal or {}),
+                datasource_grants={},
+                denied_reason=f"Datasource '{requested_datasource}' is not authorized for this request.",
+            )
+        if (
+            requested_datasource
+            and request.ctx.user_id
+            and datasource_id_from_key(requested_datasource) is not None
+            and requested_datasource not in configured_datasources
+            and not personal_options["enabled"]
+        ):
+            return ProjectionResult(
+                config=projected,
+                principal=dict(request.ctx.principal or {}),
+                datasource_grants={},
+                denied_reason="Personal datasources are not enabled.",
+            )
         allowed_grants = _allowed_datasource_grants(
             request.ctx.datasource_grants,
             operation=request.operation,
@@ -68,7 +103,6 @@ class DatasourceGrantConfigProjector:
                 denied_reason="No datasource grant available.",
             )
 
-        requested_datasource = (request.requested_datasource or "").strip()
         if requested_datasource:
             if requested_datasource not in configured_datasources:
                 raise DatusException(

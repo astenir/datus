@@ -44,11 +44,6 @@ import {
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { cn, formatDate } from "@/lib/utils"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
-
-defineProps<{
-  workspace: ChatWorkspace
-}>()
 
 const manager = useAgentManager()
 type AgentRow = (typeof manager.agents.value)[number]
@@ -189,13 +184,13 @@ function startCreate() {
   formDialogOpen.value = true
 }
 
-async function refreshAll() {
+async function refreshAll(options: { force?: boolean } = {}) {
   await Promise.all([
     manager.loadAgents(),
     manager.loadEnterpriseDefault(),
     manager.loadNodeTypes(),
     manager.loadToolCatalog(),
-    manager.loadMcpCatalog(),
+    manager.loadMcpCatalog(options),
     manager.loadResourceCatalogs(),
     manager.loadAclDirectory(),
   ])
@@ -237,7 +232,7 @@ onMounted(() => {
             variant="outline"
             size="sm"
             :disabled="manager.loading.value || manager.toolsLoading.value"
-            @click="refreshAll"
+            @click="refreshAll({ force: true })"
           >
             <RefreshCwIcon
               data-icon="inline-start"

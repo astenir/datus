@@ -20,6 +20,9 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
+    InMemoryUserDatasourceStore,
+    InMemoryUserMcpServerStore,
+    InMemoryUserModelCredentialStore,
     LocalAuthorizationProvider,
     SqliteAuditSink,
 )
@@ -27,6 +30,7 @@ from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_ex
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteSQLData
 from datus.api.models.database_models import DatabaseInfo, ListDatabasesData
+from datus.configuration.agent_config_loader import load_agent_config
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.api import admin_datasource_routes, cli_routes, database_routes, me_routes
 from datus_enterprise.projection import DatasourceGrantProjector
@@ -269,9 +273,35 @@ def test_enterprise_mvp_config_keeps_sqlite_metadata_fallback():
     assert "artifact_acl_store" not in enterprise
 
 
+def test_local_enterprise_config_clean_start_does_not_require_disabled_resource_secrets(monkeypatch, tmp_path):
+    for name in (
+        "DATUS_USER_MODEL_CREDENTIAL_SECRET",
+        "DATUS_USER_DATASOURCE_SECRET",
+        "DATUS_USER_MCP_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    config = load_agent_config(
+        config=str(REPO_ROOT / "conf/agent.local-enterprise-pg.yml.example"),
+        home=str(tmp_path / "home"),
+        project_root=str(tmp_path),
+        reload=True,
+    )
+
+    extensions = load_enterprise_extensions(config.enterprise_config)
+
+    assert isinstance(extensions.user_model_credential_store, InMemoryUserModelCredentialStore)
+    assert isinstance(extensions.user_datasource_store, InMemoryUserDatasourceStore)
+    assert isinstance(extensions.user_mcp_server_store, InMemoryUserMcpServerStore)
+
+
 def test_enterprise_pg_config_loads_postgres_metadata_providers():
     config = yaml.safe_load((REPO_ROOT / "conf/agent.enterprise.pg.yml.example").read_text())
     enterprise = config["enterprise"]
+    enterprise["user_model_credentials"]["custom_openai_compatible"]["enabled"] = True
+    enterprise["user_datasources"]["enabled"] = True
+    enterprise["user_mcp"]["enabled"] = True
 
     for key in (
         "user_store",

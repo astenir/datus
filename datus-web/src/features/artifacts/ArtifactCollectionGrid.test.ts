@@ -27,7 +27,7 @@ describe("ArtifactCollectionGrid", () => {
     }]);
 
     expect(html).toContain("flex flex-wrap items-start gap-3");
-    expect(html).toContain("h-52 w-80 max-w-full flex-none");
+    expect(html).toContain("h-52 w-88 max-w-full flex-none");
     expect(html).not.toContain("xl:grid-cols-3");
   });
 
