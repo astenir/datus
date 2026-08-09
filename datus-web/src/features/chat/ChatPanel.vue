@@ -1,23 +1,13 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue"
-import { toast } from "vue-sonner"
 import { useRouter } from "vue-router"
-import {
-  activeStreamingMessageId,
-  activeUserInteractionRequest,
-  mergeToolExecutionMessages,
-  shouldExitPlanModeAfterInteraction,
-} from "@/lib/chat"
-import { parsePermissionRequest } from "@/lib/interaction-display"
+import { useChatPanelActions } from "@/composables/useChatPanelActions"
+import { useChatPanelDisplay } from "@/composables/useChatPanelDisplay"
 import { usePermission } from "@/composables/usePermission"
 import { useSuccessStory } from "@/composables/useSuccessStory"
-import { workspaceRouteNames } from "@/features/workspace/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { ChatWorkspaceChatContract } from "@/features/workspace/workspace-contracts"
 import ChatComposerArea from "@/features/chat/ChatComposerArea.vue"
 import ChatConversationArea from "@/features/chat/ChatConversationArea.vue"
-import { deriveTodoExecutionDisplay } from "@/lib/todo-execution"
-import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
 import type { SuccessStorySource } from "@/types"
 
 const props = defineProps<{
@@ -30,103 +20,49 @@ const emit = defineEmits<{
 const router = useRouter()
 const permission = usePermission()
 const successStory = useSuccessStory()
-const DEFAULT_MODEL_VALUE = "__datus_default_model__"
-
-const todoDisplay = computed(() => deriveTodoExecutionDisplay(
-  mergeToolExecutionMessages(props.workspace.messages.value),
-  { isStreaming: props.workspace.isStreaming.value },
-))
-const displayMessages = computed(() => todoDisplay.value.messages)
-const activeTodoExecution = computed(() => todoDisplay.value.activeExecution)
-const streamingMessageId = computed(() =>
-  props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
-)
-const canSaveSuccessStory = computed(() => permission.isAdmin() || permission.hasPermission("module.kb"))
-const successStorySessionLink = computed(() => {
-  const sessionId = props.workspace.selectedSession.value
-  if (!sessionId) return undefined
-  return router.resolve({
-    name: workspaceRouteNames.chatSession,
-    params: { sessionId },
-  }).href
+const display = useChatPanelDisplay({
+  workspace: props.workspace,
+  router,
+  permission: {
+    isAdmin: () => permission.isAdmin(),
+    hasPermission: (permissionCode) => permission.hasPermission(permissionCode),
+  },
 })
-const activeInteractionKey = computed(() => props.workspace.activeInteractionKey.value)
-const activeInteraction = computed(() =>
-  activeUserInteractionRequest(props.workspace.messages.value, activeInteractionKey.value),
-)
-const dockedInteraction = computed(() => {
-  const interaction = activeInteraction.value
-  const requests = interaction?.block.requests ?? []
-  const request = requests.length === 1 ? requests[0] : null
-  if (!interaction || !request) return null
-  if (request.allowFreeText || request.multiSelect || request.options.length === 0) return null
-  if (!parsePermissionRequest(request.content)) return null
 
-  return interaction
-})
-const pendingInteractionKey = shallowRef<string | null>(null)
-
-async function send(payload: PromptInputMessage): Promise<void> {
-  const text = payload.text.trim()
-  if (!text) return
-
-  if (!props.workspace.isStreaming.value) {
-    props.workspace.handleSend(text)
-    return
-  }
-
-  try {
-    const result = await props.workspace.handleInsert(text)
-    const queueHint = result.queued_count > 0 ? `（队列中 ${result.queued_count} 条）` : ""
-    toast.success(`已加入当前任务${queueHint}`)
-  } catch (error) {
-    console.error("Failed to insert message:", error)
-    toast.error("未能加入当前任务，请重试")
-    throw error
-  }
-}
-
-function sendSuggestion(suggestion: string) {
-  props.workspace.handleSend(suggestion)
-}
-
-function selectModel(value: string) {
-  props.workspace.selectedModel.value = value === DEFAULT_MODEL_VALUE ? "" : value
-}
-
-function updateAgent(value: string) {
-  props.workspace.selectedAgent.value = value
-}
-
-async function submitInteraction(interactionKey: string, answers: string[][]) {
-  if (pendingInteractionKey.value) return
-
-  const exitsPlanMode = shouldExitPlanModeAfterInteraction(
-    activeInteraction.value,
-    interactionKey,
-    answers,
-  )
-
-  pendingInteractionKey.value = interactionKey
-  try {
-    await props.workspace.sendInteraction(interactionKey, answers)
-    if (exitsPlanMode) props.workspace.setPlanMode(false)
-  } catch (error) {
-    console.error("Failed to submit interaction:", error)
-    toast.error("提交交互失败，请重试")
-  } finally {
-    pendingInteractionKey.value = null
-  }
-}
-
-function openArtifact(kind: string, slug: string) {
-  const tab: ArtifactViewTab = kind === "report" ? "report" : "dashboard"
+function emitOpenArtifact(tab: ArtifactViewTab, slug: string) {
   emit("openArtifact", tab, slug)
 }
 
-function saveSuccessStory(source: SuccessStorySource) {
+function saveSuccessStorySource(source: SuccessStorySource) {
   void successStory.save(source)
 }
+
+const actions = useChatPanelActions({
+  workspace: props.workspace,
+  activeInteraction: display.activeInteraction,
+  onOpenArtifact: emitOpenArtifact,
+  onSaveSuccessStory: saveSuccessStorySource,
+})
+
+const {
+  displayMessages,
+  activeTodoExecution,
+  streamingMessageId,
+  canSaveSuccessStory,
+  successStorySessionLink,
+  activeInteractionKey,
+  dockedInteraction,
+} = display
+const {
+  pendingInteractionKey,
+  send,
+  sendSuggestion,
+  selectModel,
+  updateAgent,
+  submitInteraction,
+  openArtifact,
+  saveSuccessStory,
+} = actions
 </script>
 
 <template>
