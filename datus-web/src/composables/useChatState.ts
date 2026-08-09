@@ -5,15 +5,8 @@ import {
   buildUserInteractionInput,
   createClientId,
   friendlyTransportErrorBlock,
-  mergeMessage,
-  messageFromEvent,
-  normalizeBaseUrl,
-  parseSseBuffer,
 } from "@/lib/chat";
-import { request } from "@/lib/request";
 import {
-  chatStreamActivityAfterEvent,
-  connectedChatStreamActivity,
   continuingChatStreamActivity,
   idleChatStreamActivity,
   startedChatStreamActivity,
@@ -21,22 +14,15 @@ import {
 import type {
   ChatMessage,
   InsertMessageData,
-  ParsedMessage,
-  SseEvent,
 } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
 import { useChatSessionHistory } from "./useChatSessionHistory";
+import { useChatStream, type ChatStreamContext } from "./useChatStream";
 import {
   useChatRuntimeStore,
   type ChatRuntimeUpdater,
 } from "./useChatRuntimeStore";
-
-type StreamContext = {
-  runtimeKey: string;
-  sessionId: string | null;
-  controller: AbortController;
-};
 
 const { effectiveBase } = useConnection();
 const runtimeStore = useChatRuntimeStore();
@@ -79,7 +65,7 @@ function removeRuntime(key: string) {
   clearResumeAttempt(key);
 }
 
-function rekeyRuntime(context: StreamContext, sessionId: string) {
+function rekeyRuntime(context: ChatStreamContext, sessionId: string) {
   const oldKey = context.runtimeKey;
   if (oldKey === sessionId) {
     context.sessionId = sessionId;
@@ -93,82 +79,18 @@ function rekeyRuntime(context: StreamContext, sessionId: string) {
   markSessionActive(sessionId, true);
 }
 
-function captureSessionId(context: StreamContext, event: { data?: unknown }) {
-  if (context.sessionId) return;
-  const data = event.data as Record<string, unknown> | undefined;
-  if (!data) return;
-  const payload = (
-    typeof data.payload === "object" && data.payload ? data.payload : undefined
-  ) as Record<string, unknown> | undefined;
-  const candidate = data.session_id ?? data.sessionId ?? payload?.session_id ?? payload?.sessionId;
-  if (typeof candidate === "string" && candidate.trim()) {
-    rekeyRuntime(context, candidate);
-  }
-}
-
-function applyIncomingMessages(runtimeKey: string, incomingMessages: ParsedMessage[]) {
-  if (incomingMessages.length === 0) return;
-  updateRuntime(runtimeKey, (runtime) => {
-    let nextMessages = runtime.messages;
-    for (const incoming of incomingMessages) {
-      nextMessages = mergeMessage(nextMessages, incoming);
-    }
-    return { ...runtime, messages: nextMessages };
-  });
-}
-
-function applyStreamEvent(context: StreamContext, event: SseEvent): ParsedMessage | null {
-  captureSessionId(context, event);
-  const incoming = messageFromEvent(event);
-  const eventId = Number.parseInt(event.id ?? "", 10);
-  updateRuntime(context.runtimeKey, runtime => ({
-    ...runtime,
-    isInsertReady: event.event === "session" || runtime.isInsertReady,
-    streamActivity: chatStreamActivityAfterEvent(runtime.streamActivity, event, incoming),
-    nextEventCursor: Number.isInteger(eventId) && eventId >= 0
-      ? Math.max(runtime.nextEventCursor, eventId + 1)
-      : runtime.nextEventCursor,
-  }));
-  return incoming;
-}
-
-async function consumeChatResponse(context: StreamContext, response: Response) {
-  if (runtimeStore.getController(context.runtimeKey) !== context.controller) return;
-  updateRuntime(context.runtimeKey, runtime => ({
-    ...runtime,
-    streamActivity: connectedChatStreamActivity(runtime.streamActivity),
-  }));
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (runtimeStore.getController(context.runtimeKey) !== context.controller) return;
-    buffer += decoder.decode(value, { stream: true });
-    const parsed = parseSseBuffer(buffer);
-    buffer = parsed.rest;
-    const incomingMessages: ParsedMessage[] = [];
-    for (const event of parsed.events) {
-      const incoming = applyStreamEvent(context, event);
-      if (incoming) incomingMessages.push(incoming);
-    }
-    applyIncomingMessages(context.runtimeKey, incomingMessages);
-  }
-
-  buffer += decoder.decode();
-  if (!buffer || runtimeStore.getController(context.runtimeKey) !== context.controller) return;
-  const parsed = parseSseBuffer(buffer, { flush: true });
-  const incomingMessages: ParsedMessage[] = [];
-  for (const event of parsed.events) {
-    const incoming = applyStreamEvent(context, event);
-    if (incoming) incomingMessages.push(incoming);
-  }
-  applyIncomingMessages(context.runtimeKey, incomingMessages);
-}
+const chatStream = useChatStream({
+  effectiveBase,
+  runtime: runtimeStore,
+  onSessionId: rekeyRuntime,
+  onStreamCompleted: async sessionId => {
+    markSessionActive(sessionId, false);
+    await loadSessionHistory(sessionId);
+  },
+  onStreamSettled: () => {
+    void loadSessions();
+  },
+});
 
 function selectSession(sessionId: string | null) {
   if (!sessionId) {
@@ -187,26 +109,6 @@ function selectSession(sessionId: string | null) {
   if (listedSession?.is_active && !runtimeStore.hasController(sessionId) && !runtimeStore.getRuntime(sessionId)?.isStopping) {
     void resumeSession(sessionId);
   }
-}
-
-async function finalizeStream(context: StreamContext, streamCompleted: boolean) {
-  if (runtimeStore.getController(context.runtimeKey) !== context.controller) return;
-  runtimeStore.deleteController(context.runtimeKey, context.controller);
-  updateRuntime(context.runtimeKey, runtime => ({
-    ...runtime,
-    isStreaming: false,
-    isInsertReady: streamCompleted ? false : runtime.isInsertReady,
-    isStopping: false,
-    streamActivity: idleChatStreamActivity(),
-    submittedInteractionKeys: new Set(),
-    nextEventCursor: streamCompleted ? 0 : runtime.nextEventCursor,
-  }));
-
-  if (context.sessionId && streamCompleted) {
-    markSessionActive(context.sessionId, false);
-    await loadSessionHistory(context.sessionId);
-  }
-  void loadSessions();
 }
 
 async function sendMessage(opts: {
@@ -255,31 +157,13 @@ async function sendMessage(opts: {
     permissionMode: permissionMode.value,
     personalMcpIds: opts.personalMcpIds,
   });
-  const controller = new AbortController();
-  const context: StreamContext = { runtimeKey, sessionId, controller };
-  runtimeStore.setController(runtimeKey, controller);
-  let streamCompleted = false;
-
-  try {
-    const response = await request(`${normalizeBaseUrl(effectiveBase())}/api/v1/chat/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    await consumeChatResponse(context, response);
-    if (runtimeStore.getController(context.runtimeKey) === controller) streamCompleted = true;
-  } catch (error) {
-    if ((error as Error).name !== "AbortError" && runtimeStore.getController(context.runtimeKey) === controller) {
-      updateRuntime(context.runtimeKey, runtime => ({
-        ...runtime,
-        transportError: friendlyTransportErrorBlock(error, "stream"),
-        needsHistoryRefresh: true,
-      }));
-    }
-  } finally {
-    await finalizeStream(context, streamCompleted);
-  }
+  await chatStream.start({
+    runtimeKey,
+    sessionId,
+    path: "/api/v1/chat/stream",
+    body,
+    errorContext: "stream",
+  });
 }
 
 async function stopSession() {
@@ -375,14 +259,7 @@ async function resumeSession(sessionId?: string) {
     return;
   }
 
-  const controller = new AbortController();
-  const context: StreamContext = {
-    runtimeKey: targetSession,
-    sessionId: targetSession,
-    controller,
-  };
   const nextEventCursor = runtimeStore.getRuntime(targetSession)?.nextEventCursor ?? 0;
-  runtimeStore.setController(targetSession, controller);
   updateRuntime(targetSession, runtime => ({
     ...runtime,
     isStreaming: true,
@@ -390,31 +267,19 @@ async function resumeSession(sessionId?: string) {
     streamActivity: startedChatStreamActivity(),
     transportError: null,
   }));
-  let streamCompleted = false;
-
   try {
-    const response = await request(`${normalizeBaseUrl(effectiveBase())}/api/v1/chat/resume`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({
+    await chatStream.start({
+      runtimeKey: targetSession,
+      sessionId: targetSession,
+      path: "/api/v1/chat/resume",
+      body: {
         session_id: targetSession,
         ...(nextEventCursor > 0 ? { from_event_id: nextEventCursor } : {}),
-      }),
-      signal: controller.signal,
+      },
+      errorContext: "resume",
+      onError: error => console.error("Failed to resume session:", error),
     });
-    await consumeChatResponse(context, response);
-    if (runtimeStore.getController(targetSession) === controller) streamCompleted = true;
-  } catch (error) {
-    if ((error as Error).name !== "AbortError" && runtimeStore.getController(targetSession) === controller) {
-      console.error("Failed to resume session:", error);
-      updateRuntime(targetSession, runtime => ({
-        ...runtime,
-        transportError: friendlyTransportErrorBlock(error, "resume"),
-        needsHistoryRefresh: true,
-      }));
-    }
   } finally {
-    await finalizeStream(context, streamCompleted);
     finishResume(targetSession);
   }
 }
