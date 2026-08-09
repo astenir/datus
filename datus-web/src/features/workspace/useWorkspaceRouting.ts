@@ -2,7 +2,6 @@ import { computed, onMounted, watch, type ComputedRef, type Ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
 import { consumePostLoginRedirect, type AuthState } from "@/composables/useAuth"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { canRenderWorkspaceView, workspaceRedirectTarget, type WorkspaceAccessFlags } from "@/features/workspace/access"
 import {
   adminAuditFromQuery,
@@ -21,11 +20,12 @@ import {
 import type { WorkspaceContextQuery } from "@/features/workspace/route-state"
 import type { AdminViewTab, ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import type { WorkspaceRouteState } from "@/features/workspace/workspace-route-builders"
+import type { ChatWorkspaceRoutingContract } from "@/features/workspace/workspace-contracts"
 import { useWorkspaceNavigation } from "@/features/workspace/useWorkspaceNavigation"
 import { useWorkspaceRouteContextSync } from "@/features/workspace/useWorkspaceRouteContextSync"
 
 interface UseWorkspaceRoutingOptions {
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceRoutingContract
   authState: Ref<AuthState>
   viewAccess: ComputedRef<WorkspaceAccessFlags>
   checkAuth: () => Promise<void>

@@ -44,11 +44,6 @@ import {
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import { cn, formatDate } from "@/lib/utils"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
-
-defineProps<{
-  workspace: ChatWorkspace
-}>()
 
 const manager = useAgentManager()
 type AgentRow = (typeof manager.agents.value)[number]

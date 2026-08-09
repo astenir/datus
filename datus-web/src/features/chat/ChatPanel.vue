@@ -38,11 +38,11 @@ import {
   shouldExitPlanModeAfterInteraction,
 } from "@/lib/chat"
 import { parsePermissionRequest } from "@/lib/interaction-display"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { usePermission } from "@/composables/usePermission"
 import { useSuccessStory } from "@/composables/useSuccessStory"
 import { workspaceRouteNames } from "@/features/workspace/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
+import type { ChatWorkspaceChatContract } from "@/features/workspace/workspace-contracts"
 import type { SelectOption, SuccessStorySource } from "@/types"
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
@@ -53,7 +53,7 @@ import TodoExecutionDock from "@/features/chat/TodoExecutionDock.vue"
 import { deriveTodoExecutionDisplay } from "@/lib/todo-execution"
 
 const props = defineProps<{
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceChatContract
 }>()
 const emit = defineEmits<{
   openArtifact: [tab: ArtifactViewTab, slug: string]

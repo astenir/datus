@@ -11,12 +11,12 @@ import {
 } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import type { AuthState } from "@/composables/useAuth"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { WorkspaceAccessFlags } from "@/features/workspace/access"
 import SessionHistoryList from "@/features/workspace/SessionHistoryList.vue"
 import WorkspacePrimaryNavigation from "@/features/workspace/WorkspacePrimaryNavigation.vue"
 import WorkspaceProfileMenu from "@/features/workspace/WorkspaceProfileMenu.vue"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
+import type { ChatWorkspaceSessionRailContract } from "@/features/workspace/workspace-contracts"
 import {
   APP_WORKSPACE_SUBTITLE,
   APP_WORKSPACE_TITLE,
@@ -25,7 +25,7 @@ import { toast } from "vue-sonner"
 
 const props = defineProps<{
   auth: AuthState
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceSessionRailContract
   activeView: WorkspaceView
   artifactTab: ArtifactViewTab
   viewAccess: WorkspaceAccessFlags

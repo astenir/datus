@@ -2,15 +2,15 @@ import { onBeforeUnmount, shallowRef, watch, type ComputedRef, type Ref } from "
 import type { RouteLocationNormalizedLoaded, Router } from "vue-router"
 
 import type { AuthState } from "@/composables/useAuth"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { WorkspaceContextQuery } from "@/features/workspace/route-state"
 import { replaceQueryStringParams } from "@/features/workspace/route-state"
 import { createWorkspaceRouteContextApplier } from "@/features/workspace/workspace-route-context"
+import type { ChatWorkspaceRouteContextContract } from "@/features/workspace/workspace-contracts"
 
 interface UseWorkspaceRouteContextSyncOptions {
   route: RouteLocationNormalizedLoaded
   router: Router
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceRouteContextContract
   authState: Ref<AuthState>
   routeWorkspaceContext: ComputedRef<WorkspaceContextQuery>
 }

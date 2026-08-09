@@ -137,7 +137,6 @@ function updateAdminAudit(value: AdminAuditRouteState): void {
   >
     <AgentManagerPanel
       v-if="viewAccess.canViewAgents"
-      :workspace="workspace"
     />
   </TabsContent>
 

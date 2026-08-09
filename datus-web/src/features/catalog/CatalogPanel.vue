@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import type { ChatWorkspaceCatalogContract } from "@/features/workspace/workspace-contracts"
 import { useConnection } from "@/composables/useConnection"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
@@ -29,7 +29,7 @@ import { selectedOptionLabel } from "@/lib/datasource-display"
 import type { TableDetail } from "@/types"
 
 const props = defineProps<{
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceCatalogContract
   selectedTable?: string | null
 }>()
 

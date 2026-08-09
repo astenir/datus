@@ -19,13 +19,13 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
+import type { ChatWorkspaceCatalogContract } from "@/features/workspace/workspace-contracts"
 
 const props = defineProps<{
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceCatalogContract
   selectedTable?: string | null
 }>()
 

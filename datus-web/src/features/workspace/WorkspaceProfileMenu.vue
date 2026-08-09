@@ -32,8 +32,8 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { SidebarFooter } from "@/components/ui/sidebar"
 import type { AuthState } from "@/composables/useAuth"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { WorkspaceAccessFlags } from "@/features/workspace/access"
+import type { ChatWorkspaceProfileContract } from "@/features/workspace/workspace-contracts"
 import { selectedOptionLabel } from "@/lib/datasource-display"
 import { datasourceStatusDescription, datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import {
@@ -42,24 +42,10 @@ import {
 } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 
-type ProfileWorkspace = Pick<
-  ChatWorkspace,
-  | "canUseElevatedPermissionMode"
-  | "currentDatasource"
-  | "currentDatasourceStatus"
-  | "handleDatasourceTest"
-  | "isPrewarmingCurrentDatasource"
-  | "isTestingDatasource"
-  | "language"
-  | "permissionMode"
-  | "planMode"
-  | "visibleDatasourceOptions"
->
-
 interface WorkspaceProfileMenuProps {
   auth: AuthState
   viewAccess: Pick<WorkspaceAccessFlags, "canViewPermissions">
-  workspace: ProfileWorkspace
+  workspace: ChatWorkspaceProfileContract
 }
 
 const props = defineProps<WorkspaceProfileMenuProps>()

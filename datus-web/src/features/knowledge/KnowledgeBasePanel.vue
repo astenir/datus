@@ -28,13 +28,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useConnection } from "@/composables/useConnection"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
-import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import KnowledgeBootstrapPanel from "@/features/knowledge/KnowledgeBootstrapPanel.vue"
 import KnowledgeDetailPanel from "@/features/knowledge/KnowledgeDetailPanel.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
 import PanelCardHeader from "@/features/shared/PanelCardHeader.vue"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import SubjectTree from "@/features/workspace/SubjectTree.vue"
+import type { ChatWorkspaceCatalogContract } from "@/features/workspace/workspace-contracts"
 import { subjectApi } from "@/lib/api"
 import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
 import { selectedOptionLabel } from "@/lib/datasource-display"
@@ -44,7 +44,7 @@ import type { SubjectTreeNode } from "@/lib/subject-tree"
 type KnowledgeTreeMode = "catalog" | "subject"
 
 const props = defineProps<{
-  workspace: ChatWorkspace
+  workspace: ChatWorkspaceCatalogContract
   selectedTable?: string | null
   canViewSubjectTree?: boolean
 }>()
