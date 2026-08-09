@@ -1,18 +1,6 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue"
-import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
-import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorName,
-  ModelSelectorShortcut,
-  ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector"
+import { computed } from "vue"
+import { Loader2Icon, SquareIcon } from "@lucide/vue"
 import {
   PromptInput,
   PromptInputBody,
@@ -27,9 +15,10 @@ import type { ChatWorkspaceComposerContract } from "@/features/workspace/workspa
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
+import ChatModelSelector from "@/features/chat/ChatModelSelector.vue"
 import ChatMoreSettingsMenu from "@/features/chat/ChatMoreSettingsMenu.vue"
 import TodoExecutionDock from "@/features/chat/TodoExecutionDock.vue"
-import type { ActiveUserInteraction, SelectOption } from "@/types"
+import type { ActiveUserInteraction } from "@/types"
 import type { TodoExecutionState } from "@/lib/todo-execution"
 
 const props = defineProps<{
@@ -55,15 +44,6 @@ const emit = defineEmits<{
   requestCatalog: []
 }>()
 
-const DEFAULT_MODEL_VALUE = "__datus_default_model__"
-
-type ModelOptionGroup = {
-  provider: string
-  label: string
-  options: SelectOption[]
-}
-
-const modelSelectorOpen = shallowRef(false)
 const isWaitingForSession = computed(() =>
   props.workspace.isStreaming.value && !props.workspace.isInsertReady.value,
 )
@@ -87,26 +67,6 @@ const streamStatusLabel = computed(() => {
 const stopButtonLabel = computed(() =>
   props.workspace.isStopping.value ? "正在停止当前任务" : "AI 正在生成，点击停止",
 )
-const selectedModelValue = computed(() =>
-  props.workspace.selectedModel.value || DEFAULT_MODEL_VALUE,
-)
-const defaultModelLabel = computed(() =>
-  props.workspace.defaultModelLabel.value ? `默认：${props.workspace.defaultModelLabel.value}` : "默认模型",
-)
-const selectedModelLabel = computed(() =>
-  optionLabel(props.workspace.selectedModel.value, props.workspace.modelOptions.value),
-)
-const modelTriggerLabel = computed(() => selectedModelLabel.value || defaultModelLabel.value)
-const modelOptionGroups = computed(() => groupModelOptions(props.workspace.modelOptions.value))
-const modelSelectorContentClass = [
-  "gap-0 overflow-hidden rounded-2xl border-border/70 shadow-2xl sm:max-w-md",
-  "[&_[data-slot=command]]:rounded-2xl [&_[data-slot=command]]:p-1",
-  "[&_[data-slot=command-input-wrapper]]:p-1 [&_[data-slot=command-input-wrapper]]:pb-1",
-  "[&_[data-slot=input-group]]:h-9 [&_[data-slot=input-group]]:rounded-xl",
-  "[&_[data-slot=command-group]]:p-1",
-  "[&_[data-slot=command-group-heading]]:px-2.5 [&_[data-slot=command-group-heading]]:py-1.5",
-].join(" ")
-
 function handleSubmit(payload: PromptInputMessage) {
   emit("submit", payload)
 }
@@ -117,56 +77,6 @@ function handleInteractionSubmit(interactionKey: string, answers: string[][]) {
 
 function selectModel(value: string) {
   emit("selectModel", value)
-  modelSelectorOpen.value = false
-}
-
-function optionLabel(value: string, options: readonly SelectOption[]): string {
-  if (!value) return ""
-  return options.find(option => option.value === value)?.label ?? value
-}
-
-function providerKey(option: SelectOption): string {
-  if (option.group) return option.group
-  const [rawProvider] = option.value.split("/")
-  if (rawProvider && rawProvider !== option.value) return rawProvider.trim().toLowerCase()
-
-  const separatorIndex = option.label.indexOf(":")
-  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim().toLowerCase()
-
-  return "other"
-}
-
-function providerLabel(option: SelectOption): string {
-  if (option.group) return option.group
-  const separatorIndex = option.label.indexOf(":")
-  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim()
-
-  const [rawProvider] = option.value.split("/")
-  if (rawProvider && rawProvider !== option.value) return rawProvider.trim()
-
-  return "其他模型"
-}
-
-function groupModelOptions(options: readonly SelectOption[]): ModelOptionGroup[] {
-  const groups = new Map<string, ModelOptionGroup>()
-
-  for (const option of options) {
-    const key = providerKey(option)
-    const group = groups.get(key)
-
-    if (group) {
-      group.options.push(option)
-      continue
-    }
-
-    groups.set(key, {
-      provider: key,
-      label: providerLabel(option),
-      options: [option],
-    })
-  }
-
-  return Array.from(groups.values())
 }
 
 function handleUpdateAgent(value: string) {
@@ -307,83 +217,13 @@ function handleStop() {
               {{ streamStatusLabel }}
             </span>
 
-            <ModelSelector v-model:open="modelSelectorOpen">
-              <ModelSelectorTrigger as-child>
-                <PromptInputButton
-                  type="button"
-                  aria-label="选择 Model"
-                  title="Model"
-                  :disabled="workspace.isLoadingModels.value"
-                  class="h-8 max-w-44 justify-start rounded-full px-2 text-sm sm:max-w-56"
-                >
-                  <Loader2Icon
-                    v-if="workspace.isLoadingModels.value"
-                    data-icon="inline-start"
-                    class="animate-spin"
-                  />
-                  <CpuIcon
-                    v-else
-                    data-icon="inline-start"
-                  />
-                  <span class="truncate">{{ modelTriggerLabel }}</span>
-                  <ChevronDownIcon data-icon="inline-end" />
-                </PromptInputButton>
-              </ModelSelectorTrigger>
-
-              <ModelSelectorContent
-                title="选择模型"
-                :show-close-button="false"
-                :class="modelSelectorContentClass"
-              >
-                <ModelSelectorInput
-                  placeholder="搜索模型..."
-                  class="h-9 py-0"
-                />
-                <ModelSelectorList class="max-h-80 px-1 pb-1">
-                  <ModelSelectorEmpty class="py-6 text-sm">
-                    没有匹配的模型
-                  </ModelSelectorEmpty>
-
-                  <ModelSelectorGroup heading="默认">
-                    <ModelSelectorItem
-                      :value="DEFAULT_MODEL_VALUE"
-                      class="min-h-9 rounded-xl px-2.5 py-1.5"
-                      @select.prevent="selectModel(DEFAULT_MODEL_VALUE)"
-                    >
-                      <CpuIcon data-icon="inline-start" />
-                      <ModelSelectorName>
-                        {{ defaultModelLabel }}
-                      </ModelSelectorName>
-                      <ModelSelectorShortcut v-if="selectedModelValue === DEFAULT_MODEL_VALUE">
-                        当前
-                      </ModelSelectorShortcut>
-                    </ModelSelectorItem>
-                  </ModelSelectorGroup>
-
-                  <ModelSelectorGroup
-                    v-for="group in modelOptionGroups"
-                    :key="group.provider"
-                    :heading="group.label"
-                  >
-                    <ModelSelectorItem
-                      v-for="model in group.options"
-                      :key="model.value"
-                      :value="model.value"
-                      class="min-h-9 rounded-xl px-2.5 py-1.5"
-                      @select.prevent="selectModel(model.value)"
-                    >
-                      <CpuIcon data-icon="inline-start" />
-                      <ModelSelectorName>
-                        {{ model.label }}
-                      </ModelSelectorName>
-                      <ModelSelectorShortcut v-if="selectedModelValue === model.value">
-                        当前
-                      </ModelSelectorShortcut>
-                    </ModelSelectorItem>
-                  </ModelSelectorGroup>
-                </ModelSelectorList>
-              </ModelSelectorContent>
-            </ModelSelector>
+            <ChatModelSelector
+              :model-options="workspace.modelOptions.value"
+              :selected-model="workspace.selectedModel.value"
+              :default-model-name="workspace.defaultModelLabel.value"
+              :loading="workspace.isLoadingModels.value"
+              @select-model="selectModel"
+            />
 
             <PromptInputSubmit
               v-show="!workspace.isStreaming.value"

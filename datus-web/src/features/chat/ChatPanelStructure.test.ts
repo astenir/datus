@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import actionsSource from "../../composables/useChatPanelActions.ts?raw"
 import composerSource from "./ChatComposerArea.vue?raw"
 import conversationSource from "./ChatConversationArea.vue?raw"
+import modelSelectorSource from "./ChatModelSelector.vue?raw"
 import panelSource from "./ChatPanel.vue?raw"
 
 describe("ChatPanel presentation boundaries", () => {
@@ -25,7 +26,10 @@ describe("ChatPanel presentation boundaries", () => {
     expect(composerSource).toContain("<PromptInput")
     expect(composerSource).toContain("<ChatMoreSettingsMenu")
     expect(composerSource).toContain("<ChatContextPicker")
-    expect(composerSource).toContain("<ModelSelector")
+    expect(composerSource).toContain("<ChatModelSelector")
     expect(composerSource).toContain('emit("selectModel"')
+
+    expect(modelSelectorSource).toContain("<ModelSelector")
+    expect(modelSelectorSource).toContain('emit("selectModel"')
   })
 })
