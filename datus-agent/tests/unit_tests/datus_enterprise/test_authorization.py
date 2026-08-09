@@ -5,6 +5,7 @@ from starlette.datastructures import State
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     PassthroughConfigProjector,
@@ -94,6 +95,8 @@ async def test_require_module_uses_authorization_provider_for_identity_only_cont
             self.events.append(event)
 
     audit_sink = CollectingAuditSink()
+    user_store = InMemoryEnterpriseUserStore()
+    await user_store.upsert_user(user_id="u1", display_name="Test User")
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -102,6 +105,7 @@ async def test_require_module_uses_authorization_provider_for_identity_only_cont
             authorization_provider=FakeAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
+            user_store=user_store,
             audit_sink=audit_sink,
         ),
     )
@@ -135,6 +139,8 @@ async def test_require_module_denial_stays_stable_when_audit_sink_fails(monkeypa
         async def write(self, event):  # noqa: ARG002
             raise RuntimeError("audit down")
 
+    user_store = InMemoryEnterpriseUserStore()
+    await user_store.upsert_user(user_id="u1", display_name="Test User")
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -143,6 +149,7 @@ async def test_require_module_denial_stays_stable_when_audit_sink_fails(monkeypa
             authorization_provider=DenyingAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
+            user_store=user_store,
             audit_sink=FailingAuditSink(),
         ),
     )

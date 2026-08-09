@@ -50,6 +50,7 @@ def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_
         InMemoryEnterpriseQuotaStore,
         InMemoryEnterpriseRoleStore,
         InMemoryEnterpriseUserStore,
+        InMemoryUserMcpServerStore,
         PassthroughConfigProjector,
     )
 
@@ -62,6 +63,7 @@ def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_
         role_store=InMemoryEnterpriseRoleStore(),
         agent_store=InMemoryEnterpriseAgentStore(),
         quota_store=InMemoryEnterpriseQuotaStore(),
+        user_mcp_server_store=InMemoryUserMcpServerStore(),
     )
     monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
     monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
