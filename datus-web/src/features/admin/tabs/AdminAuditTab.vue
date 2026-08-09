@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { TabsContent } from "@/components/ui/tabs"
 import AdminMobileRecord from "@/features/admin/AdminMobileRecord.vue"
 import AdminPaginationBar from "@/features/admin/AdminPaginationBar.vue"
 import type { AdminAuditTabProps } from "@/features/admin/types"
