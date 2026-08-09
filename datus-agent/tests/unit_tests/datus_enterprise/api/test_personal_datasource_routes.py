@@ -35,16 +35,16 @@ class FailingAuditSink:
         raise RuntimeError("audit down")
 
 
-def _agent_config():
+def _agent_config(*, user_datasources=None):
+    if user_datasources is None:
+        user_datasources = {
+            "enabled": True,
+            "allowed_types": ["postgresql", "mysql"],
+            "allowed_hosts": ["localhost", "127.0.0.1", "*.corp"],
+            "default_ports": {"postgresql": "5432", "mysql": "3306"},
+        }
     return SimpleNamespace(
-        enterprise_config={
-            "user_datasources": {
-                "enabled": True,
-                "allowed_types": ["postgresql", "mysql"],
-                "allowed_hosts": ["localhost", "127.0.0.1", "*.corp"],
-                "default_ports": {"postgresql": "5432", "mysql": "3306"},
-            }
-        },
+        enterprise_config={"user_datasources": user_datasources},
         services=SimpleNamespace(datasources={}),
         current_datasource="",
         principal={},
@@ -274,6 +274,83 @@ async def test_personal_datasource_projection_is_request_scoped(monkeypatch):
     assert personal_datasource_key("ds2") not in result.config.services.datasources
     assert result.config.services.datasources[personal_datasource_key("ds1")].password == "alice-db-secret"
     assert base.services.datasources == {}
+
+
+@pytest.mark.asyncio
+async def test_personal_datasource_projection_rechecks_feature_flag(monkeypatch):
+    store = InMemoryUserDatasourceStore()
+    _install_extensions(monkeypatch, store=store, projector=DatasourceGrantConfigProjector())
+    await store.put_datasource(
+        user_id="alice",
+        datasource_id="ds1",
+        datasource_type="postgresql",
+        host="localhost",
+        port="5432",
+        username="alice",
+        password="alice-db-secret",
+        database="finance",
+    )
+
+    result = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(user_id="alice", datasource_grants={}),
+            base_config=_agent_config(
+                user_datasources={
+                    "enabled": False,
+                    "allowed_types": ["postgresql"],
+                    "allowed_hosts": ["localhost"],
+                }
+            ),
+            operation="catalog.list",
+            requested_datasource=personal_datasource_key("ds1"),
+        )
+    )
+
+    assert result.denied_reason == "Personal datasources are not enabled."
+    assert personal_datasource_key("ds1") not in result.config.services.datasources
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_datasources",
+    [
+        {
+            "enabled": True,
+            "allowed_types": ["mysql"],
+            "allowed_hosts": ["localhost"],
+        },
+        {
+            "enabled": True,
+            "allowed_types": ["postgresql"],
+            "allowed_hosts": ["db.corp"],
+        },
+    ],
+)
+async def test_personal_datasource_projection_rechecks_current_allowlist(monkeypatch, user_datasources):
+    store = InMemoryUserDatasourceStore()
+    _install_extensions(monkeypatch, store=store, projector=DatasourceGrantConfigProjector())
+    await store.put_datasource(
+        user_id="alice",
+        datasource_id="ds1",
+        datasource_type="postgresql",
+        host="localhost",
+        port="5432",
+        username="alice",
+        password="alice-db-secret",
+        database="finance",
+    )
+
+    result = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(user_id="alice", datasource_grants={}),
+            base_config=_agent_config(user_datasources=user_datasources),
+            operation="catalog.list",
+            requested_datasource=personal_datasource_key("ds1"),
+        )
+    )
+
+    assert result.denied_reason == "Datasource 'personal_ds1' is not authorized for this request."
+    assert personal_datasource_key("ds1") not in result.config.services.datasources
 
 
 @pytest.mark.asyncio
