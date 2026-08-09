@@ -1,15 +1,8 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from "vue"
+import { computed, shallowRef } from "vue"
 import {
-  BarChart3Icon,
   BotIcon,
-  BookMarkedIcon,
-  MessageSquareIcon,
   RefreshCwIcon,
-  ServerIcon,
-  ShieldIcon,
-  SlidersHorizontalIcon,
-  UserRoundIcon,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
@@ -21,13 +14,11 @@ import { usePermission } from "@/composables/usePermission"
 import { useTheme } from "@/composables/useTheme"
 import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
-import type { WorkspaceNavItem } from "@/features/workspace/types"
 import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
+import { useWorkspaceShell } from "@/features/workspace/useWorkspaceShell"
 import WorkspaceHeader from "@/features/workspace/WorkspaceHeader.vue"
 import WorkspaceViewContent from "@/features/workspace/WorkspaceViewContent.vue"
-import { sessionUserQueryText } from "@/lib/chat"
-import { canViewSubjectTree as canViewSubjectTreeWithPermission } from "@/lib/knowledge-access"
 import type { ArtifactEditSession } from "@/types"
 
 const workspace = useChatWorkspace()
@@ -37,13 +28,6 @@ const { theme, toggleTheme } = useTheme()
 const sqlDialogOpen = shallowRef(false)
 
 const viewAccess = computed(() => workspaceAccessFromPermission(permission))
-const canViewSubjectTree = computed(() => canViewSubjectTreeWithPermission(permission))
-const canExecuteSql = computed(() => {
-  return permission.isAdmin()
-    || permission.hasPermission("module.sql_executor")
-    || permission.hasFeaturePermission("sql_executor")
-    || permission.hasFeaturePermission("sql_generation")
-})
 
 const {
   activeView,
@@ -80,67 +64,18 @@ const {
   checkAuth,
 })
 
-watch(
-  () => [
-    activeView.value,
-    authState.value.loading,
-    authState.value.authenticated,
-    workspace.connection.value,
-  ] as const,
-  ([view, loading, authenticated, connection]) => {
-    if (authenticated && !loading && connection === "online" && (view === "knowledge" || view === "catalog" || view === "semantic")) {
-      void workspace.ensureCatalogLoaded()
-    }
-  },
-  { immediate: true },
-)
-
-const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
-
-const navItems: WorkspaceNavItem[] = [
-  chatNavItem,
-  { value: "knowledge", label: "知识库", icon: BookMarkedIcon },
-  { value: "mcp", label: "MCP", icon: ServerIcon },
-  { value: "agents", label: "Agent", icon: BotIcon },
-  { value: "configuration", label: "配置", icon: SlidersHorizontalIcon },
-  { value: "artifacts", label: "产物", icon: BarChart3Icon },
-  { value: "profile", label: "个人设置", icon: UserRoundIcon },
-  { value: "admin", label: "权限管理", icon: ShieldIcon },
-]
-
-const activeNavItem = computed(() => navItems.find(item => item.value === activeView.value) ?? chatNavItem)
-const currentSession = computed(() => {
-  const sessionId = workspace.selectedSession.value
-  if (!sessionId) return null
-
-  return workspace.sessions.value.find(session => session.session_id === sessionId) ?? null
-})
-const firstUserMessageTitle = computed(() => {
-  const message = workspace.messages.value.find(item => item.role === "user" && item.content.trim())
-  const text = message?.content.trim() ?? ""
-
-  return text.length > 60 ? `${text.slice(0, 60)}…` : text
-})
-const chatHeaderTitle = computed(() => {
-  if (!workspace.selectedSession.value) return "新对话"
-
-  const sessionTitle = currentSession.value ? sessionUserQueryText(currentSession.value) : ""
-  return sessionTitle || firstUserMessageTitle.value || "未命名会话"
-})
-const headerTitle = computed(() => {
-  if (activeView.value === "chat") {
-    return chatHeaderTitle.value
-  }
-
-  if (activeView.value === "artifacts") {
-    if (artifactSlug.value) {
-      return artifactTab.value === "report" ? "报表预览" : "仪表盘预览"
-    }
-
-    return artifactTab.value === "report" ? "报表" : "仪表盘"
-  }
-
-  return activeNavItem.value.label
+const {
+  canExecuteSql,
+  canViewSubjectTree,
+  headerTitle,
+} = useWorkspaceShell({
+  workspace,
+  authState,
+  permission,
+  viewAccess,
+  activeView,
+  artifactTab,
+  artifactSlug,
 })
 
 function startArtifactEdit(session: ArtifactEditSession): void {

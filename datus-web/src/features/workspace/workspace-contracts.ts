@@ -102,3 +102,12 @@ export type ChatWorkspaceRouteContextContract = Pick<
   | "setDatabase"
   | "setSchema"
 >
+
+export type ChatWorkspaceShellContract = Pick<
+  ChatWorkspace,
+  | "connection"
+  | "ensureCatalogLoaded"
+  | "messages"
+  | "selectedSession"
+  | "sessions"
+>
