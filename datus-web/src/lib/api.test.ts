@@ -40,6 +40,7 @@ function mockJsonResponse(payload: unknown, init?: ResponseInit) {
 
 describe("api client", () => {
   afterEach(() => {
+    mcpApi.clearToolListCache();
     setApiBaseResolver(null);
     vi.restoreAllMocks();
   });
@@ -643,6 +644,55 @@ describe("api client", () => {
     await mcpApi.listTools("http://localhost:8000", "filesystem");
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/mcp/servers/filesystem/tools");
+  });
+
+  it("deduplicates concurrent MCP tool catalog requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockJsonResponse({ success: true, data: { tools: [] } }),
+    );
+
+    await Promise.all([
+      mcpApi.listTools("http://localhost:8000/", "filesystem"),
+      mcpApi.listTools("http://localhost:8000", "filesystem"),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cools down an expired MCP endpoint and allows a forced retry", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: false,
+        errorMessage: "Failed to list tools on server 'china-stock-mcp': MCP server returned HTTP 410.",
+      }))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: { tools: [] } }));
+
+    await expect(mcpApi.listTools("http://localhost:8000", "china-stock-mcp"))
+      .rejects.toThrow("410");
+    await expect(mcpApi.listTools("http://localhost:8000", "china-stock-mcp"))
+      .rejects.toMatchObject({ cached: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await expect(mcpApi.listTools("http://localhost:8000", "china-stock-mcp", { force: true }))
+      .resolves.toEqual({ tools: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cool down transient MCP tool errors", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: false,
+        errorMessage: "MCP server returned HTTP 503.",
+      }))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: { tools: [] } }));
+
+    await expect(mcpApi.listTools("http://localhost:8000", "temporary-mcp"))
+      .rejects.toThrow("503");
+    await expect(mcpApi.listTools("http://localhost:8000", "temporary-mcp"))
+      .resolves.toEqual({ tools: [] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not expose subject knowledge endpoints without backend support", () => {

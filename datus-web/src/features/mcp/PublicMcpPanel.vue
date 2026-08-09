@@ -32,7 +32,7 @@ import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import { usePermission } from "@/composables/usePermission"
 import { ApiResultError } from "@/lib/chat"
-import { friendlyMcpConnectionError } from "@/lib/mcp"
+import { friendlyMcpConnectionError, isMcpToolListCacheError } from "@/lib/mcp"
 import { handleError } from "@/lib/utils"
 import type { McpConnectivityResult, McpServerInfo, McpServerInput, McpToolInfo } from "@/types"
 
@@ -151,6 +151,7 @@ function agentReferencesFromError(error: unknown): McpAgentReference[] {
 }
 
 function showMcpConnectionError(context: string, serverName: string, error: unknown) {
+  if (isMcpToolListCacheError(error)) return
   console.error(`${context} (${serverName})`, error)
   const friendly = friendlyMcpConnectionError(error, serverName)
   if (!friendly) return
@@ -167,7 +168,7 @@ function closeDeleteDialog() {
   deleteTarget.value = null
 }
 
-async function loadServers(preferredServer = "") {
+async function loadServers(preferredServer = "", options: { force?: boolean } = {}) {
   if (!canListServers.value) {
     servers.value = []
     selectedServer.value = ""
@@ -184,7 +185,7 @@ async function loadServers(preferredServer = "") {
       ? targetServer
       : servers.value[0]?.name ?? ""
     if (canListTools.value) {
-      await loadTools()
+      await loadTools(options)
     } else {
       tools.value = []
     }
@@ -195,14 +196,16 @@ async function loadServers(preferredServer = "") {
   }
 }
 
-async function loadTools() {
+async function loadTools(options: { force?: boolean } = {}) {
   if (!selectedServer.value || !canListTools.value) {
     tools.value = []
     return
   }
   toolsLoading.value = true
   try {
-    const result = await mcpApi.listTools(effectiveBase(), selectedServer.value)
+    const result = options.force
+      ? await mcpApi.listTools(effectiveBase(), selectedServer.value, { force: true })
+      : await mcpApi.listTools(effectiveBase(), selectedServer.value)
     tools.value = result?.tools ?? []
   } catch (error) {
     tools.value = []
@@ -272,7 +275,7 @@ async function submitServer(server: McpServerInput) {
     }
     serverDialogOpen.value = false
     editingServer.value = null
-    await loadServers(server.name)
+    await loadServers(server.name, { force: true })
   } catch (error) {
     handleError(serverDialogMode.value === "edit" ? "更新 MCP Server 失败" : "添加 MCP Server 失败", error)
   } finally {
@@ -349,7 +352,7 @@ onMounted(() => {
     :can-refresh="canListServers"
     :can-create="canAddServer"
     :can-list="canListServers"
-    @refresh="loadServers()"
+    @refresh="loadServers('', { force: true })"
     @add="openAddDialog"
     @update:scope="updateScope"
   >

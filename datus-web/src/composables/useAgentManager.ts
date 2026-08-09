@@ -7,6 +7,7 @@ import { usePermission } from "@/composables/usePermission";
 import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
 import { adminDatasourceLabel } from "@/lib/datasource-display";
+import { isMcpToolListCacheError } from "@/lib/mcp";
 import type {
   AgentAclRoleSummary,
   AgentAclUserSummary,
@@ -722,7 +723,7 @@ export function useAgentManager() {
     }
   }
 
-  async function loadMcpCatalog() {
+  async function loadMcpCatalog(options: { force?: boolean } = {}) {
     await ensurePermissionsLoaded();
 
     if (!canListMcpServers.value) {
@@ -737,7 +738,8 @@ export function useAgentManager() {
     mcpCatalogError.value = null;
 
     try {
-      const result = await mcpApi.listServers(connection.effectiveBase());
+      const baseUrl = connection.effectiveBase();
+      const result = await mcpApi.listServers(baseUrl);
       const servers = [...(result?.servers ?? [])].sort((left, right) => left.name.localeCompare(right.name));
       mcpServers.value = servers;
       mcpCatalogLoaded.value = true;
@@ -746,14 +748,18 @@ export function useAgentManager() {
         const toolEntries = await Promise.all(
           servers.map(async (server) => {
             try {
-              const toolsResult = await mcpApi.listTools(connection.effectiveBase(), server.name);
+              const toolsResult = options.force
+                ? await mcpApi.listTools(baseUrl, server.name, { force: true })
+                : await mcpApi.listTools(baseUrl, server.name);
               const toolNames = (toolsResult?.tools ?? [])
                 .map((tool) => tool.name)
                 .filter((name) => name.trim().length > 0)
                 .sort((left, right) => left.localeCompare(right));
               return [server.name, toolNames] as const;
             } catch (err) {
-              console.warn(`读取 MCP Server ${server.name} 工具失败`, err);
+              if (!isMcpToolListCacheError(err)) {
+                console.warn(`读取 MCP Server ${server.name} 工具失败`, err);
+              }
               return [server.name, []] as const;
             }
           })

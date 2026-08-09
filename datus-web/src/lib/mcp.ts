@@ -18,6 +18,23 @@ export type FriendlyMcpConnectionError = {
   description: string;
 };
 
+export class McpToolListCacheError extends Error {
+  readonly cached = true;
+
+  constructor(readonly originalError: unknown) {
+    super(errorMessage(originalError) || "MCP Server 工具目录暂不可用");
+    this.name = "McpToolListCacheError";
+  }
+}
+
+export function isMcpToolListCacheError(error: unknown): error is McpToolListCacheError {
+  return error instanceof McpToolListCacheError;
+}
+
+export function isMcpServerGoneError(error: unknown): boolean {
+  return /\b410\b|\bgone\b/i.test(errorMessage(error));
+}
+
 export function friendlyMcpConnectionError(
   error: unknown,
   serverName?: string,
@@ -35,7 +52,7 @@ export function friendlyMcpConnectionError(
   const message = errorMessage(error);
   const server = serverName?.trim() ? `“${serverName.trim()}”` : "该 MCP Server";
 
-  if (/\b410\b|\bgone\b/i.test(message)) {
+  if (isMcpServerGoneError(error)) {
     return {
       title: "MCP Server 地址已失效",
       description: `${server}对应的远程服务已下线或 URL 已过期，请更新配置后重试。`,
