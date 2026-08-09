@@ -168,6 +168,7 @@ function handleRetryAuth(): void {
             :active-secret-name="adminSecretName"
             :active-session-id="adminSessionId"
             :active-tab="adminTab"
+            :active-view="activeView"
             :active-user-id="adminUserId"
             :artifact-slug="artifactSlug"
             :artifact-tab="artifactTab"

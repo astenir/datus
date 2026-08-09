@@ -8,12 +8,17 @@ function response(data: unknown) {
   }
 }
 
-async function mockAdminApi(page: Page): Promise<void> {
+interface MockAdminApiOptions {
+  agentConfig?: unknown
+  me?: unknown
+}
+
+async function mockAdminApi(page: Page, options: MockAdminApiOptions = {}): Promise<void> {
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url())
 
     if (url.pathname === "/api/v1/me") {
-      await route.fulfill(response({
+      await route.fulfill(response(options.me ?? {
         user_id: "admin-tabs-test-user",
         is_admin: true,
         permissions: ["module.admin.*"],
@@ -25,7 +30,7 @@ async function mockAdminApi(page: Page): Promise<void> {
     }
 
     if (url.pathname === "/api/v1/config/agent") {
-      await route.fulfill(response({ current_datasource: null, datasources: {} }))
+      await route.fulfill(response(options.agentConfig ?? { current_datasource: null, datasources: {} }))
       return
     }
 
@@ -112,4 +117,52 @@ test("keeps only the active permission panel rendered when switching tabs", asyn
   await expect(visiblePanels).toContainText("审计")
   await expect(managementTabs.locator('[data-slot="card-title"]', { hasText: "审计" })).toBeVisible()
   await expect(managementTabs.locator('[data-slot="card-title"]', { hasText: "角色" })).toBeHidden()
+})
+
+test("leaves permission management without restoring an unauthorized default tab", async ({ page }) => {
+  await mockAdminApi(page, {
+    me: {
+      user_id: "bob",
+      is_admin: false,
+      permissions: [
+        "module.admin.audit",
+        "module.admin.roles",
+        "module.chat",
+        "module.config.view",
+        "module.dashboard.view",
+        "module.report.view",
+      ],
+      features: {
+        chat: true,
+        config_view: true,
+        dashboard_view: true,
+        report_view: true,
+      },
+      views: {
+        artifacts: true,
+        artifact_dashboards: true,
+        artifact_reports: true,
+        configuration: true,
+        permissions: true,
+        profile: true,
+      },
+      datasource_grants: {
+        ccks_fund: { effect: "allow" },
+      },
+    },
+    agentConfig: {
+      current_datasource: "ccks_fund",
+      datasources: { ccks_fund: {} },
+    },
+  })
+
+  await page.goto("/admin?datasource=ccks_fund&tab=roles")
+
+  await page.getByRole("button", { name: "报表", exact: true }).click()
+  await expect(page).toHaveURL(/\/artifacts\/reports\?datasource=ccks_fund(?:&|$)/)
+
+  await page.goto("/admin?datasource=ccks_fund&tab=roles")
+
+  await page.getByRole("button", { name: "配置", exact: true }).click()
+  await expect(page).toHaveURL(/\/configuration\?datasource=ccks_fund(?:&|$)/)
 })

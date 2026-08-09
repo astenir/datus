@@ -11,7 +11,7 @@ import type {
   AdminAuditRouteState,
   AdminGrantRouteState,
 } from "@/features/workspace/route-state"
-import type { AdminViewTab, ArtifactViewTab } from "@/features/workspace/types"
+import type { AdminViewTab, ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import type { ArtifactEditSession } from "@/types"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
@@ -30,6 +30,7 @@ interface WorkspaceViewContentProps {
   activeSecretName: string | null
   activeSessionId: string | null
   activeTab: AdminViewTab
+  activeView: WorkspaceView
   activeUserId: string | null
   auth: AuthState
   artifactSlug: string | null
@@ -175,7 +176,7 @@ function updateAdminAudit(value: AdminAuditRouteState): void {
     class="m-0 flex min-h-0 flex-1"
   >
     <AdminPanel
-      v-if="canRenderAdminPanel"
+      v-if="activeView === 'admin' && canRenderAdminPanel"
       :active-tab="activeTab"
       :active-user-id="activeUserId"
       :active-role-id="activeRoleId"
