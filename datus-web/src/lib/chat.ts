@@ -16,6 +16,7 @@ import type {
   SseMessagePayload
 } from "@/types";
 import { request } from "@/lib/request";
+import { friendlyMcpConnectionError } from "@/lib/mcp";
 import { isSqlExecutionTool, toolResultStatus } from "@/lib/tool-display";
 import { isInteractionToolName, normalizedToolName } from "@/lib/tool-presentation";
 
@@ -1233,6 +1234,13 @@ function friendlyDatusSqlExecutionError(rawError: string): string | undefined {
 export function friendlyToolErrorText(toolName: string, rawError: string): string {
   const error = rawError.trim();
   if (!error) return "";
+
+  const mcpConnectionTool = toolName.match(/^mcp\.(.+)\.connect$/);
+  if (mcpConnectionTool?.[1]) {
+    const friendly = friendlyMcpConnectionError(error, mcpConnectionTool[1]);
+    if (friendly) return `${friendly.title}：${friendly.description}`;
+    return "MCP Server 认证失败：远程服务拒绝了连接，请检查 MCP 凭证或联系管理员。";
+  }
 
   const toolDenied = error.match(permissionDeniedToolPattern);
   if (toolDenied) {

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Type, TypeAlias
 
+from datus.agent.node.mcp_failure_actions_downstream import is_mcp_connection_failure_action
 from datus.api.models.downstream import (
     ChatSessionTerminalEvent,
     ChatSessionToolExecutionEvent,
@@ -157,9 +158,21 @@ async def persist_tool_execution_event(
 
     if not task.session_established or action.role != ActionRole.TOOL or action.status == ActionStatus.PROCESSING:
         return
+    is_mcp_failure = is_mcp_connection_failure_action(action)
     start_time = action.start_time
     end_time = action.end_time
-    if start_time is None or end_time is None:
+    if is_mcp_failure:
+        # MCP connection failures are synthetic display actions. They do not
+        # come from an SDK function_call_output, so there is no measured end
+        # timestamp to attach to the in-memory action. Keep a zero-duration
+        # sidecar event so canonical history can restore the failure card.
+        if start_time is None and end_time is None:
+            start_time = end_time = datetime.now(timezone.utc)
+        elif start_time is None:
+            start_time = end_time
+        elif end_time is None:
+            end_time = start_time
+    elif start_time is None or end_time is None:
         return
     try:
         duration = (end_time - start_time).total_seconds()
@@ -173,6 +186,20 @@ async def persist_tool_execution_event(
         return
 
     call_tool_id = action.action_id.removeprefix("complete_")
+    tool_name = None
+    error = None
+    summary = None
+    if is_mcp_failure:
+        action_input = action.input if isinstance(action.input, dict) else {}
+        tool_name = str(action_input.get("function_name") or action.action_type)
+        action_output = action.output if isinstance(action.output, dict) else {}
+        error_value = action_output.get("error")
+        if isinstance(error_value, str) and error_value.strip():
+            error = error_value.strip()
+        summary_value = action_output.get("summary")
+        if isinstance(summary_value, str) and summary_value.strip():
+            summary = summary_value.strip()
+
     tool_event = ChatSessionToolExecutionEvent(
         event_id=f"{task.run_id}-tool-{call_tool_id}",
         call_tool_id=call_tool_id,
@@ -181,6 +208,9 @@ async def persist_tool_execution_event(
         completed_at=completed_at,
         depth=max(int(getattr(action, "depth", 0) or 0), 0),
         parent_action_id=getattr(action, "parent_action_id", None),
+        tool_name=tool_name,
+        error=error,
+        summary=summary,
         created_at=completed_at,
     )
     base_dir = getattr(agent_config, "session_dir", None) or str(

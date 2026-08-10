@@ -349,6 +349,34 @@ describe("tool execution blocks", () => {
     ]);
   });
 
+  it("renders a safe, actionable error for an MCP connection tool", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "mcp-failure-1",
+          toolName: "mcp.dead.connect",
+          result: {
+            success: 0,
+            error: "MCP server returned HTTP 410.",
+            result: null,
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "mcp-failure-1",
+        toolName: "mcp.dead.connect",
+        errorText: "MCP Server 地址已失效：“dead”对应的远程服务已下线或 URL 已过期，请更新配置后重试。",
+        resultStatus: "error",
+        result: null,
+      },
+    ]);
+  });
+
   it("preserves successful tool status after unwrapping the rendered result", () => {
     const parsed = contentFromPayloadBlocks([
       {

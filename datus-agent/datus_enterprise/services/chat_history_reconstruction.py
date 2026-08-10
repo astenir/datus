@@ -6,6 +6,7 @@ import os
 import uuid
 from typing import Any, Dict, List, Optional
 
+from datus.agent.node.mcp_failure_actions_downstream import is_mcp_connection_tool_name
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
     AtContextData,
@@ -32,7 +33,7 @@ from datus.models.session_manager import (
 )
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
-from datus.utils.time_utils import to_utc_iso
+from datus.utils.time_utils import now_utc_iso, to_utc_iso
 
 logger = get_logger(__name__)
 
@@ -133,7 +134,10 @@ class EnterpriseChatHistoryMixin:
         subagent_messages: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         tool_execution_events: Optional[List[ChatSessionToolExecutionEvent]] = None,
     ) -> Result[ChatHistoryData]:
-        if not raw_messages and not terminal_events:
+        top_level_mcp_failures = self._mcp_connection_failure_events(
+            tool_execution_events or [], depth=0, parent_action_id=None
+        )
+        if not raw_messages and not terminal_events and not top_level_mcp_failures:
             return Result[ChatHistoryData](success=True, data=ChatHistoryData())
 
         logger.info(f"Retrieved {len(raw_messages)} messages for session {session_id}")
@@ -156,17 +160,23 @@ class EnterpriseChatHistoryMixin:
         subagent_messages: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         tool_execution_events: Optional[Dict[str, ChatSessionToolExecutionEvent]] = None,
     ) -> tuple[List[SSEMessagePayload], int]:
+        display_messages = self._with_mcp_connection_failure_actions(
+            raw_messages,
+            list((tool_execution_events or {}).values()),
+            depth=depth,
+            parent_action_id=parent_action_id,
+        )
         sse_messages: List[SSEMessagePayload] = []
         task_completions = {
             action.action_id.removeprefix("complete_"): action
-            for msg in raw_messages
+            for msg in display_messages
             for action in msg.get("actions", [])
             if action.role == ActionRole.TOOL
             and action.action_type == "task"
             and action.status != ActionStatus.PROCESSING
         }
 
-        for msg in raw_messages:
+        for msg in display_messages:
             terminal_event = msg.get("_terminal_event")
             if isinstance(terminal_event, ChatSessionTerminalEvent):
                 sse_messages.append(
@@ -296,6 +306,134 @@ class EnterpriseChatHistoryMixin:
                     event_id += 1
 
         return sse_messages, event_id
+
+    @staticmethod
+    def _mcp_connection_failure_events(
+        tool_execution_events: List[ChatSessionToolExecutionEvent],
+        *,
+        depth: int,
+        parent_action_id: Optional[str],
+    ) -> List[ChatSessionToolExecutionEvent]:
+        return [
+            event
+            for event in tool_execution_events
+            if is_mcp_connection_tool_name(event.tool_name)
+            and bool(event.error)
+            and event.depth == depth
+            and (event.parent_action_id or None) == (parent_action_id or None)
+        ]
+
+    @classmethod
+    def _with_mcp_connection_failure_actions(
+        cls,
+        raw_messages: List[Dict[str, Any]],
+        tool_execution_events: List[ChatSessionToolExecutionEvent],
+        *,
+        depth: int,
+        parent_action_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Restore MCP connection failures that never entered SDK history."""
+        missing_events = cls._mcp_connection_failure_events(
+            tool_execution_events,
+            depth=depth,
+            parent_action_id=parent_action_id,
+        )
+        if not missing_events:
+            return raw_messages
+
+        canonical_action_ids = {
+            action.action_id
+            for message in raw_messages
+            for action in message.get("actions", [])
+            if getattr(action, "action_id", None)
+        }
+        messages = list(raw_messages)
+
+        for event in sorted(
+            missing_events,
+            key=lambda item: (to_utc_iso(item.created_at) or item.created_at, item.event_id),
+        ):
+            call_tool_id = event.call_tool_id.removeprefix("complete_")
+            if call_tool_id in canonical_action_ids or f"complete_{call_tool_id}" in canonical_action_ids:
+                continue
+
+            tool_name = event.tool_name
+            if not is_mcp_connection_tool_name(tool_name):
+                continue
+            server_name = tool_name[len("mcp.") : -len(".connect")]
+            created_at = to_utc_iso(event.created_at) or now_utc_iso()
+            started_at = to_utc_iso(event.started_at) or created_at
+            completed_at = to_utc_iso(event.completed_at) or started_at
+            input_data = {
+                "function_name": tool_name,
+                "arguments": {},
+                "server_name": server_name,
+            }
+            start_action = ActionHistory(
+                action_id=call_tool_id,
+                role=ActionRole.TOOL,
+                messages=f"Tool call: {tool_name}",
+                action_type=tool_name,
+                input=input_data,
+                output=None,
+                status=ActionStatus.PROCESSING,
+                start_time=started_at,
+                depth=event.depth,
+                parent_action_id=event.parent_action_id,
+            )
+            result_action = ActionHistory(
+                action_id=f"complete_{call_tool_id}",
+                role=ActionRole.TOOL,
+                messages=f"Tool result: {tool_name}",
+                action_type=tool_name,
+                input=input_data,
+                output={
+                    "error": event.error,
+                    "summary": event.summary
+                    or f"MCP Server '{server_name}' connection failed; the Agent continued without it.",
+                },
+                status=ActionStatus.FAILED,
+                start_time=started_at,
+                end_time=completed_at,
+                depth=event.depth,
+                parent_action_id=event.parent_action_id,
+            )
+            synthetic_message = {
+                "role": "assistant",
+                "content": "",
+                "timestamp": created_at,
+                "created_at": created_at,
+                "actions": [start_action, result_action],
+            }
+
+            preceding_user_indexes = [
+                index
+                for index, message in enumerate(messages)
+                if message.get("role") == "user"
+                and (
+                    not created_at
+                    or not (message_time := to_utc_iso(message.get("created_at") or message.get("timestamp")))
+                    or message_time <= created_at
+                )
+            ]
+            if not preceding_user_indexes:
+                preceding_user_indexes = [
+                    index for index, message in enumerate(messages) if message.get("role") == "user"
+                ]
+            insertion_index = preceding_user_indexes[-1] + 1 if preceding_user_indexes else len(messages)
+            while insertion_index < len(messages):
+                message = messages[insertion_index]
+                message_time = to_utc_iso(message.get("created_at") or message.get("timestamp"))
+                if message.get("role") == "assistant" and (
+                    not created_at or not message_time or message_time <= created_at
+                ):
+                    insertion_index += 1
+                    continue
+                break
+            messages.insert(insertion_index, synthetic_message)
+            canonical_action_ids.update({call_tool_id, f"complete_{call_tool_id}"})
+
+        return messages
 
     @staticmethod
     def _subagent_completion_history_payload(

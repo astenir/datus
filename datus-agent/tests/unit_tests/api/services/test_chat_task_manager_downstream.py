@@ -189,6 +189,50 @@ class TestChatTaskManagerBehavior:
         assert event.parent_action_id == "task-call-1"
 
     @pytest.mark.asyncio
+    async def test_mcp_connection_failure_is_persisted_with_safe_display_fields(self, real_agent_config):
+        from datus.models.session_manager import SessionManager
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus_enterprise.services.chat_task_runtime import persist_tool_execution_event
+
+        session_id = "durable-mcp-connection-failure"
+        manager = SessionManager(session_dir=real_agent_config.session_dir)
+        manager.create_session(session_id)
+        task = ChatTask(session_id=session_id, asyncio_task=MagicMock())
+        task.session_established = True
+        task.run_id = "run-mcp"
+        action = ActionHistory(
+            action_id="complete_mcp-failure-1",
+            role=ActionRole.TOOL,
+            action_type="mcp.dead.connect",
+            input={
+                "function_name": "mcp.dead.connect",
+                "arguments": {},
+                "server_name": "dead",
+            },
+            output={
+                "error": "MCP server returned HTTP 410.",
+                "summary": "MCP Server 'dead' connection failed; the Agent continued without it.",
+            },
+            status=ActionStatus.FAILED,
+        )
+
+        await persist_tool_execution_event(
+            task=task,
+            action=action,
+            agent_config=real_agent_config,
+            user_id=None,
+            project_id="test-proj",
+            session_body_store=None,
+        )
+
+        [event] = manager.get_tool_execution_events(session_id)
+        assert event.call_tool_id == "mcp-failure-1"
+        assert event.tool_name == "mcp.dead.connect"
+        assert event.error == "MCP server returned HTTP 410."
+        assert event.summary == "MCP Server 'dead' connection failed; the Agent continued without it."
+        assert event.duration == 0
+
+    @pytest.mark.asyncio
     async def test_slow_tool_timing_persistence_does_not_block_live_sse(self, real_agent_config):
         from datus.api.models.cli_models import StreamChatInput
         from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus

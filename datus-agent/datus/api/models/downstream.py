@@ -103,7 +103,7 @@ class ChatSessionSubagentEvent(BaseModel):
 
 
 class ChatSessionToolExecutionEvent(BaseModel):
-    """Durable display-only timing for one completed tool call."""
+    """Durable display-only timing or failure detail for one tool call."""
 
     event_id: str = Field(..., description="Stable idempotency key for the tool execution event")
     event_type: Literal["tool_execution"] = Field(default="tool_execution", description="Display sidecar event type")
@@ -113,6 +113,18 @@ class ChatSessionToolExecutionEvent(BaseModel):
     completed_at: str = Field(..., description="Measured UTC tool completion timestamp")
     depth: int = Field(default=0, ge=0, description="Tool nesting depth in the rendered transcript")
     parent_action_id: Optional[str] = Field(default=None, description="Parent action id for nested tools")
+    tool_name: Optional[str] = Field(
+        default=None,
+        description="Canonical tool name for a display-only failure absent from SDK history",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Safe user-facing error summary for a display-only tool failure",
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        description="Safe short summary for a display-only tool failure",
+    )
     created_at: str = Field(default_factory=now_utc_iso, description="UTC event timestamp")
 
 
