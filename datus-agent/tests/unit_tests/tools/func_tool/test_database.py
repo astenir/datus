@@ -1009,6 +1009,52 @@ class TestGetConnectorRouting:
         with pytest.raises(DatusException, match="not configured"):
             tool._get_connector("unknown_db")
 
+    def test_invalid_connector_config_is_not_reported_as_missing_datasource(self):
+        """Connector validation failures retain a configuration-specific error category."""
+        from collections import OrderedDict
+
+        from datus.tools.db_tools.db_manager import DBManager
+
+        mock_db_manager = Mock(spec=DBManager)
+        mock_db_manager.get_conn.side_effect = ValueError("schema: Extra inputs are not permitted")
+
+        tool = object.__new__(DBFuncTool)
+        tool._db_manager = mock_db_manager
+        tool._default_datasource = "trino"
+        tool._default_database = ""
+        tool._datasources = ["trino"]
+        tool._connector_cache = OrderedDict()
+        tool._connector_cache_size = 8
+
+        with pytest.raises(DatusException, match="has invalid configuration") as exc_info:
+            tool._get_connector("trino")
+
+        assert "not configured" not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    def test_connector_key_error_is_not_reported_as_missing_datasource(self):
+        """A routing KeyError for a configured datasource is distinct from a missing datasource key."""
+        from collections import OrderedDict
+
+        from datus.tools.db_tools.db_manager import DBManager
+
+        mock_db_manager = Mock(spec=DBManager)
+        mock_db_manager.get_conn.side_effect = KeyError("physical database")
+
+        tool = object.__new__(DBFuncTool)
+        tool._db_manager = mock_db_manager
+        tool._default_datasource = "trino"
+        tool._default_database = ""
+        tool._datasources = ["trino"]
+        tool._connector_cache = OrderedDict()
+        tool._connector_cache_size = 8
+
+        with pytest.raises(DatusException, match="routing failed") as exc_info:
+            tool._get_connector("trino")
+
+        assert "not configured" not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, KeyError)
+
     def test_default_datasource_fallback(self):
         """When using empty datasource, falls back to _default_datasource and looks up via db_manager."""
         from datus.tools.db_tools.db_manager import DBManager

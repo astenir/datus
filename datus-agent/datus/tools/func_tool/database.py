@@ -405,6 +405,12 @@ class DBFuncTool:
         db = database or ("" if datasource else self._default_database)
         key = (ds, db)
 
+        if ds not in self._datasources:
+            raise DatusException(
+                ErrorCode.COMMON_VALIDATION_FAILED,
+                message=f"Datasource '{ds}' is not configured. Available datasources: {', '.join(self._datasources)}.",
+            )
+
         # Check cache
         if key in self._connector_cache:
             # Move to end (most recently used)
@@ -417,10 +423,15 @@ class DBFuncTool:
             # Preserve database-level routing errors (e.g. invalid database name with the
             # list of available databases) so ``/database`` failures stay diagnosable.
             raise
-        except (KeyError, ValueError) as e:
+        except KeyError as e:
             raise DatusException(
-                ErrorCode.COMMON_VALIDATION_FAILED,
-                message=f"Datasource '{ds}' is not configured. Available datasources: {', '.join(self._datasources)}.",
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=f"Datasource '{ds}' routing failed: {e}",
+            ) from e
+        except ValueError as e:
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=f"Datasource '{ds}' has invalid configuration: {e}",
             ) from e
 
         # Ensure connector is connected
