@@ -39,11 +39,15 @@ categories:
     - datus/tools/func_tool/filesystem_tools.py
     - datus/tools/func_tool/sub_agent_task_tool.py
     - datus/tools/permission/permission_hooks.py
-  move-to-enterprise: []
+  move-to-enterprise:
+    - datus/api/models/mcp_models.py
+    - datus/api/routes/mcp_routes.py
+    - datus/api/services/mcp_service.py
   upstreamable-fix:
     - datus/agent/node/base_artifact_ask_agentic_node.py
     - datus/agent/node/base_visual_artifact_agentic_node.py
     - datus/agent/node/chat_agentic_node.py
+    - datus/agent/node/compare_agentic_node.py
     - datus/agent/node/deliverable_node.py
     - datus/agent/node/explore_agentic_node.py
     - datus/agent/node/gen_dashboard_agentic_node.py
@@ -60,6 +64,7 @@ categories:
     - datus/agent/node/visual_artifact/templates/dashboard_index.html
     - datus/agent/node/visual_artifact/templates/report_index.html
     - datus/api/main.py
+    - datus/schemas/action_bus.py
     - datus/api/services/action_sse_converter.py
     - datus/api/services/agent_service.py
     - datus/api/models/table_models.py
@@ -83,6 +88,7 @@ categories:
     - datus/storage/schema_metadata/store.py
     - datus/storage/subject_tree/store.py
     - datus/tools/func_tool/dashboard_artifact_tools.py
+    - datus/tools/func_tool/bash_tool.py
     - datus/tools/func_tool/database.py
     - datus/tools/func_tool/orchestrator_tools.py
     - datus/tools/func_tool/plan_tools.py
@@ -103,6 +109,8 @@ categories:
     - datus/api/README.md
     - datus/resources/skills/create-skill/SKILL.md
     - datus/tools/db_tools/README.md
+    - docs/subagent/customized_subagent.md
+    - docs/subagent/customized_subagent.zh.md
     - pyproject.toml
     - uv.lock
   test-only:
@@ -110,11 +118,8 @@ categories:
     - tests/integration/tools/test_func_tools_db.py
     - tests/unit_tests/agent/node/test_agentic_node_sysprompt_cache.py
     - tests/unit_tests/agent/node/test_agentic_node_template.py
-    - tests/unit_tests/agent/node/test_ask_artifact_agentic_node.py
-    - tests/unit_tests/agent/node/test_chat_agentic_node.py
     - tests/unit_tests/agent/node/test_dashboard_html_renderer.py
     - tests/unit_tests/agent/node/test_explore_agentic_node.py
-    - tests/unit_tests/agent/node/test_gen_job_agentic_node.py
     - tests/unit_tests/agent/node/test_report_html_renderer.py
     - tests/unit_tests/agent/node/test_tool_category_maps.py
     - tests/unit_tests/api/hooks/test_chat_hooks.py
@@ -130,6 +135,7 @@ categories:
     - tests/unit_tests/api/services/test_database_service.py
     - tests/unit_tests/api/services/test_explorer_service.py
     - tests/unit_tests/api/services/test_kb_service.py
+    - tests/unit_tests/api/services/test_mcp_service.py
     - tests/unit_tests/api/test_api_endpoints.py
     - tests/unit_tests/api/test_deps.py
     - tests/unit_tests/api/test_service.py
@@ -139,12 +145,17 @@ categories:
     - tests/unit_tests/models/test_claude_model.py
     - tests/unit_tests/models/test_openai_compatible_stream_order.py
     - tests/unit_tests/models/test_session_manager.py
+    - tests/unit_tests/schemas/test_action_bus.py
     - tests/unit_tests/schemas/test_tool_summary.py
     - tests/unit_tests/storage/test_base.py
+    - tests/unit_tests/tools/func_tool/test_bash_tool.py
     - tests/unit_tests/tools/func_tool/test_dashboard_artifact_tools.py
     - tests/unit_tests/tools/func_tool/test_database.py
     - tests/unit_tests/tools/func_tool/test_database_migration_tools.py
     - tests/unit_tests/tools/func_tool/test_plan_tools.py
     - tests/unit_tests/tools/func_tool/test_report_artifact_tools.py
+    - tests/unit_tests/tools/db_tools/test_db_manager.py
+    - tests/unit_tests/tools/mcp_tools/test_mcp_config.py
+    - tests/unit_tests/tools/mcp_tools/test_mcp_manager.py
     - tests/unit_tests/tools/permission/test_profiles.py
     - tests/unit_tests/utils/test_compress_utils.py

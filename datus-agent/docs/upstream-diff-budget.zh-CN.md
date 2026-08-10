@@ -4,41 +4,55 @@
 
 ## 当前基线
 
-基线采样日期：2026-08-03
+基线采样日期：2026-08-10
 
 说明：这是正式 `v0.3.9` release tree、数据库适配器和语义适配器协同升级完成后的采样结果。上游 Plugin、CLI 三输入模式、Bash 沙箱、细粒度 SQL 权限、Semantic Adapter 指标读写、多 OSI 模型、TUI 复制、即时中断和 DuckDB 修复均已合入；下游继续保留企业认证/授权、请求级配置投影、数据库强制只读、会话与任务所有权、Artifact ACL、用户 workspace 隔离、审计和企业 Web Chat 禁用 Bash 等长期边界。
 
 对比口径：
 
 ```bash
-cd /home/astenir/Code/work/datus
-git diff --shortstat v0.3.9 HEAD:datus-agent
-git diff --name-status -M v0.3.9 HEAD:datus-agent
+cd /home/astenir/Code/work/datus/datus-agent
+uv run python ci/harness/report_upstream_diff.py \
+  --base v0.3.9 \
+  --target upstream-agent/main
+uv run python ci/harness/report_upstream_diff.py \
+  --base v0.3.9 \
+  --check
 ```
 
-当前结果：
+当前结果（包含本次低风险测试归属收敛后的工作树）：
 
 ```text
-397 files changed, 85446 insertions(+), 2409 deletions(-)
-261 added
-134 modified
+504 files changed, 95624 insertions(+), 2550 deletions(-)
+357 added
+145 modified
 2 deleted
 ```
 
 修改的上游既有文件按类型拆分：
 
 ```text
-88 production/package files
-42 tests
-0 docs
+94 production/package files
+45 tests
+2 docs
 4 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。新增文件另含 109 个 production/package、123 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。与旧 `v0.3.8` 快照相比，modified 数量增加主要是因为 `v0.3.9` 扩大了上游原文件集合和共享契约，不能直接解释为新增了同等数量的下游业务改动。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。当前新增文件另含 198 个 production/package、130 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。与旧 `v0.3.9` 快照相比，本次收敛把 6 个企业/下游回归从上游测试文件移到新增或既有 downstream 测试文件，modified 从 151 降至 145，和当前上游同时变化的路径从 32 降至 29。数字变化不能直接解释为新增了同等数量的下游业务改动。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
 ## 收敛记录
+
+### 2026-08-10：低风险测试归属收敛
+
+分类：`test-only` 归属调整，不改变生产代码和运行时语义。处理方式：将企业 datasource read-only、Agent interaction wildcard、Prompt template identity、SubAgent completion sidecar 等回归从上游测试文件迁移到既有 `*_downstream.py` 或新增下游测试文件；上游测试文件恢复为 `v0.3.9` 内容。同步更新 `ci/harness/upstream-modified-allowlist.yml`，登记此前未纳入门禁的当前上游修改路径。
+
+不变边界：没有修改认证、授权、请求级配置投影、SQL 执行、MCP 凭证、session/task 生命周期或 SSE 生产逻辑；测试仍使用原有 fixture、helper 和断言，只改变测试文件的维护归属。新增下游测试通过导入上游测试模块中的稳定 fixture helper，未复制生产实现。
+
+数字变化：工作树总差异由 508 个文件变为 504 个（新增 357、修改 145、删除 2），差异行数为 `+95624/-2550`；修改的上游文件由 151 个降至 145 个，其中 production/package 94、tests 45、docs 2、config/meta 4；与 `upstream-agent/main` 同时变化的路径由 32 个降至 29 个。
+
+验证：迁移涉及的上游和 downstream 测试组合为 `641 passed, 84 warnings`；迁移文件 Ruff check、`report_upstream_diff.py --base v0.3.9 --check`（`allowlist: ok (145 modified files)`）和 `git diff --check` 通过。警告均来自原测试文件已有的 asyncio 标记，不是本次迁移新增的失败。
 
 ### 2026-08-03：升级到正式 v0.3.9
 

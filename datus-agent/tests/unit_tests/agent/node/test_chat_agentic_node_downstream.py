@@ -108,6 +108,24 @@ def test_disabled_delegation_removes_task_and_prompt_guidance(real_agent_config,
     assert "Task delegation tool (`task`)" not in node._get_system_prompt()
 
 
+def test_enterprise_read_only_survives_rebuild_and_delegation(real_agent_config, mock_llm_create):
+    """Enterprise datasource read-only state survives node and child rebuilds."""
+    real_agent_config._enterprise_enabled = True
+    node = _node(
+        real_agent_config,
+        node_id="test_enterprise_read_only",
+        description="Test enterprise datasource read-only",
+    )
+
+    assert node.db_func_tool.read_only is True
+
+    node._update_database_connection("california_schools")
+    assert node.db_func_tool.read_only is True
+
+    child = node.sub_agent_task_tool._create_node("gen_sql")
+    assert child.db_func_tool.read_only is True
+
+
 @pytest.mark.asyncio
 async def test_execute_stream_applies_tool_policy_before_prompt_assembly(
     real_agent_config,

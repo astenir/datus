@@ -1,11 +1,12 @@
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
 from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS, SubAgentTaskTool
 from datus.utils.constants import HIDDEN_SYS_SUB_AGENTS, SYS_SUB_AGENTS
 from datus_enterprise.agent_registry import ENTERPRISE_BUILTIN_AGENT_IDS, ENTERPRISE_RESERVED_AGENT_IDS
@@ -217,6 +218,78 @@ class TestEnterpriseAgentAclGate:
         config.agentic_nodes = {"sales_dashboard_ask": {"node_class": "ask_dashboard", "artifact_slug": "sales"}}
         tool = SubAgentTaskTool(agent_config=config)
         assert "sales_dashboard_ask" in tool._get_available_types()
+
+
+@pytest.mark.ci
+class TestActionBusCompletionDownstream:
+    def test_complete_action_records_child_session_id(self, task_tool):
+        """A late-completion warning can be tied back to the child session."""
+        from datus.schemas.action_bus import ActionBus
+
+        bus = ActionBus()
+        task_tool.set_action_bus(bus)
+
+        task_tool._emit_complete_action(
+            "gen_sql",
+            "parent-call",
+            datetime.now(),
+            2,
+            ActionStatus.SUCCESS,
+            agent_session_id="child-session",
+        )
+
+        complete = bus._queue.get_nowait()
+        assert complete.action_type == SUBAGENT_COMPLETE_ACTION_TYPE
+        assert complete.output["agent_session_id"] == "child-session"
+
+    @pytest.mark.asyncio
+    async def test_recovered_tool_failure_emits_successful_complete_action(self, task_tool):
+        """A recovered inner tool failure must not poison the subagent's final status."""
+        from datus.schemas.action_bus import ActionBus
+
+        bus = ActionBus()
+        task_tool.set_action_bus(bus)
+
+        failed_tool_action = Mock(
+            spec=ActionHistory,
+            status=ActionStatus.FAILED,
+            output={"success": False, "error": "retryable query error"},
+            depth=0,
+            parent_action_id=None,
+            role=ActionRole.TOOL,
+            action_type="read_query",
+        )
+        final_action = Mock(
+            spec=ActionHistory,
+            status=ActionStatus.SUCCESS,
+            output={"success": True, "response": "recovered", "tokens_used": 10},
+            depth=0,
+            parent_action_id=None,
+            role=ActionRole.ASSISTANT,
+            action_type="gen_sql_response",
+        )
+        mock_node = MagicMock()
+
+        async def mock_stream(ahm):
+            yield failed_tool_action
+            yield final_action
+
+        mock_node.execute_stream_with_interactions = mock_stream
+
+        with patch.object(task_tool, "_create_node", return_value=mock_node):
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(type="gen_sql", prompt="test", call_id="call_recovered")
+
+        assert result.success == 1
+        complete_actions = []
+        while not bus._queue.empty():
+            action = bus._queue.get_nowait()
+            if action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
+                complete_actions.append(action)
+
+        assert len(complete_actions) == 1
+        assert complete_actions[0].status == ActionStatus.SUCCESS
+        assert complete_actions[0].parent_action_id == "call_recovered"
 
 
 def _build_persistent_mock_node(
