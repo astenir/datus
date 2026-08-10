@@ -124,8 +124,13 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "Prompt: provide the analytical question and any context (time range, scope, "
         "metrics of interest); the agent will discover data, save queries via save_query, "
         "write_file the render/*.jsx components, then finalize with validate_render. "
-        "Returns JSON with {response, report_id, app_jsx_path, render_file_count, "
-        "html_path, query_count, tokens_used}."
+        "Returns JSON with {response, report_slug, app_jsx_path, render_file_count, "
+        "html_path, query_count, tokens_used}. A successful validate_render is the "
+        "authoritative persistence check. If the parent Chat tool scans reports/, "
+        "treat a result marked visibility_filtered: true / visibility_reason: artifact_acl "
+        "as an authorization result, never as proof that the report is missing. "
+        "Visual artifact tasks are not resumable: session_id is trace/history metadata only, "
+        "and an existing report must be edited through an ACL-authorized report edit session."
     ),
     "gen_visual_dashboard": (
         "Produce a parameterized visual dashboard artifact under "
@@ -149,7 +154,13 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "Prompt: provide the dashboard question/topic plus the filter dimensions "
         "the user wants exposed; the agent will discover data, build templates, and "
         "wire them to the JSX filter state. Returns JSON with {response, "
-        "dashboard_slug, app_jsx_path, render_file_count, template_count, tokens_used}."
+        "dashboard_slug, app_jsx_path, render_file_count, template_count, tokens_used}. "
+        "A successful validate_render is the authoritative persistence check. If the "
+        "parent Chat tool scans dashboards/, treat a result marked visibility_filtered: "
+        "true / visibility_reason: artifact_acl as an authorization result, never as "
+        "proof that the dashboard is missing. Visual artifact tasks are not resumable: "
+        "session_id is trace/history metadata only, and an existing dashboard must be "
+        "edited through an ACL-authorized dashboard edit session."
     ),
     "gen_semantic_model": (
         "Generate semantic model YAML files from database table structures. "
@@ -305,7 +316,10 @@ class SubAgentTaskTool:
                         "CONTINUE the same subagent's conversation with full prior context. "
                         "Use for iterative refinement (e.g. 'rewrite the previous SQL using "
                         "INNER JOIN' or 'narrow the report to the EU region'). Must belong "
-                        "to a subagent of the SAME `type`. Omit to start a fresh session."
+                        "to a subagent of the SAME `type`. Omit to start a fresh session. "
+                        "Exception: gen_visual_report and gen_visual_dashboard return a "
+                        "trace-only session_id and do not support session resume; existing "
+                        "artifacts require an ACL-authorized edit-session agent."
                     ),
                 },
             },
@@ -347,6 +361,9 @@ class SubAgentTaskTool:
 
         When ``session_id`` is provided the subagent resumes that prior session
         from disk so the new ``prompt`` is appended to existing turn history.
+        Visual artifact nodes are the exception: their session id is trace
+        metadata and existing-artifact edits must use an ACL-authorized
+        edit-session node.
         """
         if not type:
             return FuncToolResult(success=0, error="Missing required parameter: type")
@@ -359,6 +376,25 @@ class SubAgentTaskTool:
             )
         except Exception as e:
             logger.error(f"Task tool execution error (type={type}): {e}")
+            if (
+                session_id
+                and type in {"gen_visual_report", "gen_visual_dashboard"}
+                and "does not support session resume" in str(e)
+            ):
+                artifact_kind = "report" if type == "gen_visual_report" else "dashboard"
+                return FuncToolResult(
+                    success=0,
+                    error=str(e),
+                    result={
+                        "session_id": session_id,
+                        "session_resume_supported": False,
+                        "artifact_edit_session_required": True,
+                        "message": (
+                            f"Do not retry {type} with this session_id. To edit an existing "
+                            f"{artifact_kind}, open an ACL-authorized {artifact_kind} edit session."
+                        ),
+                    },
+                )
             return FuncToolResult(success=0, error=f"Task execution failed: {str(e)}")
 
     # ── node creation ─────────────────────────────────────────────────
@@ -480,15 +516,17 @@ class SubAgentTaskTool:
         elif subagent_type == "gen_visual_report":
             # Same session_id contract as gen_visual_dashboard below —
             # ``BaseVisualArtifactAgenticNode.__init__`` doesn't accept
-            # ``session_id``, so silently dropping it would let resume
-            # loops spawn a fresh session per turn while the LLM
-            # thinks it picked up an existing one. Fail loud.
+            # ``session_id``, so silently dropping it would let a resume loop
+            # spawn a fresh session while the LLM thinks it picked up an
+            # existing one. Fail loud and direct existing edits to the
+            # ACL-authorized edit-session node.
             if session_id is not None:
                 raise ValueError(
-                    "gen_visual_report does not support session resume "
+                    "gen_visual_report does not support session resume and must not be retried "
+                    "as a way to edit an existing artifact. "
                     "(BaseVisualArtifactAgenticNode constructor has no "
-                    "session_id parameter). Drop the session_id kwarg, "
-                    "or use a resumable subagent type."
+                    "session_id parameter). Omit session_id only for a new report; "
+                    "existing reports require an ACL-authorized report edit session."
                 )
             from datus.agent.node.gen_visual_report_agentic_node import GenVisualReportAgenticNode
 
@@ -512,14 +550,15 @@ class SubAgentTaskTool:
             # the way other visual subagents do would let resume loops
             # spawn a fresh session every turn while the LLM thinks it
             # picked up an existing one. Fail loud instead so the
-            # caller can either drop the kwarg or wait for a
-            # constructor-level resume API.
+            # caller must use an ACL-authorized edit-session node for existing
+            # artifacts instead of silently starting a new dashboard.
             if session_id is not None:
                 raise ValueError(
-                    "gen_visual_dashboard does not support session resume "
+                    "gen_visual_dashboard does not support session resume and must not be retried "
+                    "as a way to edit an existing artifact. "
                     "(BaseVisualArtifactAgenticNode constructor has no "
-                    "session_id parameter). Drop the session_id kwarg, "
-                    "or use a resumable subagent type."
+                    "session_id parameter). Omit session_id only for a new dashboard; "
+                    "existing dashboards require an ACL-authorized dashboard edit session."
                 )
             from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
 
@@ -934,7 +973,12 @@ class SubAgentTaskTool:
                 )
                 final_output = {"success": False, "error": f"Subagent stream failed: {e}"}
             finally:
-                func_result = self._convert_to_func_result(final_output, session_id=node.session_id)
+                func_result = self._convert_to_func_result(
+                    final_output,
+                    session_id=node.session_id,
+                    session_resume_supported=subagent_type
+                    not in {"gen_visual_report", "gen_visual_dashboard"},
+                )
                 complete_status = ActionStatus.SUCCESS if func_result.success else ActionStatus.FAILED
                 self._emit_complete_action(
                     subagent_type,
@@ -1252,7 +1296,13 @@ class SubAgentTaskTool:
 
     # ── result conversion ──────────────────────────────────────────────
 
-    def _convert_to_func_result(self, output, *, session_id: Optional[str] = None) -> FuncToolResult:
+    def _convert_to_func_result(
+        self,
+        output,
+        *,
+        session_id: Optional[str] = None,
+        session_resume_supported: bool = True,
+    ) -> FuncToolResult:
         """Convert AgenticNode output to FuncToolResult.
 
         ``session_id`` is the subagent's session_id; when provided, it is
@@ -1274,6 +1324,8 @@ class SubAgentTaskTool:
             }
             if session_id:
                 result_payload["session_id"] = session_id
+            if not session_resume_supported:
+                result_payload["session_resume_supported"] = False
             return FuncToolResult(success=0, error=error_msg, result=result_payload or None)
 
         if not output or not isinstance(output, dict):
@@ -1292,6 +1344,8 @@ class SubAgentTaskTool:
         def _wrap(d: Dict[str, Any]) -> FuncToolResult:
             if session_id:
                 d["session_id"] = session_id
+            if not session_resume_supported:
+                d["session_resume_supported"] = False
             return FuncToolResult(result=d)
 
         # File-based SQL result: sql_file_path present
@@ -1354,6 +1408,33 @@ class SubAgentTaskTool:
                 }
             )
 
+        # Visual report result (new artifact-based subagent).  The legacy
+        # ``report_result`` envelope above belongs to ``gen_report`` and does
+        # not carry the filesystem-backed visual artifact fields.  Preserve
+        # the flat ``GenVisualReportNodeResult`` contract so the parent Agent
+        # can use the child result (and the emitted artifact card) as the
+        # persistence signal instead of probing the ACL-protected
+        # ``reports/`` tree with its ordinary Chat ``glob`` tool.
+        #
+        # Match on the key's presence, including ``report_slug=None`` for a
+        # run that reached the visual node but failed before binding.  This
+        # keeps a partial visual run distinguishable from an unrelated
+        # generic subagent response.
+        if "report_slug" in output:
+            report_slug = output.get("report_slug")
+            return _wrap(
+                {
+                    "response": response,
+                    "report_slug": report_slug,
+                    "app_jsx_path": output.get("app_jsx_path"),
+                    "render_file_count": output.get("render_file_count", 0),
+                    "query_count": output.get("query_count", 0),
+                    "html_path": output.get("html_path"),
+                    "artifact_verified": bool(output.get("success", True)) and bool(report_slug),
+                    "tokens_used": tokens,
+                }
+            )
+
         if "markdown_report" in output:
             return _wrap(
                 {
@@ -1401,13 +1482,15 @@ class SubAgentTaskTool:
         # preserving the explicit None is more honest than silently
         # collapsing into the generic envelope.
         if "dashboard_slug" in output:
+            dashboard_slug = output.get("dashboard_slug")
             return _wrap(
                 {
                     "response": response,
-                    "dashboard_slug": output.get("dashboard_slug"),
+                    "dashboard_slug": dashboard_slug,
                     "app_jsx_path": output.get("app_jsx_path"),
                     "render_file_count": output.get("render_file_count", 0),
                     "template_count": output.get("template_count", 0),
+                    "artifact_verified": bool(output.get("success", True)) and bool(dashboard_slug),
                     "tokens_used": tokens,
                 }
             )

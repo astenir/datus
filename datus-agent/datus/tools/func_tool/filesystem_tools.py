@@ -605,7 +605,13 @@ class FilesystemFuncTool(BaseTool):
 
         return patterns
 
-    def _walk_files(self, seed: ResolvedPath, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:
+    def _walk_files(
+        self,
+        seed: ResolvedPath,
+        include_pattern: str = "",
+        include_dirs: bool = False,
+        visibility_state: Optional[dict[str, bool]] = None,
+    ) -> Iterator[Path]:
         """Walk a directory tree yielding files, and optionally directories.
 
         Traversal honors:
@@ -701,6 +707,8 @@ class FilesystemFuncTool(BaseTool):
                                 allowlist=self._path_allowlist,
                             )
                             if self._is_protected_artifact_path(item_resolved_path):
+                                if visibility_state is not None:
+                                    visibility_state["artifact_acl"] = True
                                 continue
                             item_zone = item_resolved_path.zone
                             if item_zone == PathZone.EXTERNAL:
@@ -818,7 +826,8 @@ class FilesystemFuncTool(BaseTool):
                 report_relative_to = self._root_resolved
 
             matches: List[str] = []
-            for file_path in self._walk_files(seed, include_dirs=True):
+            visibility_state: dict[str, bool] = {"artifact_acl": False}
+            for file_path in self._walk_files(seed, include_dirs=True, visibility_state=visibility_state):
                 try:
                     match_rel = str(file_path.relative_to(target_path))
                 except ValueError:
@@ -854,7 +863,10 @@ class FilesystemFuncTool(BaseTool):
                 result_data["message"] = (
                     f"Results truncated to {max_results}. Use a more specific pattern to narrow results."
                 )
-            return FuncToolResult(result=result_data)
+            result = FuncToolResult(result=result_data)
+            if visibility_state["artifact_acl"]:
+                return artifact_scope.decorate_generic_artifact_glob_result(result)
+            return result
 
         except Exception as e:
             logger.exception(f"Error in glob search for {pattern} in {path}")

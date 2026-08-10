@@ -202,5 +202,14 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
     def glob(self, pattern: str, path: str = ".") -> FuncToolResult:  # type: ignore[override]
         return artifact_scope.decorate_artifact_glob_result(self, pattern, path, super().glob(pattern, path))
 
-    def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False):  # type: ignore[override]
-        return artifact_scope.filter_artifact_walk(self, super()._walk_files(seed, include_pattern, include_dirs))
+    def _walk_files(
+        self,
+        seed,
+        include_pattern: str = "",
+        include_dirs: bool = False,
+        visibility_state=None,
+    ):  # type: ignore[override]
+        return artifact_scope.filter_artifact_walk(
+            self,
+            super()._walk_files(seed, include_pattern, include_dirs, visibility_state),
+        )

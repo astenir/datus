@@ -260,11 +260,13 @@ class TestReportFilesystemFuncTool:
         assert before_bind.success == 1
         assert before_bind.result["files"] == []
         assert before_bind.result["visibility_filtered"] is True
+        assert before_bind.result["visibility_reason"] == "artifact_acl"
         assert "No report is bound" in before_bind.result["message"]
         assert unrelated.result["files"] == ["subject/sales"]
         assert "visibility_filtered" not in unrelated.result
         assert after_bind.result["files"] == ["reports/existing"]
         assert after_bind.result["visibility_filtered"] is True
+        assert after_bind.result["visibility_reason"] == "artifact_acl"
 
     def test_locked_edit_session_bypasses_generic_artifact_protection(self, project_root: Path):
         for slug in ("allowed", "other"):
