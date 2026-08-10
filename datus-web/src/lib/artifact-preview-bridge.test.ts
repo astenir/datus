@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ARTIFACT_QUERY_REQUEST,
   ARTIFACT_QUERY_RESULT,
+  ARTIFACT_RENDER_ERROR,
+  artifactRenderErrorFromMessage,
+  artifactRepairPrompt,
   handleArtifactPreviewMessage,
   parseArtifactPreviewQueryRequest,
   withArtifactPreviewRuntime,
@@ -28,7 +31,10 @@ describe("artifact preview bridge", () => {
     expect(html).toContain("__DATUS_ARTIFACT_QUERY_TRANSPORT__");
     expect(html).toContain(ARTIFACT_QUERY_REQUEST);
     expect(html).toContain(ARTIFACT_QUERY_RESULT);
+    expect(html).toContain(ARTIFACT_RENDER_ERROR);
     expect(html).toContain("timeoutMs: 30000");
+    expect(html).toContain("forwardRenderError");
+    expect(html).toContain('window.addEventListener("unhandledrejection"');
     expect(html).toContain('installMemoryStorage("localStorage")');
     expect(html).toContain('installMemoryStorage("sessionStorage")');
     expect(html).not.toContain("MutationObserver");
@@ -74,6 +80,48 @@ describe("artifact preview bridge", () => {
   it("rejects missing and oversized request IDs", () => {
     expect(parseArtifactPreviewQueryRequest({ ...queryMessage(), requestId: "" }, "fund-overview")).toBeNull();
     expect(parseArtifactPreviewQueryRequest({ ...queryMessage(), requestId: "x".repeat(129) }, "fund-overview")).toBeNull();
+  });
+
+  it("accepts bounded render errors only from the active preview frame tree", () => {
+    const activeSource = { postMessage: vi.fn() };
+    const nestedSource = { parent: activeSource, postMessage: vi.fn() };
+    const oversizedStack = `stack-${"x".repeat(20_000)}`;
+
+    expect(artifactRenderErrorFromMessage({
+      source: nestedSource,
+      data: {
+        type: ARTIFACT_RENDER_ERROR,
+        message: "Minified React error #130",
+        stack: oversizedStack,
+      },
+    }, activeSource)).toEqual({
+      message: "Minified React error #130",
+      stack: oversizedStack.slice(0, 12_000),
+    });
+
+    expect(artifactRenderErrorFromMessage({
+      source: { postMessage: vi.fn() },
+      data: { type: ARTIFACT_RENDER_ERROR, message: "foreign frame" },
+    }, activeSource)).toBeNull();
+    expect(artifactRenderErrorFromMessage({
+      source: activeSource,
+      data: { type: ARTIFACT_RENDER_ERROR, message: "" },
+    }, activeSource)).toBeNull();
+  });
+
+  it("builds a slug-locked repair request without asking the user to copy it", () => {
+    const prompt = artifactRepairPrompt("report", "three_literal_values_demo", {
+      message: "Minified React error #130",
+      stack: "at render/app.jsx:10:2",
+    });
+
+    expect(prompt).toContain("当前 ACL 授权编辑会话所锁定的报表");
+    expect(prompt).toContain("目标 slug：three_literal_values_demo");
+    expect(prompt).toContain("不要查找、枚举或新建其他产物");
+    expect(prompt).toContain("validate_render");
+    expect(prompt).toContain('"message": "Minified React error #130"');
+    expect(prompt).toContain('"stack": "at render/app.jsx:10:2"');
+    expect(prompt).not.toContain("Please use gen_visual_report");
   });
 
   it("ignores messages outside the active preview frame tree", async () => {

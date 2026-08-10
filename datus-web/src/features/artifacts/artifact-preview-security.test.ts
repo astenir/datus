@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import viewerSource from "./ArtifactViewerFrame.vue?raw";
+import artifactsPanelSource from "./ArtifactsPanel.vue?raw";
 import chatSource from "../chat/ChatPanel.vue?raw";
 import workspaceSource from "../workspace/DatusWorkspace.vue?raw";
 
@@ -13,6 +14,18 @@ describe("artifact preview security boundary", () => {
     expect(viewerSource).toContain('window.removeEventListener("message", handleWindowMessage)');
     expect(viewerSource).toContain("previewController.abort()");
     expect(viewerSource).toContain("[props.url, props.dashboardSlug, props.query]");
+    expect(viewerSource).toContain("artifactRenderErrorFromMessage");
+  });
+
+  it("routes render repair through a slug-locked edit session and the chat workspace", () => {
+    expect(viewerSource).toContain("emit('repair', renderError)");
+    expect(viewerSource).toContain("交给专用 Agent 修复");
+    expect(viewerSource).not.toContain("clipboard");
+    expect(artifactsPanelSource).toContain("artifacts.createArtifactEditSession(tab, normalizedSlug)");
+    expect(artifactsPanelSource).toContain('emit("repair-artifact", session, artifactRepairPrompt');
+    expect(workspaceSource).toContain('@repair-artifact="startArtifactRepair"');
+    expect(workspaceSource).toContain("workspace.startArtifactEditSession(session)");
+    expect(workspaceSource).toContain("workspace.handleSend(prompt)");
   });
 
   it("routes chat artifact clicks through the workspace instead of a blob window", () => {
