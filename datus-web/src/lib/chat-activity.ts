@@ -182,7 +182,14 @@ export function chatActivityPresentation(
     };
   }
   if (activity.phase === "responding") {
-    return { visible: false, tone: "normal", label: "" };
+    return {
+      visible: true,
+      tone: "normal",
+      label: "正在生成回答…",
+      detail: idleMs >= CHAT_ACTIVITY_LONG_WAIT_MS
+        ? `已等待 ${formatElapsed(Math.floor(idleMs / 1000))}`
+        : undefined,
+    };
   }
   if (activity.phase === "preparing_response") {
     return {

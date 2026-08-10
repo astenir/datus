@@ -105,7 +105,7 @@ describe("chat stream activity", () => {
     });
   });
 
-  it("keeps preparing visible through pings and switches off when response content starts", () => {
+  it("keeps preparing visible through pings and shows generation status when response content starts", () => {
     const preparing = {
       phase: "preparing_response" as const,
       startedAt: 1_000,
@@ -147,7 +147,11 @@ describe("chat stream activity", () => {
       phase: "responding",
       lastContentAt: 11_000,
     });
-    expect(chatActivityPresentation(responseStarted, 11_000).visible).toBe(false);
+    expect(chatActivityPresentation(responseStarted, 11_000)).toEqual({
+      visible: true,
+      tone: "normal",
+      label: "正在生成回答…",
+    });
   });
 
   it("switches to awaiting user without losing the pending tool set", () => {
@@ -238,7 +242,7 @@ describe("chat activity presentation", () => {
     });
   });
 
-  it("only resurfaces responding status when the stream becomes stale", () => {
+  it("keeps responding status visible and escalates when the stream becomes stale", () => {
     const activity = {
       phase: "responding" as const,
       startedAt: 1_000,
@@ -250,7 +254,12 @@ describe("chat activity presentation", () => {
       toolCompletedCount: 0,
     };
 
-    expect(chatActivityPresentation(activity, 10_000).visible).toBe(false);
+    expect(chatActivityPresentation(activity, 10_000)).toEqual({
+      visible: true,
+      tone: "normal",
+      label: "正在生成回答…",
+      detail: "已等待 8 秒",
+    });
     expect(chatActivityPresentation(activity, 17_000)).toMatchObject({
       visible: true,
       tone: "warning",
