@@ -20,12 +20,12 @@ uv run python ci/harness/report_upstream_diff.py \
   --check
 ```
 
-当前结果（包含本次低风险测试归属收敛后的工作树）：
+当前结果（包含两批低风险测试归属收敛后的工作树）：
 
 ```text
-504 files changed, 95624 insertions(+), 2550 deletions(-)
+503 files changed, 95635 insertions(+), 2549 deletions(-)
 357 added
-145 modified
+144 modified
 2 deleted
 ```
 
@@ -33,12 +33,12 @@ uv run python ci/harness/report_upstream_diff.py \
 
 ```text
 94 production/package files
-45 tests
+44 tests
 2 docs
 4 config/meta files
 ```
 
-分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。当前新增文件另含 198 个 production/package、130 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。与旧 `v0.3.9` 快照相比，本次收敛把 6 个企业/下游回归从上游测试文件移到新增或既有 downstream 测试文件，modified 从 151 降至 145，和当前上游同时变化的路径从 32 降至 29。数字变化不能直接解释为新增了同等数量的下游业务改动。
+分类口径：只统计 `modified`；`datus/` 与 `datus_enterprise/` 归 production/package，`tests/` 归 tests，`docs/` 归 docs，其余根级构建、配置、CI 和锁文件归 config/meta。当前新增文件另含 198 个 production/package、130 个 tests、4 个 docs 和 25 个 config/meta；它们主要是下游企业模块、脚本、测试、文档和部署资产，不与修改的上游既有文件混算。前一批收敛先把 6 个企业/下游回归从上游测试文件移到新增或既有 downstream 测试文件；本批再把 3 个 MCP 凭据回归归入企业 MCP service 测试，modified 从 151 降至 144，和当前上游同时变化的路径保持 29。数字变化不能直接解释为新增了同等数量的下游业务改动。
 
 这些数字是升级治理指标。每次完成一次上游 release 合并或低风险收敛后，都应该刷新这一节，说明数字变大或变小的原因。
 
@@ -53,6 +53,16 @@ uv run python ci/harness/report_upstream_diff.py \
 数字变化：工作树总差异由 508 个文件变为 504 个（新增 357、修改 145、删除 2），差异行数为 `+95624/-2550`；修改的上游文件由 151 个降至 145 个，其中 production/package 94、tests 45、docs 2、config/meta 4；与 `upstream-agent/main` 同时变化的路径由 32 个降至 29 个。
 
 验证：迁移涉及的上游和 downstream 测试组合为 `641 passed, 84 warnings`；迁移文件 Ruff check、`report_upstream_diff.py --base v0.3.9 --check`（`allowlist: ok (145 modified files)`）和 `git diff --check` 通过。警告均来自原测试文件已有的 asyncio 标记，不是本次迁移新增的失败。
+
+### 2026-08-10：MCP 凭据测试归属收敛
+
+分类：`test-only` 归属调整，不改变生产代码和运行时语义。处理方式：将静态 Bearer 脱敏、request Bearer 仅持久化模式标记、非法认证组合不回显凭据这 3 个企业凭据回归从通用 `test_mcp_service.py` 移到 `test_mcp_service_enterprise_downstream.py`，并通过 `EnterpriseMCPService` 覆盖实际下游服务入口；上游通用测试只保留 CRUD、过滤器、异步失败和生命周期行为。
+
+不变边界：没有修改认证、授权、请求级配置投影、MCP 连接执行或凭据存储生产逻辑；测试仍使用相同 fixture、输入和安全断言，只改变测试文件的维护归属。静态 token 仍不出现在管理响应或列表响应，request Bearer 仍只保存模式，不接受带 token 的组合。
+
+数字变化：工作树总差异由 504 个文件变为 503 个（新增 357、修改 144、删除 2），差异行数为 `+95635/-2549`；修改的上游文件由 145 个降至 144 个，其中 production/package 94、tests 44、docs 2、config/meta 4；上游差异门禁 allowlist 同步移除已恢复的 `tests/unit_tests/api/services/test_mcp_service.py`。
+
+验证：MCP service 上游、downstream 和 enterprise downstream 组合为 `25 passed`；涉及测试 Ruff、`report_upstream_diff.py --base v0.3.9 --check`（`allowlist: ok (144 modified files)`）和 `git diff --check` 通过。
 
 ### 2026-08-03：升级到正式 v0.3.9
 
