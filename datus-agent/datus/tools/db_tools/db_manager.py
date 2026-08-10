@@ -402,9 +402,7 @@ class DBManager:
                 )
                 if schema_name:
                     filtered_config["schema_name"] = schema_name
-                filtered_config = {
-                    key: value for key, value in filtered_config.items() if key in _TRINO_CONFIG_FIELDS
-                }
+                filtered_config = {key: value for key, value in filtered_config.items() if key in _TRINO_CONFIG_FIELDS}
 
             # Convert port to int if present
             if "port" in filtered_config:

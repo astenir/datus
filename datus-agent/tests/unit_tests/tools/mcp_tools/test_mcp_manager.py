@@ -224,6 +224,7 @@ class TestMCPManagerPersistence:
             result = manager.save_config()
         assert result is False
 
+
 # ---------------------------------------------------------------------------
 # MCPManager - tool filter management
 # ---------------------------------------------------------------------------
@@ -324,6 +325,7 @@ class TestCreateServerInstance:
         monkeypatch.setattr(cfg, "type", "unsupported_type")
         instance, _details = manager._create_server_instance(cfg)
         assert instance is None
+
 
 # ---------------------------------------------------------------------------
 # MCPManager - async operations (mocked server instances)

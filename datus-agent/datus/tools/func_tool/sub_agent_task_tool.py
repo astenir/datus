@@ -976,8 +976,7 @@ class SubAgentTaskTool:
                 func_result = self._convert_to_func_result(
                     final_output,
                     session_id=node.session_id,
-                    session_resume_supported=subagent_type
-                    not in {"gen_visual_report", "gen_visual_dashboard"},
+                    session_resume_supported=subagent_type not in {"gen_visual_report", "gen_visual_dashboard"},
                 )
                 complete_status = ActionStatus.SUCCESS if func_result.success else ActionStatus.FAILED
                 self._emit_complete_action(
