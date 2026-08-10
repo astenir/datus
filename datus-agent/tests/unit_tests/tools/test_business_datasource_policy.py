@@ -6,6 +6,7 @@ from datus.tools.business_datasource_policy import (
     business_datasource_read_only_message,
     evaluate_business_datasource_read_only_sql,
 )
+from datus.tools.db_tools import connector_registry
 
 
 @pytest.mark.parametrize(
@@ -20,6 +21,25 @@ from datus.tools.business_datasource_policy import (
 )
 def test_allows_single_pure_read_statement(sql: str) -> None:
     assert evaluate_business_datasource_read_only_sql(sql).allowed is True
+
+
+def test_allows_oceanbase_oracle_select_with_registered_parser_dialect(monkeypatch) -> None:
+    original_get_parser_dialect = connector_registry.get_parser_dialect
+    monkeypatch.setattr(
+        connector_registry,
+        "get_parser_dialect",
+        lambda dialect: "oracle" if dialect == "oceanbase-oracle" else original_get_parser_dialect(dialect),
+    )
+    sql = (
+        "SELECT DISTINCT DEPARTMENT_NAME FROM CRM_INST_CLIENT_DEPT_INFO "
+        "WHERE IS_DELETED = 'O' OR IS_DELETED IS NULL ORDER BY DEPARTMENT_NAME"
+    )
+
+    first = evaluate_business_datasource_read_only_sql(sql, "oceanbase-oracle")
+    following = evaluate_business_datasource_read_only_sql("SELECT 1 FROM DUAL", "oceanbase-oracle")
+
+    assert first.allowed is True
+    assert following.allowed is True
 
 
 @pytest.mark.parametrize(
