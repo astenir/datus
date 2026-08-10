@@ -17,6 +17,12 @@
 | 语义适配器 | [datus-semantic-adapter/README.md](../datus-semantic-adapter/README.md) | core、MetricFlow 和 OSI 适配器 |
 | MetricFlow | [metricflow/README-DATUS.md](../metricflow/README-DATUS.md) | Datus 配置集成和 CLI |
 
+## 上游同步
+
+| 文档 | 用途 |
+| --- | --- |
+| [统一上游同步清单](./upstream-sync-manifest.yml) | 上游地址、只读 remote、采用基线、待同步引用、版本锁文件和联动验证 |
+
 ## 企业能力
 
 | 文档 | 用途 |
