@@ -1668,11 +1668,7 @@ class DBFuncTool:
                 sql = self._read_sql_from_file(sql_stripped)
 
             connector = self._get_connector(datasource, database)
-            validation_error, sql_type = self._validate_read_sql(sql, connector)
-            if validation_error:
-                return validation_error
-
-            logger.info("read_query", sql_type=sql_type.value, datasource=datasource or "default")
+            logger.info("read_query", datasource=datasource or "default")
             result_format = "arrow" if connector.dialect == "snowflake" else "list"
             result = self.execute_read_enforced(
                 sql,
@@ -1794,11 +1790,7 @@ class DBFuncTool:
 
             decision = evaluate_business_datasource_read_only_sql(sql, connector.dialect)
             if not decision.allowed:
-                denial = self._reject_read_only_mutation(
-                    "execute_sql",
-                    sql=sql,
-                    dialect=connector.dialect,
-                )
+                denial = self._reject_read_only_mutation(decision.operation)
                 return (
                     denial or FuncToolResult(success=0, error="Read-only SQL policy denied the statement."),
                     SQLType.UNKNOWN,

@@ -2040,6 +2040,35 @@ class TestDBFuncToolExecuteReadEnforced:
         assert args[0] == "SELECT 1 AS n"
         assert kwargs["result_format"] == "list"
 
+    def test_read_query_uses_shared_read_validation_once(self):
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.compressor.compress = Mock(return_value={"original_rows": 1})
+
+        with patch.object(tool, "_validate_read_sql", wraps=tool._validate_read_sql) as validate_read_sql:
+            result = tool.read_query("SELECT 1 AS n")
+
+        assert result.success == 1
+        assert validate_read_sql.call_count == 1
+
+    def test_enterprise_read_only_denial_is_classified_once(self):
+        from datus.tools import business_datasource_policy
+
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.read_only = True
+        tool.enterprise_read_only = True
+
+        with patch.object(
+            business_datasource_policy,
+            "evaluate_business_datasource_read_only_sql",
+            wraps=business_datasource_policy.evaluate_business_datasource_read_only_sql,
+        ) as evaluate_read_only_sql:
+            result = tool.execute_read_enforced("INSERT INTO t VALUES (1)", connector)
+
+        assert result.success is False
+        assert evaluate_read_only_sql.call_count == 1
+
     def test_multi_statement_rejected_without_touching_connector(self):
         connector = self._connector()
         tool = self._make_tool(connector)
