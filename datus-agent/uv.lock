@@ -790,6 +790,7 @@ enterprise-intranet = [
     { name = "datus-semantic-metricflow" },
     { name = "datus-storage-oceanbase-mysql" },
     { name = "datus-storage-postgresql" },
+    { name = "datus-trino" },
 ]
 metricflow-oceanbase-oracle = [
     { name = "datus-metricflow" },
@@ -856,6 +857,7 @@ requires-dist = [
     { name = "datus-storage-oceanbase-mysql", marker = "extra == 'enterprise-intranet'", editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" },
     { name = "datus-storage-oceanbase-mysql", marker = "extra == 'storage-oceanbase-mysql'", editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" },
     { name = "datus-storage-postgresql", marker = "extra == 'enterprise-intranet'", editable = "../datus-storage-adapters/datus-storage-postgresql" },
+    { name = "datus-trino", marker = "extra == 'enterprise-intranet'", editable = "../datus-db-adapters/datus-trino" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "duckdb", specifier = "==1.5.2" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
@@ -1291,6 +1293,28 @@ requires-dist = [
     { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "datus-trino"
+version = "0.1.3"
+source = { editable = "../datus-db-adapters/datus-trino" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "datus-sqlalchemy" },
+    { name = "pydantic" },
+    { name = "trino", extra = ["sqlalchemy"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "datus-sqlalchemy", editable = "../datus-db-adapters/datus-sqlalchemy" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
+    { name = "trino", extras = ["sqlalchemy"], specifier = ">=0.328.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "dbutils"
@@ -5022,6 +5046,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7f/b6/73315c36902ecd87d061fe045a1df4611f5b7ff714498864896b4d454ab1/trino-0.337.0.tar.gz", hash = "sha256:3a0bd03a09b7ea5dccd41ca6e58abfb127c6303f3a48a258ff794d411dd83a3c", size = 55995, upload-time = "2026-03-06T13:24:01.495Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2d/99/c39eca8b3fca72d39fe507f9e7598174acb0a5845ecdd20630790e268cb2/trino-0.337.0-py3-none-any.whl", hash = "sha256:868f2b8137d4d1baa84c9bc341f2cdf29039462aa69d7c089a0b821b5a91f29c", size = 58558, upload-time = "2026-03-06T13:23:59.662Z" },
+]
+
+[package.optional-dependencies]
+sqlalchemy = [
+    { name = "sqlalchemy" },
 ]
 
 [[package]]

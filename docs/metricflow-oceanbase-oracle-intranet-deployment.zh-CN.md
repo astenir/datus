@@ -16,7 +16,7 @@ datus-storage-adapters/
 metricflow/
 ```
 
-推荐安装 `enterprise-intranet` extra，它包含当前内网基线中的 MetricFlow、OceanBase Oracle、标准 Oracle、MySQL、PostgreSQL 业务 adapter，以及 OceanBase MySQL/PostgreSQL 内部存储 backend。仅做语义链路测试时可使用较小的 `metricflow-oceanbase-oracle` extra。
+推荐安装 `enterprise-intranet` extra，它包含当前内网基线中的 MetricFlow、OceanBase Oracle、标准 Oracle、MySQL、PostgreSQL、Trino 业务 adapter，以及 OceanBase MySQL/PostgreSQL 内部存储 backend。仅做语义链路测试时可使用较小的 `metricflow-oceanbase-oracle` extra。
 
 业务 OceanBase Oracle datasource 与 Datus 内部 OceanBase MySQL storage 是两个独立插件和权限面：前者应使用只读业务账号，后者需要独立可写 tenant/database 和账号。
 
@@ -180,19 +180,20 @@ OCEANBASE_ORACLE_METRICFLOW_TIME_END="2025-01-31"
 ```bash
 .venv/bin/python -c "
 from importlib import metadata
-import metricflow, datus_oceanbase_oracle, datus_semantic_metricflow
+import metricflow, datus_oceanbase_oracle, datus_semantic_metricflow, datus_trino
 from datus.storage.rdb import RdbRegistry
 from datus.storage.vector import VectorRegistry
 print(metricflow.__file__)
 print(datus_oceanbase_oracle.__file__)
 print(datus_semantic_metricflow.__file__)
+print(datus_trino.__file__)
 print(sorted(ep.name for ep in metadata.entry_points(group='datus.adapters')))
 print(RdbRegistry.registered_types())
 print(VectorRegistry.registered_types())
 "
 ```
 
-模块路径必须指向当前 release。`enterprise-intranet` profile 的 database adapters 应包含 `mysql`、`oceanbase-oracle`、`oracle`、`postgresql`；RDB/vector backend 应包含 `oceanbase-mysql` 和 `postgresql`。
+模块路径必须指向当前 release。`enterprise-intranet` profile 的 database adapters 应包含 `mysql`、`oceanbase-oracle`、`oracle`、`postgresql`、`trino`；RDB/vector backend 应包含 `oceanbase-mysql` 和 `postgresql`。
 
 ### 7.2 无数据库初始化回归
 
