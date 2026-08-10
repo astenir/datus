@@ -207,3 +207,26 @@ async def test_enterprise_read_only_still_allows_select(mock_broker):
     await hooks.on_tool_start(_sql_context("SELECT * FROM t"), MagicMock(), _sql_tool())
 
     mock_broker.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_read_only_reuses_statement_classification(mock_broker, monkeypatch):
+    hooks = _build_sql_hooks(
+        mock_broker,
+        get_profile("normal"),
+        business_datasource_read_only=True,
+    )
+    from datus.tools import business_datasource_policy
+
+    original_parse = business_datasource_policy.parse_sql_statement_kind
+    parse_calls = []
+
+    def count_parse(sql, dialect=""):
+        parse_calls.append((sql, dialect))
+        return original_parse(sql, dialect)
+
+    monkeypatch.setattr(business_datasource_policy, "parse_sql_statement_kind", count_parse)
+
+    await hooks.on_tool_start(_sql_context("SELECT * FROM t"), MagicMock(), _sql_tool())
+
+    assert parse_calls == [("SELECT * FROM t", "")]
