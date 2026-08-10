@@ -43,6 +43,39 @@ def test_allows_oceanbase_oracle_select_with_registered_parser_dialect(monkeypat
 
 
 @pytest.mark.parametrize(
+    ("database_dialect", "parser_dialect", "sql"),
+    [
+        (
+            "greenplum",
+            "postgres",
+            "SELECT DISTINCT ON (department_id) department_id, name "
+            "FROM departments ORDER BY department_id, updated_at DESC",
+        ),
+        ("clickzetta", "spark", "SELECT * EXCEPT(__change_type) FROM `orders_stream`"),
+    ],
+)
+def test_registered_analytics_parser_allows_reads_and_rejects_writes(
+    monkeypatch,
+    database_dialect: str,
+    parser_dialect: str,
+    sql: str,
+) -> None:
+    original_get_parser_dialect = connector_registry.get_parser_dialect
+    monkeypatch.setattr(
+        connector_registry,
+        "get_parser_dialect",
+        lambda dialect: parser_dialect if dialect == database_dialect else original_get_parser_dialect(dialect),
+    )
+
+    read_decision = evaluate_business_datasource_read_only_sql(sql, database_dialect)
+    write_decision = evaluate_business_datasource_read_only_sql("DELETE FROM orders", database_dialect)
+
+    assert read_decision.allowed is True
+    assert write_decision.allowed is False
+    assert write_decision.operation == "DELETE"
+
+
+@pytest.mark.parametrize(
     ("sql", "operation"),
     [
         ("INSERT INTO users VALUES (1)", "INSERT"),
