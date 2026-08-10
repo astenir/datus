@@ -18,6 +18,18 @@ from datus.utils.path_utils import get_files_from_glob_pattern
 
 logger = get_logger(__name__)
 
+_TRINO_CONFIG_FIELDS = {
+    "host",
+    "port",
+    "username",
+    "password",
+    "catalog",
+    "schema_name",
+    "http_scheme",
+    "verify",
+    "timeout_seconds",
+}
+
 
 def _auto_install_adapter(db_type: str) -> None:
     """Attempt to pip-install the adapter package for *db_type* and register it."""
@@ -376,6 +388,21 @@ class DBManager:
             # Expand extra field to include adapter-specific config
             if db_config.extra:
                 filtered_config.update(db_config.extra)
+
+            if db_type == "trino":
+                # Datus's generic namespace fields use ``schema``/``database``;
+                # datus-trino's strict config model uses ``schema_name`` and
+                # rejects unknown fields. Prefer an adapter-specific value,
+                # then the generic schema, and finally the generic database
+                # (which is Trino's schema-level namespace in DBFuncTool).
+                schema_name = (
+                    filtered_config.get("schema_name")
+                    or filtered_config.get("schema")
+                    or filtered_config.get("database")
+                )
+                if schema_name:
+                    filtered_config["schema_name"] = schema_name
+                filtered_config = {key: value for key, value in filtered_config.items() if key in _TRINO_CONFIG_FIELDS}
 
             # Convert port to int if present
             if "port" in filtered_config:

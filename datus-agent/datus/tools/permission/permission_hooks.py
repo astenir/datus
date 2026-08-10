@@ -838,11 +838,6 @@ class PermissionHooks(AgentHooks):
                 sql = read_workspace_sql_file(sql.strip(), self.project_root or ".")
             except Exception as e:
                 logger.debug("execute_sql gate: could not resolve .sql file (%s); treating as UNKNOWN", e)
-        # No dialect available at the hook layer; the keyword fallback in
-        # ``parse_sql_statement_kind`` is enough to separate the classes.
-        kind = parse_sql_statement_kind(sql, "") if isinstance(sql, str) else SQLType.UNKNOWN.value
-        sql_class = classify_sql_kind(kind)
-
         # Enterprise business datasources are a hard read-only capability, not
         # a confirmation preference. Apply that ceiling before coarse ALLOW,
         # dangerous mode, session/project grants, or InteractionBroker prompts.
@@ -855,6 +850,11 @@ class PermissionHooks(AgentHooks):
             )
 
             decision = evaluate_business_datasource_read_only_sql(sql if isinstance(sql, str) else "")
+            # The enterprise decision already classifies the statement. Reuse
+            # it for the ordinary permission path instead of parsing the same
+            # SQL a second time.
+            kind = decision.statement_kind
+            sql_class = classify_sql_kind(kind)
             if not decision.allowed:
                 logger.warning(
                     "Enterprise business datasource rejected SQL operation %s (%s): %s",
@@ -872,6 +872,11 @@ class PermissionHooks(AgentHooks):
                     tool_category="db_tools",
                     tool_name="execute_sql",
                 )
+        else:
+            # No dialect is available at the hook layer; the keyword fallback
+            # is enough to separate the permission classes.
+            kind = parse_sql_statement_kind(sql, "") if isinstance(sql, str) else SQLType.UNKNOWN.value
+            sql_class = classify_sql_kind(kind)
 
         # Honour explicit coarse rules first — they are the escape hatches.
         permission = self.permission_manager.check_permission("db_tools", pattern_name, self.node_name)

@@ -5,8 +5,8 @@
 
 本文件只提供代码导航和放置规则。安全与产品契约以仓库根目录的
 `ENTERPRISE_PLATFORM_PLAN.zh.md` 为准，开发检查项以
-`ENTERPRISE_AI_DEVELOPMENT_GUIDE.zh.md` 为准，上游差异治理以
-`docs/upstream-diff-budget.zh-CN.md` 为准。
+`ENTERPRISE_AI_DEVELOPMENT_GUIDE.zh.md` 为准，上游差异治理以仓库根目录的
+`docs/upstream-diff-budget.zh-CN.md` 和 `docs/upstream-sync-manifest.yml` 为准。
 
 ## 包边界
 

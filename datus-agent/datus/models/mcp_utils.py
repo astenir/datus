@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import asyncio
+import re
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Callable, Dict, Optional
 
@@ -15,6 +16,7 @@ logger = get_logger(__name__)
 async def _safe_connect_server(server_name: str, server, max_retries: int = 3):
     """Context-managed safe MCP server connection"""
     provider = None
+    max_retries = max(1, int(max_retries))
 
     for attempt in range(max_retries):
         try:
@@ -33,8 +35,9 @@ async def _safe_connect_server(server_name: str, server, max_retries: int = 3):
                     raise
                 return  # only yield once; exit after use
 
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout connecting to MCP server {server_name} (attempt {attempt + 1})")
+        except asyncio.TimeoutError as e:
+            safe_error = safe_mcp_connection_error(e)
+            logger.warning(f"Failed to connect MCP server {server_name} (attempt {attempt + 1}): {safe_error}")
             if attempt == max_retries - 1:
                 raise
         except asyncio.CancelledError:
@@ -45,7 +48,8 @@ async def _safe_connect_server(server_name: str, server, max_retries: int = 3):
             # Re-raise GeneratorExit to ensure proper cleanup
             raise
         except Exception as e:
-            logger.error(f"Failed to connect MCP server {server_name} (attempt {attempt + 1}): {str(e)}")
+            safe_error = safe_mcp_connection_error(e)
+            logger.warning(f"Failed to connect MCP server {server_name} (attempt {attempt + 1}): {safe_error}")
             if attempt == max_retries - 1:
                 raise
 
@@ -61,17 +65,21 @@ async def _safe_connect_server(server_name: str, server, max_retries: int = 3):
 async def multiple_mcp_servers(
     mcp_servers: Dict[str, Any],
     on_connection_failure: Optional[Callable[[str, str], None]] = None,
+    max_retries: int = 3,
 ):
     """Context manager for managing multiple MCP servers.
 
     Args:
         mcp_servers: Dictionary of MCP servers to manage
+        max_retries: Maximum connection attempts for each server. A failed
+            server is isolated from the rest of the Agent run.
 
     Yields:
         Dictionary of connected MCP servers
     """
     connected_servers = {}
     stack = AsyncExitStack()
+    max_retries = max(1, int(max_retries))
 
     try:
         logger.info(f"Attempting to connect {len(mcp_servers)} MCP servers: {list(mcp_servers.keys())}")
@@ -79,14 +87,15 @@ async def multiple_mcp_servers(
         for server_name, server in mcp_servers.items():
             try:
                 logger.info(f"Connecting MCP server: {server_name}")
-                cm = _safe_connect_server(server_name, server)
+                cm = _safe_connect_server(server_name, server, max_retries=max_retries)
                 connected_server = await stack.enter_async_context(cm)
                 connected_servers[server_name] = connected_server
                 logger.info(f"Successfully connected MCP server: {server_name}")
             except Exception as e:
-                logger.error(f"Failed to start MCP server {server_name}: {str(e)}")
+                safe_error = safe_mcp_connection_error(e)
+                logger.warning(f"Failed to start MCP server {server_name}: {safe_error}")
                 if on_connection_failure is not None:
-                    on_connection_failure(server_name, str(e))
+                    on_connection_failure(server_name, safe_error)
 
         if not connected_servers:
             logger.debug("Warning: No MCP servers were successfully connected")
@@ -103,3 +112,28 @@ async def multiple_mcp_servers(
                 logger.debug("Suppressed cancel scope error during MCP server cleanup")
             else:
                 raise
+
+
+def safe_mcp_connection_error(error: Any) -> str:
+    """Return a useful MCP connection error without exposing transport details."""
+    raw_error = str(error)
+    normalized = f"{type(error).__name__} {raw_error}".lower()
+
+    if isinstance(error, asyncio.TimeoutError) or re.search(
+        r"connecttimeout|readtimeout|timed?\s*out|timeout|aborterror",
+        normalized,
+    ):
+        return "MCP server connection timed out."
+
+    status_match = re.search(r"\b([45]\d{2})\b", raw_error)
+    if status_match:
+        return f"MCP server returned HTTP {status_match.group(1)}."
+
+    if re.search(
+        r"connecterror|connection\s+(?:refused|reset|closed|failed)|name or service not known|"
+        r"getaddrinfo|temporary failure in name resolution|dns|network is unreachable",
+        normalized,
+    ):
+        return "Failed to connect to MCP server. Please check the server address and network connectivity."
+
+    return "MCP server connection failed."

@@ -173,6 +173,47 @@ class TestChatServiceGetHistory:
         assert len(sm.get_tool_execution_events(session_id)) == 1
         assert len(sm.get_session_messages(session_id)) == 1
 
+    def test_mcp_connection_failure_round_trips_as_a_known_failed_tool(self, chat_svc):
+        session_id = "history-mcp-connection-failure"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                (
+                    session_id,
+                    json.dumps({"role": "user", "content": "检查远程 MCP"}),
+                    "2026-01-01T00:00:00",
+                ),
+            )
+
+        sm.append_tool_execution_event(
+            session_id,
+            ChatSessionToolExecutionEvent(
+                event_id="run-mcp-tool-mcp-failure-1",
+                call_tool_id="mcp-failure-1",
+                duration=0,
+                started_at="2026-01-01T00:00:01Z",
+                completed_at="2026-01-01T00:00:01Z",
+                tool_name="mcp.dead.connect",
+                error="MCP server returned HTTP 410.",
+                summary="MCP Server 'dead' connection failed; the Agent continued without it.",
+                created_at="2026-01-01T00:00:01Z",
+            ),
+        )
+
+        result = chat_svc.get_history(session_id)
+        contents = [content for message in result.data.messages for content in message.content]
+        call_content = next(content for content in contents if content.type == "call-tool")
+        result_content = next(content for content in contents if content.type == "call-tool-result")
+
+        assert call_content.payload["toolName"] == "mcp.dead.connect"
+        assert result_content.payload["toolName"] == "mcp.dead.connect"
+        assert result_content.payload["error"] == "MCP server returned HTTP 410."
+        assert result_content.payload["callToolId"] == "mcp-failure-1"
+        assert len(sm.get_session_messages(session_id)) == 1
+
     def test_history_rebuilds_sql_statement_summary_and_failure(self, chat_svc):
         session_id = "history-sql-summary"
         sm = SessionManager(session_dir=chat_svc._session_dir)

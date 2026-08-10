@@ -83,6 +83,12 @@ function startArtifactEdit(session: ArtifactEditSession): void {
   workspace.startArtifactEditSession(session)
 }
 
+function startArtifactRepair(session: ArtifactEditSession, prompt: string): void {
+  openChat()
+  workspace.startArtifactEditSession(session)
+  workspace.handleSend(prompt)
+}
+
 function openSqlDialog(): void {
   sqlDialogOpen.value = true
 }
@@ -179,6 +185,7 @@ function handleRetryAuth(): void {
             :view-access="viewAccess"
             :workspace="workspace"
             @edit-artifact="startArtifactEdit"
+            @repair-artifact="startArtifactRepair"
             @open-artifact="openArtifactDetail"
             @update-admin-artifact="openAdminArtifact"
             @update-admin-audit="openAdminAudit"

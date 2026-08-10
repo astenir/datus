@@ -1,17 +1,20 @@
 """Downstream enterprise boundaries for the AgenticNode base class."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from datus.models.session_manager import session_scope_from_user_id
-from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from tests.unit_tests.agent.node.test_agentic_node import (
     TestEnsurePermissionHooksProxyWiring as _PermissionHooksFixture,
 )
 from tests.unit_tests.agent.node.test_agentic_node import _make_node, _make_simple_node
 
 
-def test_drain_emits_one_failed_mcp_action_and_clears_pending_failures():
+def test_drain_emits_a_failed_mcp_action_pair_and_clears_pending_failures():
     node = _make_node()
     manager = ActionHistoryManager()
 
@@ -19,18 +22,177 @@ def test_drain_emits_one_failed_mcp_action_and_clears_pending_failures():
     node._record_mcp_connection_failure("filesystem", "connection refused")
     actions = node._drain_mcp_connection_failure_actions(manager)
 
-    assert len(actions) == 1
-    action = actions[0]
+    assert len(actions) == 2
+    start_action, action = actions
+    assert start_action.role == ActionRole.TOOL
+    assert start_action.action_type == "mcp.filesystem.connect"
+    assert start_action.status == ActionStatus.PROCESSING
+    assert start_action.input == {
+        "function_name": "mcp.filesystem.connect",
+        "arguments": {},
+        "server_name": "filesystem",
+    }
     assert action.role == ActionRole.TOOL
     assert action.action_type == "mcp.filesystem.connect"
+    assert action.action_id == f"complete_{start_action.action_id}"
     assert action.status == ActionStatus.FAILED
-    assert action.input == {"server_name": "filesystem"}
+    assert action.input == start_action.input
     assert action.output == {
-        "error": "connection refused",
+        "error": "Failed to connect to MCP server. Please check the server address and network connectivity.",
         "summary": "MCP Server 'filesystem' connection failed; the Agent continued without it.",
     }
     assert manager.get_actions() == actions
     assert node._drain_mcp_connection_failure_actions(manager) == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_failure_is_emitted_before_the_model_yields_its_first_action():
+    node = _make_node()
+    node.max_turns = 1
+    node.mcp_servers = {"filesystem": object()}
+    node._ensure_tool_transformers = lambda: None
+    node._compose_run_hooks = lambda _ctx: None
+    release_model = asyncio.Event()
+
+    async def model_stream(**kwargs):
+        kwargs["mcp_connection_failure_callback"](
+            "filesystem",
+            "MCP server returned HTTP 410.",
+        )
+        await release_model.wait()
+        yield ActionHistory(
+            action_id="model-action",
+            role=ActionRole.ASSISTANT,
+            action_type="response",
+            messages="ready",
+            input={},
+            output={"content": "ready"},
+            status=ActionStatus.SUCCESS,
+        )
+
+    node._pinned_model = MagicMock()
+    node._pinned_model.generate_with_tools_stream = model_stream
+    ctx = SimpleNamespace(
+        user_input=SimpleNamespace(model_fields_set=set()),
+        user_prompt="hello",
+        system_instruction="",
+        session=None,
+        action_history_manager=ActionHistoryManager(),
+        pending_input_queue=None,
+    )
+
+    stream = node._stream_once(ctx)
+    first = await asyncio.wait_for(anext(stream), timeout=0.5)
+    assert first.action_type == "mcp.filesystem.connect"
+    assert first.status == ActionStatus.PROCESSING
+
+    second = await asyncio.wait_for(anext(stream), timeout=0.5)
+    assert second.action_id == f"complete_{first.action_id}"
+    assert second.status == ActionStatus.FAILED
+
+    release_model.set()
+    remaining = [action async for action in stream]
+    assert remaining[0].action_id == "model-action"
+
+
+@pytest.mark.asyncio
+async def test_closing_mcp_stream_cancels_the_blocked_model_connection_wait():
+    node = _make_node()
+    node.max_turns = 1
+    node.mcp_servers = {"filesystem": object()}
+    node._ensure_tool_transformers = lambda: None
+    node._compose_run_hooks = lambda _ctx: None
+    model_closed = asyncio.Event()
+
+    async def model_stream(**kwargs):
+        kwargs["mcp_connection_failure_callback"]("filesystem", "connection refused")
+        try:
+            await asyncio.Event().wait()
+            yield ActionHistory(
+                action_id="unreachable-model-action",
+                role=ActionRole.ASSISTANT,
+                action_type="response",
+                messages="unreachable",
+                input={},
+                output={"content": "unreachable"},
+                status=ActionStatus.SUCCESS,
+            )
+        finally:
+            model_closed.set()
+
+    node._pinned_model = MagicMock()
+    node._pinned_model.generate_with_tools_stream = model_stream
+    ctx = SimpleNamespace(
+        user_input=SimpleNamespace(model_fields_set=set()),
+        user_prompt="hello",
+        system_instruction="",
+        session=None,
+        action_history_manager=ActionHistoryManager(),
+        pending_input_queue=None,
+    )
+
+    stream = node._stream_once(ctx)
+    await anext(stream)
+    await anext(stream)
+    await asyncio.wait_for(stream.aclose(), timeout=0.5)
+
+    assert model_closed.is_set()
+    assert node._mcp_connection_failure_event is None
+
+
+@pytest.mark.asyncio
+async def test_closing_after_a_model_action_keeps_mcp_cleanup_in_the_owner_task():
+    node = _make_node()
+    node.max_turns = 1
+    node.mcp_servers = {"filesystem": object()}
+    node._ensure_tool_transformers = lambda: None
+    node._compose_run_hooks = lambda _ctx: None
+    model_closed = asyncio.Event()
+
+    class TaskAffinityContext:
+        async def __aenter__(self):
+            self.owner = asyncio.current_task()
+            return self
+
+        async def __aexit__(self, *_args):
+            if asyncio.current_task() is not self.owner:
+                raise RuntimeError("MCP cleanup crossed asyncio tasks")
+            model_closed.set()
+            return False
+
+    async def model_stream(**kwargs):
+        async with TaskAffinityContext():
+            kwargs["mcp_connection_failure_callback"]("filesystem", "connection refused")
+            yield ActionHistory(
+                action_id="model-action",
+                role=ActionRole.ASSISTANT,
+                action_type="response",
+                messages="ready",
+                input={},
+                output={"content": "ready"},
+                status=ActionStatus.SUCCESS,
+            )
+            await asyncio.Event().wait()
+
+    node._pinned_model = MagicMock()
+    node._pinned_model.generate_with_tools_stream = model_stream
+    ctx = SimpleNamespace(
+        user_input=SimpleNamespace(model_fields_set=set()),
+        user_prompt="hello",
+        system_instruction="",
+        session=None,
+        action_history_manager=ActionHistoryManager(),
+        pending_input_queue=None,
+    )
+
+    stream = node._stream_once(ctx)
+    await anext(stream)
+    await anext(stream)
+    assert (await anext(stream)).action_id == "model-action"
+    await asyncio.wait_for(stream.aclose(), timeout=0.5)
+
+    assert model_closed.is_set()
+    assert node._mcp_connection_failure_event is None
 
 
 def test_request_workspace_overrides_node_and_project_roots_for_opted_in_node():

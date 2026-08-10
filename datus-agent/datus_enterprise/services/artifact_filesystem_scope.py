@@ -162,12 +162,38 @@ def generic_artifact_visibility_filtered() -> FuncToolResult:
             "files": [],
             "truncated": False,
             "visibility_filtered": True,
+            "visibility_reason": "artifact_acl",
             "message": (
-                "Results are hidden by the current artifact authorization scope; "
-                "an empty list does not prove that no artifact exists on disk."
+                "Artifact directory is protected by Artifact ACLs and cannot be "
+                "enumerated from the current Chat authorization scope; an empty "
+                "list does not prove that no artifact exists on disk."
             ),
         }
     )
+
+
+def decorate_generic_artifact_glob_result(result: FuncToolResult) -> FuncToolResult:
+    """Explain ACL pruning when a generic workspace walk crosses artifacts.
+
+    A generic Chat ``glob`` may start at the project root and therefore cannot
+    reject the seed up front. The walk still prunes ``reports/`` and
+    ``dashboards/`` entries, though; preserve the successful, possibly
+    non-empty result while making that policy filtering explicit to the model.
+    """
+
+    if result.success != 1 or not isinstance(result.result, dict):
+        return result
+
+    scoped_result = dict(result.result)
+    scoped_result["visibility_filtered"] = True
+    scoped_result["visibility_reason"] = "artifact_acl"
+    scoped_result["message"] = (
+        "Artifact ACLs omitted protected report/dashboard paths from this Glob result. "
+        "The returned files only cover the current Chat authorization scope; absence "
+        "of an artifact path does not prove that it is missing on disk."
+    )
+    result.result = scoped_result
+    return result
 
 
 def initialize_artifact_scope(
@@ -242,15 +268,17 @@ def decorate_artifact_glob_result(
 
     scoped_result = dict(result.result)
     scoped_result["visibility_filtered"] = True
+    scoped_result["visibility_reason"] = "artifact_acl"
     if tool._locked_artifact_slug:
         scoped_result["message"] = (
-            f"Results are limited to the ACL-authorized {tool.ARTIFACT_KIND} "
+            f"Artifact ACL limits results to the authorized {tool.ARTIFACT_KIND} "
             f"{tool.ARTIFACT_ROOT_DIR_NAME}/{tool._locked_artifact_slug}."
         )
     else:
         scoped_result["message"] = (
-            f"No {tool.ARTIFACT_KIND} is bound yet; existing {tool.ARTIFACT_ROOT_DIR_NAME}/ paths "
-            "are intentionally hidden. An empty list does not prove that no artifact exists on disk."
+            f"No {tool.ARTIFACT_KIND} is bound yet; Artifact ACLs prevent this session from "
+            f"enumerating existing {tool.ARTIFACT_ROOT_DIR_NAME}/ paths. An empty list does not "
+            "prove that no artifact exists on disk."
         )
     result.result = scoped_result
     return result

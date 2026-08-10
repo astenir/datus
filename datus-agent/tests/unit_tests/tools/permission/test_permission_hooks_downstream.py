@@ -4,14 +4,21 @@
 
 """Downstream permission-hook regressions."""
 
-from unittest.mock import MagicMock
+import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from datus.cli.execution_state import InteractionBroker
-from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
+from datus.tools.permission.permission_config import (
+    PermissionConfig,
+    PermissionLevel,
+    PermissionRule,
+    SqlStatementRules,
+)
 from datus.tools.permission.permission_hooks import FilesystemPolicy, PermissionDeniedException, PermissionHooks
 from datus.tools.permission.permission_manager import PermissionManager
+from datus.tools.permission.profiles import get_profile
 from datus.tools.registry.tool_registry import ToolRegistry
 
 
@@ -63,6 +70,33 @@ def _tool(name: str):
     return tool
 
 
+def _build_sql_hooks(broker, config, *, project_sql_allows=None, business_datasource_read_only=False):
+    registry = ToolRegistry()
+    tool = MagicMock()
+    tool.name = "execute_sql"
+    registry.register_tools("db_tools", [tool])
+    manager = PermissionManager(global_config=config, project_sql_allows=project_sql_allows)
+    return PermissionHooks(
+        broker=broker,
+        permission_manager=manager,
+        node_name="chat",
+        tool_registry=registry,
+        business_datasource_read_only=business_datasource_read_only,
+    )
+
+
+def _sql_context(sql: str):
+    context = MagicMock()
+    context.tool_arguments = json.dumps({"sql": sql})
+    return context
+
+
+def _sql_tool():
+    tool = MagicMock()
+    tool.name = "execute_sql"
+    return tool
+
+
 @pytest.mark.parametrize("node_name", ["dashboard_agent_42", "dashboard_edit__edit_2"])
 @pytest.mark.asyncio
 async def test_visual_dashboard_alias_uses_canonical_node_class(mock_broker, tmp_path, node_name: str) -> None:
@@ -107,3 +141,92 @@ async def test_alias_without_visual_artifact_node_class_remains_denied(mock_brok
         )
 
     mock_broker.request.assert_not_called()
+
+
+@pytest.mark.parametrize("profile", ["normal", "auto", "dangerous"])
+@pytest.mark.parametrize(
+    ("sql", "operation"),
+    [
+        ("INSERT INTO t VALUES (1)", "INSERT"),
+        ("UPDATE t SET a = 1", "UPDATE"),
+        ("DELETE FROM t", "DELETE"),
+        ("MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE", "MERGE"),
+        ("DROP TABLE t", "DROP"),
+        ("TRUNCATE TABLE t", "TRUNCATE"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_enterprise_read_only_denies_before_any_confirmation(mock_broker, profile, sql, operation):
+    hooks = _build_sql_hooks(
+        mock_broker,
+        get_profile(profile),
+        business_datasource_read_only=True,
+    )
+    mock_broker.request = AsyncMock(return_value=[["y"]])
+
+    with pytest.raises(
+        PermissionDeniedException,
+        match=rf"ENTERPRISE_BUSINESS_DATASOURCE_READ_ONLY: operation='{operation}'",
+    ):
+        await hooks.on_tool_start(_sql_context(sql), MagicMock(), _sql_tool())
+
+    mock_broker.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_read_only_ignores_existing_project_grant(mock_broker):
+    hooks = _build_sql_hooks(
+        mock_broker,
+        PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[],
+            sql_statements=SqlStatementRules(write=PermissionLevel.ALLOW),
+        ),
+        project_sql_allows=["delete"],
+        business_datasource_read_only=True,
+    )
+
+    with pytest.raises(PermissionDeniedException, match="operation='DELETE'"):
+        await hooks.on_tool_start(_sql_context("DELETE FROM t"), MagicMock(), _sql_tool())
+
+    mock_broker.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_read_only_still_allows_select(mock_broker):
+    hooks = _build_sql_hooks(
+        mock_broker,
+        PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[],
+            sql_statements=SqlStatementRules(),
+        ),
+        business_datasource_read_only=True,
+    )
+
+    await hooks.on_tool_start(_sql_context("SELECT * FROM t"), MagicMock(), _sql_tool())
+
+    mock_broker.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_read_only_reuses_statement_classification(mock_broker, monkeypatch):
+    hooks = _build_sql_hooks(
+        mock_broker,
+        get_profile("normal"),
+        business_datasource_read_only=True,
+    )
+    from datus.tools import business_datasource_policy
+
+    original_parse = business_datasource_policy.parse_sql_statement_kind
+    parse_calls = []
+
+    def count_parse(sql, dialect=""):
+        parse_calls.append((sql, dialect))
+        return original_parse(sql, dialect)
+
+    monkeypatch.setattr(business_datasource_policy, "parse_sql_statement_kind", count_parse)
+
+    await hooks.on_tool_start(_sql_context("SELECT * FROM t"), MagicMock(), _sql_tool())
+
+    assert parse_calls == [("SELECT * FROM t", "")]

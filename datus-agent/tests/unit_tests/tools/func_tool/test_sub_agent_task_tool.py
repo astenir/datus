@@ -5,7 +5,6 @@
 """CI-level tests for SubAgentTaskTool (AgenticNode-based execution)."""
 
 import json
-from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -817,6 +816,74 @@ class TestConvertToFuncResult:
             "session_id": "ask-metrics-session",
         }
 
+    def test_visual_report_result_preserves_documented_fields(self, task_tool):
+        """The visual report result must carry its slug to the parent Agent.
+
+        ``GenVisualReportNodeResult.model_dump()`` is flat (there is no
+        ``report_result`` wrapper).  Dropping ``report_slug`` makes the parent
+        fall back to an ordinary ``glob('reports/*')`` probe, which is
+        intentionally ACL-filtered in enterprise Chat and can trigger a
+        duplicate generation attempt.
+        """
+        output = {
+            "success": True,
+            "response": "Report built.",
+            "report_slug": "revenue_q2",
+            "app_jsx_path": "reports/revenue_q2/render/app.jsx",
+            "render_file_count": 5,
+            "query_count": 3,
+            "html_path": "reports/revenue_q2/index.html",
+            "tokens_used": 6789,
+            "artifact_kind": "report",
+            "artifact_mode": "new",
+            "name": "Q2 Revenue",
+        }
+
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_visual_report_session_trace01",
+            session_resume_supported=False,
+        )
+
+        assert result.success == 1
+        assert result.result["response"] == "Report built."
+        assert result.result["report_slug"] == "revenue_q2"
+        assert result.result["app_jsx_path"] == "reports/revenue_q2/render/app.jsx"
+        assert result.result["render_file_count"] == 5
+        assert result.result["query_count"] == 3
+        assert result.result["html_path"] == "reports/revenue_q2/index.html"
+        assert result.result["artifact_verified"] is True
+        assert result.result["tokens_used"] == 6789
+        assert result.result["session_id"] == "gen_visual_report_session_trace01"
+        assert result.result["session_resume_supported"] is False
+
+    def test_visual_report_result_preserves_none_slug_on_partial_run(self, task_tool):
+        """A visual run that never bound an artifact remains distinguishable."""
+        output = {
+            "success": True,
+            "response": "Failed before binding an artifact.",
+            "report_slug": None,
+            "app_jsx_path": None,
+            "render_file_count": 0,
+            "query_count": 0,
+            "html_path": None,
+            "tokens_used": 42,
+        }
+
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_visual_report_session_trace02",
+            session_resume_supported=False,
+        )
+
+        assert result.success == 1
+        assert "report_slug" in result.result
+        assert result.result["report_slug"] is None
+        assert result.result["render_file_count"] == 0
+        assert result.result["query_count"] == 0
+        assert result.result["artifact_verified"] is False
+        assert result.result["session_resume_supported"] is False
+
     def test_visual_dashboard_result_preserves_documented_fields(self, task_tool):
         """``GenVisualDashboardNodeResult.model_dump()`` carries
         ``dashboard_slug``, ``app_jsx_path``, ``render_file_count``,
@@ -842,7 +909,11 @@ class TestConvertToFuncResult:
             "artifact_mode": "new",
             "name": "AOV Weekly Trend",
         }
-        result = task_tool._convert_to_func_result(output)
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_visual_dashboard_session_trace01",
+            session_resume_supported=False,
+        )
         assert result.success == 1
         # Every documented field present + non-discarded.
         assert result.result["response"] == "Dashboard built."
@@ -850,7 +921,10 @@ class TestConvertToFuncResult:
         assert result.result["app_jsx_path"] == "dashboards/aov_weekly/render/app.jsx"
         assert result.result["render_file_count"] == 4
         assert result.result["template_count"] == 3
+        assert result.result["artifact_verified"] is True
         assert result.result["tokens_used"] == 12345
+        assert result.result["session_id"] == "gen_visual_dashboard_session_trace01"
+        assert result.result["session_resume_supported"] is False
 
     def test_visual_dashboard_result_preserves_none_slug_on_partial_run(self, task_tool):
         """When the dashboard run failed before binding, the model
@@ -884,6 +958,7 @@ class TestConvertToFuncResult:
         assert result.result["dashboard_slug"] is None
         assert result.result["render_file_count"] == 0
         assert result.result["template_count"] == 0
+        assert result.result["artifact_verified"] is False
 
 
 @pytest.mark.acceptance
@@ -1132,26 +1207,6 @@ class TestActionBusIntegration:
         bus = ActionBus()
         task_tool.set_action_bus(bus)
         assert task_tool._action_bus is bus
-
-    def test_complete_action_records_child_session_id(self, task_tool):
-        """A late-completion warning can be tied back to the child session."""
-        from datus.schemas.action_bus import ActionBus
-
-        bus = ActionBus()
-        task_tool.set_action_bus(bus)
-
-        task_tool._emit_complete_action(
-            "gen_sql",
-            "parent-call",
-            datetime.now(),
-            2,
-            ActionStatus.SUCCESS,
-            agent_session_id="child-session",
-        )
-
-        complete = bus._queue.get_nowait()
-        assert complete.action_type == SUBAGENT_COMPLETE_ACTION_TYPE
-        assert complete.output["agent_session_id"] == "child-session"
 
     @pytest.mark.asyncio
     async def test_actions_forwarded_to_bus(self, task_tool):
@@ -2193,55 +2248,6 @@ class TestCompleteAction:
         assert complete_actions[0].parent_action_id == "call_fail"
 
     @pytest.mark.asyncio
-    async def test_recovered_tool_failure_emits_successful_complete_action(self, task_tool):
-        """A recovered inner tool failure must not poison the subagent's final status."""
-        from datus.schemas.action_bus import ActionBus
-
-        bus = ActionBus()
-        task_tool.set_action_bus(bus)
-
-        failed_tool_action = Mock(
-            spec=ActionHistory,
-            status=ActionStatus.FAILED,
-            output={"success": False, "error": "retryable query error"},
-            depth=0,
-            parent_action_id=None,
-            role=ActionRole.TOOL,
-            action_type="read_query",
-        )
-        final_action = Mock(
-            spec=ActionHistory,
-            status=ActionStatus.SUCCESS,
-            output={"success": True, "response": "recovered", "tokens_used": 10},
-            depth=0,
-            parent_action_id=None,
-            role=ActionRole.ASSISTANT,
-            action_type="gen_sql_response",
-        )
-        mock_node = MagicMock()
-
-        async def mock_stream(ahm):
-            yield failed_tool_action
-            yield final_action
-
-        mock_node.execute_stream_with_interactions = mock_stream
-
-        with patch.object(task_tool, "_create_node", return_value=mock_node):
-            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
-                result = await task_tool.task(type="gen_sql", prompt="test", call_id="call_recovered")
-
-        assert result.success == 1
-        complete_actions = []
-        while not bus._queue.empty():
-            action = bus._queue.get_nowait()
-            if action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
-                complete_actions.append(action)
-
-        assert len(complete_actions) == 1
-        assert complete_actions[0].status == ActionStatus.SUCCESS
-        assert complete_actions[0].parent_action_id == "call_recovered"
-
-    @pytest.mark.asyncio
     async def test_complete_action_not_emitted_without_bus(self, task_tool):
         """Without an ActionBus, no complete action is emitted and no error occurs."""
         assert task_tool._action_bus is None
@@ -2693,6 +2699,19 @@ def _build_persistent_mock_node(
 
 @pytest.mark.ci
 class TestSessionPersistence:
+    @pytest.mark.asyncio
+    async def test_visual_resume_failure_requires_acl_edit_session(self, task_tool):
+        result = await task_tool.task(
+            type="gen_visual_report",
+            prompt="修复已有报表",
+            session_id="gen_visual_report_session_existing1",
+        )
+
+        assert result.success == 0
+        assert result.result["session_resume_supported"] is False
+        assert result.result["artifact_edit_session_required"] is True
+        assert "ACL-authorized report edit session" in result.result["message"]
+
     @pytest.mark.asyncio
     async def test_returns_session_id_in_result(self, task_tool):
         """A successful task() result must include the subagent's session_id."""

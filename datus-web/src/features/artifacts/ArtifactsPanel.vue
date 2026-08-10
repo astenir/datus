@@ -24,7 +24,11 @@ import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
 import ArtifactViewerFrame from "@/features/artifacts/ArtifactViewerFrame.vue"
 import PageHeaderToolbar from "@/features/shared/PageHeaderToolbar.vue"
-import type { ArtifactPreviewQueryRequest } from "@/lib/artifact-preview-bridge"
+import {
+  artifactRepairPrompt,
+  type ArtifactPreviewQueryRequest,
+  type ArtifactRenderError,
+} from "@/lib/artifact-preview-bridge"
 import type { ArtifactEditSession, ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 
@@ -38,6 +42,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   "open-artifact": [tab: ArtifactViewTab, slug: string]
   "edit-artifact": [session: ArtifactEditSession]
+  "repair-artifact": [session: ArtifactEditSession, prompt: string]
 }>()
 
 const artifacts = useArtifacts()
@@ -68,12 +73,20 @@ const viewerPreviewKey = computed(() => {
 const viewerPreviewOpening = computed(() => {
   return Boolean(viewerPreviewKey.value && artifacts.previewLoadingKey.value === viewerPreviewKey.value)
 })
+const viewerRepairing = computed(() => editingSlugFor(props.tab) === selectedViewerSlug.value)
 const viewerPreviewUrl = computed(() => {
   if (!viewerPreviewKey.value) return null
   const activeKey = artifacts.activePreviewTab.value && artifacts.activePreviewSlug.value
     ? artifactPreviewKey(artifacts.activePreviewTab.value, artifacts.activePreviewSlug.value)
     : null
   return activeKey === viewerPreviewKey.value ? artifacts.activePreviewUrl.value : null
+})
+const selectedViewerCanEdit = computed(() => {
+  const slug = selectedViewerSlug.value
+  if (!slug) return false
+
+  const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
+  return items.some(item => item.slug === slug && item.can_edit === true)
 })
 const selectedShareLoading = computed(() => {
   const slug = selectedDetailSlug.value
@@ -190,6 +203,20 @@ async function editArtifact(tab: ArtifactViewTab, slug: string | null | undefine
   emit("edit-artifact", session)
 }
 
+async function repairArtifact(
+  tab: ArtifactViewTab,
+  slug: string | null | undefined,
+  error: ArtifactRenderError,
+) {
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  const session = await artifacts.createArtifactEditSession(tab, normalizedSlug)
+  if (!session) return
+
+  emit("repair-artifact", session, artifactRepairPrompt(tab, normalizedSlug, error))
+}
+
 function handleShareDialogOpen(open: boolean) {
   shareDialogOpen.value = open
   if (!open) {
@@ -239,7 +266,10 @@ watch(
       :show-chrome="false"
       :dashboard-slug="props.tab === 'dashboard' ? selectedViewerSlug : null"
       :query="props.tab === 'dashboard' ? runViewerDashboardQuery : undefined"
+      :can-repair="selectedViewerCanEdit"
+      :repairing="viewerRepairing"
       @reload="artifacts.openHtmlPreview(props.tab, selectedViewerSlug)"
+      @repair="repairArtifact(props.tab, selectedViewerSlug, $event)"
     />
 
     <div

@@ -16,7 +16,7 @@ datus-storage-adapters/
 metricflow/
 ```
 
-推荐安装 `enterprise-intranet` extra，它包含当前内网基线中的 MetricFlow、OceanBase Oracle、标准 Oracle、MySQL、PostgreSQL 业务 adapter，以及 OceanBase MySQL/PostgreSQL 内部存储 backend。仅做语义链路测试时可使用较小的 `metricflow-oceanbase-oracle` extra。
+推荐安装 `enterprise-intranet` extra，它包含当前内网基线中的 MetricFlow、OceanBase Oracle、标准 Oracle、MySQL、PostgreSQL、Trino 业务 adapter，以及 OceanBase MySQL/PostgreSQL 内部存储 backend。仅做语义链路测试时可使用较小的 `metricflow-oceanbase-oracle` extra。
 
 业务 OceanBase Oracle datasource 与 Datus 内部 OceanBase MySQL storage 是两个独立插件和权限面：前者应使用只读业务账号，后者需要独立可写 tenant/database 和账号。
 
@@ -50,10 +50,19 @@ metricflow/
 
 ```bash
 deploy/offline/package-intranet.sh \
-  --branch feature/metricflow-oceanbase-oracle \
+  --branch <release-tag-or-commit-sha> \
   --strict-clean \
   --skip-web
 ```
+
+`--branch` 必须使用已经审批并且在当前仓库中可解析的正式 tag 或固定 commit SHA，不要依赖已经合并、删除或仍会移动的 feature branch。打包前后分别记录：
+
+```bash
+git rev-parse <release-tag-or-commit-sha>
+git show --no-patch --format=fuller <release-tag-or-commit-sha>
+```
+
+交付基线应与 `docs/upstream-sync-manifest.yml` 中登记的各项目采用状态一致；清单中的 `observed_upstream` 只代表观察到的上游引用，不能直接作为已采用 release 交付。
 
 内网解包并克隆 bundle：
 
@@ -171,19 +180,20 @@ OCEANBASE_ORACLE_METRICFLOW_TIME_END="2025-01-31"
 ```bash
 .venv/bin/python -c "
 from importlib import metadata
-import metricflow, datus_oceanbase_oracle, datus_semantic_metricflow
+import metricflow, datus_oceanbase_oracle, datus_semantic_metricflow, datus_trino
 from datus.storage.rdb import RdbRegistry
 from datus.storage.vector import VectorRegistry
 print(metricflow.__file__)
 print(datus_oceanbase_oracle.__file__)
 print(datus_semantic_metricflow.__file__)
+print(datus_trino.__file__)
 print(sorted(ep.name for ep in metadata.entry_points(group='datus.adapters')))
 print(RdbRegistry.registered_types())
 print(VectorRegistry.registered_types())
 "
 ```
 
-模块路径必须指向当前 release。`enterprise-intranet` profile 的 database adapters 应包含 `mysql`、`oceanbase-oracle`、`oracle`、`postgresql`；RDB/vector backend 应包含 `oceanbase-mysql` 和 `postgresql`。
+模块路径必须指向当前 release。`enterprise-intranet` profile 的 database adapters 应包含 `mysql`、`oceanbase-oracle`、`oracle`、`postgresql`、`trino`；RDB/vector backend 应包含 `oceanbase-mysql` 和 `postgresql`。
 
 ### 7.2 无数据库初始化回归
 

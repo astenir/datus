@@ -405,6 +405,12 @@ class DBFuncTool:
         db = database or ("" if datasource else self._default_database)
         key = (ds, db)
 
+        if ds not in self._datasources:
+            raise DatusException(
+                ErrorCode.COMMON_VALIDATION_FAILED,
+                message=f"Datasource '{ds}' is not configured. Available datasources: {', '.join(self._datasources)}.",
+            )
+
         # Check cache
         if key in self._connector_cache:
             # Move to end (most recently used)
@@ -417,10 +423,15 @@ class DBFuncTool:
             # Preserve database-level routing errors (e.g. invalid database name with the
             # list of available databases) so ``/database`` failures stay diagnosable.
             raise
-        except (KeyError, ValueError) as e:
+        except KeyError as e:
             raise DatusException(
-                ErrorCode.COMMON_VALIDATION_FAILED,
-                message=f"Datasource '{ds}' is not configured. Available datasources: {', '.join(self._datasources)}.",
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=f"Datasource '{ds}' routing failed: {e}",
+            ) from e
+        except ValueError as e:
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=f"Datasource '{ds}' has invalid configuration: {e}",
             ) from e
 
         # Ensure connector is connected
@@ -1657,11 +1668,7 @@ class DBFuncTool:
                 sql = self._read_sql_from_file(sql_stripped)
 
             connector = self._get_connector(datasource, database)
-            validation_error, sql_type = self._validate_read_sql(sql, connector)
-            if validation_error:
-                return validation_error
-
-            logger.info("read_query", sql_type=sql_type.value, datasource=datasource or "default")
+            logger.info("read_query", datasource=datasource or "default")
             result_format = "arrow" if connector.dialect == "snowflake" else "list"
             result = self.execute_read_enforced(
                 sql,
@@ -1783,11 +1790,7 @@ class DBFuncTool:
 
             decision = evaluate_business_datasource_read_only_sql(sql, connector.dialect)
             if not decision.allowed:
-                denial = self._reject_read_only_mutation(
-                    "execute_sql",
-                    sql=sql,
-                    dialect=connector.dialect,
-                )
+                denial = self._reject_read_only_mutation(decision.operation)
                 return (
                     denial or FuncToolResult(success=0, error="Read-only SQL policy denied the statement."),
                     SQLType.UNKNOWN,

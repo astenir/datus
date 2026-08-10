@@ -50,4 +50,5 @@ def register():
         clickzetta_factory,
         config_class=ClickZettaConfig,
         capabilities={"database", "schema"},
+        parser_dialect="spark",
     )

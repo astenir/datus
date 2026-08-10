@@ -450,26 +450,27 @@ def authorize_read_sql(sql: str, connector, agent_config: Optional[AgentConfig])
             errorCode=ErrorCode.SQL_EXECUTION_ERROR,
             errorMessage=str(exc),
         )
-    validation_error, rewritten_sql_type = guard._validate_read_sql(rewritten_sql, connector)
-    if validation_error:
-        return Result(
-            success=False,
-            errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-            errorMessage=validation_error.error,
+    if rewritten_sql != sql:
+        validation_error, rewritten_sql_type = guard._validate_read_sql(rewritten_sql, connector)
+        if validation_error:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=validation_error.error,
+            )
+        metadata_denial = metadata_scope_denial(
+            rewritten_sql,
+            rewritten_sql_type,
+            connector,
+            agent_config,
+            guard,
         )
-    metadata_denial = metadata_scope_denial(
-        rewritten_sql,
-        rewritten_sql_type,
-        connector,
-        agent_config,
-        guard,
-    )
-    if metadata_denial:
-        return Result(
-            success=False,
-            errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-            errorMessage=metadata_denial,
-        )
+        if metadata_denial:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=metadata_denial,
+            )
     return rewritten_sql
 
 

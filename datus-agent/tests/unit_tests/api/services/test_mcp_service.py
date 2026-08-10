@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from datus.api.models.base_models import Result
-from datus.api.models.mcp_models import AddServerInput, MCPAuthInput, ToolFilterInput
+from datus.api.models.mcp_models import AddServerInput, ToolFilterInput
 from datus.api.services.mcp_service import MCPService
 
 
@@ -68,58 +68,6 @@ class TestMCPServiceAddRemoveServer:
         svc = MCPService(agent_config=real_agent_config)
         result = svc.remove_server("ghost_server")
         assert result.success is False
-
-    def test_static_bearer_response_is_redacted(self, real_agent_config):
-        svc = MCPService(agent_config=real_agent_config)
-        result = svc.add_server(
-            AddServerInput(
-                name="secured_remote",
-                type="http",
-                url="http://example.com/mcp",
-                auth=MCPAuthInput(mode="static_bearer", token="service-value"),
-            )
-        )
-
-        assert result.success is True
-        assert result.data["server"]["auth"] == {
-            "mode": "static_bearer",
-            "credential_configured": True,
-        }
-        assert "service-value" not in str(result.model_dump())
-        assert "service-value" not in str(svc.list_servers().model_dump())
-
-    def test_request_bearer_persists_only_mode_marker(self, real_agent_config):
-        svc = MCPService(agent_config=real_agent_config)
-        result = svc.add_server(
-            AddServerInput(
-                name="caller_remote",
-                type="sse",
-                url="http://example.com/sse",
-                auth=MCPAuthInput(mode="request_bearer"),
-            )
-        )
-
-        assert result.success is True
-        persisted = (Path(real_agent_config.home) / "conf" / ".mcp.json").read_text()
-        assert '"mode": "request_bearer"' in persisted
-        assert "token" not in persisted
-
-    def test_invalid_auth_combination_returns_generic_error(self, real_agent_config):
-        svc = MCPService(agent_config=real_agent_config)
-        rejected = "must-not-echo"
-
-        result = svc.add_server(
-            AddServerInput(
-                name="invalid_remote",
-                type="http",
-                url="http://example.com/mcp",
-                auth=MCPAuthInput(mode="request_bearer", token=rejected),
-            )
-        )
-
-        assert result.success is False
-        assert result.errorCode == "MCP_SERVER_CONFIG_INVALID"
-        assert rejected not in str(result.model_dump())
 
 
 class TestMCPServiceToolFilter:

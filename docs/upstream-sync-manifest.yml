@@ -1,0 +1,285 @@
+schema_version: 1
+
+# 本清单严格区分“当前观察到的上游引用”和“下游已经采用的基线”。只有正式升级变更记录了
+# 采用版本和验证证据，才能把 observed_upstream 更新为 local_adopted_baseline。
+repository:
+  name: datus
+  default_branch: main
+  checked_at: "2026-08-10T14:38:10+08:00"
+  checked_commit: 2360eb9e448e5be76edf3a567a773a1b54e83fbb
+  upstream_push_policy: read_only
+  formal_upgrade_branch: "upgrade/upstream-vX.Y.Z"
+
+  commands:
+    refresh_refs: "git fetch --all --tags --prune"
+    inspect_status: "git status --short --branch && git remote -v && git branch -vv"
+    inspect_agent_diff: "git diff --shortstat <agent-baseline> HEAD:datus-agent"
+    inspect_db_diff: "git diff --shortstat <db-baseline> HEAD:datus-db-adapters"
+    inspect_storage_diff: "git diff --shortstat <storage-baseline> HEAD:datus-storage-adapters"
+    inspect_semantic_diff: "git diff --shortstat <semantic-baseline> HEAD:datus-semantic-adapter"
+    inspect_metricflow_diff: "git diff --shortstat <metricflow-baseline> HEAD:metricflow"
+
+  release_rules:
+    - "存在正式 release tag 时，从该 tag 发起协同升级。"
+    - "不要例行把上游 main 合并到下游 main。"
+    - "耦合源码 workspace、包版本下限、editable source 和锁文件必须一起同步。"
+    - "企业认证、授权、投影、owner、ACL、SQL policy、审计、Quota 和 workspace 边界保持 fail closed。"
+    - "每次正式升级或有效收敛后刷新 docs/upstream-diff-budget.zh-CN.md。"
+    - "受保护 main 的变更通过 PR 交付，合并后核对 ancestry、远端对齐和工作区状态。"
+
+upstream_projects:
+  datus-agent:
+    local_path: datus-agent
+    upstream_url: https://github.com/Datus-ai/Datus-agent.git
+    remote:
+      name: upstream-agent
+      configured: true
+      fetch_url: https://github.com/Datus-ai/Datus-agent.git
+      push_url: DISABLED
+    license: Apache-2.0
+    sync_policy: formal_release_tag_first
+    local_adopted_baseline:
+      kind: release_tag_tree
+      ref: v0.3.9
+      sha: 4b7a6d89bb04d1dd29a94698aa11ad53001b382e
+      adopted_by: 29def1bcbc7f98ceb3cf82a9c3d507f87bc09b0a
+      adopted_at: "2026-08-03T12:13:38+08:00"
+      note: "企业下游变更继续叠加在这个正式 release tree 之上。"
+    observed_upstream:
+      ref: main
+      sha: d952bbf89d5b60fc95c1c51a3528770568779834
+      commit_at: "2026-08-10T09:29:34+08:00"
+      observed_at: "2026-08-10T14:38:10+08:00"
+      status: pending_downstream_sync
+    version_sources:
+      package: datus-agent/pyproject.toml
+      lockfiles:
+        - datus-agent/uv.lock
+        - datus-agent/requirements.txt
+        - datus-agent/requirements-test.txt
+      editable_sources: datus-agent/pyproject.toml[tool.uv.sources]
+    coupled_projects:
+      - datus-db-adapters
+      - datus-storage-adapters
+      - datus-semantic-adapter
+      - metricflow
+    verification:
+      focused:
+        - "cd datus-agent && uv run ruff check ."
+        - "cd datus-agent && uv run pytest <focused-test-paths>"
+      broad:
+        - "cd datus-agent && uv lock --locked"
+        - "cd datus-agent && uv run pytest"
+      enterprise:
+        - "企业认证 Provider、缺失用户和禁用用户检查"
+        - "route security matrix 检查"
+        - "Session Owner、配置投影、SQL Policy、Artifact ACL、审计和 Quota smoke"
+      diff_gate:
+        - "cd datus-agent && uv run python ci/harness/report_upstream_diff.py --base v0.3.9 --check"
+
+  datus-db-adapters:
+    local_path: datus-db-adapters
+    upstream_url: https://github.com/Datus-ai/datus-db-adapters.git
+    remote:
+      name: upstream-adapters
+      configured: true
+      fetch_url: https://github.com/Datus-ai/datus-db-adapters.git
+      push_url: DISABLED
+    license: Apache-2.0
+    sync_policy: coordinated_workspace_source
+    local_adopted_baseline:
+      kind: coordinated_v0.3.9_source_sync
+      ref: v0.3.9-compatible-source
+      sync_commit: 9b4062e8beec340a548b807fd10135084b9717c2
+      sync_at: "2026-08-03T09:39:44+08:00"
+      note: "下游还包含 Oracle、OceanBase、PostgreSQL、Trino 和 Greenplum 的适配器专项修复。"
+    observed_upstream:
+      ref: main
+      sha: 4be5d6de55c4be48e9ba20ec64f568a3ccd22f7b
+      commit_at: "2026-08-06T16:02:12+08:00"
+      observed_at: "2026-08-10T14:38:10+08:00"
+      status: pending_downstream_sync
+    version_sources:
+      workspace: datus-db-adapters/pyproject.toml
+      lockfiles:
+        - datus-db-adapters/uv.lock
+      package_versions: "datus-db-adapters/datus-*/pyproject.toml"
+    coupled_projects:
+      - datus-agent
+      - metricflow
+    verification:
+      focused:
+        - "cd datus-db-adapters && uv run ruff check ."
+        - "cd datus-db-adapters && uv run pytest --import-mode=importlib datus-<adapter>/tests/unit"
+      integration:
+        - "使用对应 Docker 服务运行受影响 adapter 的集成测试；无法运行时明确记录跳过原因。"
+      cross_repo:
+        - "共享 Connector 契约变化时，重新运行 Agent datasource、catalog 和 query smoke。"
+
+  datus-storage-adapters:
+    local_path: datus-storage-adapters
+    upstream_url: https://github.com/Datus-ai/datus-storage-adapters.git
+    remote:
+      name: upstream-storage
+      configured: false
+      fetch_url: https://github.com/Datus-ai/datus-storage-adapters.git
+      push_url: DISABLED
+      registration_note: "下一次 storage 同步前登记这个只读 remote；本字段中的 URL 是事实来源。"
+    license: Apache-2.0
+    sync_policy: fixed_sha_or_release_tag
+    local_adopted_baseline:
+      kind: downstream_package_state
+      package_version: 0.1.5
+      source_commit: null
+      status: baseline_needs_formal_registration
+      note: "本地已有 OceanBase MySQL 和向量存储下游差异；正式同步提交登记前，不得把 observed main SHA 描述为已采用。"
+    observed_upstream:
+      ref: main
+      sha: febbb74023b7ae394a39f64d5bd4e5fdd7cc751c
+      commit_at: "2026-08-05T16:07:55+08:00"
+      observed_at: "2026-08-10T14:38:10+08:00"
+      status: observed_not_adopted
+    version_sources:
+      workspace: datus-storage-adapters/pyproject.toml
+      lockfiles:
+        - datus-storage-adapters/uv.lock
+      package_versions:
+        - datus-storage-adapters/datus-storage-base/pyproject.toml
+        - datus-storage-adapters/datus-storage-oceanbase-mysql/pyproject.toml
+        - datus-storage-adapters/datus-storage-postgresql/pyproject.toml
+    coupled_projects:
+      - datus-agent
+    downstream_extensions:
+      - datus-storage-adapters/datus-storage-oceanbase-mysql
+      - datus-storage-adapters/datus-storage-postgresql
+      - datus-storage-adapters/datus-storage-base
+    verification:
+      focused:
+        - "cd datus-storage-adapters && uv run ruff check ."
+        - "cd datus-storage-adapters && uv run pytest"
+      integration:
+        - "Docker 依赖可用时运行 PostgreSQL/pgvector test-container 覆盖。"
+      cross_repo:
+        - "包变化后运行 datus-agent locked sync，并检查 storage import 和 entry point。"
+    next_sync:
+      - "把 upstream-storage 登记为只读 remote。"
+      - "选择固定上游 SHA 或正式 release tag 作为比较基线。"
+      - "记录三方比较结果并刷新下游差异章节。"
+
+  datus-semantic-adapter:
+    local_path: datus-semantic-adapter
+    upstream_url: https://github.com/Datus-ai/datus-semantic-adapter.git
+    remote:
+      name: upstream-semantic-adapter
+      configured: true
+      fetch_url: https://github.com/Datus-ai/datus-semantic-adapter.git
+      push_url: DISABLED
+    license: Apache-2.0
+    sync_policy: coordinated_workspace_source
+    local_adopted_baseline:
+      kind: coordinated_v0.3.9_source_and_lock_sync
+      source_sync_commit: f7d118f41c17e7741a81193b5027ad146441912c
+      dependency_sync_commit: 29def1bcbc7f98ceb3cf82a9c3d507f87bc09b0a
+      note: "下游保留 OSI Engine 重命名和 Datus 语义建模集成。"
+    observed_upstream:
+      ref: main
+      sha: 5e6a88ad2f78d255b21e2ea7a5fa6b93442109fc
+      commit_at: "2026-08-06T14:22:39+08:00"
+      observed_at: "2026-08-10T14:38:10+08:00"
+      status: pending_downstream_sync
+    version_sources:
+      workspace: datus-semantic-adapter/pyproject.toml
+      lockfiles:
+        - datus-semantic-adapter/uv.lock
+      package_versions: "datus-semantic-adapter/datus-semantic-*/pyproject.toml"
+    coupled_projects:
+      - datus-agent
+      - metricflow
+    verification:
+      focused:
+        - "cd datus-semantic-adapter && uv sync --locked --all-packages --all-extras"
+        - "cd datus-semantic-adapter && .venv/bin/python -m pytest --asyncio-mode=auto"
+      cross_repo:
+        - "共享契约变化时运行 Agent semantic authoring、metric query 和模型生成测试。"
+
+  metricflow:
+    local_path: metricflow
+    upstream_url: https://github.com/Datus-ai/metricflow.git
+    remote:
+      name: upstream-metricflow
+      configured: true
+      fetch_url: https://github.com/Datus-ai/metricflow.git
+      push_url: DISABLED
+    license: AGPL-3.0-or-later
+    sync_policy: coordinated_source_snapshot
+    local_adopted_baseline:
+      kind: downstream_source_snapshot
+      source_commit: b835149249705d3fedcb912afa1d3ca0f1b06dfc
+      package_version: 0.2.7
+      note: "导入上游历史后，本地源码继续包含 Datus 和 OceanBase Oracle 扩展。"
+    observed_upstream:
+      ref: main
+      sha: 0a67e30977966a56f75d8813b8e2a1ab7b508732
+      commit_at: "2026-08-05T11:52:03+08:00"
+      observed_at: "2026-08-10T14:38:10+08:00"
+      status: pending_downstream_sync
+    version_sources:
+      package: metricflow/pyproject.toml
+      lockfiles:
+        - metricflow/poetry.lock
+      datus_integration: metricflow/README-DATUS.md
+    coupled_projects:
+      - datus-agent
+      - datus-semantic-adapter
+    downstream_extensions:
+      - metricflow/metricflow/sql/render/oceanbase_oracle.py
+      - metricflow/metricflow/sql_clients/oceanbase_oracle.py
+      - metricflow/metricflow/test/sql/test_oceanbase_oracle_rendering.py
+    verification:
+      focused:
+        - "cd metricflow && ../datus-agent/.venv/bin/python -m pytest -p no:rerunfailures metricflow/test/sql metricflow/test/sql_clients"
+      cross_repo:
+        - "SQL 渲染或配置变化后运行 semantic-adapter 与 Agent metric/query smoke。"
+
+project_local_components:
+  datus-web:
+    local_path: datus-web
+    upstream_url: null
+    sync_policy: project_local_product
+    api_contract_sources:
+      - datus-web/openapi.json
+      - datus-web/src/types/openapi.ts
+      - datus-web/src/lib/api/
+    verification:
+      - "cd datus-web && npm run lint"
+      - "cd datus-web && npm test"
+      - "cd datus-web && npm run build"
+      - "cd datus-web && npm run test:browser"
+
+dependency_propagation:
+  - changed_path: metricflow/
+    triggers:
+      - datus-semantic-adapter
+      - datus-agent
+  - changed_path: datus-semantic-adapter/
+    triggers:
+      - datus-agent
+  - changed_path: datus-storage-adapters/
+    triggers:
+      - datus-agent
+  - changed_path: datus-db-adapters/
+    triggers:
+      - datus-agent
+  - changed_path: datus-agent/datus/agent/node/visual_artifact/
+    triggers:
+      - agent-renderer
+      - datus-web
+
+handover_required_evidence:
+  - "记录 checked_commit 和每个 observed_upstream SHA。"
+  - "记录每个 remote 是否已经在本地配置，以及是否禁用 push。"
+  - "严格区分 local_adopted_baseline 与 observed_upstream；待同步引用不能描述成已同步。"
+  - "附上聚焦测试、跨项目测试、真实企业 smoke 和明确跳过的检查。"
+  - "协同升级后刷新 docs/upstream-diff-budget.zh-CN.md。"
+  - "受保护 main 记录 PR 编号、合并提交、origin/main 对齐状态和工作区状态。"
+  - "保留上游 license、attribution、copyright notice 和源码 header。"

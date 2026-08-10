@@ -326,6 +326,43 @@ class TestDBManager:
             assert rebuilt is not first
             assert build.call_count == 2
 
+    def test_trino_config_maps_generic_namespace_fields(self):
+        """Trino receives its strict ``schema_name`` field, not generic namespace extras."""
+        from datus.configuration.agent_config import DbConfig
+
+        config = DbConfig.filter_kwargs(
+            DbConfig,
+            {
+                "type": "trino",
+                "host": "trino.example",
+                "port": "8080",
+                "username": "trino",
+                "catalog": "hive",
+                "schema": "analytics",
+                "database": "legacy_schema",
+                "extra": {"owner": "user", "http_scheme": "https"},
+            },
+        )
+
+        payload = DBManager({"trino": config})._db_config_to_connection_config(config)
+
+        assert payload["schema_name"] == "analytics"
+        assert payload["http_scheme"] == "https"
+        assert "schema" not in payload
+        assert "database" not in payload
+        assert "owner" not in payload
+
+    def test_trino_config_uses_database_as_schema_fallback(self):
+        """A Trino database override maps to the adapter's schema namespace when schema is absent."""
+        from datus.configuration.agent_config import DbConfig
+
+        config = DbConfig(type="trino", host="trino.example", username="trino", database="analytics")
+
+        payload = DBManager({"trino": config})._db_config_to_connection_config(config)
+
+        assert payload["schema_name"] == "analytics"
+        assert "database" not in payload
+
     def test_get_connections_returns_map_for_glob(self, tmp_path):
         # A glob datasource exposes one connector per matched file, keyed by file/db name.
         from datus.configuration.agent_config import DbConfig

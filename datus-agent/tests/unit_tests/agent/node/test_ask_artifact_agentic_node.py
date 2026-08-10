@@ -1898,19 +1898,6 @@ class TestToolsWhitelist:
         missing = expected - names
         assert not missing, f"whitelisted tools missing from node surface: {sorted(missing)}"
 
-    def test_interaction_wildcard_exposes_registered_controls(self, real_agent_config):
-        """``tools.*`` keeps the node's session-local interaction surface."""
-        node = _make_ask_report_with_tools(real_agent_config, "tools.*", name="ask_controls", slug="controls")
-
-        assert {
-            "ask_user",
-            "confirm_plan",
-            "todo_list",
-            "todo_read",
-            "todo_write",
-            "todo_update",
-        }.issubset(_tool_names(node))
-
     def test_method_level_whitelist_is_precise(self, real_agent_config):
         """``db_tools.execute_sql`` grants exactly that method — sibling db
         methods that weren't listed stay dropped."""

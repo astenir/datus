@@ -45,6 +45,7 @@ interface WorkspaceViewContentProps {
 defineProps<WorkspaceViewContentProps>()
 const emit = defineEmits<{
   editArtifact: [session: ArtifactEditSession]
+  repairArtifact: [session: ArtifactEditSession, prompt: string]
   openArtifact: [tab: ArtifactViewTab, slug: string]
   updateAdminArtifact: [value: AdminArtifactRouteState | null]
   updateAdminAudit: [value: AdminAuditRouteState]
@@ -63,6 +64,10 @@ function openArtifact(tab: ArtifactViewTab, slug: string): void {
 
 function editArtifact(session: ArtifactEditSession): void {
   emit("editArtifact", session)
+}
+
+function repairArtifact(session: ArtifactEditSession, prompt: string): void {
+  emit("repairArtifact", session, prompt)
 }
 
 function updateKnowledgeTable(table: string): void {
@@ -161,6 +166,7 @@ function updateAdminAudit(value: AdminAuditRouteState): void {
       :selected-slug="artifactSlug"
       @open-artifact="openArtifact"
       @edit-artifact="editArtifact"
+      @repair-artifact="repairArtifact"
     />
   </TabsContent>
 

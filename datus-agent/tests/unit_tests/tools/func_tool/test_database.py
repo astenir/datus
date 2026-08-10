@@ -1009,6 +1009,52 @@ class TestGetConnectorRouting:
         with pytest.raises(DatusException, match="not configured"):
             tool._get_connector("unknown_db")
 
+    def test_invalid_connector_config_is_not_reported_as_missing_datasource(self):
+        """Connector validation failures retain a configuration-specific error category."""
+        from collections import OrderedDict
+
+        from datus.tools.db_tools.db_manager import DBManager
+
+        mock_db_manager = Mock(spec=DBManager)
+        mock_db_manager.get_conn.side_effect = ValueError("schema: Extra inputs are not permitted")
+
+        tool = object.__new__(DBFuncTool)
+        tool._db_manager = mock_db_manager
+        tool._default_datasource = "trino"
+        tool._default_database = ""
+        tool._datasources = ["trino"]
+        tool._connector_cache = OrderedDict()
+        tool._connector_cache_size = 8
+
+        with pytest.raises(DatusException, match="has invalid configuration") as exc_info:
+            tool._get_connector("trino")
+
+        assert "not configured" not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    def test_connector_key_error_is_not_reported_as_missing_datasource(self):
+        """A routing KeyError for a configured datasource is distinct from a missing datasource key."""
+        from collections import OrderedDict
+
+        from datus.tools.db_tools.db_manager import DBManager
+
+        mock_db_manager = Mock(spec=DBManager)
+        mock_db_manager.get_conn.side_effect = KeyError("physical database")
+
+        tool = object.__new__(DBFuncTool)
+        tool._db_manager = mock_db_manager
+        tool._default_datasource = "trino"
+        tool._default_database = ""
+        tool._datasources = ["trino"]
+        tool._connector_cache = OrderedDict()
+        tool._connector_cache_size = 8
+
+        with pytest.raises(DatusException, match="routing failed") as exc_info:
+            tool._get_connector("trino")
+
+        assert "not configured" not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, KeyError)
+
     def test_default_datasource_fallback(self):
         """When using empty datasource, falls back to _default_datasource and looks up via db_manager."""
         from datus.tools.db_tools.db_manager import DBManager
@@ -1993,6 +2039,35 @@ class TestDBFuncToolExecuteReadEnforced:
         args, kwargs = connector.execute_query.call_args
         assert args[0] == "SELECT 1 AS n"
         assert kwargs["result_format"] == "list"
+
+    def test_read_query_uses_shared_read_validation_once(self):
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.compressor.compress = Mock(return_value={"original_rows": 1})
+
+        with patch.object(tool, "_validate_read_sql", wraps=tool._validate_read_sql) as validate_read_sql:
+            result = tool.read_query("SELECT 1 AS n")
+
+        assert result.success == 1
+        assert validate_read_sql.call_count == 1
+
+    def test_enterprise_read_only_denial_is_classified_once(self):
+        from datus.tools import business_datasource_policy
+
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.read_only = True
+        tool.enterprise_read_only = True
+
+        with patch.object(
+            business_datasource_policy,
+            "evaluate_business_datasource_read_only_sql",
+            wraps=business_datasource_policy.evaluate_business_datasource_read_only_sql,
+        ) as evaluate_read_only_sql:
+            result = tool.execute_read_enforced("INSERT INTO t VALUES (1)", connector)
+
+        assert result.success is False
+        assert evaluate_read_only_sql.call_count == 1
 
     def test_multi_statement_rejected_without_touching_connector(self):
         connector = self._connector()

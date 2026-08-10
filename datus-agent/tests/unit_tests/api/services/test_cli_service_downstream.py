@@ -11,7 +11,9 @@ import pytest
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteContextInput, ExecuteSQLInput
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
+from datus.tools.func_tool.database import DBFuncTool
 from datus.tools.sql_policy import EnforcementResult, SqlPolicyConfig
+from datus_enterprise.services.cli_sql_policy import authorize_read_sql
 
 
 class DenyCliSqlPolicyEnforcer:
@@ -45,6 +47,22 @@ class RewriteCliSqlPolicyEnforcer:
 
 
 class TestCLIServiceExecuteSQL:
+    def test_unchanged_read_sql_is_validated_once(self, monkeypatch):
+        connector = SimpleNamespace(dialect="sqlite")
+        validate_calls = []
+        original_validate = DBFuncTool._validate_read_sql
+
+        def count_validate(guard, sql, active_connector):
+            validate_calls.append(sql)
+            return original_validate(guard, sql, active_connector)
+
+        monkeypatch.setattr(DBFuncTool, "_validate_read_sql", count_validate)
+
+        authorized_sql = authorize_read_sql("SELECT 1", connector, None)
+
+        assert authorized_sql == "SELECT 1"
+        assert validate_calls == ["SELECT 1"]
+
     @pytest.mark.asyncio
     async def test_enterprise_read_only_delete_returns_product_copy_without_connector_execution(self, monkeypatch):
         class FakeConnector:

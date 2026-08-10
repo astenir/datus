@@ -56,13 +56,25 @@ def test_protected_artifact_tree_is_pruned_from_generic_chat_glob(tmp_path):
     )
 
     root_result = tool.glob("**/*.json")
+    root_wildcard_result = tool.glob("*")
+    root_jsx_result = tool.glob("**/*.jsx")
     direct_result = tool.glob("**/*.json", path="dashboards")
 
     assert root_result.success == 1
     assert root_result.result["files"] == []
+    assert root_result.result["visibility_filtered"] is True
+    assert root_result.result["visibility_reason"] == "artifact_acl"
+    assert "Artifact ACLs" in root_result.result["message"]
+    for result in (root_wildcard_result, root_jsx_result):
+        assert result.success == 1
+        assert result.result["visibility_filtered"] is True
+        assert result.result["visibility_reason"] == "artifact_acl"
+        assert "authorization scope" in result.result["message"]
     assert direct_result.success == 1
     assert direct_result.result["files"] == []
     assert direct_result.result["visibility_filtered"] is True
+    assert direct_result.result["visibility_reason"] == "artifact_acl"
+    assert "Artifact ACLs" in direct_result.result["message"]
     assert "authorization scope" in direct_result.result["message"]
 
 

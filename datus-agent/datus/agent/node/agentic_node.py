@@ -170,6 +170,7 @@ class AgenticNode(Node):
         if not hasattr(self, "degraded_capabilities"):
             self.degraded_capabilities: Dict[str, str] = {}
         self._mcp_connection_failures: List[tuple[str, str]] = []
+        self._mcp_connection_failure_event: Optional[asyncio.Event] = None
         # Resume target (or freshly generated id when caller passes ``None``).
         # ``session_id`` is set once below — after ``get_node_name()`` is wired
         # up — and is treated as immutable for the node's lifetime: resume /
@@ -361,6 +362,9 @@ class AgenticNode(Node):
 
     def _record_mcp_connection_failure(self, server_name: str, error: str) -> None:
         record_mcp_connection_failure(self, server_name, error)
+        failure_event = getattr(self, "_mcp_connection_failure_event", None)
+        if failure_event is not None:
+            failure_event.set()
 
     def _drain_mcp_connection_failure_actions(self, manager: ActionHistoryManager) -> List[ActionHistory]:
         return drain_mcp_connection_failure_actions(self, manager)
@@ -3450,27 +3454,135 @@ class AgenticNode(Node):
         # argument too late and the first run would execute unwrapped tools.
         self._ensure_tool_transformers()
         self._current_action_history = ctx.action_history_manager
-        try:
-            async for stream_action in self.model.generate_with_tools_stream(
-                prompt=ctx.user_prompt,
-                tools=self.tools or [],
-                builtin_web_tools=getattr(self, "_builtin_web_tools", None),
-                mcp_servers=self.mcp_servers,
-                instruction=ctx.system_instruction,
-                max_turns=effective_max_turns,
-                session=ctx.session,
-                action_history_manager=ctx.action_history_manager,
-                hooks=self._compose_run_hooks(ctx),
-                agent_name=self.get_node_name(),
-                interrupt_controller=self.interrupt_controller,
-                pending_input_queue=ctx.pending_input_queue,
-                mcp_connection_failure_callback=self._record_mcp_connection_failure,
-                # Defensive: test doubles that bypass ``AgenticNode.__init__``
-                # may not have a broker; the model layer skips emit when None.
-                interaction_broker=getattr(self, "interaction_broker", None),
-            ):
+
+        async def _stream_model_actions() -> AsyncGenerator[ActionHistory, None]:
+            """Forward model actions while surfacing MCP setup failures promptly."""
+            mcp_servers = getattr(self, "mcp_servers", None)
+
+            def _create_model_stream() -> AsyncGenerator[ActionHistory, None]:
+                return self.model.generate_with_tools_stream(
+                    prompt=ctx.user_prompt,
+                    tools=self.tools or [],
+                    builtin_web_tools=getattr(self, "_builtin_web_tools", None),
+                    mcp_servers=mcp_servers,
+                    instruction=ctx.system_instruction,
+                    max_turns=effective_max_turns,
+                    session=ctx.session,
+                    action_history_manager=ctx.action_history_manager,
+                    hooks=self._compose_run_hooks(ctx),
+                    agent_name=self.get_node_name(),
+                    interrupt_controller=self.interrupt_controller,
+                    pending_input_queue=ctx.pending_input_queue,
+                    mcp_connection_failure_callback=self._record_mcp_connection_failure,
+                    # Defensive: test doubles that bypass ``AgenticNode.__init__``
+                    # may not have a broker; the model layer skips emit when None.
+                    interaction_broker=getattr(self, "interaction_broker", None),
+                )
+
+            if not mcp_servers:
                 for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
                     yield failure_action
+                async for action in _create_model_stream():
+                    for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                        yield failure_action
+                    yield action
+                return
+
+            failure_event = asyncio.Event()
+            previous_failure_event = getattr(self, "_mcp_connection_failure_event", None)
+            self._mcp_connection_failure_event = failure_event
+            request_queue: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+            output_queue: asyncio.Queue[tuple[str, Any, Any]] = asyncio.Queue(maxsize=1)
+
+            async def _produce_model_actions() -> None:
+                """Own the model iterator so transport cleanup stays task-local."""
+                model_stream = None
+                cancelled_error: Optional[asyncio.CancelledError] = None
+                try:
+                    model_stream = _create_model_stream()
+                    while True:
+                        await request_queue.get()
+                        try:
+                            action = await anext(model_stream)
+                        except StopAsyncIteration:
+                            await output_queue.put(("done", None, None))
+                            break
+                        await output_queue.put(("action", action, None))
+                except asyncio.CancelledError as error:
+                    # Consume cancellation long enough to close the model
+                    # generator in this same task; re-raise after cleanup.
+                    cancelled_error = error
+                except BaseException as error:
+                    await output_queue.put(("error", error, error.__traceback__))
+                finally:
+                    if model_stream is not None:
+                        close = getattr(model_stream, "aclose", None)
+                        if close is not None:
+                            try:
+                                await close()
+                            except Exception:  # noqa: BLE001 - cleanup must not mask the model outcome
+                                logger.debug("Failed to close MCP model stream", exc_info=True)
+                if cancelled_error is not None:
+                    raise cancelled_error
+
+            producer_task = asyncio.create_task(_produce_model_actions())
+            failure_task = None
+            output_task = None
+            request_pending = False
+
+            try:
+                for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                    yield failure_action
+
+                failure_task = asyncio.create_task(failure_event.wait())
+                while True:
+                    if not request_pending:
+                        await request_queue.put(None)
+                        request_pending = True
+                    if output_task is None:
+                        output_task = asyncio.create_task(output_queue.get())
+                    wait_tasks = {output_task, failure_task}
+                    done, _ = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+
+                    if failure_task in done:
+                        failure_event.clear()
+                        failure_task = asyncio.create_task(failure_event.wait())
+                        for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                            yield failure_action
+
+                    if output_task not in done:
+                        continue
+
+                    event_type, payload, payload_traceback = output_task.result()
+                    output_task = None
+                    request_pending = False
+                    if event_type == "action":
+                        for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                            yield failure_action
+                        yield payload
+                        continue
+                    for failure_action in self._drain_mcp_connection_failure_actions(ctx.action_history_manager):
+                        yield failure_action
+                    if event_type == "error":
+                        raise payload.with_traceback(payload_traceback)
+                    break
+            finally:
+                if output_task is not None and not output_task.done():
+                    output_task.cancel()
+                if failure_task is not None and not failure_task.done():
+                    failure_task.cancel()
+                if not producer_task.done():
+                    producer_task.cancel()
+                await asyncio.gather(
+                    *(task for task in (output_task, failure_task, producer_task) if task is not None),
+                    return_exceptions=True,
+                )
+                if getattr(self, "_mcp_connection_failure_event", None) is failure_event:
+                    self._mcp_connection_failure_event = previous_failure_event
+
+        model_actions_stream = _stream_model_actions()
+        try:
+            async for stream_action in model_actions_stream:
                 lifecycle_hook = getattr(self, "_tool_lifecycle_hook_instance", None)
                 if lifecycle_hook is not None and lifecycle_hook.consume_published_completion(stream_action.action_id):
                     if stream_action.role == ActionRole.TOOL and stream_action.status == ActionStatus.SUCCESS:
@@ -3509,6 +3621,7 @@ class AgenticNode(Node):
 
                 yield action_to_yield
         finally:
+            await model_actions_stream.aclose()
             self._current_action_history = None
 
     # ── optional hooks (subclasses override as needed) ──────────────────

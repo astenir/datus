@@ -20,6 +20,11 @@ type BrowserQueryRequest = {
 type BrowserBridge = {
   ARTIFACT_QUERY_REQUEST: string;
   ARTIFACT_QUERY_RESULT: string;
+  ARTIFACT_RENDER_ERROR: string;
+  artifactRenderErrorFromMessage(
+    event: MessageEvent<unknown>,
+    expectedSource: Window | null,
+  ): { message: string; stack: string | null } | null;
   withArtifactPreviewRuntime(html: string): string;
   handleArtifactPreviewMessage(
     event: MessageEvent<unknown>,
@@ -33,6 +38,7 @@ type BrowserBridge = {
 type BrowserTestState = {
   outer: HTMLIFrameElement;
   queryCalls: BrowserQueryRequest[];
+  renderErrors: Array<{ message: string; stack: string | null }>;
   outerHtml: string;
 };
 
@@ -47,6 +53,7 @@ type PreviewScenario = {
   dashboardSlug?: string;
   expectedDashboardSlug?: string;
   failQuery?: boolean;
+  renderError?: boolean;
   standaloneHttp?: boolean;
 };
 
@@ -69,13 +76,14 @@ async function launchPreview(page: Page, scenario: PreviewScenario = {}) {
 
     const dashboardSlug = options.dashboardSlug ?? "fund-overview";
     const expectedDashboardSlug = options.expectedDashboardSlug ?? "fund-overview";
-    const detail = {
-      slug: dashboardSlug,
-      name: "Fund overview",
-      published_version: 3,
-      files: [{
-        path: "render/app.jsx",
-        content: `
+    const renderSource = options.renderError
+      ? `
+          import React from 'react';
+          export default function App() {
+            return React.createElement(undefined);
+          }
+        `
+      : `
           import React from 'react';
           import { useDatusArtifact } from '@datus/web-artifact';
           export default function App() {
@@ -84,7 +92,14 @@ async function launchPreview(page: Page, scenario: PreviewScenario = {}) {
             const output = errorMessage ? 'ERROR:' + errorMessage : (data ? JSON.stringify(data) : 'pending');
             return React.createElement('pre', { id: 'query-result' }, output);
           }
-        `,
+        `;
+    const detail = {
+      slug: dashboardSlug,
+      name: "Fund overview",
+      published_version: 3,
+      files: [{
+        path: "render/app.jsx",
+        content: renderSource,
       }],
     };
     const outerHtml = bridge.withArtifactPreviewRuntime(`<!doctype html>
@@ -100,12 +115,19 @@ async function launchPreview(page: Page, scenario: PreviewScenario = {}) {
       <\/script></body></html>`);
     const outer = document.createElement("iframe");
     const queryCalls: BrowserQueryRequest[] = [];
+    const renderErrors: Array<{ message: string; stack: string | null }> = [];
 
     outer.dataset.testid = "outer-preview";
     outer.setAttribute("sandbox", "allow-scripts allow-downloads");
     outer.setAttribute("referrerpolicy", "no-referrer");
 
     window.addEventListener("message", (event) => {
+      const renderError = bridge.artifactRenderErrorFromMessage(event, outer.contentWindow);
+      if (renderError) {
+        renderErrors.push(renderError);
+        return;
+      }
+
       void bridge.handleArtifactPreviewMessage(
         event,
         outer.contentWindow,
@@ -121,7 +143,7 @@ async function launchPreview(page: Page, scenario: PreviewScenario = {}) {
 
     outer.src = URL.createObjectURL(new Blob([outerHtml], { type: "text/html" }));
     document.querySelector("#test-root")?.replaceChildren(outer);
-    window.__artifactPreviewTest = { outer, queryCalls, outerHtml };
+    window.__artifactPreviewTest = { outer, queryCalls, renderErrors, outerHtml };
 
     return {
       containsAuthorization: outerHtml.includes("Authorization"),
@@ -184,6 +206,15 @@ test("returns a concise failure to the renderer-native provider", async ({ page 
   const { inner } = await previewFrames(page);
 
   await expect(inner.locator("#query-result")).toHaveText("ERROR:运行仪表盘查询失败");
+});
+
+test("forwards nested renderer failures to the host preview", async ({ page }) => {
+  await launchPreview(page, { renderError: true });
+  await previewFrames(page);
+
+  await expect.poll(() => page.evaluate(() => window.__artifactPreviewTest?.renderErrors.length)).toBe(1);
+  const errors = await page.evaluate(() => window.__artifactPreviewTest?.renderErrors);
+  expect(errors?.[0]?.message).toContain("React error");
 });
 
 test("keeps the renderer HTTP provider as the standalone fallback", async ({ page }) => {

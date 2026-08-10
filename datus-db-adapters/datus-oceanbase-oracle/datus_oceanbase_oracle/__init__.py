@@ -18,4 +18,5 @@ def register():
         OceanBaseOracleConnector,
         config_class=OceanBaseOracleConfig,
         capabilities={"database", "schema"},
+        parser_dialect="oracle",
     )
