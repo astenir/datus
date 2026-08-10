@@ -20,6 +20,7 @@ def register():
         GreenplumConnector,
         config_class=GreenplumConfig,
         capabilities={"database", "schema"},
+        parser_dialect="postgres",
         uri_builder=build_greenplum_uri,
         context_resolver=resolve_greenplum_context,
     )
