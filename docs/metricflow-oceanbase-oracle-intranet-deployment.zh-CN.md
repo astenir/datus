@@ -50,10 +50,19 @@ metricflow/
 
 ```bash
 deploy/offline/package-intranet.sh \
-  --branch feature/metricflow-oceanbase-oracle \
+  --branch <release-tag-or-commit-sha> \
   --strict-clean \
   --skip-web
 ```
+
+`--branch` 必须使用已经审批并且在当前仓库中可解析的正式 tag 或固定 commit SHA，不要依赖已经合并、删除或仍会移动的 feature branch。打包前后分别记录：
+
+```bash
+git rev-parse <release-tag-or-commit-sha>
+git show --no-patch --format=fuller <release-tag-or-commit-sha>
+```
+
+交付基线应与 `docs/upstream-sync-manifest.yml` 中登记的各项目采用状态一致；清单中的 `observed_upstream` 只代表观察到的上游引用，不能直接作为已采用 release 交付。
 
 内网解包并克隆 bundle：
 

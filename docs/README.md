@@ -2,7 +2,7 @@
 
 本目录只收纳跨子项目维护文档和无法归属单一组件的专项部署说明。组件的安装、配置和测试应写在对应子项目中；同一流程只保留一个事实来源，其他文档通过链接引用。
 
-`datus-agent/docs/` 是上游公开产品文档，本次 monorepo 文档组织不改动该目录。
+`datus-agent/docs/` 是上游公开产品文档；下游交接、差异治理和跨项目同步文档统一放在本目录。
 
 ## 开发入口
 
@@ -22,6 +22,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | [统一上游同步清单](./upstream-sync-manifest.yml) | 上游地址、只读 remote、采用基线、待同步引用、版本锁文件和联动验证 |
+| [Agent 上游差异预算](./upstream-diff-budget.zh-CN.md) | 当前 `datus-agent` 基线、差异分类、门禁和收敛流程 |
 
 ## 企业能力
 
@@ -38,7 +39,6 @@
 | 文档 | 用途 |
 | --- | --- |
 | [CI 质量门禁维护指南](./ci-quality-gates.zh-CN.md) | 根 GitHub Actions、路径检测和 required status 契约 |
-| [前端静态分析基线](./frontend-static-analysis-baseline.zh-CN.md) | 当前 ESLint/TypeScript 覆盖、已知低风险项和迁移边界 |
 | [Web OpenAPI 实现映射](../datus-web/docs/openapi-implementation-map.md) | 后端 route 到前端 API、composable 和界面的实现状态 |
 
 ## 专项部署

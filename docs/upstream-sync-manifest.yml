@@ -24,7 +24,7 @@ repository:
     - "不要例行把上游 main 合并到下游 main。"
     - "耦合源码 workspace、包版本下限、editable source 和锁文件必须一起同步。"
     - "企业认证、授权、投影、owner、ACL、SQL policy、审计、Quota 和 workspace 边界保持 fail closed。"
-    - "每次正式升级或有效收敛后刷新 datus-agent/docs/upstream-diff-budget.zh-CN.md。"
+    - "每次正式升级或有效收敛后刷新 docs/upstream-diff-budget.zh-CN.md。"
     - "受保护 main 的变更通过 PR 交付，合并后核对 ancestry、远端对齐和工作区状态。"
 
 upstream_projects:
@@ -280,6 +280,6 @@ handover_required_evidence:
   - "记录每个 remote 是否已经在本地配置，以及是否禁用 push。"
   - "严格区分 local_adopted_baseline 与 observed_upstream；待同步引用不能描述成已同步。"
   - "附上聚焦测试、跨项目测试、真实企业 smoke 和明确跳过的检查。"
-  - "协同升级后刷新 datus-agent/docs/upstream-diff-budget.zh-CN.md。"
+  - "协同升级后刷新 docs/upstream-diff-budget.zh-CN.md。"
   - "受保护 main 记录 PR 编号、合并提交、origin/main 对齐状态和工作区状态。"
   - "保留上游 license、attribution、copyright notice 和源码 header。"

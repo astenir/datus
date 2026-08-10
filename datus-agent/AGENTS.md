@@ -25,7 +25,7 @@ Read the most specific doc before editing:
 - Enterprise product/security contract: `ENTERPRISE_PLATFORM_PLAN.zh.md`
 - Enterprise implementation checklist: `ENTERPRISE_AI_DEVELOPMENT_GUIDE.zh.md`
 - Local enterprise backend bring-up: `LOCAL_ENTERPRISE_BACKEND_TESTING.zh.md`
-- Downstream build, release, and adapter maintenance: `docs/downstream-maintenance.zh-CN.md`
+- Monorepo upstream handover and sync: `../docs/upstream-sync-manifest.yml` and `../docs/upstream-diff-budget.zh-CN.md`
 - Public user/developer overview: `README.md` and `docs/develop/`
 
 For enterprise-related code, read both enterprise docs before changing code. They define the stage boundary and fail-closed requirements. Do not rely on chat history alone.
@@ -81,7 +81,7 @@ Per-project KB content lives under `./subject/{semantic_models,sql_summaries}/`.
 
 ## Upstream Diff Budget
 
-Use `docs/upstream-diff-budget.zh-CN.md` when changing files inherited from upstream. New downstream enterprise behavior should default to `datus_enterprise/`, enterprise config examples, scripts, or enterprise tests. Keep upstream-owned files as thin hooks only: startup registration, dependency adapters, request context, config projection, storage/execution extension points, and route security matrix integration.
+Use `../docs/upstream-diff-budget.zh-CN.md` and the root `../docs/upstream-sync-manifest.yml` when changing files inherited from upstream. New downstream enterprise behavior should default to `datus_enterprise/`, enterprise config examples, scripts, or enterprise tests. Keep upstream-owned files as thin hooks only: startup registration, dependency adapters, request context, config projection, storage/execution extension points, and route security matrix integration.
 
 When a change adds or keeps a modification to an upstream original file, classify it as one of: core hook, move-to-enterprise candidate, upstreamable fix, docs/config/meta, or test-only. Prefer moving enterprise policy logic out of route/service bodies before adding more branches there. For release upgrades, refresh the diff budget numbers after comparing `vX.Y.Z` with `HEAD:datus-agent`.
 
