@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Session history search fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue"
+      import Sidebar from "/src/components/ui/sidebar/Sidebar.vue"
+      import SidebarContent from "/src/components/ui/sidebar/SidebarContent.vue"
+      import SidebarProvider from "/src/components/ui/sidebar/SidebarProvider.vue"
+      import "/src/style.css"
+      import SessionHistoryList from "/src/features/workspace/SessionHistoryList.vue"
+
+      const sessions = [
+        {
+          session_id: "session-sales",
+          user_query: "查询销售额",
+          is_active: false,
+        },
+        {
+          session_id: "session-margin",
+          user_query: "查询利润率",
+          is_active: false,
+        },
+      ]
+
+      const selectedSessionId = ref(null)
+      const events = ref([])
+
+      createApp({
+        setup() {
+          function openSession(sessionId) {
+            selectedSessionId.value = sessionId
+            events.value = [...events.value, `open:${sessionId}`]
+          }
+
+          return () => h("main", { class: "min-h-screen bg-background" }, [
+            h(
+              SidebarProvider,
+              { defaultOpen: true, class: "h-[600px] w-[384px]" },
+              {
+                default: () => h(
+                  Sidebar,
+                  { collapsible: "none", class: "h-[600px] w-[384px]" },
+                  {
+                    default: () => h(
+                      SidebarContent,
+                      { class: "gap-0 overflow-hidden px-0" },
+                      {
+                        default: () => h(SessionHistoryList, {
+                          canViewChat: true,
+                          isLoadingSessions: false,
+                          selectedSessionId: selectedSessionId.value,
+                          sessions,
+                          onOpenSession: openSession,
+                        }),
+                      },
+                    ),
+                  },
+                ),
+              },
+            ),
+            h("output", { "data-testid": "events", class: "sr-only" }, events.value.join("|")),
+          ])
+        },
+      }).mount("#app")
+    </script>
+  </body>
+</html>
