@@ -146,9 +146,23 @@ npm run build:intranet
 
 `build:intranet` 会通过 Vite mode 读取 `.env.intranet.local`。如果前端和 API 由同一个 Nginx 站点代理，推荐把 `VITE_DATUS_API_TARGET` 留空，让浏览器请求同源 `/api`，由 Nginx 转发到后端；只有 API 与前端不同源且后端 CORS 已正确放行时，才把它设置成完整后端 origin。
 
-## 自定义新会话开屏建议语句
+## 自定义新会话开屏文案
 
-新会话空态展示的建议语句从部署目录的 `chat-suggestions.txt` 读取（UTF-8，每行一句）。构建时 Vite 会把 `public/chat-suggestions.txt` 原样复制到 `dist/` 根目录（与 `index.html` 同级），因此部署后**直接编辑服务器上该文件即可生效，无需重新构建**：
+新会话空态的欢迎标题和建议语句都从部署目录的文本文件读取（UTF-8），构建时 Vite 会把 `public/` 下的文件原样复制到 `dist/` 根目录（与 `index.html` 同级），因此部署后**直接编辑服务器上对应文件即可生效，无需重新构建**。
+
+### 欢迎标题
+
+`chat-welcome-title.txt`，取第一个非空行：
+
+```
+有什么我能帮你的吗？
+```
+
+- 文件不存在、读取失败或内容为空时，回退到内置默认标题（见 `src/features/chat/chat-welcome.ts`）。
+
+### 建议语句
+
+`chat-suggestions.txt`，每行一句：
 
 ```
 帮我分析基金持仓的关键变化
@@ -157,10 +171,9 @@ npm run build:intranet
 
 - 文件不存在、读取失败时，回退到内置默认文案（见 `src/features/chat/chat-suggestions.ts`）；
 - 文件存在但没有任何有效行时，不展示任何建议语句；
-- 空行、重复行会被自动过滤；
-- 修改文件后刷新页面即可看到新语句（请求带 `no-cache`，不做浏览器缓存）。
+- 空行、重复行会被自动过滤。
 
-注意：文件必须保存为 UTF-8 编码（含中文时尤其重要），并确保 Web 服务器能直接访问该静态文件（`try_files` 命中即可，无需额外配置）。
+两个文件修改后刷新页面即可生效（请求带 `no-cache`，不做浏览器缓存）。注意：文件必须保存为 UTF-8 编码（含中文时尤其重要），并确保 Web 服务器能直接访问这些静态文件（`try_files` 命中即可，无需额外配置）。
 
 ## 常用命令
 

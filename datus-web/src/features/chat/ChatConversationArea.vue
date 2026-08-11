@@ -18,6 +18,10 @@ import {
   DEFAULT_CHAT_SUGGESTIONS,
   loadChatSuggestions,
 } from "@/features/chat/chat-suggestions"
+import {
+  DEFAULT_WELCOME_TITLE,
+  loadWelcomeTitle,
+} from "@/features/chat/chat-welcome"
 
 defineProps<{
   displayMessages: readonly ChatDisplayMessage[]
@@ -50,9 +54,15 @@ const emit = defineEmits<{
 const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
 
 const promptSuggestions = ref<readonly string[]>(DEFAULT_CHAT_SUGGESTIONS)
+const welcomeTitle = ref(DEFAULT_WELCOME_TITLE)
 
 onMounted(async () => {
-  promptSuggestions.value = await loadChatSuggestions()
+  const [suggestions, title] = await Promise.all([
+    loadChatSuggestions(),
+    loadWelcomeTitle(),
+  ])
+  promptSuggestions.value = suggestions
+  welcomeTitle.value = title
 })
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
@@ -83,7 +93,7 @@ function stop() {
       class="flex min-h-0 w-full min-w-0 flex-1 flex-col items-center justify-center px-4 pb-28 pt-12 text-center md:pb-36"
     >
       <h1 class="max-w-full text-3xl font-bold leading-tight text-foreground md:text-4xl">
-        有什么我能帮你的吗？
+        {{ welcomeTitle }}
       </h1>
 
       <Suggestions class="mx-auto mt-8 flex w-full max-w-5xl flex-wrap justify-center gap-2 whitespace-normal px-1">
