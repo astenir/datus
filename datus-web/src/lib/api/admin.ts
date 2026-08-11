@@ -3,6 +3,7 @@ import type {
   AdminArtifact,
   AdminDatasource,
   AdminDatasourceGrant,
+  AdminDatasourceGrantSubject,
   AdminSession,
   AdminSessionDetail,
   AdminSessionListParams,
@@ -18,6 +19,7 @@ import type {
   AuditLogListResponse,
   AuditLogListParams,
   DatasourceGrantListParams,
+  DatasourceGrantSubjectListParams,
   DeleteQuotaInput,
   QuotaListParams,
   Role,
@@ -201,6 +203,20 @@ export const adminDatasourceApi = {
     ]);
     return get<ApiResponse<{ databases: DatabaseInfo[] }>>(
       `/api/v1/admin/datasources/${encodeURIComponent(datasourceKey)}/catalog${query}`,
+    );
+  },
+
+  listGrantSubjects(
+    params: DatasourceGrantSubjectListParams,
+  ): Promise<PaginatedApiResponse<AdminDatasourceGrantSubject[]>> {
+    const query = queryString([
+      ["subject_type", params.subjectType],
+      ["search", params.search],
+      ["limit", params.limit],
+      ["offset", params.offset],
+    ]);
+    return get<PaginatedApiResponse<AdminDatasourceGrantSubject[]>>(
+      `/api/v1/admin/datasource-grant-subjects${query}`,
     );
   },
 

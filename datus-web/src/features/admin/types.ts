@@ -165,10 +165,8 @@ export type AdminGrantDialogProps = Pick<
   AdminDialogProps,
   | "formatScope"
   | "overview"
-  | "roles"
   | "saveGrantAndCloseRoute"
   | "setGrantDialogOpen"
-  | "users"
 >
 
 export type AdminQuotaDialogProps = Pick<

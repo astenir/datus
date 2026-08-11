@@ -31,18 +31,29 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   emptyText?: string
   noResultsText?: string
+  selectionMode?: "single" | "multiple"
+  allowEmptyOptions?: boolean
+  disableWhileLoading?: boolean
+  showSelectedSummary?: boolean
 }>(), {
   disabled: false,
   loading: false,
   emptyText: "暂无已选项",
   noResultsText: "没有匹配结果",
+  selectionMode: "multiple",
+  allowEmptyOptions: false,
+  disableWhileLoading: true,
+  showSelectedSummary: true,
 })
 
 const emit = defineEmits<{
   toggle: [value: string]
+  select: [value: string]
+  search: [value: string]
 }>()
 
 const open = shallowRef(false)
+const searchTerm = shallowRef("")
 const selectedOptions = computed(() => props.selectedValues.map((value) => {
   return props.options.find(option => option.value === value) ?? {
     value,
@@ -50,7 +61,7 @@ const selectedOptions = computed(() => props.selectedValues.map((value) => {
   }
 }))
 const triggerText = computed(() => {
-  if (props.loading) return "正在加载候选项..."
+  if (props.loading && !selectedOptions.value.length) return "正在加载候选项..."
   if (!selectedOptions.value.length) return props.placeholder
   if (selectedOptions.value.length === 1) return selectedOptions.value[0]?.label ?? props.placeholder
   return `已选择 ${selectedOptions.value.length} 项`
@@ -59,13 +70,28 @@ const selectedSummaryText = computed(() => {
   if (!selectedOptions.value.length) return props.emptyText
   return selectedOptions.value.map(option => option.label).join("、")
 })
-const triggerDisabled = computed(() => props.disabled || props.loading || props.options.length === 0)
+const comboboxModelValue = computed(() => {
+  if (props.selectionMode === "single") return props.selectedValues[0]
+  return props.selectedValues
+})
+const emptyStateText = computed(() => props.loading ? "正在加载候选项..." : props.noResultsText)
+const triggerDisabled = computed(() => (
+  props.disabled
+  || (props.loading && props.disableWhileLoading)
+  || (!props.allowEmptyOptions && props.options.length === 0)
+))
 
 function optionSearchText(option: SearchableMultiSelectOption): string {
   return [option.label, option.description, option.value].filter(Boolean).join(" ")
 }
 
 function updateSelection(value: unknown) {
+  if (props.selectionMode === "single") {
+    if (typeof value !== "string" || !value.trim()) return
+    emit("select", value)
+    open.value = false
+    return
+  }
   if (!Array.isArray(value)) return
 
   const nextValues = new Set(
@@ -81,8 +107,16 @@ function updateSelection(value: unknown) {
   })
 }
 
+function displaySearchValue(): string {
+  return searchTerm.value
+}
+
 watch(triggerDisabled, (disabled) => {
   if (disabled) open.value = false
+})
+watch(searchTerm, value => emit("search", value))
+watch(open, (isOpen) => {
+  if (!isOpen) searchTerm.value = ""
 })
 </script>
 
@@ -90,9 +124,9 @@ watch(triggerDisabled, (disabled) => {
   <div class="flex w-full min-w-0 flex-col gap-2">
     <Combobox
       v-model:open="open"
-      :model-value="selectedValues"
+      :model-value="comboboxModelValue"
       :disabled="triggerDisabled"
-      multiple
+      :multiple="selectionMode === 'multiple'"
       @update:model-value="updateSelection"
     >
       <ComboboxAnchor as-child>
@@ -117,8 +151,12 @@ watch(triggerDisabled, (disabled) => {
         align="start"
         class="w-[var(--reka-combobox-trigger-width)] p-1.5 *:data-[slot=input-group]:m-0 *:data-[slot=input-group]:mb-1.5 *:data-[slot=input-group]:h-9 *:data-[slot=input-group]:w-full *:data-[slot=input-group]:rounded-2xl"
       >
-        <ComboboxInput :placeholder="searchPlaceholder" />
-        <ComboboxEmpty class="py-6">{{ noResultsText }}</ComboboxEmpty>
+        <ComboboxInput
+          v-model="searchTerm"
+          :display-value="selectionMode === 'single' ? displaySearchValue : undefined"
+          :placeholder="searchPlaceholder"
+        />
+        <ComboboxEmpty class="py-6">{{ emptyStateText }}</ComboboxEmpty>
         <ComboboxViewport class="p-0">
           <ComboboxGroup>
             <ComboboxItem
@@ -146,6 +184,7 @@ watch(triggerDisabled, (disabled) => {
     </Combobox>
 
     <p
+      v-if="showSelectedSummary"
       class="min-w-0 truncate text-sm text-muted-foreground"
       :title="selectedSummaryText"
     >

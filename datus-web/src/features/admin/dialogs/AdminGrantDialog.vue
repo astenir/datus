@@ -19,22 +19,10 @@ import {
 } from "@/components/ui/select"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
 import type { AdminGrantDialogProps } from "@/features/admin/types"
+import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 import { adminDatasourceLabel } from "@/lib/datasource-display"
 
 const props = defineProps<AdminGrantDialogProps>()
-
-const grantSubjectOptions = computed(() => {
-  if (props.overview.grantForm.value.subject_type === "role") {
-    return props.roles.roles.value.map((role) => ({
-      value: role.role_id,
-      label: role.name ? role.name + " (" + role.role_id + ")" : role.role_id,
-    }))
-  }
-  return props.users.users.value.map((user) => ({
-    value: user.user_id,
-    label: user.display_name ? user.display_name + " (" + user.user_id + ")" : user.user_id,
-  }))
-})
 
 const grantDatasourceOptions = computed(() => {
   const options = props.overview.data.value.datasources.map((datasource) => ({
@@ -117,47 +105,39 @@ function formatScopeText(text: string): string {
           </Field>
           <Field>
             <FieldLabel>主体</FieldLabel>
-            <Select v-model="overview.grantForm.value.subject_id">
-              <SelectTrigger class="w-full">
-                <SelectValue placeholder="选择用户或角色" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem
-                    v-for="subject in grantSubjectOptions"
-                    :key="subject.value"
-                    :value="subject.value"
-                  >
-                    {{ subject.label }}
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <FieldDescription v-if="!grantSubjectOptions.length">
-              当前没有可选{{ overview.grantForm.value.subject_type === "role" ? "角色" : "用户" }}。
+            <SearchableMultiSelect
+              :allow-empty-options="true"
+              :disable-while-loading="false"
+              :loading="overview.loadingGrantSubjects.value"
+              :no-results-text="overview.grantSubjectError.value ?? '没有匹配的用户或角色'"
+              :options="overview.grantSubjectOptions.value"
+              :selected-values="overview.grantForm.value.subject_id ? [overview.grantForm.value.subject_id] : []"
+              :show-selected-summary="false"
+              placeholder="选择用户或角色"
+              search-placeholder="搜索用户或角色"
+              selection-mode="single"
+              @search="overview.setGrantSubjectSearch"
+              @select="overview.setGrantSubjectId"
+            />
+            <FieldDescription v-if="overview.grantSubjectError.value">
+              {{ overview.grantSubjectError.value }}
+            </FieldDescription>
+            <FieldDescription v-else-if="overview.grantSubjectHasMore.value">
+              候选项超过 100 个，请继续输入关键词搜索。
             </FieldDescription>
           </Field>
           <Field>
             <FieldLabel>数据源</FieldLabel>
-            <Select
-              :model-value="overview.grantForm.value.datasource_key"
-              @update:model-value="overview.setGrantDatasource"
-            >
-              <SelectTrigger class="w-full">
-                <SelectValue placeholder="选择数据源" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem
-                    v-for="datasource in grantDatasourceOptions"
-                    :key="datasource.value"
-                    :value="datasource.value"
-                  >
-                    {{ datasource.label }}
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            <SearchableMultiSelect
+              :disabled="overview.savingGrant.value"
+              :options="grantDatasourceOptions"
+              :selected-values="overview.grantForm.value.datasource_key ? [overview.grantForm.value.datasource_key] : []"
+              :show-selected-summary="false"
+              placeholder="选择数据源"
+              search-placeholder="搜索数据源"
+              selection-mode="single"
+              @select="overview.setGrantDatasource"
+            />
           </Field>
         </div>
         <div class="grid gap-4 md:grid-cols-[10rem_minmax(0,1fr)]">

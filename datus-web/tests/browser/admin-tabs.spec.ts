@@ -10,7 +10,10 @@ function response(data: unknown) {
 
 interface MockAdminApiOptions {
   agentConfig?: unknown
+  datasources?: unknown
+  grantSubjects?: unknown
   me?: unknown
+  onGrantSubjectRequest?: (url: URL) => void
 }
 
 async function mockAdminApi(page: Page, options: MockAdminApiOptions = {}): Promise<void> {
@@ -77,6 +80,17 @@ async function mockAdminApi(page: Page, options: MockAdminApiOptions = {}): Prom
         next_before_id: null,
         has_more: false,
       }))
+      return
+    }
+
+    if (url.pathname === "/api/v1/admin/datasource-grant-subjects") {
+      options.onGrantSubjectRequest?.(url)
+      await route.fulfill(response(options.grantSubjects ?? []))
+      return
+    }
+
+    if (url.pathname === "/api/v1/admin/datasources") {
+      await route.fulfill(response(options.datasources ?? []))
       return
     }
 
@@ -165,4 +179,37 @@ test("leaves permission management without restoring an unauthorized default tab
 
   await page.getByRole("button", { name: "配置", exact: true }).click()
   await expect(page).toHaveURL(/\/configuration\?datasource=ccks_fund(?:&|$)/)
+})
+
+test("searches grant subjects beyond the first user page and searches datasources", async ({ page }) => {
+  const subjectRequests: string[] = []
+  await mockAdminApi(page, {
+    datasources: [
+      { name: "fund", display_name: "Fund Warehouse", type: "postgres", is_default: true },
+      { name: "risk", display_name: "Risk Warehouse", type: "postgres", is_default: false },
+    ],
+    grantSubjects: Array.from({ length: 25 }, (_, index) => ({
+      subject_type: "user",
+      subject_id: `user_${index}`,
+      display_name: `User ${index}`,
+      enabled: true,
+    })),
+    onGrantSubjectRequest: url => subjectRequests.push(url.search),
+  })
+  await page.goto("/admin?tab=grants")
+
+  await page.getByRole("button", { name: "新增授权" }).click()
+  const dialog = page.getByRole("dialog", { name: "新增数据授权" })
+  await expect(dialog).toBeVisible()
+
+  await dialog.getByRole("button", { name: "选择用户或角色" }).click()
+  await page.getByPlaceholder("搜索用户或角色").fill("user_24")
+  await expect.poll(() => subjectRequests.some(query => query.includes("search=user_24"))).toBe(true)
+  await page.getByRole("option", { name: "User 24 (user_24)" }).click()
+  await expect(dialog.getByRole("button", { name: "选择用户或角色" })).toContainText("User 24")
+
+  await dialog.getByRole("button", { name: "选择数据源" }).click()
+  await page.getByPlaceholder("搜索数据源").fill("risk")
+  await page.getByRole("option", { name: "Risk Warehouse (risk)" }).click()
+  await expect(dialog.getByRole("button", { name: "选择数据源" })).toContainText("Risk Warehouse")
 })
