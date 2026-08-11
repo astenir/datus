@@ -82,6 +82,12 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Test maintenance rules
+        run: npm run test:maintenance
+
+      - name: Check generated OpenAPI types
+        run: npm run api:check
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

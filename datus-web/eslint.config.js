@@ -55,6 +55,24 @@ export default defineConfig(
       ],
       "no-console": ["error", { allow: ["warn", "error"] }],
       "no-debugger": "error",
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Route backend requests through src/lib/request.ts or src/lib/api/**; document explicit non-backend exceptions.",
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.object.name='globalThis'][callee.property.name='fetch']",
+          message: "Route backend requests through src/lib/request.ts or src/lib/api/**; document explicit non-backend exceptions.",
+        },
+        {
+          selector: "CallExpression[callee.object.name='window'][callee.property.name='fetch']",
+          message: "Route backend requests through src/lib/request.ts or src/lib/api/**; document explicit non-backend exceptions.",
+        },
+      ],
       "vue/no-mutating-props": ["error", { shallowOnly: true }],
       "vue/no-use-v-if-with-v-for": "error",
       "vue/require-v-for-key": "error",
@@ -71,6 +89,20 @@ export default defineConfig(
     files: ["vite.config.ts"],
     languageOptions: {
       globals: globals.node,
+    },
+  },
+  {
+    files: ["src/lib/request.ts"],
+    rules: {
+      "no-restricted-globals": "off",
+      "no-restricted-syntax": "off",
+    },
+  },
+  {
+    files: ["**/*.test.ts", "**/*.spec.ts"],
+    rules: {
+      "no-restricted-globals": "off",
+      "no-restricted-syntax": "off",
     },
   },
 )

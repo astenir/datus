@@ -312,6 +312,7 @@ This file is the durable project rulebook for Codex work in this repository.
 - Use `npm run api:sync` to pull `openapi.json` from the backend and regenerate OpenAPI TypeScript types.
 - `npm run api:sync` defaults to `http://localhost:8000/openapi.json`; override with `DATUS_OPENAPI_URL`, `VITE_DATUS_API_TARGET`, or `DATUS_API_TARGET` when testing another backend.
 - Use `npm run api:types` when `openapi.json` already matches the intended backend and only generated TypeScript types need refreshing.
+- Use `npm run api:check` to regenerate types in a temporary directory and verify that committed `src/types/openapi.ts` matches committed `openapi.json` without contacting a backend or overwriting the worktree.
 - Generated `src/types/openapi.ts` is a contract artifact. Do not edit it manually; update it through `npm run api:types` or `npm run api:sync`.
 - The OpenAPI type generation intentionally strips generated JSDoc comments through `scripts/strip-openapi-comments.mjs` so project no-`any` scans are not polluted by prose in backend descriptions.
 - Use `npm run api:smoke` after changing API helpers, request normalization, backend config handling, datasource switching, or OpenAPI-generated types.
@@ -328,6 +329,8 @@ Before finishing non-trivial changes, run:
 ```bash
 git diff --check
 npm run lint
+npm run test:maintenance
+npm run api:check
 npm test
 npm run build
 ```
