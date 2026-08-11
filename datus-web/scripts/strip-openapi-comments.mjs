@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-const GENERATED_TYPES_PATH = "src/types/openapi.ts";
+const GENERATED_TYPES_PATH = process.argv[2] || "src/types/openapi.ts";
 
 const source = await readFile(GENERATED_TYPES_PATH, "utf8");
 const withoutDocComments = source
