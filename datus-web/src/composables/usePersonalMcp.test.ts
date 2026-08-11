@@ -1,17 +1,33 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "@/lib/request";
+import { usePersonalMcp } from "./usePersonalMcp";
 
-const personalMcpOptions = vi.fn();
-const personalMcpServers = vi.fn();
-const createPersonalMcp = vi.fn();
-const updatePersonalMcp = vi.fn();
-const deletePersonalMcp = vi.fn();
-const testPersonalMcp = vi.fn();
-const personalMcpTools = vi.fn();
-const personalMcpSessionBinding = vi.fn();
-const toastSuccess = vi.fn();
-const toastError = vi.fn();
+// vi.mock 工厂会被提升到文件顶部执行，mock 函数必须通过 vi.hoisted 声明，
+// 否则静态导入 usePersonalMcp 时会在这些 const 初始化前被引用（TDZ）。
+const {
+  personalMcpOptions,
+  personalMcpServers,
+  createPersonalMcp,
+  updatePersonalMcp,
+  deletePersonalMcp,
+  testPersonalMcp,
+  personalMcpTools,
+  personalMcpSessionBinding,
+  toastSuccess,
+  toastError,
+} = vi.hoisted(() => ({
+  personalMcpOptions: vi.fn(),
+  personalMcpServers: vi.fn(),
+  createPersonalMcp: vi.fn(),
+  updatePersonalMcp: vi.fn(),
+  deletePersonalMcp: vi.fn(),
+  testPersonalMcp: vi.fn(),
+  personalMcpTools: vi.fn(),
+  personalMcpSessionBinding: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+}));
 
 const server = {
   id: "11111111111111111111111111111111",
@@ -54,6 +70,8 @@ function abortablePending(signal?: AbortSignal): Promise<never> {
 }
 
 describe("usePersonalMcp", () => {
+  let manager: ReturnType<typeof usePersonalMcp> | undefined;
+
   beforeEach(() => {
     vi.clearAllMocks();
     personalMcpOptions.mockResolvedValue({
@@ -83,9 +101,14 @@ describe("usePersonalMcp", () => {
     });
   });
 
+  // 状态在模块级共享（会话选择器与管理页共用），每个用例结束后必须 dispose
+  // 复位，避免用例间串扰，与 useChatSessionHistory.test.ts 的隔离方式一致。
+  afterEach(() => {
+    manager?.dispose();
+  });
+
   it("loads organization options and owner-visible servers", async () => {
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
 
     await manager.load();
 
@@ -95,8 +118,7 @@ describe("usePersonalMcp", () => {
   });
 
   it("creates and updates without exposing a bearer token in state", async () => {
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
     const input = {
       display_name: "个人分析工具",
       transport: "http" as const,
@@ -125,8 +147,7 @@ describe("usePersonalMcp", () => {
         { ...server, id: "33333333333333333333333333333333", display_name: "已停用", enabled: false },
       ],
     });
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
     await manager.load();
 
     expect(manager.toggleSelection(server.id)).toBe(true);
@@ -137,8 +158,7 @@ describe("usePersonalMcp", () => {
   });
 
   it("restores a canonical session binding, locks it, and resets only for a draft", async () => {
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
     await manager.load();
 
     await manager.loadSessionBinding("session-1");
@@ -153,13 +173,34 @@ describe("usePersonalMcp", () => {
     expect(manager.boundSessionId.value).toBeNull();
   });
 
+  it("shares one server list across instances and keeps it while any instance lives", async () => {
+    manager = usePersonalMcp();
+    await manager.load();
+    const workspaceInstance = usePersonalMcp();
+    const managementInstance = usePersonalMcp();
+
+    // 会话选择器（workspace）与管理页（management）读写同一份 servers。
+    expect(workspaceInstance.servers.value).toEqual([server]);
+    expect(managementInstance.servers.value).toEqual([server]);
+
+    // 管理页实例随 Tab 切换卸载：只要工作区实例还存活，共享状态不得被清空。
+    managementInstance.dispose();
+    expect(workspaceInstance.servers.value).toEqual([server]);
+    expect(workspaceInstance.selectedIds.value).toEqual([]);
+
+    // 工作区实例也卸载（应用卸载）：最后一个实例释放共享状态。
+    workspaceInstance.dispose();
+    manager.dispose();
+    expect(manager.servers.value).toEqual([]);
+    expect(manager.options.value).toMatchObject({ enabled: false, allowed_hosts: [] });
+  });
+
   it("shows a safe reference count when deletion is blocked", async () => {
     const response = new Response(JSON.stringify({
       detail: { code: "PERSONAL_MCP_SERVER_IN_USE", session_count: 2 },
     }), { status: 409, statusText: "Conflict", headers: { "Content-Type": "application/json" } });
     deletePersonalMcp.mockRejectedValueOnce(new HttpError(409, "Conflict", response));
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
 
     expect(await manager.deleteServer(server.id)).toBe(false);
     expect(toastError).toHaveBeenCalledWith("该 MCP 仍被 2 个会话引用，暂时不能删除");
@@ -173,8 +214,7 @@ describe("usePersonalMcp", () => {
       return abortablePending(signal);
     });
     personalMcpServers.mockImplementationOnce((signal?: AbortSignal) => abortablePending(signal));
-    const { usePersonalMcp } = await import("./usePersonalMcp");
-    const manager = usePersonalMcp();
+    manager = usePersonalMcp();
 
     const firstLoad = manager.load();
     const secondLoad = manager.load();
