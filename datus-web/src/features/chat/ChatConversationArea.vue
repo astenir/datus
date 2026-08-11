@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent } from "vue"
+import { defineAsyncComponent, onMounted, ref } from "vue"
 import {
   Conversation,
   ConversationContent,
@@ -14,6 +14,10 @@ import type {
   SuccessStorySource,
 } from "@/types"
 import type { TodoExecutionState } from "@/lib/todo-execution"
+import {
+  DEFAULT_CHAT_SUGGESTIONS,
+  loadChatSuggestions,
+} from "@/features/chat/chat-suggestions"
 
 defineProps<{
   displayMessages: readonly ChatDisplayMessage[]
@@ -45,14 +49,11 @@ const emit = defineEmits<{
 
 const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
 
-const promptSuggestions = [
-  "帮我分析基金持仓的关键变化",
-  "列出当前数据源有哪些表",
-  "运行 SQL 查询近 10 条记录",
-  "查看 MCP 工具连接状态",
-  "生成一份数据质量检查思路",
-  "帮我总结这个会话的重点",
-]
+const promptSuggestions = ref<readonly string[]>(DEFAULT_CHAT_SUGGESTIONS)
+
+onMounted(async () => {
+  promptSuggestions.value = await loadChatSuggestions()
+})
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
   emit("submitInteraction", interactionKey, answers)

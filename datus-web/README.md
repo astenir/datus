@@ -146,6 +146,22 @@ npm run build:intranet
 
 `build:intranet` 会通过 Vite mode 读取 `.env.intranet.local`。如果前端和 API 由同一个 Nginx 站点代理，推荐把 `VITE_DATUS_API_TARGET` 留空，让浏览器请求同源 `/api`，由 Nginx 转发到后端；只有 API 与前端不同源且后端 CORS 已正确放行时，才把它设置成完整后端 origin。
 
+## 自定义新会话开屏建议语句
+
+新会话空态展示的建议语句从部署目录的 `chat-suggestions.txt` 读取（UTF-8，每行一句）。构建时 Vite 会把 `public/chat-suggestions.txt` 原样复制到 `dist/` 根目录（与 `index.html` 同级），因此部署后**直接编辑服务器上该文件即可生效，无需重新构建**：
+
+```
+帮我分析基金持仓的关键变化
+列出当前数据源有哪些表
+```
+
+- 文件不存在、读取失败时，回退到内置默认文案（见 `src/features/chat/chat-suggestions.ts`）；
+- 文件存在但没有任何有效行时，不展示任何建议语句；
+- 空行、重复行会被自动过滤；
+- 修改文件后刷新页面即可看到新语句（请求带 `no-cache`，不做浏览器缓存）。
+
+注意：文件必须保存为 UTF-8 编码（含中文时尤其重要），并确保 Web 服务器能直接访问该静态文件（`try_files` 命中即可，无需额外配置）。
+
 ## 常用命令
 
 ```bash
