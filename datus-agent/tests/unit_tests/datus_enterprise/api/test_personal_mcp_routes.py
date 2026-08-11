@@ -171,6 +171,19 @@ def test_personal_mcp_session_binding_is_restored_from_owner_scoped_store(monkey
     store = InMemoryUserMcpServerStore()
     _install(monkeypatch, store)
     asyncio.run(
+        store.put_server(
+            user_id="alice",
+            mcp_id="a" * 32,
+            display_name="My Search",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            token=None,
+            allowed_tools=[],
+            blocked_tools=[],
+            enabled=True,
+        )
+    )
+    asyncio.run(
         store.set_session_binding(
             project_id="project",
             session_id="session-1",
@@ -187,9 +200,37 @@ def test_personal_mcp_session_binding_is_restored_from_owner_scoped_store(monkey
         response = client.get("/api/v1/me/mcp-servers/session-binding/session-1")
 
     assert response.status_code == 200
+    # The binding carries the user-facing display name so chat rendering can
+    # resolve the runtime ``personal_<id>`` alias back to the MCP name.
     assert response.json()["data"] == {
         "session_id": "session-1",
-        "servers": [{"mcp_id": "a" * 32, "revision": 2}],
+        "servers": [{"mcp_id": "a" * 32, "revision": 2, "display_name": "My Search"}],
+    }
+
+
+def test_personal_mcp_session_binding_keeps_empty_display_name_for_deleted_server(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    asyncio.run(
+        store.set_session_binding(
+            project_id="project",
+            session_id="session-1",
+            user_id="alice",
+            servers=[{"mcp_id": "b" * 32, "revision": 1}],
+        )
+    )
+
+    async def allow_session(*_args, **_kwargs):
+        return SimpleNamespace(error=None)
+
+    monkeypatch.setattr(personal_mcp_routes, "authorize_session_access", allow_session)
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get("/api/v1/me/mcp-servers/session-binding/session-1")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "session_id": "session-1",
+        "servers": [{"mcp_id": "b" * 32, "revision": 1, "display_name": ""}],
     }
 
 
@@ -330,10 +371,14 @@ async def test_chat_projection_attaches_only_owned_selected_mcp(monkeypatch):
     alias = f"personal_{record['id']}"
     assert [item["id"] for item in projected] == [record["id"]]
     assert alias in config._request_mcp_servers
+    # The projection keeps the user-facing display name next to the runtime
+    # alias so chat rendering never shows the record ID in tool cards.
+    assert config._request_mcp_display_names == {alias: "Search"}
     assert alias in config.agentic_nodes["chat_custom"]["mcp"]
     assert f"mcp.{alias}.*" in config.agentic_nodes["chat_custom"]["tool_policy"]["allowed"]
     assert config.agentic_nodes["child"] == {"id": "child", "mcp": "enterprise_child"}
     assert not hasattr(shared_config, "_request_mcp_servers")
+    assert not hasattr(shared_config, "_request_mcp_display_names")
     assert shared_config.agentic_nodes["chat_custom"]["mcp"] == "enterprise_search"
     binding = await store.get_session_binding("project", "chat_custom_session_1", "alice")
     assert binding is None

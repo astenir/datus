@@ -37,6 +37,30 @@ def personal_mcp_alias(mcp_id: str) -> str:
     return f"{PERSONAL_MCP_ALIAS_PREFIX}{normalize_personal_mcp_id(mcp_id)}"
 
 
+def personal_mcp_display_names(records: list[dict[str, Any]]) -> dict[str, str]:
+    """Map request-projected server aliases to user-facing display names.
+
+    The runtime alias (``personal_<id>``) is derived from the record ID for
+    stability and uniqueness; display names may collide or change, so they are
+    never used as runtime identity. Chat-side rendering (connection-failure
+    summaries, degraded-capability warnings) resolves the alias back to the
+    display name through this map when available.
+    """
+    names: dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        display_name = str(record.get("display_name") or "").strip()
+        if not display_name:
+            continue
+        try:
+            alias = personal_mcp_alias(str(record["id"]))
+        except DatusException:
+            continue
+        names[alias] = display_name
+    return names
+
+
 def normalize_display_name(value: str) -> str:
     name = value.strip()
     if not name:

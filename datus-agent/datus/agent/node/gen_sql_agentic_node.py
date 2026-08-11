@@ -528,6 +528,9 @@ class GenSQLAgenticNode(AgenticNode):
 
     def _setup_mcp_server_from_config(self, server_name: str) -> Optional[Any]:
         """Setup MCP server from {agent.home}/conf/.mcp.json using mcp_manager."""
+        from datus.agent.node.mcp_failure_actions_downstream import request_mcp_display_names
+
+        display_name = request_mcp_display_names(self).get(server_name) or server_name
         try:
             from datus.tools.mcp_tools.mcp_manager import MCPManager
 
@@ -539,7 +542,7 @@ class GenSQLAgenticNode(AgenticNode):
                 logger.warning(f"MCP server '{server_name}' not found in configuration")
                 self._record_degraded_capability(
                     f"mcp.{server_name}",
-                    f"MCP Server '{server_name}' is bound to this Agent but is missing from the runtime configuration.",
+                    f"MCP Server '{display_name}' is bound to this Agent but is missing from the runtime configuration.",
                 )
                 return None
 
@@ -554,7 +557,7 @@ class GenSQLAgenticNode(AgenticNode):
                 logger.warning(f"Failed to create MCP server '{server_name}': {error_msg}")
                 self._record_degraded_capability(
                     f"mcp.{server_name}",
-                    f"MCP Server '{server_name}' could not be initialized: {error_msg}",
+                    f"MCP Server '{display_name}' could not be initialized: {error_msg}",
                 )
                 return None
 
@@ -562,7 +565,7 @@ class GenSQLAgenticNode(AgenticNode):
             logger.error(f"Failed to setup MCP server '{server_name}' from config: {e}")
             self._record_degraded_capability(
                 f"mcp.{server_name}",
-                f"MCP Server '{server_name}' could not be initialized: {e}",
+                f"MCP Server '{display_name}' could not be initialized: {e}",
             )
             return None
 

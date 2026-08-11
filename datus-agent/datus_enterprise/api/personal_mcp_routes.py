@@ -78,6 +78,7 @@ class UpsertPersonalMcpRequest(BaseModel):
 class PersonalMcpSessionBindingItem(BaseModel):
     mcp_id: str
     revision: int
+    display_name: str = ""
 
 
 class PersonalMcpSessionBinding(BaseModel):
@@ -145,12 +146,22 @@ async def get_personal_mcp_session_binding(
         raise HTTPException(status_code=404, detail="RESOURCE_NOT_FOUND")
     binding = await _store().get_session_binding(svc.project_id, session_id, _require_user_id(ctx))
     servers = list(binding.get("servers") or []) if binding else []
+    user_id = _require_user_id(ctx)
+    items = []
+    for item in servers:
+        # Join the user-facing display name so chat rendering can resolve the
+        # runtime alias (``personal_<id>``) back to the MCP name.
+        record = await _store().get_server(user_id, str(item["mcp_id"]))
+        items.append(
+            PersonalMcpSessionBindingItem(
+                mcp_id=str(item["mcp_id"]),
+                revision=int(item["revision"]),
+                display_name=str(record.get("display_name") or "") if record else "",
+            )
+        )
     return Result(
         success=True,
-        data=PersonalMcpSessionBinding(
-            session_id=session_id,
-            servers=[PersonalMcpSessionBindingItem(**item) for item in servers],
-        ),
+        data=PersonalMcpSessionBinding(session_id=session_id, servers=items),
     )
 
 
