@@ -52,6 +52,78 @@ workflow_dispatch
 
 `merge_group` 和 `workflow_dispatch` 不读取 PR 文件列表，而是强制相关 workflow 的所有实体 job 运行。
 
+## 本地默认检查与 PR 检查范围
+
+本地命令和 PR gate 的依赖锁定方式、测试选择和外部服务边界并不完全相同：
+
+- `datus-agent/AGENTS.md` 的 `uv run pytest` 是本地全量入口；PR 使用
+  `uv sync --locked --group ci` 和 portable/focused pytest 集合，包含 route matrix、企业用户
+  拒绝先于 service cache、请求级 datasource/model config 隔离、MCP request credential 隔离和
+  history/tool summary 脱敏的定向用例；
+- DB adapter、Storage adapter、Semantic adapter 和 MetricFlow 的 PR job 也使用锁定或
+  portable 命令，integration/真实数据库检查不属于默认 required gate；
+- Web PR job 运行 lint、maintenance rule tests、committed OpenAPI -> generated TypeScript stale check、Vitest、
+  Playwright/browser test、typography 和 build，但不从运行中 backend 执行 `api:sync`，也不运行
+  live enterprise smoke。
+
+因此，“本地默认 pytest/build 可运行”不能写成“PR 已验证全部运行时依赖”；需要外部服务、
+凭据或目标部署的检查必须单独标注。
+
+## OpenAPI 生成契约（当前为部分自动规则）
+
+`datus-web/openapi.json` 和 `datus-web/src/types/openapi.ts` 是由脚本生成的契约 artifact；
+维护规则要求不得把它们手工维护成第二套 API 定义。当前静态审计能确认生成链，不能仅凭
+Git 历史证明它们从未被手工编辑：
+
+- `npm run api:pull` 从运行中的 FastAPI `/openapi.json` 拉取并写入 `openapi.json`；
+- `npm run api:types` 使用 `openapi-typescript` 生成 `src/types/openapi.ts`；
+- `npm run api:sync` 串联两个步骤；
+- `npm run api:check` 在系统临时目录从 committed `openapi.json` 重新生成并规范化 TypeScript，
+  与 committed `src/types/openapi.ts` 比较，不连接 backend，也不覆盖工作区；
+- `datus-web/docs/openapi-implementation-map.md` 只记录前端覆盖状态，不替代 schema。
+
+当前 tracked snapshot 的静态事实是 OpenAPI `3.1.0`、164 个 paths、201 个 operations；
+`src/types/openapi.ts` 包含相同的 164 个 path keys。该比较不能替代对目标运行中 FastAPI
+`/openapi.json` 的验证。此前实现映射中的 `149 operations` 摘要和表格合计 `137` 都不是
+当前 schema 的 operation 总数，不能继续作为门禁基线。
+
+当前 `StreamChatInput` 还存在一个需要保留在文档中的生成类型差异：OpenAPI/backend 只将
+`message` 列为必填，`plan_mode`、`max_turns`、`prompt_language` 由 backend 默认值补齐；
+生成的 TypeScript 却将这三个字段标为非 optional，而 Web request builder 不发送它们。
+这是生成类型比 wire contract 更严格的已确认事实，不应通过手工修改生成文件来解决。
+
+当前 Web quality workflow 执行 `npm run api:check`，能够阻止只修改 `openapi.json` 或只修改
+`src/types/openapi.ts` 导致的生成产物漂移。该检查只验证 committed schema -> generated type；
+它不会证明 committed `openapi.json` 与目标运行中 FastAPI 一致。
+
+因此，修改 FastAPI route、Pydantic response model、SSE schema 或错误码时，开发者仍必须在
+目标 backend 上运行 `npm run api:sync`，审阅生成 diff，并同步 API helper、composable、UI 和
+测试。需要 backend、企业配置或凭据的 live schema/smoke 检查仍不是默认 PR gate。
+
+OpenAPI 变更还必须保留以下错误层：HTTP status、`Result` application envelope 和 Chat
+SSE `error` event 不能在 schema/前端类型同步时被压成一个通用错误。
+
+### 生成文件检查边界
+
+| 生成或 vendor 内容 | 当前生成源/命令 | 当前自动检查 | 例外与人工要求 |
+| --- | --- | --- | --- |
+| `datus-web/src/types/openapi.ts` | `openapi.json` + `npm run api:types` | Web PR 运行 `npm run api:check` | backend -> `openapi.json` 仍需目标环境 `api:sync`/smoke |
+| `datus-agent/datus/agent/node/visual_artifact/vendor/web_artifact_render_dist/index.umd.js` | 固定 upstream bundle + documented patch | Renderer PR gate 校验 patched SHA | 升级时更新 upstream/patched provenance，禁止直接改 minified bundle |
+| `datus-web/src/components/ui/**`、`src/components/ai-elements/**` | shadcn-vue/AI Elements registry | 未做逐文件 provenance 自动比较 | 默认只读；共享 build/a11y/runtime blocker 例外须说明来源并验证所有调用方 |
+| `datus-agent/requirements-test.txt` | 文件头记录的 `uv export --locked` | 当前 root PR workflows 无通用 stale diff | 依赖变更需记录命令并审阅 lock/export diff |
+
+不能仅凭目录名或 Git 历史断言生成文件从未手工修改。新增生成 artifact 时，至少记录 source、
+generator version、生成命令、只读校验方式和允许的 manual patch/provenance 例外。
+
+### Route security matrix 事实边界
+
+`create_app()` 当前通过 enterprise route projection 替换或插入路由；
+`datus-agent/tests/unit_tests/api/enterprise/test_route_security_matrix.py` 收集实际注册的
+`APIRoute` method/path，并与 `ROUTE_SECURITY_MATRIX` 做集合相等断言。当前 tracked 源码的
+静态结果为 201 个唯一 matrix keys，归一化 FastAPI path converter 后与 tracked OpenAPI
+operation 集合没有差异。这个静态结果不等于当前运行环境中的最终路由集合；动态 import
+失败、可选依赖缺失或配置差异仍需运行该测试确认。
+
 ## 路径检测契约
 
 检测实现位于：
@@ -228,6 +300,13 @@ retry-exempt-status-codes: 400,401,403,404,422
 
 ```bash
 node --test .github/scripts/*.test.cjs
+```
+
+验证 committed OpenAPI snapshot 与 generated TypeScript：
+
+```bash
+cd datus-web
+npm run api:check
 ```
 
 直接检查 Action 固定与权限策略：

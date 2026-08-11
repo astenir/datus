@@ -44,6 +44,14 @@ Vue code should use Vue 3 Composition API with `<script setup lang="ts">`. Keep 
 
 Use pytest for Python packages and Vitest/Playwright where configured for the frontend. Prefer focused tests for the package being changed, then run broader checks when touching shared contracts or workspace-level behavior.
 
+## Maintenance Change Rules
+
+- When changing a test assertion or fixture, record the old expectation, the new expectation, and the production contract that justifies the change. Do not widen permissions, replace exact deny assertions with ambiguous outcomes, or remove `assert_not_called` protection merely to make tests pass.
+- Before adding or upgrading a dependency, explain the concrete use site, why the standard library or existing dependencies are insufficient, the alternatives considered, and any runtime, license, security, or lockfile impact.
+- Treat a PR as broad when it changes three or more sub-projects, or crosses two or more of these boundaries: authentication/authorization, public API/configuration, storage/data migration, and request/runtime state. Generated-only and lockfile-only mechanical diffs do not count by themselves.
+- Broad changes should be split into independently verifiable and revertible steps. If an atomic change cannot be split safely, document the compatibility window, migration order, rollback point, and why partial delivery would be riskier.
+- Generated or vendored files may change only through their documented source and command. Record the generator version and provenance; keep any unavoidable manual patch separate and reproducible.
+
 ## CI Maintenance
 
 Read `docs/ci-quality-gates.zh-CN.md` before changing root GitHub Actions workflows, path detectors, gate verification, or required status contexts. Keep `Agent renderer gate`, `Web quality gate`, and `Python quality gate` stable unless the GitHub Ruleset is migrated deliberately.
@@ -88,4 +96,4 @@ Examples:
 
 ## Security
 
-Do not commit secrets, local credentials, real tokens, generated caches, dependency folders, virtual environments, build outputs, or machine-local configuration.
+Do not commit secrets, local credentials, real tokens, generated caches, dependency folders, virtual environments, build outputs, or machine-local configuration. Request- or user-scoped credentials must not be persisted in logs, history, caches, traces, audit payloads, error messages, or generated diagnostics. Dedicated credential stores and static credential configuration are outside that ban only when their persistence method, owner scope, at-rest protection, and redacted API/log behavior are documented and tested.

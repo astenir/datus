@@ -14,8 +14,11 @@
 | Web 开发与部署 | [datus-web/README.md](../datus-web/README.md) | Vite 代理、认证、子路径构建、测试 |
 | 数据库适配器 | [datus-db-adapters/README.md](../datus-db-adapters/README.md) | 已注册 adapter、workspace 开发和包级文档 |
 | 存储适配器 | [datus-storage-adapters/README.md](../datus-storage-adapters/README.md) | RDB/vector backend 与插件注册 |
+| 存储适配器维护规则 | [datus-storage-adapters/AGENTS.md](../datus-storage-adapters/AGENTS.md) | base interface、Registry、entry point、集成测试和安全边界 |
 | 语义适配器 | [datus-semantic-adapter/README.md](../datus-semantic-adapter/README.md) | core、MetricFlow 和 OSI 适配器 |
+| 语义适配器维护规则 | [datus-semantic-adapter/AGENTS.md](../datus-semantic-adapter/AGENTS.md) | core/实现边界、MetricFlow editable source、OSI 隔离测试 |
 | MetricFlow | [metricflow/README-DATUS.md](../metricflow/README-DATUS.md) | Datus 配置集成和 CLI |
+| MetricFlow 维护规则 | [metricflow/AGENTS.md](../metricflow/AGENTS.md) | 两种配置模式、SQL 方言、MCP、测试和发布边界 |
 
 ## 上游同步
 
@@ -39,7 +42,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | [CI 质量门禁维护指南](./ci-quality-gates.zh-CN.md) | 根 GitHub Actions、路径检测和 required status 契约 |
-| [Web OpenAPI 实现映射](../datus-web/docs/openapi-implementation-map.md) | 后端 route 到前端 API、composable 和界面的实现状态 |
+| [Web OpenAPI 实现映射](../datus-web/docs/openapi-implementation-map.md) | 后端 route 到前端 API、composable 和界面的实现状态；精确 schema 数量以 tracked/generated OpenAPI 文件为准 |
 
 ## 专项部署
 
