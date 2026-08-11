@@ -29,6 +29,7 @@ This file is the durable project rulebook for Codex work in this repository.
 
 - Use the local shadcn-vue wrappers under `src/components/ui/**` for interface primitives.
 - Import all base UI primitives from `@/components/ui/...`; do not hand-roll native styled controls when a local UI primitive exists.
+- Use `Tabs` (paired with `TabsContent`) only for real content-pane switching; use `ToggleGroup type="single"` for in-place single-select filters such as column-constraint filters or list source filters.
 - Prefer AI Elements Vue under `src/components/ai-elements/**` whenever a feature is chat-like, agent-like, generated-content-heavy, or centered on model/tool execution. Use these primitives before building custom equivalents for:
   - conversation layout
   - messages
