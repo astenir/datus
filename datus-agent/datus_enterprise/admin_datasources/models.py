@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -39,3 +39,12 @@ class AdminDatasourceGrantSummary(BaseModel):
     scope: dict[str, Any] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class AdminDatasourceGrantSubjectSummary(BaseModel):
+    """Minimal role/user identity exposed to datasource grant editors."""
+
+    subject_type: Literal["user", "role"]
+    subject_id: str
+    display_name: str | None = None
+    enabled: bool | None = None

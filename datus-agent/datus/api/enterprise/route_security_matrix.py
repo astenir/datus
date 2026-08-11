@@ -936,6 +936,7 @@ _add_many(
     [
         "/api/v1/admin/datasources",
         "/api/v1/admin/datasources/{datasource_key}/catalog",
+        "/api/v1/admin/datasource-grant-subjects",
         "/api/v1/admin/datasource-grants",
         "/api/v1/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}",
     ],

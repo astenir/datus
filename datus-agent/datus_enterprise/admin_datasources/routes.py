@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from inspect import isawaitable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -27,6 +27,8 @@ from datus_enterprise.admin_datasources.helpers import (
     _grant_matches_search,
     _grant_record_for_audit,
     _grant_resource_id,
+    _grant_role_subject_matches_search,
+    _grant_subject_summary_from_record,
     _grant_summary_for_audit,
     _grant_summary_from_record,
     _grant_validation_error_code,
@@ -39,6 +41,7 @@ from datus_enterprise.admin_datasources.helpers import (
     _validate_optional_grant_filters,
 )
 from datus_enterprise.admin_datasources.models import (
+    AdminDatasourceGrantSubjectSummary,
     AdminDatasourceGrantSummary,
     AdminDatasourceSummary,
     SetDefaultDatasourceRequest,
@@ -101,6 +104,83 @@ async def list_admin_datasources_endpoint(
         ),
     )
     return Result(success=True, data=items)
+
+
+@router.get(
+    "/admin/datasource-grant-subjects",
+    response_model=AdminListResult[AdminDatasourceGrantSubjectSummary],
+    summary="List Datasource Grant Subjects",
+    description="Minimal searchable role/user directory for datasource grant editing.",
+)
+async def list_admin_datasource_grant_subjects(
+    ctx: AdminDatasourcesCtx,
+    subject_type: Annotated[Literal["user", "role"], Query(description="Grant subject type.")],
+    search: Annotated[str | None, Query(max_length=200, description="Search subject id or display name.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ADMIN_LIST_MAX_LIMIT)] = ADMIN_LIST_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminListResult[AdminDatasourceGrantSubjectSummary] | Result[Any]:
+    """Return a permission-scoped subject directory independent from admin list state."""
+
+    try:
+        extensions = deps.get_enterprise_extensions()
+        if subject_type == "user":
+            store = extensions.user_store
+            list_page = getattr(store, "list_users_page", None)
+            records_are_offset = callable(list_page)
+            if records_are_offset:
+                records = await list_page(
+                    enabled=None,
+                    search=search,
+                    limit=limit + 1,
+                    offset=offset,
+                )
+            else:
+                records = await store.list_users(enabled=None)
+                query = (search or "").strip().casefold()
+                if query:
+                    records = [
+                        record
+                        for record in records
+                        if any(
+                            query in str(record.get(field) or "").casefold() for field in ("user_id", "display_name")
+                        )
+                    ]
+        else:
+            records_are_offset = False
+            records = await extensions.role_store.list_roles()
+            records = [record for record in records if _grant_role_subject_matches_search(record, search)]
+    except Exception:
+        await _audit_datasource_grant(
+            ctx,
+            operation="list_admin_datasource_grant_subjects",
+            decision="deny",
+            reason="datasource grant subject list failed",
+            metadata={"subject_type": subject_type},
+        )
+        return _datasource_error(
+            "DATASOURCE_GRANT_SUBJECT_LIST_FAILED",
+            "Datasource grant subject list failed.",
+        )
+
+    page = paginate_admin_records(
+        records,
+        limit=limit,
+        offset=offset,
+        records_are_offset=records_are_offset,
+    )
+    subjects = [_grant_subject_summary_from_record(record, subject_type=subject_type) for record in page.data or []]
+    await _audit_datasource_grant(
+        ctx,
+        operation="list_admin_datasource_grant_subjects",
+        decision="allow",
+        metadata={
+            "subject_type": subject_type,
+            "count": len(subjects),
+            "offset": offset,
+            "has_more": page.pagination.has_more,
+        },
+    )
+    return AdminListResult(success=True, data=subjects, pagination=page.pagination)
 
 
 @router.get(
