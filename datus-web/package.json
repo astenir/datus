@@ -10,7 +10,7 @@
     "build:intranet": "vue-tsc -b && vite build --mode intranet",
     "test": "vitest run",
     "test:browser": "tsc -p tsconfig.browser.json && node scripts/run-browser-tests.mjs",
-    "test:maintenance": "node --test scripts/maintenance-rules.test.mjs",
+    "test:maintenance": "node --test scripts/check-maintenance-rules.mjs",
     "lint": "eslint --max-warnings=0 \"src/features/**/*.{ts,vue}\" \"src/composables/**/*.ts\" \"src/lib/**/*.ts\" \"src/router/**/*.ts\" src/types.ts \"src/types/**/*.ts\" src/App.vue src/main.ts vite.config.ts",
     "preview": "vite preview --host 0.0.0.0",
     "lint:typography": "node scripts/lint-typography.mjs",
