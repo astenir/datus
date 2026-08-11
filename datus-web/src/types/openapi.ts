@@ -2340,6 +2340,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/datasource-grant-subjects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_datasource_grant_subjects_api_v1_admin_datasource_grant_subjects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/datasources/{datasource_key}/catalog": {
         parameters: {
             query?: never;
@@ -2871,6 +2888,17 @@ export interface components {
             manifest: components["schemas"]["ArtifactManifest"];
         };
 
+        AdminDatasourceGrantSubjectSummary: {
+
+            subject_type: "user" | "role";
+
+            subject_id: string;
+
+            display_name?: string | null;
+
+            enabled?: boolean | null;
+        };
+
         AdminDatasourceGrantSummary: {
 
             subject_type: string;
@@ -2906,6 +2934,18 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["AdminArtifactSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+            pagination?: components["schemas"]["AdminPagination"] | null;
+        };
+
+        AdminListResult_AdminDatasourceGrantSubjectSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminDatasourceGrantSubjectSummary"][] | null;
 
             errorCode?: string | null;
 
@@ -11437,6 +11477,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_list_AdminDatasourceSummary__"];
+                };
+            };
+        };
+    };
+    list_admin_datasource_grant_subjects_api_v1_admin_datasource_grant_subjects_get: {
+        parameters: {
+            query: {
+
+                subject_type: "user" | "role";
+
+                search?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminListResult_AdminDatasourceGrantSubjectSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

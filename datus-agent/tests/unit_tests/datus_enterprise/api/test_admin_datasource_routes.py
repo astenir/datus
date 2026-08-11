@@ -153,6 +153,121 @@ def test_list_admin_datasources_rejects_without_admin_datasources(monkeypatch):
     assert "module.admin.datasources" in response.json()["detail"]
 
 
+def test_list_admin_datasource_grant_subjects_is_independent_from_admin_user_page(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    for index in range(25):
+        asyncio.run(
+            user_store.upsert_user(
+                user_id=f"user_{index:02d}",
+                display_name=f"User {index:02d}",
+                enabled=index != 24,
+            )
+        )
+
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, user_store=user_store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "user", "limit": 100},
+        )
+        search_response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "user", "search": "User 24", "limit": 100},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert len(body["data"]) == 25
+    assert body["pagination"] == {"limit": 100, "offset": 0, "has_more": False}
+    assert body["data"][24] == {
+        "subject_type": "user",
+        "subject_id": "user_24",
+        "display_name": "User 24",
+        "enabled": False,
+    }
+    assert search_response.json()["data"] == [body["data"][24]]
+    assert "email" not in response.text
+
+
+def test_list_admin_datasource_grant_subject_roles_are_searchable_and_paginated(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    for index in range(3):
+        asyncio.run(role_store.upsert_role(role_id=f"role_{index}", name=f"Role {index}"))
+
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, role_store=role_store)
+
+    with TestClient(app) as client:
+        page_response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "role", "limit": 1, "offset": 1},
+        )
+        search_response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "role", "search": "Role 2"},
+        )
+
+    assert page_response.json()["data"] == [
+        {
+            "subject_type": "role",
+            "subject_id": "role_1",
+            "display_name": "Role 1",
+            "enabled": None,
+        }
+    ]
+    assert page_response.json()["pagination"] == {"limit": 1, "offset": 1, "has_more": True}
+    assert [subject["subject_id"] for subject in search_response.json()["data"]] == ["role_2"]
+
+
+def test_list_admin_datasource_grant_subjects_returns_stable_envelope_for_store_failure(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    user_store = SimpleNamespace(list_users_page=AsyncMock(side_effect=RuntimeError("store down")))
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, audit_sink=audit_sink, user_store=user_store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "user"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "DATASOURCE_GRANT_SUBJECT_LIST_FAILED"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "datasource grant subject list failed"
+
+
+def test_list_admin_datasource_grant_subjects_rejects_invalid_subject_type_before_store_access(monkeypatch):
+    user_store = SimpleNamespace(list_users_page=AsyncMock(side_effect=AssertionError("store accessed")))
+    ctx = AppContext(user_id="operator", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, user_store=user_store)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/admin/datasource-grant-subjects",
+            params={"subject_type": "team"},
+        )
+
+    assert response.status_code == 422
+    user_store.list_users_page.assert_not_awaited()
+
+
 def test_list_admin_datasource_catalog_returns_unpruned_catalog_for_grant_editing(monkeypatch):
     audit_sink = CollectingAuditSink()
     ctx = AppContext(
@@ -302,6 +417,7 @@ def test_list_admin_datasource_catalog_returns_stable_error_for_unknown_datasour
     ("method", "path", "json_body"),
     [
         ("get", "/api/v1/admin/datasources", None),
+        ("get", "/api/v1/admin/datasource-grant-subjects?subject_type=user", None),
         ("get", "/api/v1/admin/datasources/db_b/catalog", None),
         ("put", "/api/v1/admin/datasource-default", {"name": "db_a"}),
         (
@@ -1036,6 +1152,7 @@ def test_admin_datasource_routes_do_not_register_legacy_switch_path():
 
     assert route_paths == {
         "/api/v1/admin/datasource-default",
+        "/api/v1/admin/datasource-grant-subjects",
         "/api/v1/admin/datasource-grants",
         "/api/v1/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}",
         "/api/v1/admin/datasources",

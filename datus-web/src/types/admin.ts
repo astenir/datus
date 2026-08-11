@@ -26,6 +26,7 @@ export type AuditLogPage = components["schemas"]["AuditLogPage"];
 export type AuditLogListResponse = AuditLogPage | AuditLog[];
 export type AdminDatasource = components["schemas"]["AdminDatasourceSummary"];
 export type AdminDatasourceGrant = components["schemas"]["AdminDatasourceGrantSummary"];
+export type AdminDatasourceGrantSubject = components["schemas"]["AdminDatasourceGrantSubjectSummary"];
 export type AdminQuota = components["schemas"]["AdminQuotaSummary"];
 export type AdminUsage = components["schemas"]["AdminUsageSummary"];
 export type AdminSecret = components["schemas"]["AdminSecretSummary"];
@@ -207,6 +208,13 @@ export interface DatasourceGrantListParams {
   subjectId?: string;
   datasourceKey?: string;
   effect?: "allow" | "deny";
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface DatasourceGrantSubjectListParams {
+  subjectType: "user" | "role";
   search?: string;
   limit?: number;
   offset?: number;

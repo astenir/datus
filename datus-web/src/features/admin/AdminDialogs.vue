@@ -37,10 +37,8 @@ defineProps<AdminDialogProps>()
   <AdminGrantDialog
     :format-scope="formatScope"
     :overview="overview"
-    :roles="roles"
     :save-grant-and-close-route="saveGrantAndCloseRoute"
     :set-grant-dialog-open="setGrantDialogOpen"
-    :users="users"
   />
   <AdminQuotaDialog
     :overview="overview"

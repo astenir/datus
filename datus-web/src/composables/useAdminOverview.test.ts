@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listDatasources = vi.fn();
 const listAdminCatalog = vi.fn();
+const listGrantSubjects = vi.fn();
 const listGrants = vi.fn();
 const getGrant = vi.fn();
 const upsertGrant = vi.fn();
@@ -37,6 +38,7 @@ vi.mock("@/lib/api", () => ({
   adminDatasourceApi: {
     listDatasources,
     listCatalog: listAdminCatalog,
+    listGrantSubjects,
     listGrants,
     getGrant,
     upsertGrant,
@@ -131,6 +133,16 @@ describe("useAdminOverview", () => {
     grantedPermissions.add("module.admin.sessions");
     grantedPermissions.add("module.admin.artifacts");
     listDatasources.mockResolvedValue({ data: [{ name: "fund", type: "postgres", is_default: true }] });
+    listGrantSubjects.mockResolvedValue({
+      success: true,
+      data: Array.from({ length: 25 }, (_, index) => ({
+        subject_type: "user",
+        subject_id: `user_${index}`,
+        display_name: `User ${index}`,
+        enabled: true,
+      })),
+      pagination: { limit: 100, offset: 0, has_more: false },
+    });
     listGrants.mockResolvedValue({ data: [grant] });
     getGrant.mockResolvedValue({ data: grant });
     listQuotas.mockResolvedValue({ data: [] });
@@ -405,6 +417,135 @@ describe("useAdminOverview", () => {
         tables: ["orders", "accounts"],
       },
     ]);
+  });
+
+  it("loads more than one admin user page into an independent grant subject directory", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    overview.openCreateGrantDialog();
+
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith({
+      subjectType: "user",
+      search: undefined,
+      limit: 100,
+      offset: 0,
+    }));
+    await vi.waitFor(() => expect(overview.grantSubjectOptions.value).toHaveLength(25));
+    expect(overview.grantSubjectOptions.value[24]).toEqual({
+      value: "user_24",
+      label: "User 24 (user_24)",
+      description: undefined,
+    });
+  });
+
+  it("debounces grant subject search and switches to the role directory", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.openCreateGrantDialog();
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(1));
+    listGrantSubjects.mockClear();
+
+    vi.useFakeTimers();
+    try {
+      overview.setGrantSubjectSearch("user_24");
+      await vi.advanceTimersByTimeAsync(249);
+      expect(listGrantSubjects).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(listGrantSubjects).toHaveBeenCalledWith({
+        subjectType: "user",
+        search: "user_24",
+        limit: 100,
+        offset: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    overview.setGrantSubjectId("user_24");
+    listGrantSubjects.mockClear();
+    overview.setGrantSubjectType("role");
+
+    expect(overview.grantForm.value.subject_id).toBe("");
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith({
+      subjectType: "role",
+      search: undefined,
+      limit: 100,
+      offset: 0,
+    }));
+  });
+
+  it("ignores stale grant subject search responses", async () => {
+    const firstSubjects = [{
+      subject_type: "user",
+      subject_id: "first",
+      display_name: "First",
+      enabled: true,
+    }];
+    const secondSubjects = [{
+      subject_type: "user",
+      subject_id: "second",
+      display_name: "Second",
+      enabled: true,
+    }];
+    type SubjectResponse = {
+      success: boolean;
+      data: typeof firstSubjects;
+      pagination: { limit: number; offset: number; has_more: boolean };
+    };
+    let resolveFirst: (value: SubjectResponse) => void = () => undefined;
+    let resolveSecond: (value: SubjectResponse) => void = () => undefined;
+    listGrantSubjects
+      .mockImplementationOnce(() => new Promise<SubjectResponse>((resolve) => {
+        resolveFirst = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise<SubjectResponse>((resolve) => {
+        resolveSecond = resolve;
+      }));
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    const firstRequest = overview.loadGrantSubjects("first");
+    const secondRequest = overview.loadGrantSubjects("second");
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(2));
+    resolveSecond({
+      success: true,
+      data: secondSubjects,
+      pagination: { limit: 100, offset: 0, has_more: false },
+    });
+    await secondRequest;
+    resolveFirst({
+      success: true,
+      data: firstSubjects,
+      pagination: { limit: 100, offset: 0, has_more: false },
+    });
+    await firstRequest;
+
+    expect(overview.grantSubjectOptions.value).toEqual([{
+      value: "second",
+      label: "Second (second)",
+      description: undefined,
+    }]);
+    expect(overview.loadingGrantSubjects.value).toBe(false);
+  });
+
+  it("keeps the selected grant subject visible when it is outside the returned page", async () => {
+    listGrantSubjects.mockResolvedValueOnce({
+      success: true,
+      data: [],
+      pagination: { limit: 100, offset: 0, has_more: true },
+    });
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    overview.openEditGrantDialog(grant);
+
+    await vi.waitFor(() => expect(overview.grantSubjectOptions.value).toEqual([{
+      value: "analyst",
+      label: "当前：analyst",
+    }]));
+    expect(overview.grantSubjectHasMore.value).toBe(true);
   });
 
   it("surfaces catalog timeout responses both inline and as a toast", async () => {

@@ -120,18 +120,20 @@ function deleteSession(sessionId: string): void {
           :aria-busy="isLoadingSessions"
           class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden"
         >
-          <InputGroup class="mt-1 h-9 rounded-lg bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
-            <InputGroupAddon>
-              <SearchIcon data-icon="inline-start" />
-            </InputGroupAddon>
-            <InputGroupInput
-              v-model="searchQuery"
-              aria-label="搜索会话"
-              placeholder="搜索历史..."
-              :disabled="isInitialSessionLoad"
-              class="text-sm"
-            />
-          </InputGroup>
+          <div class="px-1">
+            <InputGroup class="mt-1 h-9 rounded-lg bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
+              <InputGroupAddon>
+                <SearchIcon data-icon="inline-start" />
+              </InputGroupAddon>
+              <InputGroupInput
+                v-model="searchQuery"
+                aria-label="搜索会话"
+                placeholder="搜索历史..."
+                :disabled="isInitialSessionLoad"
+                class="text-sm"
+              />
+            </InputGroup>
+          </div>
 
           <ScrollArea class="-mr-3 min-h-0 flex-1 pr-0">
             <div

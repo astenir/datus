@@ -11,7 +11,10 @@ from datus.api.constants import USER_ID_PATTERN
 from datus.api.deps import ServiceDep
 from datus.api.models.base_models import Result
 from datus.utils.loggings import get_logger
-from datus_enterprise.admin_datasources.models import AdminDatasourceGrantSummary
+from datus_enterprise.admin_datasources.models import (
+    AdminDatasourceGrantSubjectSummary,
+    AdminDatasourceGrantSummary,
+)
 from datus_enterprise.audit import AuditEvent, audit_decision
 
 logger = get_logger(__name__)
@@ -29,6 +32,32 @@ def _grant_matches_search(record: dict[str, Any], search: str | None) -> bool:
         json.dumps(record.get("scope") or {}, ensure_ascii=False, sort_keys=True),
     )
     return any(query in str(value or "").casefold() for value in values)
+
+
+def _grant_role_subject_matches_search(record: dict[str, Any], search: str | None) -> bool:
+    query = (search or "").strip().casefold()
+    if not query:
+        return True
+    return any(query in str(record.get(field) or "").casefold() for field in ("role_id", "name"))
+
+
+def _grant_subject_summary_from_record(
+    record: dict[str, Any],
+    *,
+    subject_type: str,
+) -> AdminDatasourceGrantSubjectSummary:
+    if subject_type == "user":
+        return AdminDatasourceGrantSubjectSummary(
+            subject_type="user",
+            subject_id=str(record["user_id"]),
+            display_name=_optional_str(record.get("display_name")),
+            enabled=bool(record.get("enabled", True)),
+        )
+    return AdminDatasourceGrantSubjectSummary(
+        subject_type="role",
+        subject_id=str(record["role_id"]),
+        display_name=_optional_str(record.get("name")),
+    )
 
 
 def _default_datasource_name(svc: ServiceDep) -> str | None:

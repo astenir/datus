@@ -1,4 +1,4 @@
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import { toast } from "vue-sonner";
 
 import {
@@ -20,6 +20,7 @@ import {
 import type {
   AdminArtifact,
   AdminDatasourceGrant,
+  AdminDatasourceGrantSubject,
   AdminOverviewData,
   AdminQuota,
   AdminSecret,
@@ -38,6 +39,12 @@ import type { RoleDatasourceTreeNode } from "@/lib/role-permissions";
 type ArtifactAclTarget = {
   artifactType: AdminArtifact["artifact_type"];
   slug: string;
+};
+
+type AdminGrantSubjectOption = {
+  value: string;
+  label: string;
+  description?: string;
 };
 
 function cloneEmptyOverview(): AdminOverviewData {
@@ -166,9 +173,13 @@ export function useAdminOverview() {
   const deletingSecretName = shallowRef<string | null>(null);
   const loadingGrantDetail = shallowRef(false);
   const loadingGrantCatalog = shallowRef(false);
+  const loadingGrantSubjects = shallowRef(false);
   const selectedGrantRouteKey = shallowRef<string | null>(null);
   const grantDetailError = shallowRef<string | null>(null);
   const grantCatalogError = shallowRef<string | null>(null);
+  const grantSubjectError = shallowRef<string | null>(null);
+  const grantSubjectHasMore = shallowRef(false);
+  const grantSubjectSearch = shallowRef("");
   const loadingSecretDetail = shallowRef(false);
   const selectedSecretName = shallowRef<string | null>(null);
   const secretDetailError = shallowRef<string | null>(null);
@@ -182,6 +193,8 @@ export function useAdminOverview() {
   const sessionDetailError = shallowRef<string | null>(null);
   let grantDetailRequestId = 0;
   let grantCatalogRequestId = 0;
+  let grantSubjectRequestId = 0;
+  let ignoreNextGrantSubjectSearch = false;
   let secretDetailRequestId = 0;
   let artifactAclRequestId = 0;
   let sessionDetailRequestId = 0;
@@ -216,6 +229,7 @@ export function useAdminOverview() {
   const grantScopeMode = shallowRef<DatasourceScopeMode>("all");
   const selectedGrantNodes = ref<string[]>([]);
   const grantCatalogDatabases = ref<CatalogDatabase[]>([]);
+  const grantSubjectOptions = shallowRef<AdminGrantSubjectOption[]>([]);
 
   const showQuotaDialog = shallowRef(false);
   const editingQuota = shallowRef<AdminQuota | null>(null);
@@ -291,6 +305,90 @@ export function useAdminOverview() {
       ? datasourceNodeIdsFromScope(grant.datasource_key, scope, grantCatalogDatabases.value)
       : [];
   }
+
+  function grantSubjectFallbackOption(): AdminGrantSubjectOption[] {
+    const subjectId = grantForm.value.subject_id.trim();
+    if (!subjectId) return [];
+    return [{
+      value: subjectId,
+      label: `当前：${subjectId}`,
+    }];
+  }
+
+  function grantSubjectOptionFromSummary(subject: AdminDatasourceGrantSubject): AdminGrantSubjectOption {
+    const displayName = subject.display_name?.trim();
+    return {
+      value: subject.subject_id,
+      label: displayName ? `${displayName} (${subject.subject_id})` : subject.subject_id,
+      description: subject.subject_type === "user" && subject.enabled === false ? "已停用" : undefined,
+    };
+  }
+
+  function resetGrantSubjectDirectory() {
+    grantSubjectRequestId += 1;
+    loadingGrantSubjects.value = false;
+    grantSubjectError.value = null;
+    grantSubjectHasMore.value = false;
+    if (grantSubjectSearch.value) {
+      ignoreNextGrantSubjectSearch = true;
+      grantSubjectSearch.value = "";
+    }
+    grantSubjectOptions.value = [];
+  }
+
+  async function loadGrantSubjects(search = grantSubjectSearch.value) {
+    const subjectType = grantForm.value.subject_type === "role" ? "role" : "user";
+    const requestId = grantSubjectRequestId + 1;
+    grantSubjectRequestId = requestId;
+    loadingGrantSubjects.value = true;
+    grantSubjectError.value = null;
+    try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageDatasources.value) {
+        grantSubjectOptions.value = [];
+        return;
+      }
+      const result = await adminDatasourceApi.listGrantSubjects({
+        subjectType,
+        search: search.trim() || undefined,
+        limit: 100,
+        offset: 0,
+      });
+      if (requestId !== grantSubjectRequestId) return;
+      if (!result.success) {
+        grantSubjectError.value = "加载授权主体失败";
+        grantSubjectHasMore.value = false;
+        grantSubjectOptions.value = grantSubjectFallbackOption();
+        return;
+      }
+      const options = (result.data ?? []).map(grantSubjectOptionFromSummary);
+      const selectedFallback = grantSubjectFallbackOption().filter(option => (
+        !options.some(candidate => candidate.value === option.value)
+      ));
+      grantSubjectOptions.value = [...selectedFallback, ...options];
+      grantSubjectHasMore.value = result.pagination?.has_more ?? false;
+    } catch (err) {
+      if (requestId !== grantSubjectRequestId) return;
+      console.error("加载授权主体失败:", err);
+      grantSubjectError.value = "加载授权主体失败，请稍后重试";
+      grantSubjectHasMore.value = false;
+      grantSubjectOptions.value = grantSubjectFallbackOption();
+    } finally {
+      if (requestId === grantSubjectRequestId) {
+        loadingGrantSubjects.value = false;
+      }
+    }
+  }
+
+  watch(grantSubjectSearch, (search, _previous, onCleanup) => {
+    if (ignoreNextGrantSubjectSearch) {
+      ignoreNextGrantSubjectSearch = false;
+      return;
+    }
+    if (!showGrantDialog.value) return;
+    const timer = setTimeout(() => void loadGrantSubjects(search), 250);
+    onCleanup(() => clearTimeout(timer));
+  });
 
   function setSecretFormFromSecret(secret: AdminSecret) {
     editingSecret.value = secret;
@@ -634,7 +732,9 @@ export function useAdminOverview() {
     };
     grantScopeMode.value = "all";
     selectedGrantNodes.value = [];
+    resetGrantSubjectDirectory();
     showGrantDialog.value = true;
+    void loadGrantSubjects();
     void loadGrantCatalog();
   }
 
@@ -645,7 +745,9 @@ export function useAdminOverview() {
     grantDetailError.value = null;
     loadingGrantDetail.value = false;
     setGrantFormFromGrant(grant);
+    resetGrantSubjectDirectory();
     showGrantDialog.value = true;
+    void loadGrantSubjects();
     void loadGrantCatalog(grant.datasource_key);
   }
 
@@ -674,7 +776,9 @@ export function useAdminOverview() {
     };
     grantScopeMode.value = "all";
     selectedGrantNodes.value = [];
+    resetGrantSubjectDirectory();
     showGrantDialog.value = true;
+    void loadGrantSubjects();
     void loadGrantCatalog(normalizedDatasourceKey);
 
     try {
@@ -710,6 +814,7 @@ export function useAdminOverview() {
     editingGrant.value = null;
     grantDetailError.value = null;
     grantCatalogError.value = null;
+    resetGrantSubjectDirectory();
     loadingGrantDetail.value = false;
     loadingGrantCatalog.value = false;
     selectedGrantNodes.value = [];
@@ -718,10 +823,21 @@ export function useAdminOverview() {
 
   function setGrantSubjectType(value: unknown) {
     if (value !== "user" && value !== "role") return;
-    if (grantForm.value.subject_type !== value) {
-      grantForm.value.subject_id = "";
-    }
+    if (grantForm.value.subject_type === value) return;
+    grantForm.value.subject_id = "";
     grantForm.value.subject_type = value;
+    resetGrantSubjectDirectory();
+    if (showGrantDialog.value) void loadGrantSubjects();
+  }
+
+  function setGrantSubjectSearch(value: string) {
+    grantSubjectSearch.value = value;
+  }
+
+  function setGrantSubjectId(value: string) {
+    const normalizedSubjectId = value.trim();
+    if (!normalizedSubjectId) return;
+    grantForm.value.subject_id = normalizedSubjectId;
   }
 
   function setGrantDatasource(value: unknown) {
@@ -1302,9 +1418,14 @@ export function useAdminOverview() {
     deletingSecretName,
     loadingGrantDetail,
     loadingGrantCatalog,
+    loadingGrantSubjects,
     selectedGrantRouteKey,
     grantDetailError,
     grantCatalogError,
+    grantSubjectError,
+    grantSubjectHasMore,
+    grantSubjectSearch,
+    grantSubjectOptions,
     loadingSecretDetail,
     selectedSecretName,
     secretDetailError,
@@ -1362,11 +1483,14 @@ export function useAdminOverview() {
     applySecretListFilters,
     applyArtifactListFilters,
     loadGrantCatalog,
+    loadGrantSubjects,
     openCreateGrantDialog,
     openEditGrantDialog,
     openGrantDetail,
     closeGrantDialog,
     setGrantSubjectType,
+    setGrantSubjectSearch,
+    setGrantSubjectId,
     setGrantDatasource,
     setGrantScopeMode,
     toggleGrantNode,

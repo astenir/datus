@@ -868,6 +868,28 @@ describe("api client", () => {
     expect(calls[6]?.[0]).toBe("/api/v1/admin/artifacts?artifact_type=dashboard&search=fund&limit=50&offset=0");
   });
 
+  it("builds the datasource grant subject directory query independently", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({
+        success: true,
+        data: [],
+        pagination: { limit: 100, offset: 0, has_more: false },
+      }))
+    );
+
+    await adminDatasourceApi.listGrantSubjects({
+      subjectType: "user",
+      search: "User 24",
+      limit: 100,
+      offset: 0,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/admin/datasource-grant-subjects?subject_type=user&search=User+24&limit=100&offset=0",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("uses current enterprise admin operations routes", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => Promise.resolve(mockJsonResponse({ success: true, data: [] })))

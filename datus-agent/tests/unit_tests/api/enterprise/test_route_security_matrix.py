@@ -206,3 +206,10 @@ def test_datasource_grant_admin_routes_carry_datasource_boundary():
         assert DATASOURCE_GRANT in policy.categories
         assert MODULE_RBAC in policy.categories
         assert policy.module_permission == "module.admin.datasources"
+
+
+def test_datasource_grant_subject_directory_uses_datasource_admin_permission():
+    policy = ROUTE_SECURITY_MATRIX[route_key("GET", "/api/v1/admin/datasource-grant-subjects")]
+
+    assert {MODULE_RBAC, DATASOURCE_GRANT, SYSTEM_READONLY} <= policy.categories
+    assert policy.module_permission == "module.admin.datasources"
