@@ -176,5 +176,5 @@ export interface PersonalMcpToolSummary {
 
 export interface PersonalMcpSessionBinding {
   session_id: string;
-  servers: Array<{ mcp_id: string; revision: number }>;
+  servers: Array<{ mcp_id: string; revision: number; display_name: string }>;
 }

@@ -9,6 +9,10 @@ import {
 import { toast } from "vue-sonner";
 
 import { meApi } from "@/lib/api";
+import {
+  clearPersonalMcpDisplayNames,
+  setPersonalMcpDisplayNames,
+} from "@/lib/personal-mcp-display";
 import { HttpError } from "@/lib/request";
 import type {
   ApiResponse,
@@ -105,6 +109,7 @@ function dispose(): void {
   selectedIds.value = [];
   selectionLocked.value = false;
   boundSessionId.value = null;
+  clearPersonalMcpDisplayNames();
 }
 
 export function usePersonalMcp() {
@@ -134,6 +139,11 @@ export function usePersonalMcp() {
       if (controller.signal.aborted) return;
       options.value = resultData(optionsResult, defaultOptions());
       servers.value = resultData(serversResult, []);
+      // 服务列表携带 MCP 名称，供工具卡片 / 权限请求把 personal_<id> 别名还原为名称。
+      setPersonalMcpDisplayNames(servers.value.map(server => ({
+        id: server.id,
+        displayName: server.display_name,
+      })));
     } catch (loadError) {
       if (isAbortError(loadError) || controller.signal.aborted) return;
       console.error("加载个人 MCP 失败:", loadError);
@@ -302,6 +312,11 @@ export function usePersonalMcp() {
       );
       if (controller.signal.aborted) return;
       selectedIds.value = result.servers.map(server => server.mcp_id);
+      // 会话绑定是权威来源（服务可能已重命名），以绑定返回的 MCP 名称为准。
+      setPersonalMcpDisplayNames(result.servers.map(server => ({
+        id: server.mcp_id,
+        displayName: server.display_name,
+      })));
     } catch (bindingError) {
       if (isAbortError(bindingError) || controller.signal.aborted) return;
       console.error("恢复会话个人 MCP 选择失败:", bindingError);
@@ -322,6 +337,7 @@ export function usePersonalMcp() {
     selectionLocked.value = false;
     boundSessionId.value = null;
     selectedIds.value = [];
+    clearPersonalMcpDisplayNames();
   }
 
   return {

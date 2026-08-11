@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clearPersonalMcpDisplayNames,
+  setPersonalMcpDisplayNames,
+} from "./personal-mcp-display";
+import {
   activeStreamingMessageId,
   activeUserInteractionKey,
   activeUserInteractionRequest,
@@ -375,6 +379,36 @@ describe("tool execution blocks", () => {
         result: null,
       },
     ]);
+  });
+
+  it("resolves a personal MCP alias to its display name in connection errors", () => {
+    const alias = `personal_${'a'.repeat(32)}`;
+    setPersonalMcpDisplayNames([{ id: 'a'.repeat(32), displayName: "我的搜索服务" }]);
+    try {
+      const parsed = contentFromPayloadBlocks([
+        {
+          type: "call-tool-result",
+          payload: {
+            callToolId: "mcp-failure-2",
+            toolName: `mcp.${alias}.connect`,
+            result: {
+              success: 0,
+              error: "MCP server connection timed out.",
+              result: null,
+            },
+          },
+        },
+      ]);
+
+      expect(parsed.blocks[0]).toMatchObject({
+        toolName: `mcp.${alias}.connect`,
+        errorText: "MCP Server 连接超时：暂时无法连接“我的搜索服务”，请检查服务地址、网络、代理或防火墙后重试。",
+      });
+      // 数据 ID 不得出现在用户可见的错误文案里（toolName 作为技术标识保留原名）
+      expect((parsed.blocks[0] as { errorText?: string }).errorText).not.toContain(alias);
+    } finally {
+      clearPersonalMcpDisplayNames();
+    }
   });
 
   it("preserves successful tool status after unwrapping the rendered result", () => {

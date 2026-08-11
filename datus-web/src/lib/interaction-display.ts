@@ -1,3 +1,5 @@
+import { resolvePersonalMcpDisplayName } from "@/lib/personal-mcp-display";
+
 export type PermissionRequestArg = {
   key: string;
   value: string;
@@ -23,12 +25,13 @@ export function parsePermissionRequest(content: string): PermissionRequestDispla
   const argsText = extractMarkdownField(content, "Args") ?? "";
   const [serverName, operationName] = splitToolName(toolName);
   const result: PermissionRequestDisplay = {
-    toolName,
+    // 个人 MCP 的运行时别名是 personal_<记录ID>，有会话绑定时还原为 MCP 名称。
+    toolName: resolvePersonalMcpDisplayName(toolName),
     argsText,
     argsRows: argsRowsFromText(argsText),
   };
 
-  if (serverName) result.serverName = serverName;
+  if (serverName) result.serverName = resolvePersonalMcpDisplayName(serverName);
   if (operationName) result.operationName = operationName;
   return result;
 }

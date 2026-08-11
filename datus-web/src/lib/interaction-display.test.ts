@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  clearPersonalMcpDisplayNames,
+  setPersonalMcpDisplayNames,
+} from "./personal-mcp-display";
 import { parsePermissionRequest } from "./interaction-display";
 
 describe("parsePermissionRequest", () => {
@@ -58,5 +62,26 @@ describe("parsePermissionRequest", () => {
 
   it("ignores normal interaction copy", () => {
     expect(parsePermissionRequest("请选择是否继续")).toBeNull();
+  });
+
+  it("resolves a personal MCP alias to its display name in permission requests", () => {
+    const id = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const alias = `personal_${id}`;
+    setPersonalMcpDisplayNames([{ id, displayName: "我的搜索服务" }]);
+    try {
+      expect(
+        parsePermissionRequest(
+          `### Permission Request **Tool:** \`mcp.${alias}.search_docs\` **Args:** \`{"query": "年报"}\``,
+        ),
+      ).toEqual({
+        toolName: "mcp.我的搜索服务.search_docs",
+        serverName: "mcp.我的搜索服务",
+        operationName: "search_docs",
+        argsText: '{"query": "年报"}',
+        argsRows: [{ key: "query", value: "年报" }],
+      });
+    } finally {
+      clearPersonalMcpDisplayNames();
+    }
   });
 });

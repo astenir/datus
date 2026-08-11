@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { clearPersonalMcpDisplayNames, setPersonalMcpDisplayNames } from "@/lib/personal-mcp-display";
 import {
   isInteractionToolName,
   subagentDisplayName,
@@ -41,6 +42,27 @@ describe("tool presentation", () => {
       metadata: ["1.25 秒", "2 行"],
       isSubagent: false,
     });
+  });
+
+  it("resolves a personal MCP alias to its display name in the technical name", () => {
+    const id = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const alias = `personal_${id}`;
+    setPersonalMcpDisplayNames([{ id, displayName: "我的搜索服务" }]);
+    try {
+      expect(toolPresentation({
+        type: "tool-execution",
+        callToolId: "mcp-fail-1",
+        toolName: `mcp.${alias}.connect`,
+        params: {},
+        errorText: "MCP Server 连接超时",
+        resultStatus: "error",
+        result: null,
+      })).toMatchObject({
+        technicalName: "mcp.我的搜索服务.connect",
+      });
+    } finally {
+      clearPersonalMcpDisplayNames();
+    }
   });
 
   it("uses the delegated agent as the primary task title", () => {

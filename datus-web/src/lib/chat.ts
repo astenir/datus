@@ -17,6 +17,7 @@ import type {
 } from "@/types";
 import { request } from "@/lib/request";
 import { friendlyMcpConnectionError } from "@/lib/mcp";
+import { resolvePersonalMcpDisplayName } from "@/lib/personal-mcp-display";
 import { isSqlExecutionTool, toolResultStatus } from "@/lib/tool-display";
 import { isInteractionToolName, normalizedToolName } from "@/lib/tool-presentation";
 
@@ -1237,7 +1238,9 @@ export function friendlyToolErrorText(toolName: string, rawError: string): strin
 
   const mcpConnectionTool = toolName.match(/^mcp\.(.+)\.connect$/);
   if (mcpConnectionTool?.[1]) {
-    const friendly = friendlyMcpConnectionError(error, mcpConnectionTool[1]);
+    // 个人 MCP 的运行时别名是 personal_<记录ID>；有会话绑定时还原为 MCP 名称。
+    const serverName = resolvePersonalMcpDisplayName(mcpConnectionTool[1]);
+    const friendly = friendlyMcpConnectionError(error, serverName);
     if (friendly) return `${friendly.title}：${friendly.description}`;
     return "MCP Server 认证失败：远程服务拒绝了连接，请检查 MCP 凭证或联系管理员。";
   }

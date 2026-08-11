@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "@/lib/request";
+import { personalMcpDisplayName } from "@/lib/personal-mcp-display";
 import { usePersonalMcp } from "./usePersonalMcp";
 
 // vi.mock 工厂会被提升到文件顶部执行，mock 函数必须通过 vi.hoisted 声明，
@@ -97,7 +98,10 @@ describe("usePersonalMcp", () => {
     });
     personalMcpSessionBinding.mockResolvedValue({
       success: true,
-      data: { session_id: "session-1", servers: [{ mcp_id: server.id, revision: 1 }] },
+      data: {
+        session_id: "session-1",
+        servers: [{ mcp_id: server.id, revision: 1, display_name: server.display_name }],
+      },
     });
   });
 
@@ -166,11 +170,14 @@ describe("usePersonalMcp", () => {
     expect(manager.selectedIds.value).toEqual([server.id]);
     expect(manager.selectionLocked.value).toBe(true);
     expect(manager.toggleSelection(server.id)).toBe(false);
+    // 会话绑定把运行时别名 personal_<id> 与 MCP 名称一起注册，供工具卡片解析。
+    expect(personalMcpDisplayName(`personal_${server.id}`)).toBe("个人分析工具");
 
     manager.resetDraftSelection();
     expect(manager.selectedIds.value).toEqual([]);
     expect(manager.selectionLocked.value).toBe(false);
     expect(manager.boundSessionId.value).toBeNull();
+    expect(personalMcpDisplayName(`personal_${server.id}`)).toBeUndefined();
   });
 
   it("shares one server list across instances and keeps it while any instance lives", async () => {
