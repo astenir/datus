@@ -29,6 +29,8 @@ function defaultOptions(): PersonalMcpOptions {
   return {
     enabled: false,
     allowed_hosts: [],
+    allow_insecure_http: false,
+    allow_private_hosts: false,
     max_servers_per_user: 0,
     max_selected_per_session: 0,
   };

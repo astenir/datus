@@ -295,6 +295,7 @@ onMounted(async () => {
       :mode="dialogMode"
       :server="editingServer"
       :submitting="manager.saving.value"
+      :options="manager.options.value"
       @submit="submitServer"
     />
 

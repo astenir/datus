@@ -116,24 +116,45 @@ def personal_mcp_options(agent_config: Any) -> dict[str, Any]:
     return {
         "enabled": bool(raw.get("enabled")) and bool(allowed_hosts),
         "allowed_hosts": allowed_hosts,
+        "allow_insecure_http": bool(raw.get("allow_insecure_http")),
+        "allow_private_hosts": bool(raw.get("allow_private_hosts")),
         "max_servers_per_user": _bounded_int(raw.get("max_servers_per_user"), default=10, minimum=1, maximum=100),
         "max_selected_per_session": _bounded_int(raw.get("max_selected_per_session"), default=3, minimum=1, maximum=10),
         "timeout_seconds": _bounded_float(raw.get("timeout_seconds"), default=30.0, minimum=1.0, maximum=60.0),
     }
 
 
+def personal_mcp_policy_mode(agent_config: Any) -> str:
+    """Effective network policy label, recorded in audit events for traceability."""
+
+    options = personal_mcp_options(agent_config)
+    if options["allow_insecure_http"] and options["allow_private_hosts"]:
+        return "relaxed"
+    if options["allow_insecure_http"]:
+        return "insecure_http"
+    if options["allow_private_hosts"]:
+        return "private_hosts"
+    return "strict"
+
+
 def validate_personal_mcp_policy(agent_config: Any, *, url: str) -> str:
     options = personal_mcp_options(agent_config)
     if not options["enabled"]:
         raise DatusException(ErrorCode.COMMON_CONFIG_ERROR, message="Personal MCP is not enabled.")
-    normalized, host = normalize_https_url(url)
+    normalized, host = normalize_mcp_url(url, allow_insecure_http=options["allow_insecure_http"])
     if not any(fnmatchcase(host, pattern) for pattern in options["allowed_hosts"]):
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP host is not allowed.")
-    _reject_unsafe_ip_literal(host)
+    _reject_unsafe_ip_literal(host, allow_private_hosts=options["allow_private_hosts"])
     return normalized
 
 
 def normalize_https_url(value: str) -> tuple[str, str]:
+    """Strict HTTPS-only normalization; the default personal MCP policy."""
+
+    return normalize_mcp_url(value)
+
+
+def normalize_mcp_url(value: str, *, allow_insecure_http: bool = False) -> tuple[str, str]:
     raw = value.strip()
     if len(raw) > 2048:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP URL is too long.")
@@ -143,7 +164,10 @@ def normalize_https_url(value: str) -> tuple[str, str]:
     except ValueError as exc:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Invalid personal MCP URL.") from exc
     host = (parsed.hostname or "").rstrip(".").lower()
-    if parsed.scheme.casefold() != "https" or not host:
+    scheme = parsed.scheme.casefold()
+    if scheme == "http" and allow_insecure_http:
+        pass
+    elif scheme != "https" or not host:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP URL must use HTTPS.")
     if parsed.username is not None or parsed.password is not None:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP URL must not contain userinfo.")
@@ -155,13 +179,18 @@ def normalize_https_url(value: str) -> tuple[str, str]:
     if port is not None:
         netloc = f"{netloc}:{port}"
     path = parsed.path or "/"
-    return urlunsplit(("https", netloc, path, "", "")), host
+    return urlunsplit((scheme, netloc, path, "", "")), host
 
 
-async def validate_personal_mcp_destination(url: str) -> None:
-    """Resolve the target immediately before connecting and reject unsafe IPs."""
+async def validate_personal_mcp_destination(url: str, *, allow_private_hosts: bool = False) -> None:
+    """Resolve the target immediately before connecting and reject unsafe IPs.
 
-    _, host = normalize_https_url(url)
+    ``allow_private_hosts`` relaxes the public-IP requirement for deployments
+    that explicitly opt into private/loopback MCP endpoints; the whitelist and
+    scheme policy are enforced separately by :func:`validate_personal_mcp_policy`.
+    """
+
+    _, host = normalize_mcp_url(url, allow_insecure_http=True)
     try:
         addresses = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
     except OSError as exc:
@@ -170,7 +199,7 @@ async def validate_personal_mcp_destination(url: str) -> None:
     if not resolved:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP host cannot be resolved.")
     for value in resolved:
-        _reject_unsafe_address(value)
+        _reject_unsafe_address(value, allow_private_hosts=allow_private_hosts)
 
 
 def record_to_mcp_config(record: dict[str, Any], *, timeout_seconds: float):
@@ -194,16 +223,18 @@ def record_to_mcp_config(record: dict[str, Any], *, timeout_seconds: float):
     return SSEServerConfig(**kwargs) if record["transport"] == "sse" else HTTPServerConfig(**kwargs)
 
 
-def _reject_unsafe_ip_literal(host: str) -> None:
+def _reject_unsafe_ip_literal(host: str, *, allow_private_hosts: bool = False) -> None:
     try:
         ipaddress.ip_address(host)
     except ValueError:
         return
-    _reject_unsafe_address(host)
+    _reject_unsafe_address(host, allow_private_hosts=allow_private_hosts)
 
 
-def _reject_unsafe_address(value: str) -> None:
+def _reject_unsafe_address(value: str, *, allow_private_hosts: bool = False) -> None:
     address = ipaddress.ip_address(value)
+    if allow_private_hosts:
+        return
     if not address.is_global:
         raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP destination is not public.")
 

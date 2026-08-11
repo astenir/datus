@@ -76,7 +76,9 @@ async def project_personal_mcp_for_chat(
                 raise HTTPException(status_code=409, detail="PERSONAL_MCP_REVISION_CHANGED")
         try:
             validate_personal_mcp_policy(agent_config, url=str(record["url"]))
-            await validate_personal_mcp_destination(str(record["url"]))
+            await validate_personal_mcp_destination(
+                str(record["url"]), allow_private_hosts=options["allow_private_hosts"]
+            )
         except DatusException as exc:
             raise HTTPException(status_code=400, detail="PERSONAL_MCP_DESTINATION_DENIED") from exc
         records.append(record)
