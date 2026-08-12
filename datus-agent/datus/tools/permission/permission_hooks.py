@@ -147,12 +147,27 @@ def _format_tool_args_markdown(args: dict) -> str:
 
 
 class PermissionDeniedException(Exception):
-    """Exception raised when a tool call is denied by permission rules."""
+    """Exception raised when a tool call is denied by permission rules.
 
-    def __init__(self, message: str, tool_category: str = "", tool_name: str = ""):
+    ``deny_reason`` is a stable machine-readable tag (``non_interactive``,
+    ``user_rejected``, ``sql_statements_denied``, ``bash_denied``, ...) that
+    lets downstream formatters produce user-facing copy without re-parsing
+    the message text. Optional and backward compatible: messages remain the
+    source of truth for callers that never set it.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        tool_category: str = "",
+        tool_name: str = "",
+        *,
+        deny_reason: str = "",
+    ):
         super().__init__(message)
         self.tool_category = tool_category
         self.tool_name = tool_name
+        self.deny_reason = deny_reason
 
 
 @dataclass(frozen=True)
@@ -462,6 +477,7 @@ class PermissionHooks(AgentHooks):
                     ),
                     tool_category=category,
                     tool_name=pattern_name,
+                    deny_reason="non_interactive",
                 )
 
             # Check multiple cache keys (tool_name and pattern_name might differ)
@@ -496,6 +512,7 @@ class PermissionHooks(AgentHooks):
                         f"User rejected execution of '{tool_name}'",
                         tool_category=category,
                         tool_name=pattern_name,
+                        deny_reason="user_rejected",
                     )
 
                 logger.info(f"User approved tool '{tool_name}'")
@@ -677,6 +694,7 @@ class PermissionHooks(AgentHooks):
                 ),
                 tool_category="filesystem_tools",
                 tool_name=pattern_name,
+                deny_reason="non_interactive_fs",
             )
 
         # Dangerous profile in interactive mode: opt out of the EXTERNAL ASK
@@ -707,6 +725,7 @@ class PermissionHooks(AgentHooks):
                     f"User rejected external filesystem access to {resolved.resolved}",
                     tool_category="filesystem_tools",
                     tool_name=pattern_name,
+                    deny_reason="user_rejected_fs",
                 )
             logger.info("User approved external filesystem access to %s", resolved.resolved)
             return True
@@ -910,6 +929,7 @@ class PermissionHooks(AgentHooks):
                 ),
                 tool_category="db_tools",
                 tool_name="execute_sql",
+                deny_reason="sql_statements_denied",
             )
 
         # ASK. A project-scope grant (``.datus/config.yml`` sql_allow or an
@@ -970,6 +990,7 @@ class PermissionHooks(AgentHooks):
                 "User rejected execution of 'execute_sql'",
                 tool_category="db_tools",
                 tool_name="execute_sql",
+                deny_reason="user_rejected",
             )
 
     async def _handle_sql_permission_legacy(self, context: Any, kind: str) -> bool:
@@ -1013,6 +1034,7 @@ class PermissionHooks(AgentHooks):
                     "User rejected execution of 'execute_sql'",
                     tool_category="db_tools",
                     tool_name="execute_sql",
+                    deny_reason="user_rejected",
                 )
             logger.info("User approved execute_sql (%s)", sql_class)
             return True
@@ -1145,6 +1167,7 @@ class PermissionHooks(AgentHooks):
                 ),
                 tool_category="bash_tools",
                 tool_name="bash",
+                deny_reason="bash_denied",
             )
 
         if decision.level == PermissionLevel.ALLOW:
@@ -1191,6 +1214,7 @@ class PermissionHooks(AgentHooks):
                 ),
                 tool_category="bash_tools",
                 tool_name="bash",
+                deny_reason="non_interactive_bash",
             )
 
         # Reserved LLM-classifier seam: only for non-safety asks, fail closed.
@@ -1275,6 +1299,7 @@ class PermissionHooks(AgentHooks):
                 "User rejected execution of bash command",
                 tool_category="bash_tools",
                 tool_name="bash",
+                deny_reason="user_rejected",
             )
 
     @staticmethod
