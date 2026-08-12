@@ -426,7 +426,7 @@ watch(
             >
               {{ detailKindLabel }}
             </Badge>
-            <DialogTitle class="min-w-0 truncate">{{ detailDialogTitle }}</DialogTitle>
+            <DialogTitle class="min-w-0 truncate leading-snug">{{ detailDialogTitle }}</DialogTitle>
           </div>
           <DialogDescription class="truncate">
             {{ selectedDetailSlug ?? "未选择产物" }}

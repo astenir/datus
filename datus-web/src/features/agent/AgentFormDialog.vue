@@ -151,7 +151,7 @@ async function submitForm() {
     >
       <DialogHeader class="gap-2 px-5 py-4 pr-14 text-left sm:px-6 sm:py-5 sm:pr-16">
         <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <DialogTitle class="min-w-0 truncate">{{ dialogTitle }}</DialogTitle>
+          <DialogTitle class="min-w-0 truncate leading-snug">{{ dialogTitle }}</DialogTitle>
           <template v-if="!props.manager.detailLoading.value && !props.manager.detailError.value">
             <Badge :variant="selectedIsReadonly ? 'outline' : 'secondary'">{{ sourceLabel }}</Badge>
             <Badge variant="outline">{{ statusLabel }}</Badge>
