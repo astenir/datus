@@ -110,6 +110,31 @@ describe("ArtifactCollectionGrid", () => {
     expect(html).toContain("作者：未知");
   });
 
+  it("shows the artifact creation date on the same line as the author", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+      owner_display_name: "Owner User",
+      created_at: "2026-07-23T08:56:00Z",
+    }]);
+
+    expect(html).toContain("2026/07/23");
+    expect(html).toContain("创建时间：");
+  });
+
+  it("hides the creation date when the manifest has no created_at", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+    }]);
+
+    expect(html).not.toContain("创建时间：");
+  });
+
   it("shows a loading state instead of the empty state during the initial request", async () => {
     const html = await renderGrid([], true);
 

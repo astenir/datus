@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  CalendarDaysIcon,
   EyeIcon,
   FilePenLineIcon,
   FileSearchIcon,
@@ -72,6 +73,24 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
 function hasMenuActions(item: ReadonlyArtifactManifest): boolean {
   return Boolean(item.can_manage_share || (props.editEnabled && item.can_edit))
 }
+
+function toDate(value: string): Date {
+  return new Date(value.endsWith("Z") ? value : `${value}Z`)
+}
+
+function formatCreatedAt(value: string | null | undefined): string {
+  if (!value) return ""
+  return toDate(value).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+}
+
+function createdAtTitle(value: string | null | undefined): string {
+  if (!value) return ""
+  return `创建时间：${toDate(value).toLocaleString("zh-CN", { hour12: false })}`
+}
 </script>
 
 <template>
@@ -143,17 +162,30 @@ function hasMenuActions(item: ReadonlyArtifactManifest): boolean {
         >
           {{ item.name }}
         </CardTitle>
-        <div
-          class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-          :title="authorTitle(item)"
-        >
-          <UserRoundIcon
-            class="size-3.5 shrink-0"
-            aria-hidden="true"
-          />
-          <span class="shrink-0">作者</span>
-          <span class="truncate font-medium">
-            {{ authorLabel(item) }}
+        <div class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            class="flex min-w-0 items-center gap-1.5"
+            :title="authorTitle(item)"
+          >
+            <UserRoundIcon
+              class="size-3.5 shrink-0"
+              aria-hidden="true"
+            />
+            <span class="shrink-0">作者</span>
+            <span class="truncate font-medium">
+              {{ authorLabel(item) }}
+            </span>
+          </div>
+          <span
+            v-if="item.created_at"
+            class="ml-2 flex shrink-0 items-center gap-1"
+            :title="createdAtTitle(item.created_at)"
+          >
+            <CalendarDaysIcon
+              class="size-3.5 shrink-0"
+              aria-hidden="true"
+            />
+            {{ formatCreatedAt(item.created_at) }}
           </span>
         </div>
         <CardDescription
