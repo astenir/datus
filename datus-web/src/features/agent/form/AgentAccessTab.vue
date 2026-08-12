@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import type { AgentManagerController } from "@/composables/useAgentManager"
 import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
@@ -57,7 +58,7 @@ const publishedWithoutAudience = computed(() =>
     <div>
       <h2 class="text-lg font-semibold">访问控制</h2>
       <p class="mt-1 text-sm text-muted-foreground">
-        发布状态决定 Agent 是否上线；可见范围决定上线后哪些企业用户能够发现并使用。
+        发布状态决定 Agent 是否上线；可见范围决定哪些企业用户能够发现并使用，委派规则决定它可以调用哪些其他 Agent。
       </p>
     </div>
 
@@ -161,6 +162,44 @@ const publishedWithoutAudience = computed(() =>
         <FieldDescription>
           仅可分配给通过当前 ACL 且状态启用的用户；用户个人默认优先于企业默认。
         </FieldDescription>
+      </Field>
+    </FieldGroup>
+
+    <div>
+      <h3 class="text-sm font-semibold">委派规则</h3>
+      <p class="mt-0.5 text-sm text-muted-foreground">控制该 Agent 是否可以调用其他 Agent，以及具体白名单。</p>
+    </div>
+
+    <FieldGroup class="grid gap-5 md:grid-cols-2">
+      <Field
+        orientation="horizontal"
+        class="md:col-span-2"
+      >
+        <div class="flex-1">
+          <FieldLabel for="agent-subagent-delegation">允许委派其他 Agent</FieldLabel>
+          <FieldDescription>关闭后服务端会移除 task 工具，避免通过子 Agent 绕过当前策略。</FieldDescription>
+        </div>
+        <Switch
+          id="agent-subagent-delegation"
+          v-model="props.manager.form.value.allowSubagentDelegation"
+        />
+      </Field>
+
+      <Field
+        v-if="props.manager.form.value.allowSubagentDelegation"
+        class="md:col-span-2"
+      >
+        <FieldLabel>允许委派的 Agent</FieldLabel>
+        <SearchableMultiSelect
+          :options="props.manager.subagentOptions.value"
+          :selected-values="props.manager.form.value.allowedSubagentIds"
+          placeholder="选择可委派的 Agent"
+          search-placeholder="搜索 Agent..."
+          empty-text="未设置精确白名单"
+          no-results-text="没有匹配 Agent"
+          @toggle="props.manager.toggleAllowedSubagent"
+        />
+        <FieldDescription>被委派 Agent 仍会再次检查自己的 ACL 和工具策略。</FieldDescription>
       </Field>
     </FieldGroup>
   </div>
