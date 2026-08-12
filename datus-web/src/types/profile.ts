@@ -180,3 +180,14 @@ export interface PersonalMcpSessionBinding {
   session_id: string;
   servers: Array<{ mcp_id: string; revision: number; display_name: string }>;
 }
+
+export interface PersonalMcpSessionReference {
+  session_id: string;
+  title: string;
+  updated_at?: string | null;
+}
+
+export interface PersonalMcpDeleteResult {
+  deleted: boolean;
+  unbound_sessions?: number;
+}

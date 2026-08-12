@@ -56,6 +56,56 @@ async def test_pg_personal_mcp_store_counts_and_deletes_owned_bindings():
     assert store._execute.await_args.args[1:] == ("project", "session-1", "alice")
 
 
+@pytest.mark.asyncio
+async def test_pg_personal_mcp_store_lists_and_unbinds_referencing_sessions():
+    store = PgUserMcpServerStore(
+        dsn="postgresql://metadata",
+        encryption_secret="test-user-mcp-secret-32-characters",
+    )
+    rows = [
+        Row(
+            project_id="project",
+            session_id="session-1",
+            updated_at="2026-01-02T00:00:00+00:00",
+            servers_json=[
+                {"mcp_id": "a" * 32, "revision": 1, "display_name": "Search"},
+                {"mcp_id": "c" * 32, "revision": 1, "display_name": "Other"},
+            ],
+        ),
+        Row(
+            project_id="project",
+            session_id="session-2",
+            updated_at="2026-01-03T00:00:00+00:00",
+            servers_json=[{"mcp_id": "b" * 32, "revision": 1}],
+        ),
+    ]
+
+    # list_session_bindings 只返回引用该 MCP 的会话，不包含无关绑定。
+    store._fetch = AsyncMock(return_value=rows)
+    references = await store.list_session_bindings("alice", "a" * 32)
+    assert references == [
+        {"project_id": "project", "session_id": "session-1", "updated_at": "2026-01-02T00:00:00+00:00"}
+    ]
+
+    # unbind_server 解除引用并更新/删除行：保留剩余引用时 UPDATE，全部解除时 DELETE。
+    store._fetch = AsyncMock(return_value=rows)
+    store._execute = AsyncMock(return_value="UPDATE 1")
+    assert await store.unbind_server("alice", "a" * 32) == 1
+    assert store._execute.call_count == 1
+    assert store._execute.await_args.args[1:] == (
+        f'[{{"display_name": "Other", "mcp_id": "{"c" * 32}", "revision": 1}}]',
+        "project",
+        "session-1",
+        "alice",
+    )
+
+    # 绑定中只剩被删 MCP 时整行删除，避免残留空绑定把后续重新选择误判为 locked。
+    store._fetch = AsyncMock(return_value=[rows[1]])
+    store._execute = AsyncMock(return_value="DELETE 1")
+    assert await store.unbind_server("alice", "b" * 32) == 1
+    assert store._execute.await_args.args[1:] == ("project", "session-2", "alice")
+
+
 class Row(dict):
     def __getitem__(self, key):
         if isinstance(key, int):

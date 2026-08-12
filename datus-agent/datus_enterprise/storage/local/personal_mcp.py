@@ -78,6 +78,35 @@ class InMemoryUserMcpServerStore:
             if binding["user_id"] == user_id and _binding_references(binding["servers"], mcp_id)
         )
 
+    async def list_session_bindings(self, user_id: str, mcp_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "project_id": str(binding["project_id"]),
+                "session_id": str(binding["session_id"]),
+                "updated_at": str(binding["updated_at"]),
+            }
+            for binding in self._bindings.values()
+            if binding["user_id"] == user_id and _binding_references(binding["servers"], mcp_id)
+        ]
+
+    async def unbind_server(self, user_id: str, mcp_id: str) -> int:
+        """Drop ``mcp_id`` from every binding of ``user_id``; remove emptied rows."""
+        changed = 0
+        for key in list(self._bindings):
+            binding = self._bindings[key]
+            if binding["user_id"] != user_id:
+                continue
+            remaining = [item for item in binding["servers"] if str(item.get("mcp_id") or "") != mcp_id]
+            if len(remaining) == len(binding["servers"]):
+                continue
+            if remaining:
+                binding["servers"] = remaining
+                binding["updated_at"] = _sqlite_now()
+            else:
+                del self._bindings[key]
+            changed += 1
+        return changed
+
     async def get_session_binding(self, project_id: str, session_id: str, user_id: str) -> dict[str, Any] | None:
         record = self._bindings.get((project_id, session_id))
         return dict(record) if record and record["user_id"] == user_id else None
@@ -91,11 +120,12 @@ class InMemoryUserMcpServerStore:
         servers: list[dict[str, Any]],
     ) -> dict[str, Any]:
         existing = self._bindings.get((project_id, session_id))
-        normalized = _binding_record(project_id, session_id, user_id, servers, existing=existing)
-        if existing and (existing["user_id"] != user_id or existing["servers"] != normalized["servers"]):
+        # _binding_record 内部按 mcp_id/revision 投影比较并拒绝变更，这里只校验归属。
+        if existing and existing["user_id"] != user_id:
             raise DatusException(
                 ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP selection is locked for this session."
             )
+        normalized = _binding_record(project_id, session_id, user_id, servers, existing=existing)
         self._bindings[(project_id, session_id)] = normalized
         return dict(normalized)
 
@@ -205,6 +235,53 @@ class SqliteUserMcpServerStore:
             ).fetchall()
         return sum(1 for row in rows if _binding_references(_json_records(row[0]), mcp_id))
 
+    async def list_session_bindings(self, user_id: str, mcp_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT project_id, session_id, updated_at, servers_json "
+                "FROM enterprise_session_mcp_bindings WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        return [
+            {
+                "project_id": str(row[0]),
+                "session_id": str(row[1]),
+                "updated_at": str(row[2]),
+            }
+            for row in rows
+            if _binding_references(_json_records(row[3]), mcp_id)
+        ]
+
+    async def unbind_server(self, user_id: str, mcp_id: str) -> int:
+        """Drop ``mcp_id`` from every binding of ``user_id``; delete emptied rows."""
+        changed = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT project_id, session_id, servers_json "
+                "FROM enterprise_session_mcp_bindings WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+            for row in rows:
+                servers = _json_records(row[2])
+                remaining = [item for item in servers if str(item.get("mcp_id") or "") != mcp_id]
+                if len(remaining) == len(servers):
+                    continue
+                if remaining:
+                    conn.execute(
+                        "UPDATE enterprise_session_mcp_bindings SET servers_json = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE project_id = ? AND session_id = ? AND user_id = ?",
+                        (json.dumps(remaining, sort_keys=True), row[0], row[1], user_id),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM enterprise_session_mcp_bindings "
+                        "WHERE project_id = ? AND session_id = ? AND user_id = ?",
+                        (row[0], row[1], user_id),
+                    )
+                changed += 1
+            conn.commit()
+        return changed
+
     async def get_session_binding(self, project_id: str, session_id: str, user_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -227,10 +304,6 @@ class SqliteUserMcpServerStore:
     ) -> dict[str, Any]:
         existing = await self.get_session_binding(project_id, session_id, user_id)
         normalized = _binding_record(project_id, session_id, user_id, servers, existing=existing)
-        if existing and existing["servers"] != normalized["servers"]:
-            raise DatusException(
-                ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP selection is locked for this session."
-            )
         with self._connect() as conn:
             conn.execute(
                 """
@@ -345,15 +418,18 @@ def _binding_record(
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
     now = _sqlite_now()
-    normalized = sorted(
-        ({"mcp_id": str(item["mcp_id"]), "revision": int(item["revision"])} for item in servers),
-        key=lambda item: item["mcp_id"],
-    )
+    stored = _binding_servers(servers)
+    # 比较时只投影 mcp_id/revision：旧行未快照 display_name，直接比较整行会把
+    # 升级前已绑定的会话误判为 selection locked。
+    if existing and _binding_projection(existing["servers"]) != _binding_projection(stored):
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP selection is locked for this session."
+        )
     return {
         "project_id": project_id,
         "session_id": session_id,
         "user_id": user_id,
-        "servers": normalized,
+        "servers": stored,
         "created_at": existing.get("created_at") if existing else now,
         "updated_at": now,
     }
@@ -368,6 +444,21 @@ def _binding_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": str(row[4]),
         "updated_at": str(row[5]),
     }
+
+
+def _binding_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalized binding entries; snapshots ``display_name`` when provided."""
+    return sorted(
+        (
+            {key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item}
+            for item in servers
+        ),
+        key=lambda item: item["mcp_id"],
+    )
+
+
+def _binding_projection(servers: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    return sorted((str(item.get("mcp_id") or ""), int(item.get("revision") or 0)) for item in servers)
 
 
 def _json_list(value: Any) -> list[str]:

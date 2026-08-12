@@ -117,7 +117,16 @@ async def commit_personal_mcp_session(
         project_id=project_id,
         session_id=session_id,
         user_id=user_id,
-        servers=[{"mcp_id": record["id"], "revision": record["revision"]} for record in records],
+        servers=[
+            {
+                "mcp_id": record["id"],
+                "revision": record["revision"],
+                # 快照用户可见名称：MCP 被强制删除后，历史会话的工具卡片仍能
+                # 把运行时别名 personal_<id> 还原为 MCP 名称。
+                "display_name": str(record.get("display_name") or ""),
+            }
+            for record in records
+        ],
     )
     for record in records:
         await store.touch_server_used(user_id, str(record["id"]))

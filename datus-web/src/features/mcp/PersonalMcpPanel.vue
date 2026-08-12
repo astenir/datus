@@ -21,6 +21,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Spinner } from "@/components/ui/spinner"
+import { formatSessionTime } from "@/lib/chat"
 import McpManagementShell from "@/features/mcp/McpManagementShell.vue"
 import McpServerDetail from "@/features/mcp/McpServerDetail.vue"
 import McpServerList from "@/features/mcp/McpServerList.vue"
@@ -111,6 +114,8 @@ const selectedDetail = computed<McpServerDetailModel | null>(() => {
     ],
   }
 })
+const deleteReferences = computed(() => deleteTarget.value ? manager.references(deleteTarget.value.id) : [])
+const referencesLoading = computed(() => deleteTarget.value !== null && manager.referencesLoadingId.value === deleteTarget.value.id)
 
 watch(
   () => manager.servers.value,
@@ -153,6 +158,7 @@ function openEditServer(id: string): void {
 
 function openDeleteServer(id: string): void {
   deleteTarget.value = manager.servers.value.find(server => server.id === id) ?? null
+  if (deleteTarget.value) void manager.loadReferences(id)
 }
 
 async function submitServer(input: UpsertPersonalMcpInput): Promise<void> {
@@ -178,7 +184,7 @@ async function testServer(id: string): Promise<void> {
 async function confirmDelete(): Promise<void> {
   const target = deleteTarget.value
   if (!target) return
-  if (await manager.deleteServer(target.id)) deleteTarget.value = null
+  if (await manager.deleteServer(target.id, deleteReferences.value.length > 0)) deleteTarget.value = null
 }
 
 onMounted(async () => {
@@ -304,15 +310,48 @@ onMounted(async () => {
         <DialogHeader>
           <DialogTitle>删除个人 MCP</DialogTitle>
           <DialogDescription>
-            删除“{{ deleteTarget?.display_name }}”后无法恢复。仍被历史会话引用的 MCP 会被服务端拒绝删除。
+            删除“{{ deleteTarget?.display_name }}”后无法恢复。
+            <template v-if="!referencesLoading && deleteReferences.length > 0">
+              该 MCP 仍被 {{ deleteReferences.length }} 个会话引用，删除将解除这些会话的引用，历史会话中该 MCP 将不可用。
+            </template>
           </DialogDescription>
         </DialogHeader>
+        <div
+          v-if="referencesLoading"
+          class="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Spinner />
+          正在检查引用会话...
+        </div>
+        <ScrollArea
+          v-else-if="deleteReferences.length > 0"
+          class="max-h-44"
+        >
+          <ul class="flex flex-col gap-2 pr-3">
+            <li
+              v-for="reference in deleteReferences"
+              :key="reference.session_id"
+              class="rounded-lg border p-2"
+            >
+              <div class="truncate text-sm font-medium">
+                {{ reference.title || `会话 ${reference.session_id.slice(0, 8)}` }}
+              </div>
+              <div class="mt-0.5 text-xs text-muted-foreground">
+                {{ reference.updated_at ? formatSessionTime(reference.updated_at) : "历史会话" }}
+              </div>
+            </li>
+          </ul>
+        </ScrollArea>
         <DialogFooter>
           <Button variant="outline" :disabled="manager.saving.value" @click="deleteTarget = null">
             取消
           </Button>
-          <Button variant="destructive" :disabled="manager.saving.value" @click="confirmDelete">
-            删除
+          <Button
+            variant="destructive"
+            :disabled="manager.saving.value || referencesLoading"
+            @click="confirmDelete"
+          >
+            {{ deleteReferences.length > 0 ? "解除引用并删除" : "删除" }}
           </Button>
         </DialogFooter>
       </DialogContent>

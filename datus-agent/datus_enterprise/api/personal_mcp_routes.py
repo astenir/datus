@@ -89,6 +89,19 @@ class PersonalMcpSessionBinding(BaseModel):
     servers: list[PersonalMcpSessionBindingItem] = Field(default_factory=list)
 
 
+class PersonalMcpSessionReference(BaseModel):
+    """A historical session whose binding still references a personal MCP."""
+
+    session_id: str
+    title: str = ""
+    updated_at: str | None = None
+
+
+class PersonalMcpDeleteResult(BaseModel):
+    deleted: bool
+    unbound_sessions: int = 0
+
+
 async def _require_permission(ctx: RequestContextDep, action: str) -> None:
     await require_authorized_module(ctx, action)
 
@@ -153,13 +166,16 @@ async def get_personal_mcp_session_binding(
     items = []
     for item in servers:
         # Join the user-facing display name so chat rendering can resolve the
-        # runtime alias (``personal_<id>``) back to the MCP name.
+        # runtime alias (``personal_<id>``) back to the MCP name. Once the
+        # server record is gone (force-deleted), fall back to the display_name
+        # snapshot captured in the binding at bind time.
         record = await _store().get_server(user_id, str(item["mcp_id"]))
+        display_name = str(record.get("display_name") or "") if record else str(item.get("display_name") or "")
         items.append(
             PersonalMcpSessionBindingItem(
                 mcp_id=str(item["mcp_id"]),
                 revision=int(item["revision"]),
-                display_name=str(record.get("display_name") or "") if record else "",
+                display_name=display_name,
             )
         )
     return Result(
@@ -241,9 +257,51 @@ async def update_personal_mcp_server(
     return Result(success=True, data=_summary(record))
 
 
+@router.get(
+    "/{mcp_id}/references",
+    response_model=Result[list[PersonalMcpSessionReference]],
+    dependencies=[Depends(_require_personal_mcp_module), Depends(_require_remove)],
+)
+async def list_personal_mcp_references(
+    mcp_id: str,
+    svc: ServiceDep,
+    ctx: RequestContextDep,
+) -> Result[list[PersonalMcpSessionReference]]:
+    """List historical sessions still referencing this personal MCP.
+
+    The delete dialog shows these sessions so the user knows exactly which
+    conversations keep the MCP referenced before choosing to force-delete.
+    """
+
+    await _owned_record(ctx, mcp_id)
+    user_id = _require_user_id(ctx)
+    bindings = await _store().list_session_bindings(user_id, normalize_personal_mcp_id(mcp_id))
+    titles: dict[str, str] = {}
+    try:
+        sessions_result = await svc.chat.list_sessions_async(user_id=user_id)
+        if sessions_result.success and sessions_result.data is not None:
+            titles = {
+                item.session_id: _reference_title(item.user_query, item.total_turns)
+                for item in sessions_result.data.sessions
+            }
+    except Exception:
+        logger.warning("Personal MCP reference title lookup failed", exc_info=True)
+    return Result(
+        success=True,
+        data=[
+            PersonalMcpSessionReference(
+                session_id=binding["session_id"],
+                title=titles.get(binding["session_id"], ""),
+                updated_at=binding.get("updated_at"),
+            )
+            for binding in bindings
+        ],
+    )
+
+
 @router.delete(
     "/{mcp_id}",
-    response_model=Result[dict[str, bool]],
+    response_model=Result[PersonalMcpDeleteResult],
     dependencies=[
         Depends(_require_personal_mcp_module),
         Depends(_require_remove),
@@ -254,7 +312,8 @@ async def delete_personal_mcp_server(
     mcp_id: str,
     svc: ServiceDep,
     ctx: RequestContextDep,
-) -> Result[dict[str, bool]]:
+    force: bool = False,
+) -> Result[PersonalMcpDeleteResult]:
     existing = await _owned_record(ctx, mcp_id)
     user_id = _require_user_id(ctx)
     normalized_id = normalize_personal_mcp_id(mcp_id)
@@ -263,19 +322,25 @@ async def delete_personal_mcp_server(
     except Exception as exc:
         logger.error("Personal MCP reference check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="PERSONAL_MCP_REFERENCE_CHECK_FAILED") from exc
+    unbound_sessions = 0
     if session_count:
-        await _audit_best_effort(
-            ctx,
-            "remove",
-            str(existing["id"]),
-            agent_config=svc.agent_config,
-            old_record=existing,
-            metadata={"blocked": True, "session_count": session_count},
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "PERSONAL_MCP_SERVER_IN_USE", "session_count": session_count},
-        )
+        if not force:
+            await _audit_best_effort(
+                ctx,
+                "remove",
+                str(existing["id"]),
+                agent_config=svc.agent_config,
+                old_record=existing,
+                metadata={"blocked": True, "session_count": session_count},
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "PERSONAL_MCP_SERVER_IN_USE", "session_count": session_count},
+            )
+        # Force delete: drop the MCP from every referencing session binding so
+        # those sessions keep working (resuming a session whose binding points
+        # at a deleted MCP would otherwise fail with PERSONAL_MCP_NOT_FOUND).
+        unbound_sessions = await _store().unbind_server(user_id, normalized_id)
     deleted = await _store().delete_server(user_id, normalized_id)
     await _audit_best_effort(
         ctx,
@@ -283,9 +348,9 @@ async def delete_personal_mcp_server(
         str(existing["id"]),
         agent_config=svc.agent_config,
         old_record=existing,
-        metadata={"deleted": deleted},
+        metadata={"deleted": deleted, "unbound_sessions": unbound_sessions},
     )
-    return Result(success=True, data={"deleted": deleted})
+    return Result(success=True, data=PersonalMcpDeleteResult(deleted=deleted, unbound_sessions=unbound_sessions))
 
 
 @router.post(
@@ -334,6 +399,16 @@ def _require_user_id(ctx: AppContext) -> str:
     if not ctx.user_id:
         raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
     return ctx.user_id
+
+
+def _reference_title(user_query: str | None, total_turns: int) -> str:
+    """Session display title, mirroring the frontend ``sessionUserQueryText``."""
+    text = (user_query or "").strip()
+    if text:
+        return text if len(text) <= 60 else f"{text[:60]}…"
+    if total_turns > 0:
+        return f"{total_turns} 轮对话"
+    return ""
 
 
 async def _owned_record(ctx: AppContext, mcp_id: str) -> dict[str, Any]:

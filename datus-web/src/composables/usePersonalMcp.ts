@@ -18,6 +18,7 @@ import type {
   ApiResponse,
   PersonalMcpConnectivityResult,
   PersonalMcpOptions,
+  PersonalMcpSessionReference,
   PersonalMcpSummary,
   PersonalMcpToolSummary,
   UpsertPersonalMcpInput,
@@ -72,11 +73,13 @@ const loading = shallowRef(false);
 const saving = shallowRef(false);
 const testingId = shallowRef<string | null>(null);
 const toolsLoadingId = shallowRef<string | null>(null);
+const referencesLoadingId = shallowRef<string | null>(null);
 const bindingLoading = shallowRef(false);
 const error = shallowRef<string | null>(null);
 const options = ref<PersonalMcpOptions>(defaultOptions());
 const servers = ref<PersonalMcpSummary[]>([]);
 const tools = ref<Record<string, PersonalMcpToolSummary[]>>({});
+const referencesByServer = ref<Record<string, PersonalMcpSessionReference[]>>({});
 const selectedIds = ref<string[]>([]);
 const selectionLocked = shallowRef(false);
 const boundSessionId = shallowRef<string | null>(null);
@@ -108,6 +111,7 @@ function dispose(): void {
   options.value = defaultOptions();
   servers.value = [];
   tools.value = {};
+  referencesByServer.value = {};
   selectedIds.value = [];
   selectionLocked.value = false;
   boundSessionId.value = null;
@@ -201,18 +205,22 @@ export function usePersonalMcp() {
     }
   }
 
-  async function deleteServer(id: string): Promise<boolean> {
+  async function deleteServer(id: string, force = false): Promise<boolean> {
     saving.value = true;
     error.value = null;
     try {
-      const result = resultData(await meApi.deletePersonalMcp(id), { deleted: false });
+      const result = resultData(await meApi.deletePersonalMcp(id, force), { deleted: false });
       if (!result.deleted) return false;
       servers.value = servers.value.filter(server => server.id !== id);
       selectedIds.value = selectedIds.value.filter(selectedId => selectedId !== id);
       const nextTools = { ...tools.value };
       delete nextTools[id];
       tools.value = nextTools;
-      toast.success("个人 MCP 已删除");
+      const nextReferences = { ...referencesByServer.value };
+      delete nextReferences[id];
+      referencesByServer.value = nextReferences;
+      const unbound = result.unbound_sessions ?? 0;
+      toast.success(unbound > 0 ? `个人 MCP 已删除，并解除 ${unbound} 个会话的引用` : "个人 MCP 已删除");
       return true;
     } catch (deleteError) {
       const sessionCount = await personalMcpInUseCount(deleteError);
@@ -225,6 +233,22 @@ export function usePersonalMcp() {
       return false;
     } finally {
       saving.value = false;
+    }
+  }
+
+  async function loadReferences(id: string): Promise<readonly PersonalMcpSessionReference[]> {
+    referencesLoadingId.value = id;
+    try {
+      const result = resultData(await meApi.personalMcpReferences(id), []);
+      referencesByServer.value = { ...referencesByServer.value, [id]: result };
+      return result;
+    } catch (referencesError) {
+      if (isAbortError(referencesError)) return [];
+      console.error("加载个人 MCP 引用会话失败:", referencesError);
+      referencesByServer.value = { ...referencesByServer.value, [id]: [] };
+      return [];
+    } finally {
+      if (referencesLoadingId.value === id) referencesLoadingId.value = null;
     }
   }
 
@@ -347,6 +371,7 @@ export function usePersonalMcp() {
     saving: readonly(saving),
     testingId: readonly(testingId),
     toolsLoadingId: readonly(toolsLoadingId),
+    referencesLoadingId: readonly(referencesLoadingId),
     bindingLoading: readonly(bindingLoading),
     error: readonly(error),
     options: readonly(options),
@@ -365,6 +390,8 @@ export function usePersonalMcp() {
     deleteServer,
     testServer,
     loadTools,
+    loadReferences,
+    references: (id: string) => referencesByServer.value[id] ?? [],
     toggleSelection,
     loadSessionBinding,
     resetDraftSelection,

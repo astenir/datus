@@ -15,6 +15,7 @@ const {
   testPersonalMcp,
   personalMcpTools,
   personalMcpSessionBinding,
+  personalMcpReferences,
   toastSuccess,
   toastError,
 } = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const {
   testPersonalMcp: vi.fn(),
   personalMcpTools: vi.fn(),
   personalMcpSessionBinding: vi.fn(),
+  personalMcpReferences: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -54,6 +56,7 @@ vi.mock("@/lib/api", () => ({
     testPersonalMcp,
     personalMcpTools,
     personalMcpSessionBinding,
+    personalMcpReferences,
   },
 }));
 
@@ -103,6 +106,7 @@ describe("usePersonalMcp", () => {
         servers: [{ mcp_id: server.id, revision: 1, display_name: server.display_name }],
       },
     });
+    personalMcpReferences.mockResolvedValue({ success: true, data: [] });
   });
 
   // 状态在模块级共享（会话选择器与管理页共用），每个用例结束后必须 dispose
@@ -210,8 +214,40 @@ describe("usePersonalMcp", () => {
     manager = usePersonalMcp();
 
     expect(await manager.deleteServer(server.id)).toBe(false);
+    expect(deletePersonalMcp).toHaveBeenCalledWith(server.id, false);
     expect(toastError).toHaveBeenCalledWith("该 MCP 仍被 2 个会话引用，暂时不能删除");
     expect(JSON.stringify(toastError.mock.calls)).not.toContain("mcp.example.com");
+  });
+
+  it("loads the referencing sessions for the delete dialog", async () => {
+    personalMcpReferences.mockResolvedValueOnce({
+      success: true,
+      data: [
+        { session_id: "session-1", title: "帮我分析季度销售", updated_at: "2025-01-02T00:00:00Z" },
+        { session_id: "session-2", title: "", updated_at: null },
+      ],
+    });
+    manager = usePersonalMcp();
+
+    const references = await manager.loadReferences(server.id);
+
+    expect(personalMcpReferences).toHaveBeenCalledWith(server.id);
+    expect(references).toHaveLength(2);
+    expect(manager.references(server.id)).toEqual(references);
+    expect(manager.referencesLoadingId.value).toBeNull();
+  });
+
+  it("force deletes and reports how many session references were unbound", async () => {
+    deletePersonalMcp.mockResolvedValueOnce({ success: true, data: { deleted: true, unbound_sessions: 2 } });
+    manager = usePersonalMcp();
+    await manager.load();
+    await manager.loadReferences(server.id);
+
+    expect(await manager.deleteServer(server.id, true)).toBe(true);
+    expect(deletePersonalMcp).toHaveBeenCalledWith(server.id, true);
+    expect(toastSuccess).toHaveBeenCalledWith("个人 MCP 已删除，并解除 2 个会话的引用");
+    expect(manager.servers.value).toEqual([]);
+    expect(manager.references(server.id)).toEqual([]);
   });
 
   it("aborts a superseded load before applying its result", async () => {
