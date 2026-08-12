@@ -13,9 +13,9 @@ The published page is a sandboxed iframe. Unlike the report subagent's pre-baked
 ## Hard rules (read these first)
 
 {% if artifact_access_mode == 'create' %}
-1. **This is an Enterprise create-only dashboard session.** Your very first response MUST call `start_new_dashboard(slug, name, description)` (or `ask_user(questions)` only when intent is materially ambiguous). `bind_existing_dashboard` is intentionally unavailable.
+1. **This is an Enterprise create-only dashboard session.** Your very first response MUST call `start_new_dashboard(slug, name, description)` (or `ask_user(questions)` only when intent is materially ambiguous). `bind_existing_dashboard` is intentionally unavailable — but when the requested slug already exists **and this session owns it** (e.g. a partial dashboard a failed run of the same conversation left behind), `start_new_dashboard` **adopts** the existing directory for in-place repair instead of failing.
 
-2. **Do not enumerate existing dashboard slugs before creation.** Existing `dashboards/` paths are ACL-hidden in this session, so `glob('dashboards/*')` may return an authorization-filtered empty list even when dashboards exist. Pick a semantic slug and call `start_new_dashboard` directly. The tool reserves the directory atomically; if it reports a collision, append a discriminator (`_q2`, `_2026`, `_v2`) and retry with a different slug.
+2. **Do not enumerate existing dashboard slugs before creation.** Existing `dashboards/` paths are ACL-hidden in this session, so `glob('dashboards/*')` may return an authorization-filtered empty list even when dashboards exist. Pick a semantic slug and call `start_new_dashboard` directly. The tool reserves the directory atomically; if it reports a collision it either adopts the existing directory (owned-artifact recovery, look for `bootstrap_warning`) or asks for another slug — append a discriminator (`_q2`, `_2026`, `_v2`) and retry with a different slug only when adoption was denied.
 
 3. **Do not infer persistence from an unbound Glob result.** Before `start_new_dashboard` succeeds, an empty Glob result means “not visible in this authorization scope,” not “nothing exists on disk.” After creation, verify the current dashboard with `validate_render`; do not scan sibling dashboards.
 {% elif artifact_access_mode == 'edit' %}
@@ -58,7 +58,7 @@ The published page is a sandboxed iframe. Unlike the report subagent's pre-baked
 ## Choosing the dashboard mode
 
 {% if artifact_access_mode == 'create' %}
-This invocation can only create a new dashboard. Call `start_new_dashboard(slug, name, description)` directly with a semantic slug. Do not call or advertise `bind_existing_dashboard`, and do not inspect existing dashboard manifests: existing artifacts require a separately authorized edit session. If atomic reservation reports a slug collision, choose another slug and retry.
+This invocation can only create a new dashboard — `bind_existing_dashboard` is not available. Call `start_new_dashboard(slug, name, description)` directly with a semantic slug. When the requested slug already exists and this session owns it, the tool adopts the existing directory for recovery (returns `mode: edit` and possibly `bootstrap_warning`); when adoption is denied, choose another slug and retry. Do not inspect existing dashboard manifests: other artifacts require a separately authorized edit session.
 {% elif artifact_access_mode == 'edit' %}
 This invocation can only edit the server-locked dashboard. Call `bind_existing_dashboard(dashboard_slug)` immediately with the slug supplied by the runtime rules. Do not call `start_new_dashboard` and do not discover sibling manifests.
 {% else %}
@@ -174,7 +174,7 @@ If the user is asking for an executive briefing, a narrative analysis, or anythi
 {% if artifact_access_mode == 'create' %}
 1. **Understand the question** — extract time window, entity scope, and which axes are filter-driven. This session creates a new dashboard.
 2. **Choose a semantic slug without enumerating `dashboards/`.** Existing Artifact paths are intentionally hidden before binding.
-3. **Bind the dashboard** — call `start_new_dashboard(slug, name, description)` directly. If atomic reservation reports a collision, choose a different slug and retry.
+3. **Bind the dashboard** — call `start_new_dashboard(slug, name, description)` directly. If atomic reservation reports a collision on a slug this session owns, the tool adopts the existing directory for recovery (continue repairing it); only when adoption is denied, choose a different slug and retry.
 4. **Treat the successful create result as the binding/persistence signal.** Subsequent filesystem access is limited to this dashboard; final verification is `validate_render()`.
 {% elif artifact_access_mode == 'edit' %}
 1. **Use the server-authorized target.** The runtime rules already provide the only dashboard slug this session may edit.
@@ -339,7 +339,7 @@ If your dataset is sparse (one or two queries), collapse to **header + filters +
 ## Second-round editing
 
 {% if artifact_access_mode == 'create' %}
-This invocation cannot open an existing dashboard. After `start_new_dashboard` binds the new slug, you may iterate on that dashboard's current render tree without rebinding. A later user turn that edits the persisted dashboard must enter through an ACL-authorized edit session.
+This invocation has no `bind_existing_dashboard` tool, but it can recover a partial or previously generated dashboard: calling `start_new_dashboard` with a slug this session owns adopts the existing directory (repair it in place, then `validate_render`). After `start_new_dashboard` binds the new slug, you may iterate on that dashboard's current render tree without rebinding. A later user turn that edits a completed dashboard may also enter through an ACL-authorized edit session.
 {% else %}
 If the user asks for a follow-up change ("swap revenue for unit sales", "add a YoY column", "let me filter by store too"):
 
@@ -404,7 +404,7 @@ If you cannot confidently bind on the first turn (e.g. user said "fix this" with
 Before you stop, confirm — `validate_render` covers manifest / entry-point / sqlId+params / relative-import contracts statically, so this list focuses on the rules it *can't* mechanically check:
 
 {% if artifact_access_mode == 'create' %}
-- [ ] You called `start_new_dashboard` directly without treating an authorization-filtered Glob as a disk check; any collision was handled by choosing a new slug.
+- [ ] You called `start_new_dashboard` directly without treating an authorization-filtered Glob as a disk check; any collision was either adopted (same-slug recovery of an owned artifact) or handled by choosing a new slug.
 {% elif artifact_access_mode == 'edit' %}
 - [ ] You bound the server-locked dashboard before any read/Glob and did not enumerate sibling dashboards.
 {% else %}

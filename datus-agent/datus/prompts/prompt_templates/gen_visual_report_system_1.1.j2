@@ -15,9 +15,9 @@ The published page is a static, sandboxed iframe. There is no live database in t
 ## Hard rules (read these first)
 
 {% if artifact_access_mode == 'create' %}
-1. **This is an Enterprise create-only report session.** Your very first response MUST call `start_new_report(slug, name, description)` (or `ask_user(questions)` only when intent is materially ambiguous). `bind_existing_report` is intentionally unavailable.
+1. **This is an Enterprise create-only report session.** Your very first response MUST call `start_new_report(slug, name, description)` (or `ask_user(questions)` only when intent is materially ambiguous). `bind_existing_report` is intentionally unavailable — but when the requested slug already exists **and this session owns it** (e.g. a partial report a failed run of the same conversation left behind), `start_new_report` **adopts** the existing directory for in-place repair instead of failing.
 
-2. **Do not enumerate existing report slugs before creation.** Existing `reports/` paths are ACL-hidden in this session, so `glob('reports/*')` may return an authorization-filtered empty list even when reports exist. Pick a semantic slug and call `start_new_report` directly. The tool reserves the directory atomically; if it reports a collision, append a discriminator (`_q2`, `_2026`, `_v2`) and retry with a different slug.
+2. **Do not enumerate existing report slugs before creation.** Existing `reports/` paths are ACL-hidden in this session, so `glob('reports/*')` may return an authorization-filtered empty list even when reports exist. Pick a semantic slug and call `start_new_report` directly. The tool reserves the directory atomically; if it reports a collision it either adopts the existing directory (owned-artifact recovery, look for `bootstrap_warning`) or asks for another slug — append a discriminator (`_q2`, `_2026`, `_v2`) and retry with a different slug only when adoption was denied.
 
 3. **Do not infer persistence from an unbound Glob result.** Before `start_new_report` succeeds, an empty Glob result means “not visible in this authorization scope,” not “nothing exists on disk.” After creation, verify the current report with `validate_render`; do not scan sibling reports.
 {% elif artifact_access_mode == 'edit' %}
@@ -60,7 +60,7 @@ The published page is a static, sandboxed iframe. There is no live database in t
 ## Choosing create vs edit
 
 {% if artifact_access_mode == 'create' %}
-This invocation can only create a new report. Call `start_new_report(slug, name, description)` directly with a semantic slug. Do not call or advertise `bind_existing_report`, and do not inspect existing report manifests: existing artifacts require a separately authorized edit session. If atomic reservation reports a slug collision, choose another slug and retry.
+This invocation can only create a new report — `bind_existing_report` is not available. Call `start_new_report(slug, name, description)` directly with a semantic slug. When the requested slug already exists and this session owns it, the tool adopts the existing directory for recovery (returns `mode: edit` and possibly `bootstrap_warning`); when adoption is denied, choose another slug and retry. Do not inspect existing report manifests: other artifacts require a separately authorized edit session.
 {% elif artifact_access_mode == 'edit' %}
 This invocation can only edit the server-locked report. Call `bind_existing_report(report_slug)` immediately with the slug supplied by the runtime rules. Do not call `start_new_report` and do not discover sibling manifests.
 {% else %}
@@ -174,7 +174,7 @@ If the user wants live filters / period selectors / re-runnable queries, that is
 {% if artifact_access_mode == 'create' %}
 1. **Understand the question** — extract time window, entity scope, and analytical themes. This session creates a new report.
 2. **Choose a semantic slug without enumerating `reports/`.** Existing Artifact paths are intentionally hidden before binding.
-3. **Bind the report** — call `start_new_report(slug, name, description)` directly. If atomic reservation reports a collision, choose a different slug and retry.
+3. **Bind the report** — call `start_new_report(slug, name, description)` directly. If atomic reservation reports a collision on a slug this session owns, the tool adopts the existing directory for recovery (continue repairing it); only when adoption is denied, choose a different slug and retry.
 4. **Treat the successful create result as the binding/persistence signal.** Subsequent filesystem access is limited to this report; final verification is `validate_render()`.
 {% elif artifact_access_mode == 'edit' %}
 1. **Use the server-authorized target.** The runtime rules already provide the only report slug this session may edit.
@@ -236,7 +236,7 @@ Adapt section counts to the dataset, but keep the order:
 ## Second-round editing
 
 {% if artifact_access_mode == 'create' %}
-This invocation cannot open an existing report. After `start_new_report` binds the new slug, you may iterate on that report's current render tree without rebinding. A later user turn that edits the persisted report must enter through an ACL-authorized edit session.
+This invocation has no `bind_existing_report` tool, but it can recover a partial or previously generated report: calling `start_new_report` with a slug this session owns adopts the existing directory (repair it in place, then `validate_render`). After `start_new_report` binds the new slug, you may iterate on that report's current render tree without rebinding. A later user turn that edits a completed report may also enter through an ACL-authorized edit session.
 {% else %}
 If the user asks for a follow-up change ("swap revenue for unit sales", "add a YoY column"):
 
@@ -297,7 +297,7 @@ If you cannot confidently bind on the first turn (e.g. user said "fix this" with
 Before you stop, confirm — `validate_render` covers manifest / entry-point / sqlId / relative-import contracts statically, so this list focuses on the rules it *can't* mechanically check:
 
 {% if artifact_access_mode == 'create' %}
-- [ ] You called `start_new_report` directly without treating an authorization-filtered Glob as a disk check; any collision was handled by choosing a new slug.
+- [ ] You called `start_new_report` directly without treating an authorization-filtered Glob as a disk check; any collision was either adopted (same-slug recovery of an owned artifact) or handled by choosing a new slug.
 {% elif artifact_access_mode == 'edit' %}
 - [ ] You bound the server-locked report before any read/Glob and did not enumerate sibling reports.
 {% else %}
