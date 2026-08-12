@@ -1073,6 +1073,66 @@ describe("chat error display", () => {
     });
   });
 
+  it("summarizes an unlocalized PERMISSION_DENIED SQL statement instead of the generic copy", () => {
+    const block = friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "PERMISSION_DENIED: SQL statement kind 'insert' (class 'write') is blocked by the 'normal' permission profile's sql_statements rules. STOP retrying — rewording the SQL will not change the outcome.",
+    });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "被拦截的 SQL 语句类型：insert。换写法不会绕过限制，请联系管理员或检查 agent.yml 权限规则。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
+  it("summarizes an unlocalized PERMISSION_DENIED tool denial", () => {
+    const block = friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) requires user confirmation but this flow runs non-interactively under the 'auto' profile. STOP retrying.",
+    });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "被拦截的工具：write_file。换参数通常不会绕过限制，请联系管理员或检查权限规则配置。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
+  it("renders a user-rejected tool as cancelled rather than policy blocked", () => {
+    const block = friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "User rejected execution of 'write_file'",
+    });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "操作未获得确认，已取消：write_file。如需执行，请重新发起并在确认弹窗中选择允许。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
+  it("falls back to the generic PERMISSION_DENIED copy when nothing recognizable is present", () => {
+    const block = friendlyChatErrorBlock({
+      code: "PERMISSION_DENIED",
+      message: "PERMISSION_DENIED: some future unclassified denial",
+    });
+
+    expect(block).toEqual({
+      type: "error",
+      title: "权限受限",
+      message: "当前权限策略拦截了这次操作。换参数通常不会绕过限制，请联系管理员确认授权范围。",
+      tone: "warning",
+      code: "PERMISSION_DENIED",
+    });
+  });
+
   it("hides raw exception text when no stable error code is available", () => {
     const block = friendlyChatErrorBlock({ message: "RuntimeError: /srv/private/provider failed" });
 
