@@ -1175,6 +1175,7 @@ describe("chat error display", () => {
     ["UPSTREAM_UNAVAILABLE", "模型服务暂时不可用"],
     ["UPSTREAM_ERROR", "模型服务请求失败"],
     ["CONTEXT_LENGTH_EXCEEDED", "对话内容超出模型限制"],
+    ["MODEL_MAX_TURNS_EXCEEDED", "对话轮数超限"],
     ["UPSTREAM_AUTH_ERROR", "模型服务认证失败"],
     ["CONTENT_POLICY_VIOLATION", "请求被内容策略拦截"],
     ["UPSTREAM_BAD_REQUEST", "模型无法处理当前请求"],
@@ -1185,6 +1186,22 @@ describe("chat error display", () => {
     expect(block).toMatchObject({ type: "error", title, code });
     expect(block.message).not.toContain("private upstream detail");
     expect(block.message).not.toContain("当前前端还没有对应说明");
+  });
+
+  it("maps the backend max-turns payload (error_type + error_code=300022 message)", () => {
+    const block = friendlyChatErrorBlock({
+      code: "MODEL_MAX_TURNS_EXCEEDED",
+      message: "error_code=300022, error_message=Maximum turns (30) exceeded - agent execution stopped",
+    });
+
+    expect(block).toMatchObject({
+      type: "error",
+      title: "对话轮数超限",
+      code: "MODEL_MAX_TURNS_EXCEEDED",
+    });
+    // Raw backend text is replaced by localized copy.
+    expect(block.message).not.toContain("300022");
+    expect(block.message).not.toContain("Maximum turns");
   });
 
   it("uses structured HTTP codes and safe network copy for transport failures", () => {

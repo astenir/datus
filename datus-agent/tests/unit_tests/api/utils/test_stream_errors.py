@@ -29,6 +29,10 @@ class RateLimitError(Exception):
     pass
 
 
+class MaxTurnsExceeded(Exception):
+    """Stand-in mirroring agents.exceptions.MaxTurnsExceeded's class name."""
+
+
 def test_decodes_litellm_blob_to_readable_chinese():
     error_type, message = humanize_stream_error(InternalServerError(LITELLM_BLOB))
 
@@ -67,6 +71,41 @@ def test_maps_known_class_to_stable_code():
 
 def test_unknown_exception_falls_back_generically():
     error_type, message = humanize_stream_error(ValueError("boom"))
+
+    assert error_type == "INTERNAL_ERROR"
+    assert message == "Something went wrong while generating the response. Please try again."
+
+
+def test_maps_max_turns_exceeded_to_stable_code():
+    # Raw agents SDK exception (streaming chat path — the node catches it
+    # before the model layer can convert it to DatusException).
+    error_type, message = humanize_stream_error(MaxTurnsExceeded("Max turns (30) exceeded"))
+
+    assert error_type == "MODEL_MAX_TURNS_EXCEEDED"
+    assert message
+    assert "\\x" not in message
+
+
+def test_maps_datus_max_turns_exception_code():
+    # DatusException conversion path (codex / non-streaming model calls).
+    from datus.utils.exceptions import DatusException, ErrorCode
+
+    exc = DatusException(ErrorCode.MODEL_MAX_TURNS_EXCEEDED, message_args={"max_turns": 30})
+    error_type, message = humanize_stream_error(exc)
+
+    assert error_type == "MODEL_MAX_TURNS_EXCEEDED"
+    assert message
+    # The raw ``error_code=300022, ...`` stringification never reaches the client.
+    assert "300022" not in message
+
+
+def test_other_datus_exception_codes_stay_generic():
+    # Only the max-turns code gets surfaced; other DatusException codes keep
+    # the previous generic fallback so SQL/DB diagnostics are not relabeled.
+    from datus.utils.exceptions import DatusException, ErrorCode
+
+    exc = DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"error_message": "boom"})
+    error_type, message = humanize_stream_error(exc)
 
     assert error_type == "INTERNAL_ERROR"
     assert message == "Something went wrong while generating the response. Please try again."

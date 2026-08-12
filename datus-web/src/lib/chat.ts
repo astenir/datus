@@ -288,6 +288,10 @@ const friendlyChatErrors: Record<string, { title: string; message: string; tone?
     title: "模型访问受限",
     message: "当前账号无权使用所选模型。请选择授权范围内的模型，或联系管理员调整模型权限。",
   },
+  MODEL_MAX_TURNS_EXCEEDED: {
+    title: "对话轮数超限",
+    message: "本次任务的执行步骤超过了上限，已自动停止。可以精简问题、压缩会话，或新建会话后重试。",
+  },
   RATE_LIMITED: {
     title: "请求过于频繁",
     message: "当前请求触发了限流保护。请稍后再试。",
