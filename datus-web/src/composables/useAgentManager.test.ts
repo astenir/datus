@@ -258,6 +258,24 @@ describe("useAgentManager", () => {
     expect(manager.agentCount.value).toBe(2);
   });
 
+  it("excludes the top-level default chat agent from subagent delegation options", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "chat", name: "chat", node_class: "chat", status: "published", source: "builtin" },
+      { agent_id: "chat_custom", name: "聊天助手", node_class: "chat", status: "published", source: "custom" },
+      { agent_id: "analyst", name: "analyst", node_class: "gen_sql", status: "published", source: "custom" },
+    ]);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+
+    // Old expectation: "chat" was offered as a delegation target but the
+    // backend task tool never accepts it (it is the top-level parent node),
+    // so every saved runtime policy warned "Subagent type 'chat' ... is not a
+    // known type". New expectation: only real delegation targets are offered.
+    expect(manager.subagentOptions.value.map(option => option.value)).toEqual(["analyst", "chat_custom"]);
+  });
+
   it("defaults newly created enterprise agents to enterprise visibility", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();

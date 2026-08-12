@@ -610,10 +610,18 @@ export function useAgentManager() {
       form.value.allowedRoleIds,
     )
   );
+  // The default chat Agent ("chat") is the top-level parent node, not a
+  // delegatable subagent: the backend task tool excludes "chat" (and
+  // "feedback") from its discoverable subagent types, so offering it here
+  // makes every saved runtime policy produce "not a known type" warnings.
+  // Custom chat Agents remain selectable under their own agent_id.
+  const NON_DELEGATABLE_BUILTIN_AGENT_IDS = new Set(["chat"]);
+
   const subagentOptions = computed(() =>
     withSelectedFallbackOptions(
       agents.value
         .filter(agent => agent.agent_id !== selectedAgent.value?.agent_id)
+        .filter(agent => !NON_DELEGATABLE_BUILTIN_AGENT_IDS.has(agent.agent_id))
         .map(agent => ({
           value: agent.agent_id,
           label: agent.name,
