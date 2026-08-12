@@ -302,6 +302,7 @@ onMounted(async () => {
       :server="editingServer"
       :submitting="manager.saving.value"
       :options="manager.options.value"
+      :can-view-tools="canViewTools"
       @submit="submitServer"
     />
 
