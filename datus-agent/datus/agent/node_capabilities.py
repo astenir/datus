@@ -24,6 +24,11 @@ class AgentNodeCapability:
     prompt_template: str | None = None
     module_permission: str | None = None
     supports_mcp: bool = False
+    #: Runtime fallback ``max_turns`` for the node class when neither
+    #: ``agent.yml`` nor an enterprise Agent record overrides it. Mirrors
+    #: the node class constructors' defaults; kept here so enterprise
+    #: built-in Agent summaries can align with the same value.
+    default_max_turns: int = 50
     default_tools: tuple[str, ...] = ()
     tool_categories: tuple[str, ...] = ()
     tool_method_allowlists: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -201,6 +206,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_visual_report - Structured report artifact (manifest + queries)",
         prompt_template="gen_visual_report_system",
         module_permission="module.report.query",
+        default_max_turns=80,
         default_tools=_VISUAL_REPORT_DEFAULT_TOOLS,
         tool_categories=_ANALYSIS_TOOL_CATEGORIES
         + ("filesystem_tools", "artifact_tools")
@@ -220,6 +226,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_visual_dashboard - Parameterized dashboard artifact (Jinja2 SQL templates)",
         prompt_template="gen_visual_dashboard_system",
         module_permission="module.dashboard.query",
+        default_max_turns=80,
         default_tools=_VISUAL_DASHBOARD_DEFAULT_TOOLS,
         tool_categories=_ANALYSIS_TOOL_CATEGORIES
         + ("filesystem_tools", "artifact_tools")

@@ -80,6 +80,7 @@ async def list_admin_agent_node_types(ctx: AdminAgentsCtx) -> Result[list[Enterp
                 label=capability.label,
                 description=capability.description,
                 supports_mcp=capability.supports_mcp,
+                default_max_turns=capability.default_max_turns,
             )
             for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES
         ],

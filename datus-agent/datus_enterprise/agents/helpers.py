@@ -29,6 +29,7 @@ from datus_enterprise.agents.models import (
 from datus_enterprise.agents.registry import (
     ADMIN_AGENT_PERMISSION,
     agent_policy_metadata,
+    builtin_agent_default_max_turns,
     builtin_agent_prompt_template,
     builtin_overlay_payload,
     can_use_agent,
@@ -133,6 +134,9 @@ def _detail_from_builtin(
     summary = _summary_from_record(record).model_dump()
     return EnterpriseAgentDetail(
         **summary,
+        max_turns=int(
+            record.get("max_turns") or builtin_agent_default_max_turns(str(record.get("agent_id") or ""))
+        ),
         **builtin_agent_prompt_template(
             str(record["agent_id"]),
             agent_config=agent_config,
