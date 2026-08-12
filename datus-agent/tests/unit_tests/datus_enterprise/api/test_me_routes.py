@@ -144,6 +144,58 @@ def test_me_marks_wildcard_permission_as_admin_feature(monkeypatch):
     assert body["data"]["views"]["configuration"] is True
 
 
+def test_me_lists_granular_features_aligning_with_role_page(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(
+        user_id="u1",
+        permissions={
+            "module.mcp.personal",
+            "mcp.server.list",
+            "mcp.personal.tools",
+            "module.report.export",
+            "module.admin.agents",
+            "module.system.status",
+        },
+    )
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    features = response.json()["data"]["features"]
+    assert features["mcp_personal"] is True
+    assert features["mcp_server"] is True
+    assert features["mcp_personal_ops"] is True
+    assert features["mcp_filter"] is False
+    assert features["report_export"] is True
+    assert features["report_edit"] is False
+    assert features["agent_manage"] is True
+    assert features["system_status"] is True
+    assert features["admin"] is False
+    assert features["chat"] is False
+
+
+def test_me_feature_wildcards_cover_domain_codes(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(user_id="u1", permissions={"module.report.*", "mcp.*", "module.admin.*"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    features = response.json()["data"]["features"]
+    assert features["report_view"] is True
+    assert features["report_query"] is True
+    assert features["report_export"] is True
+    assert features["report_edit"] is True
+    assert features["dashboard_view"] is False
+    assert features["mcp_server"] is True
+    assert features["mcp_filter"] is True
+    assert features["mcp_personal_ops"] is True
+    assert features["user_manage"] is True
+    assert features["admin"] is True
+
+
 def test_me_permissions_merges_principal_compatibility(monkeypatch):
     _install_extensions(monkeypatch)
     ctx = AppContext(

@@ -103,6 +103,89 @@ describe("useProfileOverview", () => {
     expect(profile.featureList.value).toEqual([]);
   });
 
+  it("labels every profile feature with the same wording as the role page", async () => {
+    features.mockResolvedValue({
+      data: {
+        chat: true,
+        chat_permission_mode: true,
+        sql_executor: true,
+        datasource_catalog: true,
+        kb: true,
+        mcp: true,
+        mcp_personal: true,
+        mcp_server: true,
+        mcp_filter: true,
+        mcp_personal_ops: true,
+        report_view: true,
+        report_query: true,
+        report_export: true,
+        report_edit: true,
+        dashboard_view: true,
+        dashboard_query: true,
+        dashboard_export: true,
+        dashboard_edit: true,
+        agent_manage: true,
+        user_manage: true,
+        role_manage: true,
+        datasource_manage: true,
+        artifact_manage: true,
+        session_manage: true,
+        audit_view: true,
+        audit_export: true,
+        quota_manage: true,
+        secret_manage: true,
+        config_view: true,
+        config_edit: true,
+        system_status: true,
+        admin: true,
+      },
+    });
+
+    const { useProfileOverview } = await import("./useProfileOverview");
+    const profile = useProfileOverview();
+
+    await profile.loadProfile();
+
+    const byCode = new Map(profile.enabledFeatures.value.map(item => [item.code, item.label]));
+    expect(byCode.get("chat")).toBe("对话");
+    expect(byCode.get("chat_permission_mode")).toBe("高危对话模式");
+    expect(byCode.get("mcp_personal")).toBe("个人 MCP");
+    expect(byCode.get("mcp_server")).toBe("MCP Server 操作");
+    expect(byCode.get("mcp_filter")).toBe("MCP 过滤规则");
+    expect(byCode.get("mcp_personal_ops")).toBe("个人 MCP 操作");
+    expect(byCode.get("report_export")).toBe("报表导出");
+    expect(byCode.get("report_edit")).toBe("报表编辑");
+    expect(byCode.get("dashboard_export")).toBe("仪表盘导出");
+    expect(byCode.get("dashboard_edit")).toBe("仪表盘编辑");
+    expect(byCode.get("agent_manage")).toBe("Agent 管理");
+    expect(byCode.get("user_manage")).toBe("用户管理");
+    expect(byCode.get("role_manage")).toBe("角色管理");
+    expect(byCode.get("datasource_manage")).toBe("数据授权管理");
+    expect(byCode.get("artifact_manage")).toBe("产物 ACL 管理");
+    expect(byCode.get("session_manage")).toBe("会话管理");
+    expect(byCode.get("audit_view")).toBe("审计查看");
+    expect(byCode.get("audit_export")).toBe("审计导出");
+    expect(byCode.get("quota_manage")).toBe("额度管理");
+    expect(byCode.get("secret_manage")).toBe("密钥管理");
+    expect(byCode.get("config_view")).toBe("配置查看");
+    expect(byCode.get("config_edit")).toBe("配置编辑");
+    expect(byCode.get("system_status")).toBe("系统状态");
+    expect(byCode.get("admin")).toBe("全部管理权限");
+  });
+
+  it("falls back to the raw code for unknown feature codes", async () => {
+    features.mockResolvedValue({
+      data: { chat: false, future_feature: true },
+    });
+
+    const { useProfileOverview } = await import("./useProfileOverview");
+    const profile = useProfileOverview();
+
+    await profile.loadProfile();
+
+    expect(profile.enabledFeatures.value).toEqual([{ code: "future_feature", label: "future_feature", enabled: true }]);
+  });
+
   it("shows a toast and keeps the existing state when loading fails", async () => {
     summary.mockRejectedValue(new Error("AUTH_REQUIRED"));
     const { useProfileOverview } = await import("./useProfileOverview");
