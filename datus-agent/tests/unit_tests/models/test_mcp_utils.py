@@ -105,9 +105,7 @@ async def test_duplicate_tool_names_across_servers_are_prefix_isolated():
     enterprise = _FakeServer("enterprise_search", [_fake_tool("NM007399"), _fake_tool("search_doc")])
     personal = _FakeServer("personal_" + "a" * 32, [_fake_tool("NM007399")])
 
-    async with multiple_mcp_servers(
-        {"enterprise_search": enterprise, "personal_" + "a" * 32: personal}
-    ) as connected:
+    async with multiple_mcp_servers({"enterprise_search": enterprise, "personal_" + "a" * 32: personal}) as connected:
         assert connected["enterprise_search"] is not enterprise
         enterprise_tools = await connected["enterprise_search"].list_tools()
         personal_tools = await connected["personal_" + "a" * 32].list_tools()

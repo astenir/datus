@@ -96,8 +96,7 @@ def test_formats_user_rejected_denial_via_structured_reason() -> None:
     )
 
     assert format_permission_denied_error(exc) == (
-        "权限受限：工具 write_file 的执行未获得确认，已取消。"
-        "如需执行，请重新发起并在确认弹窗中选择允许。"
+        "权限受限：工具 write_file 的执行未获得确认，已取消。如需执行，请重新发起并在确认弹窗中选择允许。"
     )
 
 
@@ -110,8 +109,7 @@ def test_formats_user_rejected_bash_via_structured_reason() -> None:
     )
 
     assert format_permission_denied_error(exc) == (
-        "权限受限：bash 命令 的执行未获得确认，已取消。"
-        "如需执行，请重新发起并在确认弹窗中选择允许。"
+        "权限受限：bash 命令 的执行未获得确认，已取消。如需执行，请重新发起并在确认弹窗中选择允许。"
     )
 
 

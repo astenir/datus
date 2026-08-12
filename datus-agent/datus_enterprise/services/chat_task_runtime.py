@@ -312,8 +312,7 @@ def has_active_artifact_edit_session(
 
     purge_expired_artifact_edit_sessions(sessions)
     return any(
-        session.artifact_type == artifact_type and session.artifact_slug == slug
-        for session in sessions.values()
+        session.artifact_type == artifact_type and session.artifact_slug == slug for session in sessions.values()
     )
 
 

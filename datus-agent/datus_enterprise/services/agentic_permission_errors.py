@@ -117,19 +117,13 @@ def _format_structured_denial(exc: BaseException, text: str) -> str | None:
     if reason == _REASON_USER_REJECTED:
         tool = _exception_tool(exc, text)
         label = "bash 命令" if tool == "bash" else (f"工具 {tool}" if tool else "该操作")
-        return (
-            f"权限受限：{label} 的执行未获得确认，已取消。"
-            "如需执行，请重新发起并在确认弹窗中选择允许。"
-        )
+        return f"权限受限：{label} 的执行未获得确认，已取消。如需执行，请重新发起并在确认弹窗中选择允许。"
 
     if reason == _REASON_USER_REJECTED_FS:
         match = _FS_REJECTED_PATH_RE.search(text)
         path = match.group(1).strip() if match else ""
         if path:
-            return (
-                f"权限受限：外部路径 {path} 的访问未获得确认，已取消。"
-                "如需访问，请重新发起并在确认弹窗中选择允许。"
-            )
+            return f"权限受限：外部路径 {path} 的访问未获得确认，已取消。如需访问，请重新发起并在确认弹窗中选择允许。"
         return "权限受限：外部路径访问未获得确认，已取消。如需访问，请重新发起并在确认弹窗中选择允许。"
 
     if reason == _REASON_NON_INTERACTIVE:

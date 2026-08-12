@@ -257,8 +257,7 @@ class SqliteUserMcpServerStore:
         changed = 0
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT project_id, session_id, servers_json "
-                "FROM enterprise_session_mcp_bindings WHERE user_id = ?",
+                "SELECT project_id, session_id, servers_json FROM enterprise_session_mcp_bindings WHERE user_id = ?",
                 (user_id,),
             ).fetchall()
             for row in rows:
@@ -449,10 +448,7 @@ def _binding_from_row(row: sqlite3.Row) -> dict[str, Any]:
 def _binding_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalized binding entries; snapshots ``display_name`` when provided."""
     return sorted(
-        (
-            {key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item}
-            for item in servers
-        ),
+        ({key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item} for item in servers),
         key=lambda item: item["mcp_id"],
     )
 

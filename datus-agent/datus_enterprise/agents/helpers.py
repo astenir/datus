@@ -134,9 +134,7 @@ def _detail_from_builtin(
     summary = _summary_from_record(record).model_dump()
     return EnterpriseAgentDetail(
         **summary,
-        max_turns=int(
-            record.get("max_turns") or builtin_agent_default_max_turns(str(record.get("agent_id") or ""))
-        ),
+        max_turns=int(record.get("max_turns") or builtin_agent_default_max_turns(str(record.get("agent_id") or ""))),
         **builtin_agent_prompt_template(
             str(record["agent_id"]),
             agent_config=agent_config,

@@ -131,7 +131,7 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "as an authorization result, never as proof that the report is missing. "
         "Visual artifact tasks are NOT resumable: never pass a session_id back for "
         "gen_visual_report — the tool rejects it. To CONTINUE a previous report (including "
-        "one a failed run left partial), call task(type=\"gen_visual_report\") again WITHOUT "
+        'one a failed run left partial), call task(type="gen_visual_report") again WITHOUT '
         "session_id and name the report slug in the prompt; the fresh subagent's "
         "start_new_report adopts the existing directory when this session owns it, and "
         "incomplete artifacts are bootstrapped for repair. Never glob reports/ from your "
@@ -167,7 +167,7 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "proof that the dashboard is missing. Visual artifact tasks are NOT resumable: "
         "never pass a session_id back for gen_visual_dashboard — the tool rejects it. "
         "To CONTINUE a previous dashboard (including one a failed run left partial), "
-        "call task(type=\"gen_visual_dashboard\") again WITHOUT session_id and name the "
+        'call task(type="gen_visual_dashboard") again WITHOUT session_id and name the '
         "dashboard slug in the prompt; the fresh subagent's start_new_dashboard adopts "
         "the existing directory when this session owns it, and incomplete artifacts are "
         "bootstrapped for repair. Never glob dashboards/ from your own Chat scope to "

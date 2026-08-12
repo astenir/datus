@@ -469,10 +469,7 @@ class ReportArtifactTools:
             if adoption_error is not None:
                 return FuncToolResult(
                     success=0,
-                    error=(
-                        f"reports/{slug}/ already exists. {adoption_error} "
-                        "Pick a different slug and retry."
-                    ),
+                    error=(f"reports/{slug}/ already exists. {adoption_error} Pick a different slug and retry."),
                 )
             return self._adopt_existing_report(slug)
         except OSError as exc:

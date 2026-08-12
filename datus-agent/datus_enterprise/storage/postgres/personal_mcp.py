@@ -120,8 +120,7 @@ class PgUserMcpServerStore(_PgStoreBase):
     async def unbind_server(self, user_id: str, mcp_id: str) -> int:
         """Drop ``mcp_id`` from every binding of ``user_id``; delete emptied rows."""
         rows = await self._fetch(
-            "SELECT project_id, session_id, servers_json "
-            "FROM enterprise_session_mcp_bindings WHERE user_id = $1",
+            "SELECT project_id, session_id, servers_json FROM enterprise_session_mcp_bindings WHERE user_id = $1",
             user_id,
         )
         changed = 0
@@ -251,10 +250,7 @@ def _json_list(value: Any) -> list[str]:
 
 def _normalized_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
-        (
-            {key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item}
-            for item in servers
-        ),
+        ({key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item} for item in servers),
         key=lambda item: item["mcp_id"],
     )
 

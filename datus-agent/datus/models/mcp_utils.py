@@ -57,7 +57,7 @@ class PrefixedMCPServer:
 
     def _original_tool_name(self, tool_name: str) -> str:
         if tool_name.startswith(self._tool_prefix):
-            return tool_name[len(self._tool_prefix):]
+            return tool_name[len(self._tool_prefix) :]
         return tool_name
 
     async def __aenter__(self):

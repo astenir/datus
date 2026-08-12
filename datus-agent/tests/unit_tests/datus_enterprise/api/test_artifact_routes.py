@@ -1318,6 +1318,7 @@ def test_enterprise_artifact_routes_expose_authoritative_paths_once():
 
 # ─── Artifact delete ─────────────────────────────────────────────────────────
 
+
 def _owner_acl(owner_user_id: str = "owner-1") -> dict:
     return {
         "owner_user_id": owner_user_id,

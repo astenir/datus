@@ -2748,12 +2748,8 @@ class TestGenSQLSystemPromptToolContext:
 
         node = _make_gen_sql_node(agent_config=real_agent_config)
         node.mcp_servers = {
-            "enterprise_search": SimpleNamespace(
-                _tools_list=[SimpleNamespace(name="NM007399")]
-            ),
-            "personal_" + "a" * 32: SimpleNamespace(
-                _tools_list=[SimpleNamespace(name="NM007399")]
-            ),
+            "enterprise_search": SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
+            "personal_" + "a" * 32: SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
         }
         tool_filter = SimpleNamespace(
             allowed_tool_names=["NM007399", "search_doc"],
@@ -2773,16 +2769,12 @@ class TestGenSQLSystemPromptToolContext:
             f"personal_{'a' * 32}_search_doc",
         }
 
-    def test_mcp_tool_names_for_prompt_keep_original_names_with_single_server(
-        self, real_agent_config, mock_llm_create
-    ):
+    def test_mcp_tool_names_for_prompt_keep_original_names_with_single_server(self, real_agent_config, mock_llm_create):
         """A single bound server keeps its raw tool names (zero-change path)."""
 
         node = _make_gen_sql_node(agent_config=real_agent_config)
         node.mcp_servers = {
-            "enterprise_search": SimpleNamespace(
-                _tools_list=[SimpleNamespace(name="NM007399")]
-            ),
+            "enterprise_search": SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
         }
         tool_filter = SimpleNamespace(
             allowed_tool_names=["search_doc"],

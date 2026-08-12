@@ -525,10 +525,7 @@ class DashboardArtifactTools:
             if adoption_error is not None:
                 return FuncToolResult(
                     success=0,
-                    error=(
-                        f"dashboards/{slug}/ already exists. {adoption_error} "
-                        "Pick a different slug and retry."
-                    ),
+                    error=(f"dashboards/{slug}/ already exists. {adoption_error} Pick a different slug and retry."),
                 )
             return self._adopt_existing_dashboard(slug)
         except OSError as exc:
