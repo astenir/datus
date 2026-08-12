@@ -803,6 +803,67 @@ class TestConvertToFuncResult:
             "session_id": "gen_metrics_session_blocked01",
         }
 
+    def test_visual_dashboard_failure_preserves_bound_slug(self, task_tool):
+        """A failed visual-dashboard run that bound a slug must still report it.
+
+        The subagent can crash after ``start_new_dashboard`` reserved the slug
+        (MaxTurnsExceeded, upstream LLM error, …) while the artifact directory
+        is already on disk. Visual runs are not resumable, so the parent LLM's
+        only recovery path is a fresh task() that re-uses the same slug — it
+        needs the slug from the failure envelope, not from an ACL-filtered
+        glob of ``dashboards/``.
+        """
+        output = {
+            "success": False,
+            "error": "Subagent stream failed: upstream error",
+            "response": "Sorry, I encountered an error while generating the visual dashboard.",
+            "dashboard_slug": "revenue_overview",
+            "app_jsx_path": None,
+            "render_file_count": 0,
+            "template_count": 0,
+            "tokens_used": 42,
+        }
+
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_visual_dashboard_session_trace02",
+            session_resume_supported=False,
+        )
+
+        assert result.success == 0
+        assert result.error == "Subagent stream failed: upstream error"
+        assert result.result["dashboard_slug"] == "revenue_overview"
+        assert result.result["app_jsx_path"] is None
+        assert result.result["session_id"] == "gen_visual_dashboard_session_trace02"
+        assert result.result["session_resume_supported"] is False
+
+    def test_visual_report_failure_preserves_bound_slug(self, task_tool):
+        """Mirror of the dashboard case: a failed run keeps its bound slug."""
+        output = {
+            "success": False,
+            "error": "MaxTurnsExceeded",
+            "response": "",
+            "report_slug": "sales_weekly",
+            "app_jsx_path": "reports/sales_weekly/render/app.jsx",
+            "render_file_count": 3,
+            "query_count": 1,
+            "html_path": None,
+            "tokens_used": 12,
+        }
+
+        result = task_tool._convert_to_func_result(
+            output,
+            session_id="gen_visual_report_session_trace03",
+            session_resume_supported=False,
+        )
+
+        assert result.success == 0
+        assert result.error == "MaxTurnsExceeded"
+        assert result.result["report_slug"] == "sales_weekly"
+        assert result.result["app_jsx_path"] == "reports/sales_weekly/render/app.jsx"
+        assert result.result["session_id"] == "gen_visual_report_session_trace03"
+        assert result.result["session_resume_supported"] is False
+
     def test_markdown_report_result(self, task_tool):
         output = {"response": "Metric answer", "markdown_report": "## Metric answer", "tokens_used": 25}
 

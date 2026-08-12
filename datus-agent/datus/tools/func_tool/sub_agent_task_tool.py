@@ -129,8 +129,14 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "authoritative persistence check. If the parent Chat tool scans reports/, "
         "treat a result marked visibility_filtered: true / visibility_reason: artifact_acl "
         "as an authorization result, never as proof that the report is missing. "
-        "Visual artifact tasks are not resumable: session_id is trace/history metadata only, "
-        "and an existing report must be edited through an ACL-authorized report edit session."
+        "Visual artifact tasks are NOT resumable: never pass a session_id back for "
+        "gen_visual_report — the tool rejects it. To CONTINUE a previous report (including "
+        "one a failed run left partial), call task(type=\"gen_visual_report\") again WITHOUT "
+        "session_id and name the report slug in the prompt; the fresh subagent's "
+        "start_new_report adopts the existing directory when this session owns it, and "
+        "incomplete artifacts are bootstrapped for repair. Never glob reports/ from your "
+        "own Chat scope to look for artifacts — ACL filtering hides them and an empty Glob "
+        "result proves nothing."
     ),
     "gen_visual_dashboard": (
         "Produce a parameterized visual dashboard artifact under "
@@ -158,9 +164,15 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "A successful validate_render is the authoritative persistence check. If the "
         "parent Chat tool scans dashboards/, treat a result marked visibility_filtered: "
         "true / visibility_reason: artifact_acl as an authorization result, never as "
-        "proof that the dashboard is missing. Visual artifact tasks are not resumable: "
-        "session_id is trace/history metadata only, and an existing dashboard must be "
-        "edited through an ACL-authorized dashboard edit session."
+        "proof that the dashboard is missing. Visual artifact tasks are NOT resumable: "
+        "never pass a session_id back for gen_visual_dashboard — the tool rejects it. "
+        "To CONTINUE a previous dashboard (including one a failed run left partial), "
+        "call task(type=\"gen_visual_dashboard\") again WITHOUT session_id and name the "
+        "dashboard slug in the prompt; the fresh subagent's start_new_dashboard adopts "
+        "the existing directory when this session owns it, and incomplete artifacts are "
+        "bootstrapped for repair. Never glob dashboards/ from your own Chat scope to "
+        "look for artifacts — ACL filtering hides them and an empty Glob result proves "
+        "nothing."
     ),
     "gen_semantic_model": (
         "Generate semantic model YAML files from database table structures. "
@@ -318,8 +330,10 @@ class SubAgentTaskTool:
                         "INNER JOIN' or 'narrow the report to the EU region'). Must belong "
                         "to a subagent of the SAME `type`. Omit to start a fresh session. "
                         "Exception: gen_visual_report and gen_visual_dashboard return a "
-                        "trace-only session_id and do not support session resume; existing "
-                        "artifacts require an ACL-authorized edit-session agent."
+                        "trace-only session_id and do not support session resume — never pass "
+                        "it back. Continue them by starting a fresh task() WITHOUT session_id "
+                        "and naming the report/dashboard slug in the prompt (the fresh subagent "
+                        "adopts the existing artifact on start_new collision)."
                     ),
                 },
             },
@@ -390,8 +404,11 @@ class SubAgentTaskTool:
                         "session_resume_supported": False,
                         "artifact_edit_session_required": True,
                         "message": (
-                            f"Do not retry {type} with this session_id. To edit an existing "
-                            f"{artifact_kind}, open an ACL-authorized {artifact_kind} edit session."
+                            f"Do not retry {type} with this session_id. To continue an existing "
+                            f"or partial {artifact_kind}, call task() again without session_id and "
+                            f"pass the {artifact_kind} slug in the prompt — the fresh subagent "
+                            f"adopts the existing artifact on start_new_{artifact_kind} collision "
+                            f"(or open an ACL-authorized {artifact_kind} edit session)."
                         ),
                     },
                 )
@@ -526,7 +543,10 @@ class SubAgentTaskTool:
                     "as a way to edit an existing artifact. "
                     "(BaseVisualArtifactAgenticNode constructor has no "
                     "session_id parameter). Omit session_id only for a new report; "
-                    "existing reports require an ACL-authorized report edit session."
+                    "to continue an existing or partial report, start a fresh task WITHOUT "
+                    "session_id and name the report slug in the prompt so the new subagent "
+                    "resumes it via start_new_report slug adoption (or open an ACL-authorized "
+                    "report edit session)."
                 )
             from datus.agent.node.gen_visual_report_agentic_node import GenVisualReportAgenticNode
 
@@ -558,7 +578,10 @@ class SubAgentTaskTool:
                     "as a way to edit an existing artifact. "
                     "(BaseVisualArtifactAgenticNode constructor has no "
                     "session_id parameter). Omit session_id only for a new dashboard; "
-                    "existing dashboards require an ACL-authorized dashboard edit session."
+                    "to continue an existing or partial dashboard, start a fresh task WITHOUT "
+                    "session_id and name the dashboard slug in the prompt so the new subagent "
+                    "resumes it via start_new_dashboard slug adoption (or open an ACL-authorized "
+                    "dashboard edit session)."
                 )
             from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
 
@@ -1316,9 +1339,24 @@ class SubAgentTaskTool:
             # Carry session_id under `result` so the parent can resume the
             # partial subagent session. ``result`` is None when no session
             # was created (e.g. errors raised before node construction).
+            # ``report_slug`` / ``dashboard_slug`` / ``app_jsx_path`` are carried
+            # through even on failure: a visual-artifact run that bound a slug
+            # before crashing leaves that artifact on disk, and the parent LLM
+            # needs the slug to continue it (visual runs are not resumable).
             result_payload = {
                 key: output_payload[key]
-                for key in ("status", "blocker_code", "skip_reason", "response", "semantic_models", "tokens_used")
+                for key in (
+                    "status",
+                    "blocker_code",
+                    "skip_reason",
+                    "response",
+                    "semantic_models",
+                    "tokens_used",
+                    "report_slug",
+                    "dashboard_slug",
+                    "app_jsx_path",
+                    "html_path",
+                )
                 if output_payload is not None and key in output_payload
             }
             if session_id:
