@@ -1717,6 +1717,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/mcp-servers/{mcp_id}/references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_personal_mcp_references_api_v1_me_mcp_servers__mcp_id__references_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/mcp-servers/{mcp_id}/test": {
         parameters: {
             query?: never;
@@ -1779,7 +1796,8 @@ export interface paths {
         get: operations["get_dashboard_detail_api_v1_dashboards__slug__get"];
         put?: never;
         post?: never;
-        delete?: never;
+
+        delete: operations["delete_dashboard_artifact_api_v1_dashboards__slug__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1830,7 +1848,8 @@ export interface paths {
         get: operations["get_report_detail_api_v1_reports__slug__get"];
         put?: never;
         post?: never;
-        delete?: never;
+
+        delete: operations["delete_report_artifact_api_v1_reports__slug__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4154,6 +4173,8 @@ export interface components {
             description: string;
 
             supports_mcp: boolean;
+
+            default_max_turns: number;
         };
 
         EnterpriseAgentSummary: {
@@ -4736,11 +4757,22 @@ export interface components {
             updated_at?: string | null;
         };
 
+        PersonalMcpDeleteResult: {
+
+            deleted: boolean;
+
+            unbound_sessions: number;
+        };
+
         PersonalMcpOptions: {
 
             enabled: boolean;
 
             allowed_hosts?: string[];
+
+            allow_insecure_http: boolean;
+
+            allow_private_hosts: boolean;
 
             max_servers_per_user: number;
 
@@ -4761,6 +4793,15 @@ export interface components {
             revision: number;
 
             display_name: string;
+        };
+
+        PersonalMcpSessionReference: {
+
+            session_id: string;
+
+            title: string;
+
+            updated_at?: string | null;
         };
 
         PersonalMcpSummary: {
@@ -5511,6 +5552,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_PersonalMcpDeleteResult_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpDeleteResult"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_PersonalMcpOptions_: {
 
             success: boolean;
@@ -5676,6 +5728,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_bool_: {
+
+            success: boolean;
+
+            data?: boolean | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_dict_: {
 
             success: boolean;
@@ -5797,6 +5860,17 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["PersonalDatasourceSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_list_PersonalMcpSessionReference__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalMcpSessionReference"][] | null;
 
             errorCode?: string | null;
 
@@ -6871,7 +6945,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["ExecuteContextInput"];
+                "application/json": components["schemas"]["ExecuteContextInput"] | null;
             };
         };
         responses: {
@@ -6906,7 +6980,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["InternalCommandInput"];
+                "application/json": components["schemas"]["InternalCommandInput"] | null;
             };
         };
         responses: {
@@ -10014,6 +10088,39 @@ export interface operations {
     };
     delete_personal_mcp_server_api_v1_me_mcp_servers__mcp_id__delete: {
         parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                mcp_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalMcpDeleteResult_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_personal_mcp_references_api_v1_me_mcp_servers__mcp_id__references_get: {
+        parameters: {
             query?: never;
             header?: never;
             path: {
@@ -10029,7 +10136,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_dict_str__bool__"];
+                    "application/json": components["schemas"]["Result_list_PersonalMcpSessionReference__"];
                 };
             };
 
@@ -10156,6 +10263,37 @@ export interface operations {
             };
         };
     };
+    delete_dashboard_artifact_api_v1_dashboards__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_bool_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_dashboard_html_by_path_api_v1_dashboards__slug__html_get: {
         parameters: {
             query?: {
@@ -10228,6 +10366,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_ReportDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_report_artifact_api_v1_reports__slug__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_bool_"];
                 };
             };
 

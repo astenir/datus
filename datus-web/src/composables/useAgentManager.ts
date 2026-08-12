@@ -216,6 +216,25 @@ function parsePositiveInteger(value: string): number | undefined {
   return parsed;
 }
 
+/**
+ * Runtime-default ``max_turns`` for a node class.
+ *
+ * Prefers the backend node-type catalog (``default_max_turns`` mirrors the
+ * node constructor defaults: 80 for visual-artifact nodes, 50 otherwise);
+ * falls back to the same values statically when the catalog hasn't loaded.
+ */
+export function resolveNodeClassDefaultMaxTurns(
+  nodeTypes: readonly AgentNodeType[],
+  nodeClass: string | undefined,
+): number {
+  const cls = nodeClass || "gen_sql";
+  const capability = nodeTypes.find(item => item.node_class === cls);
+  if (capability && typeof capability.default_max_turns === "number") {
+    return capability.default_max_turns;
+  }
+  return cls === "gen_visual_dashboard" || cls === "gen_visual_report" ? 80 : 50;
+}
+
 function normalizeAgentVisibility(value: string | null | undefined): AgentVisibility {
   if (value === "enterprise" || value === "role") return value;
   return "private";
@@ -254,7 +273,11 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
   };
 }
 
-function createInputFromForm(form: AgentFormState, supportsMcp: boolean): CreateAgentInput {
+function createInputFromForm(
+  form: AgentFormState,
+  supportsMcp: boolean,
+  nodeTypes: readonly AgentNodeType[] = [],
+): CreateAgentInput {
   return {
     name: trimmedOptional(form.name),
     node_class: trimmedOptional(form.nodeClass) ?? "gen_sql",
@@ -270,7 +293,7 @@ function createInputFromForm(form: AgentFormState, supportsMcp: boolean): Create
     skills: parseListText(form.skillsText),
     scoped_context: scopedContextFromForm(form),
     rules: parseListText(form.rulesText),
-    max_turns: parsePositiveInteger(form.maxTurns) ?? 30,
+    max_turns: parsePositiveInteger(form.maxTurns) ?? resolveNodeClassDefaultMaxTurns(nodeTypes, form.nodeClass),
     acl: {
       visibility: form.visibility,
       allowed_roles: form.allowedRoleIds,
@@ -304,8 +327,12 @@ function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentP
   };
 }
 
-function editInputFromForm(form: AgentFormState, supportsMcp: boolean): EditAgentInput {
-  return createInputFromForm(form, supportsMcp);
+function editInputFromForm(
+  form: AgentFormState,
+  supportsMcp: boolean,
+  nodeTypes: readonly AgentNodeType[] = [],
+): EditAgentInput {
+  return createInputFromForm(form, supportsMcp, nodeTypes);
 }
 
 function agentIdentifier(agent: AgentInfo | AgentDetail): string {
@@ -1186,7 +1213,7 @@ export function useAgentManager() {
         await agentApi.edit(
           connection.effectiveBase(),
           agentId,
-          editInputFromForm(form.value, selectedNodeSupportsMcp.value),
+          editInputFromForm(form.value, selectedNodeSupportsMcp.value, nodeTypes.value),
         );
         await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已保存");
@@ -1194,7 +1221,7 @@ export function useAgentManager() {
         await agentApi.create(
           connection.effectiveBase(),
           agentId,
-          createInputFromForm(form.value, selectedNodeSupportsMcp.value),
+          createInputFromForm(form.value, selectedNodeSupportsMcp.value, nodeTypes.value),
         );
         await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已创建");
@@ -1411,6 +1438,7 @@ export const agentManagerInternals = {
   editInputFromForm,
   parseListText,
   parsePositiveInteger,
+  resolveNodeClassDefaultMaxTurns,
   normalizeAgentVisibility,
   normalizeAgentList,
   agentIdentifier,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import { BotIcon, XIcon } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import type { AgentManagerController } from "@/composables/useAgentManager"
+import { resolveNodeClassDefaultMaxTurns } from "@/composables/useAgentManager"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -32,6 +34,10 @@ const agentStatusOptions = [
   { value: "disabled", label: "已停用" },
   { value: "archived", label: "已归档" },
 ] as const
+
+const defaultMaxTurns = computed(() =>
+  resolveNodeClassDefaultMaxTurns(props.manager.nodeTypes.value, props.manager.form.value.nodeClass),
+)
 
 function clearDatasource() {
   props.manager.form.value.datasourceId = ""
@@ -120,10 +126,10 @@ function clearArtifact() {
           :readonly="props.readonly"
           :aria-invalid="Boolean(props.maxTurnsError)"
           inputmode="numeric"
-          placeholder="30"
+          :placeholder="String(defaultMaxTurns)"
         />
         <FieldError v-if="props.maxTurnsError">{{ props.maxTurnsError }}</FieldError>
-        <FieldDescription v-else>留空时使用默认值 30。</FieldDescription>
+        <FieldDescription v-else>留空时使用默认值 {{ defaultMaxTurns }}。</FieldDescription>
       </Field>
 
       <Field>
