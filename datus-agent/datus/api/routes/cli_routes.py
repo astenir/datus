@@ -59,7 +59,7 @@ async def stop_execute_sql(
 async def execute_context(
     context_type: Annotated[str, Path(description="Type of context command")],
     svc: ServiceDep,
-    request: ExecuteContextInput = None,
+    request: ExecuteContextInput | None = None,
 ) -> Result[ExecuteContextData]:
     """Execute context command."""
     if request is None:
@@ -78,7 +78,7 @@ async def execute_context(
 async def execute_internal_command(
     command: Annotated[str, Path(description="Internal command name")],
     svc: ServiceDep,
-    request: InternalCommandInput = None,
+    request: InternalCommandInput | None = None,
 ) -> Result[InternalCommandData]:
     """Execute internal command."""
     if request is None:

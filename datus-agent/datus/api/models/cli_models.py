@@ -80,9 +80,9 @@ class ExecuteContextInput(BaseModel):
     )
 
     context_type: str = Field(..., description="Type of context command")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    args: str = Field("", description="Context command arguments")
+    database_name: Optional[str] = Field(default=None, description="Database name")
+    schema_name: Optional[str] = Field(default=None, description="Schema name")
+    args: str = Field(default="", description="Context command arguments")
 
 
 class TableInfo(BaseModel):
@@ -363,7 +363,7 @@ class InternalCommandInput(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"command": "show", "args": "tables"}})
 
     command: str = Field(..., description="Internal command")
-    args: str = Field("", description="Command arguments")
+    args: str = Field(default="", description="Command arguments")
 
 
 class InternalCommandResultData(BaseModel):
