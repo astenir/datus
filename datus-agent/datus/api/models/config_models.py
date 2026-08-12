@@ -54,14 +54,14 @@ class DatasourceConfig(BaseModel):
     username: str = Field(..., description="Database username")
     password: str = Field(..., description="Database password")
     database: str = Field(..., description="Database name")
-    catalog: Optional[str] = Field(None, description="Database catalog (for databases that support catalogs)")
+    catalog: Optional[str] = Field(default=None, description="Database catalog (for databases that support catalogs)")
 
 
 class StorageConfig(BaseModel):
     """Storage configuration for RAG."""
 
     base_path: str = Field(..., description="Base path for storage")
-    embedding_device_type: str = Field("cpu", description="Device type for embeddings")
+    embedding_device_type: str = Field(default="cpu", description="Device type for embeddings")
     database: "StorageDatabaseConfig" = Field(..., description="Storage database configuration")
 
 
@@ -79,22 +79,22 @@ class AgentConfigData(BaseModel):
 
     model_config = ConfigDict(exclude_none=True)
 
-    target: Optional[str] = Field(None, description="Target model name")
-    models: Optional[Dict[str, ModelConfig]] = Field(None, description="Model configurations")
-    nodes: Optional[Dict[str, Dict]] = Field(None, description="Node configurations")
-    benchmark: Optional[Dict[str, Dict]] = Field(None, description="Benchmark configurations")
-    datasources: Optional[Dict[str, DatasourceConfig]] = Field(None, description="Datasource configurations")
-    metrics: Optional[Dict[str, Dict]] = Field(None, description="Metrics configurations")
-    storage: Optional[StorageConfig] = Field(None, description="Storage configuration")
-    workflow: Optional[Dict] = Field(None, description="Workflow configuration")
-    reflection_nodes: Optional[Dict[str, List]] = Field(None, description="Reflection nodes configuration")
+    target: Optional[str] = Field(default=None, description="Target model name")
+    models: Optional[Dict[str, ModelConfig]] = Field(default=None, description="Model configurations")
+    nodes: Optional[Dict[str, Dict]] = Field(default=None, description="Node configurations")
+    benchmark: Optional[Dict[str, Dict]] = Field(default=None, description="Benchmark configurations")
+    datasources: Optional[Dict[str, DatasourceConfig]] = Field(default=None, description="Datasource configurations")
+    metrics: Optional[Dict[str, Dict]] = Field(default=None, description="Metrics configurations")
+    storage: Optional[StorageConfig] = Field(default=None, description="Storage configuration")
+    workflow: Optional[Dict] = Field(default=None, description="Workflow configuration")
+    reflection_nodes: Optional[Dict[str, List]] = Field(default=None, description="Reflection nodes configuration")
 
 
 class UpdateAgentConfigInput(BaseModel):
     """Request for updating agent configuration."""
 
     agent: AgentConfigData = Field(..., description="Agent configuration data")
-    test_connectivity: bool = Field(True, description="Whether to test connectivity")
+    test_connectivity: bool = Field(default=True, description="Whether to test connectivity")
 
 
 class ModelConnectivityTest(BaseModel):
@@ -104,7 +104,7 @@ class ModelConnectivityTest(BaseModel):
     type: str = Field(..., description="Model type")
     model: str = Field(..., description="Model name")
     response_time: int = Field(..., description="Response time in milliseconds")
-    error_message: Optional[str] = Field(None, description="Error message if test failed")
+    error_message: Optional[str] = Field(default=None, description="Error message if test failed")
 
 
 class DatabaseInfo(BaseModel):
@@ -113,7 +113,7 @@ class DatabaseInfo(BaseModel):
     version: str = Field(..., description="Database version")
     databases: List[str] = Field(..., description="Available databases")
     current_datasource: str = Field(..., description="Current database name")
-    catalogs: Optional[List[str]] = Field(None, description="Available catalogs (if supported)")
+    catalogs: Optional[List[str]] = Field(default=None, description="Available catalogs (if supported)")
 
 
 class DatasourceConnectivityTest(BaseModel):
@@ -122,8 +122,8 @@ class DatasourceConnectivityTest(BaseModel):
     status: str = Field(..., description="Test status (success/failed)")
     type: str = Field(..., description="Database type")
     response_time: int = Field(..., description="Response time in milliseconds")
-    database_info: Optional[DatabaseInfo] = Field(None, description="Database information")
-    error_message: Optional[str] = Field(None, description="Error message if test failed")
+    database_info: Optional[DatabaseInfo] = Field(default=None, description="Database information")
+    error_message: Optional[str] = Field(default=None, description="Error message if test failed")
 
 
 class ConnectivityTests(BaseModel):
@@ -191,7 +191,7 @@ class DatabaseTypeInfo(BaseModel):
     description: str = Field(..., description="Database description")
     connection_method: str = Field(..., description="Connection method")
     required_fields: List[str] = Field(..., description="Required configuration fields")
-    default_catalog: Optional[str] = Field(None, description="Default catalog name")
+    default_catalog: Optional[str] = Field(default=None, description="Default catalog name")
 
 
 class DatabaseTypesData(BaseModel):
@@ -211,8 +211,8 @@ class ModelPricing(BaseModel):
 
     model_config = ConfigDict(exclude_none=True)
 
-    prompt: Optional[str] = Field(None, description="Price per input token")
-    completion: Optional[str] = Field(None, description="Price per output token")
+    prompt: Optional[str] = Field(default=None, description="Price per input token")
+    completion: Optional[str] = Field(default=None, description="Price per output token")
 
 
 class ModelInfo(BaseModel):
@@ -223,12 +223,12 @@ class ModelInfo(BaseModel):
     provider: str = Field(..., description="Provider key from providers.yml, or 'custom' for agent.models entries")
     id: str = Field(..., description="Model slug as consumed by the SDK")
     model: Optional[str] = Field(
-        None, description="Actual model name (same as id for provider models, ModelConfig.model for custom)"
+        default=None, description="Actual model name (same as id for provider models, ModelConfig.model for custom)"
     )
-    name: Optional[str] = Field(None, description="Human-readable model name")
-    context_length: Optional[int] = Field(None, description="Maximum context window in tokens")
-    max_tokens: Optional[int] = Field(None, description="Maximum completion tokens")
-    pricing: Optional[ModelPricing] = Field(None, description="Per-token pricing, when available")
+    name: Optional[str] = Field(default=None, description="Human-readable model name")
+    context_length: Optional[int] = Field(default=None, description="Maximum context window in tokens")
+    max_tokens: Optional[int] = Field(default=None, description="Maximum completion tokens")
+    pricing: Optional[ModelPricing] = Field(default=None, description="Per-token pricing, when available")
 
 
 class ModelsData(BaseModel):
@@ -238,6 +238,6 @@ class ModelsData(BaseModel):
 
     models: List[ModelInfo] = Field(..., description="Flat list of available models")
     providers: List[str] = Field(..., description="Provider keys represented in this response")
-    current_model: Optional[str] = Field(None, description="Currently active model as 'provider/model'")
-    fetched_at: Optional[str] = Field(None, description="ISO-8601 timestamp of the OpenRouter cache")
+    current_model: Optional[str] = Field(default=None, description="Currently active model as 'provider/model'")
+    fetched_at: Optional[str] = Field(default=None, description="ISO-8601 timestamp of the OpenRouter cache")
     source: str = Field(..., description="Where the data came from: cache or catalog")

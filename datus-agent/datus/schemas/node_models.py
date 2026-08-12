@@ -103,7 +103,7 @@ class TableSchema(BaseTableSchema):
     """
 
     definition: str = Field(..., description="DDL schema text of the table")
-    table_type: str = Field("table", description="Type of the schema")
+    table_type: str = Field(default="table", description="Type of the schema")
 
     def to_prompt(self, dialect: str = "snowflake") -> str:
         """
@@ -172,7 +172,7 @@ class TableValue(BaseTableSchema):
     """Model for table value information returned by schema linking."""
 
     table_values: str = Field(..., description="Sample values from the table")
-    table_type: str = Field("table", description="Type of the schema")
+    table_type: str = Field(default="table", description="Type of the schema")
 
     def to_prompt(
         self,
@@ -382,10 +382,10 @@ class GenerateSQLInput(BaseInput):
     Validates the input parameters for SQL query generation.
     """
 
-    database_type: Optional[str] = Field(None, description="Type of the database")
+    database_type: Optional[str] = Field(default=None, description="Type of the database")
     table_schemas: Union[List[TableSchema], str] = Field(..., description="List of table schemas to use")
-    data_details: Optional[List[TableValue]] = Field(None, description="Optional sample data from tables")
-    metrics: Optional[List[Metric]] = Field(None, description="Optional metrics for query generation")
+    data_details: Optional[List[TableValue]] = Field(default=None, description="Optional sample data from tables")
+    metrics: Optional[List[Metric]] = Field(default=None, description="Optional metrics for query generation")
     sql_task: SqlTask = Field(..., description="The SQL task to generate SQL from")
     contexts: Optional[List[SQLContext]] = Field(default=[], description="Optional context information for the input")
     external_knowledge: str = Field(
@@ -408,7 +408,7 @@ class GenerateSQLResult(BaseResult):
 
     sql_query: str = Field(..., description="The generated SQL query")
     tables: List[str] = Field(default_factory=list, description="List of tables used in the query")
-    explanation: Optional[str] = Field(None, description="Explanation of the SQL query")
+    explanation: Optional[str] = Field(default=None, description="Explanation of the SQL query")
 
 
 class ExecuteSQLInput(BaseInput):
@@ -430,8 +430,8 @@ class ExecuteSQLResult(BaseResult):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    sql_query: Optional[str] = Field("", description="The SQL query to execute")
-    row_count: Optional[int] = Field(None, description="The number of rows returned")
+    sql_query: Optional[str] = Field(default="", description="The SQL query to execute")
+    row_count: Optional[int] = Field(default=None, description="The number of rows returned")
     sql_return: Any = Field(  # TODO: change to Union[str, ArrowTable, List[Reuslt]]
         default=None, description="The result of SQL execution (string or Arrow data)"
     )
@@ -462,13 +462,13 @@ class ExecuteSQLResult(BaseResult):
 class SQLContext(BaseModel):
     # sql_id: str = Field(..., description="The id of the SQL")
     sql_query: str = Field(..., description="The generated SQL query")
-    explanation: Optional[str] = Field("", description="Explanation of the SQL query")
+    explanation: Optional[str] = Field(default="", description="Explanation of the SQL query")
     # TODO: modify str to List[Result] with arrow format
     sql_return: Any = Field(default="", description="The result of SQL execution")
-    sql_error: Optional[str] = Field("", description="The error of SQL execution")
-    row_count: Optional[int] = Field(0, description="The number of rows returned")
-    reflection_strategy: Optional[str] = Field("", description="The reflection strategy")
-    reflection_explanation: Optional[str] = Field("", description="The reflection explanation")
+    sql_error: Optional[str] = Field(default="", description="The error of SQL execution")
+    row_count: Optional[int] = Field(default=0, description="The number of rows returned")
+    reflection_strategy: Optional[str] = Field(default="", description="The reflection strategy")
+    reflection_explanation: Optional[str] = Field(default="", description="The reflection explanation")
 
     def to_dict(self):
         return self.model_dump()
@@ -600,16 +600,16 @@ class OutputInput(BaseInput):
     Validates the output result.
     """
 
-    finished: bool = Field(True, description="Whether the task is finished")
-    error: Optional[str] = Field(None, description="The error message")
+    finished: bool = Field(default=True, description="Whether the task is finished")
+    error: Optional[str] = Field(default=None, description="The error message")
     task_id: str = Field(..., description="The id of the task")
     task: str = Field(..., description="The task description")
     database_name: str = Field(..., description="The name of the database")
     output_dir: str = Field(..., description="The target directory to save the output")
     gen_sql: str = Field(..., description="The generated SQL")
-    sql_result: Optional[str] = Field(None, description="The result of SQL execution")
-    row_count: Optional[int] = Field(None, description="The number of rows returned")
-    table_schemas: List[TableSchema] = Field([], description="The schemas of the tables")
+    sql_result: Optional[str] = Field(default=None, description="The result of SQL execution")
+    row_count: Optional[int] = Field(default=None, description="The number of rows returned")
+    table_schemas: List[TableSchema] = Field(default=[], description="The schemas of the tables")
     metrics: List[Metric] = Field(default=[], description="The metrics")
     external_knowledge: str = Field(
         default="", description="Supplementary description / evidence supplied with the question"
@@ -647,7 +647,7 @@ class ReflectionInput(BaseInput):
     )
     # sql_return: str = Field(..., description="The SQL execution result to analyze")
     # row_count: int = Field(..., description="Number of rows returned")
-    # error: Optional[str] = Field("", description="Error returned")
+    # error: Optional[str] = Field(default="", description="Error returned")
 
 
 class StrategyType(str, Enum):
@@ -671,7 +671,7 @@ class ReflectionResult(BaseResult):
 
     model_config = ConfigDict(use_enum_values=True)
 
-    strategy: Optional[StrategyType] = Field(None, description="Suggested strategy for workflow changes")
+    strategy: Optional[StrategyType] = Field(default=None, description="Suggested strategy for workflow changes")
     details: Dict[str, Union[str, List[str], Dict[str, Any]]] = Field(
         default_factory=dict,
         description="Detailed analysis information, can contain strings, lists or nested dictionaries",

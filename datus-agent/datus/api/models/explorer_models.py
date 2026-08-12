@@ -15,15 +15,15 @@ class DatabaseCatalogInfo(BaseModel):
     type: str = Field(..., description="Database type (snowflake, mysql, postgresql, starrocks)")
     uri: str = Field(..., description="Database connection URI")
     current: bool = Field(..., description="Whether this is the current database")
-    catalog_name: Optional[str] = Field(None, description="Catalog name for databases that support catalogs")
-    schema_name: Optional[str] = Field(None, description="Schema name")
+    catalog_name: Optional[str] = Field(default=None, description="Catalog name for databases that support catalogs")
+    schema_name: Optional[str] = Field(default=None, description="Schema name")
     connection_status: str = Field(..., description="Connection status (connected/disconnected)")
     tables_count: int = Field(..., description="Number of tables")
     last_accessed: str = Field(..., description="Last accessed timestamp")
     schemas: Optional[Dict[str, List[str]]] = Field(
-        None, description="Schema -> tables mapping (for databases with schemas)"
+        default=None, description="Schema -> tables mapping (for databases with schemas)"
     )
-    tables: Optional[List[str]] = Field(None, description="List of tables (for databases without schemas)")
+    tables: Optional[List[str]] = Field(default=None, description="List of tables (for databases without schemas)")
 
 
 class CatalogListData(BaseModel):
@@ -47,9 +47,9 @@ class SubjectNode(BaseModel):
     """Subject tree node."""
 
     name: str = Field(..., description="Node name")
-    type: Optional[SubjectNodeType] = Field(None, description="Node type")
+    type: Optional[SubjectNodeType] = Field(default=None, description="Node type")
     subject_path: List[str] = Field(default_factory=list, description="Full path from root")
-    children: Optional[List["SubjectNode"]] = Field(None, description="Child nodes")
+    children: Optional[List["SubjectNode"]] = Field(default=None, description="Child nodes")
 
 
 # Enable forward reference
@@ -117,25 +117,27 @@ class MetricPreviewInput(BaseModel):
     """Preview a saved metric by compiling it to SQL (dry-run)."""
 
     subject_path: List[str] = Field(..., description="Path to the saved metric; the leaf is the metric name")
-    catalog: Optional[str] = Field(None, description="Current catalog context")
-    database: Optional[str] = Field(None, description="Current database context")
-    db_schema: Optional[str] = Field(None, description="Current schema context")
-    dimensions: Optional[List[str]] = Field(None, description="Optional dimensions to group by")
-    time_start: Optional[str] = Field(None, description="Optional start time (ISO or relative, e.g. '-7d')")
-    time_end: Optional[str] = Field(None, description="Optional end time (ISO or relative, e.g. 'now')")
-    time_granularity: Optional[str] = Field(None, description="Optional grain: day/week/month/quarter/year")
-    where: Optional[str] = Field(None, description="Optional SQL WHERE clause (without the WHERE keyword)")
-    limit: Optional[int] = Field(None, description="Optional row limit")
-    order_by: Optional[List[str]] = Field(None, description="Optional order-by columns; prefix '-' for descending")
+    catalog: Optional[str] = Field(default=None, description="Current catalog context")
+    database: Optional[str] = Field(default=None, description="Current database context")
+    db_schema: Optional[str] = Field(default=None, description="Current schema context")
+    dimensions: Optional[List[str]] = Field(default=None, description="Optional dimensions to group by")
+    time_start: Optional[str] = Field(default=None, description="Optional start time (ISO or relative, e.g. '-7d')")
+    time_end: Optional[str] = Field(default=None, description="Optional end time (ISO or relative, e.g. 'now')")
+    time_granularity: Optional[str] = Field(default=None, description="Optional grain: day/week/month/quarter/year")
+    where: Optional[str] = Field(default=None, description="Optional SQL WHERE clause (without the WHERE keyword)")
+    limit: Optional[int] = Field(default=None, description="Optional row limit")
+    order_by: Optional[List[str]] = Field(
+        default=None, description="Optional order-by columns; prefix '-' for descending"
+    )
 
 
 class MetricDimensionItem(BaseModel):
     """A queryable dimension of a metric."""
 
     name: str = Field(..., description="Dimension name")
-    type: Optional[str] = Field(None, description="Dimension type, e.g. 'time', 'string', 'number'")
-    description: Optional[str] = Field(None, description="Dimension description")
-    is_primary_key: Optional[bool] = Field(None, description="Whether the dimension is a primary key")
+    type: Optional[str] = Field(default=None, description="Dimension type, e.g. 'time', 'string', 'number'")
+    description: Optional[str] = Field(default=None, description="Dimension description")
+    is_primary_key: Optional[bool] = Field(default=None, description="Whether the dimension is a primary key")
 
 
 class MetricDimensionsData(BaseModel):
@@ -143,7 +145,7 @@ class MetricDimensionsData(BaseModel):
 
     metric: str = Field(..., description="Metric name")
     dimensions: List[MetricDimensionItem] = Field(default_factory=list, description="Queryable dimensions")
-    time_dimension: Optional[str] = Field(None, description="Canonical time dimension for the metric")
+    time_dimension: Optional[str] = Field(default=None, description="Canonical time dimension for the metric")
     time_granularities: List[str] = Field(
         default_factory=list,
         description="Legal time grains ordered from finest to coarsest",
@@ -167,10 +169,10 @@ class MetricPreviewData(BaseModel):
     """Compiled SQL for previewing a metric's data, or a dimension preflight error."""
 
     metric: str = Field(..., description="Metric name")
-    sql: Optional[str] = Field(None, description="Runnable SQL compiled from the metric definition")
-    database: Optional[str] = Field(None, description="Physical database the SQL should run against")
+    sql: Optional[str] = Field(default=None, description="Runnable SQL compiled from the metric definition")
+    database: Optional[str] = Field(default=None, description="Physical database the SQL should run against")
     preflight_error: Optional[MetricDimensionPreflight] = Field(
-        None, description="Set instead of sql when the requested dimensions are invalid"
+        default=None, description="Set instead of sql when the requested dimensions are invalid"
     )
 
 
@@ -203,6 +205,6 @@ class SubjectPathInput(BaseModel):
     """Subject path input."""
 
     subject_path: List[str] = Field(..., description="Subject path name")
-    catalog: Optional[str] = Field(None, description="Current catalog context")
-    database: Optional[str] = Field(None, description="Current database context")
-    db_schema: Optional[str] = Field(None, description="Current schema context")
+    catalog: Optional[str] = Field(default=None, description="Current catalog context")
+    database: Optional[str] = Field(default=None, description="Current database context")
+    db_schema: Optional[str] = Field(default=None, description="Current schema context")

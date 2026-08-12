@@ -50,7 +50,7 @@ class ReportDetail(BaseModel):
     manifest: ArtifactManifest = Field(
         ..., description="Full manifest.json contents (slug + name + description + kind + created_at)"
     )
-    created_at: Optional[str] = Field(None, description="ISO 8601 timestamp (render/app.jsx mtime)")
+    created_at: Optional[str] = Field(default=None, description="ISO 8601 timestamp (render/app.jsx mtime)")
     files: List[ArtifactFile] = Field(
         ...,
         description=(

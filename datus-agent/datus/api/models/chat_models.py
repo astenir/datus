@@ -9,14 +9,14 @@ class ToolResult(BaseModel):
     """Structured result from tool execution."""
 
     success: Literal[0, 1] = Field(..., description="1 for success, 0 for failure")
-    error: Optional[str] = Field(None, description="Error message if execution failed")
-    result: Optional[Any] = Field(None, description="Tool execution result data if successful")
+    error: Optional[str] = Field(default=None, description="Error message if execution failed")
+    result: Optional[Any] = Field(default=None, description="Tool execution result data if successful")
 
 
 class ToolResultInput(BaseModel):
     """Input model for receiving tool execution results from frontend."""
 
-    session_id: Optional[str] = Field(None, description="Session ID for the active chat task")
+    session_id: Optional[str] = Field(default=None, description="Session ID for the active chat task")
     call_tool_id: str = Field(..., description="Unique identifier for the tool call", examples=["tc_abc123"])
     tool_result: ToolResult = Field(
         ...,
@@ -35,8 +35,10 @@ class ResumeChatInput(BaseModel):
     """Input for reconnecting to a running chat task."""
 
     session_id: str = Field(..., description="Session ID to reconnect to")
-    source: Optional[str] = Field(None, description="chat source, web/vscode")
-    from_event_id: Optional[int] = Field(None, ge=0, description="Event cursor to resume from; omit to auto-resume")
+    source: Optional[str] = Field(default=None, description="chat source, web/vscode")
+    from_event_id: Optional[int] = Field(
+        default=None, ge=0, description="Event cursor to resume from; omit to auto-resume"
+    )
 
 
 class StopChatInput(BaseModel):

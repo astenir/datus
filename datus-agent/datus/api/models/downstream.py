@@ -34,7 +34,7 @@ class ExecuteSQLInput(UpstreamExecuteSQLInput):
         }
     )
 
-    datasource: Optional[str] = Field(None, description="Datasource name")
+    datasource: Optional[str] = Field(default=None, description="Datasource name")
 
 
 class StreamChatInput(UpstreamStreamChatInput):
@@ -136,13 +136,13 @@ class ModelInfo(BaseModel):
     provider: str = Field(..., description="Provider key from providers.yml, or 'custom' for agent.models entries")
     id: str = Field(..., description="Model slug as consumed by the SDK")
     model: Optional[str] = Field(
-        None, description="Actual model name (same as id for provider models, ModelConfig.model for custom)"
+        default=None, description="Actual model name (same as id for provider models, ModelConfig.model for custom)"
     )
-    name: Optional[str] = Field(None, description="Human-readable model name")
+    name: Optional[str] = Field(default=None, description="Human-readable model name")
     capabilities: List[str] = Field(default_factory=lambda: ["chat"], description="Supported model capabilities")
-    context_length: Optional[int] = Field(None, description="Maximum context window in tokens")
-    max_tokens: Optional[int] = Field(None, description="Maximum completion tokens")
-    pricing: Optional[ModelPricing] = Field(None, description="Per-token pricing, when available")
+    context_length: Optional[int] = Field(default=None, description="Maximum context window in tokens")
+    max_tokens: Optional[int] = Field(default=None, description="Maximum completion tokens")
+    pricing: Optional[ModelPricing] = Field(default=None, description="Per-token pricing, when available")
 
 
 class ModelsData(BaseModel):
@@ -152,8 +152,8 @@ class ModelsData(BaseModel):
 
     models: List[ModelInfo] = Field(..., description="Flat list of available models")
     providers: List[str] = Field(..., description="Provider keys represented in this response")
-    current_model: Optional[str] = Field(None, description="Currently active model as 'provider/model'")
-    fetched_at: Optional[str] = Field(None, description="ISO-8601 timestamp of the OpenRouter cache")
+    current_model: Optional[str] = Field(default=None, description="Currently active model as 'provider/model'")
+    fetched_at: Optional[str] = Field(default=None, description="ISO-8601 timestamp of the OpenRouter cache")
     source: str = Field(..., description="Where the data came from: cache or catalog")
 
 
@@ -162,11 +162,11 @@ class AgentConfigSummaryData(BaseModel):
 
     model_config = ConfigDict(exclude_none=True)
 
-    target: Optional[Any] = Field(None, description="Active target model configuration or legacy target value")
+    target: Optional[Any] = Field(default=None, description="Active target model configuration or legacy target value")
     providers: Dict[str, Any] = Field(default_factory=dict, description="Configured shared provider credentials")
     provider_options: List[Dict[str, Any]] = Field(default_factory=list, description="Provider catalog options")
     models: Dict[str, Any] = Field(default_factory=dict, description="Configured legacy/self-hosted model entries")
-    current_datasource: Optional[str] = Field(None, description="Currently active datasource key")
+    current_datasource: Optional[str] = Field(default=None, description="Currently active datasource key")
     datasources: Dict[str, Any] = Field(default_factory=dict, description="Configured datasource entries")
     home: str = Field(..., description="Resolved agent home/project storage path")
 
@@ -181,7 +181,7 @@ class ProbeResultData(BaseModel):
     """Connectivity probe result."""
 
     ok: bool = Field(..., description="Whether the probe succeeded")
-    message: Optional[str] = Field(None, description="Failure detail when ok=false")
+    message: Optional[str] = Field(default=None, description="Failure detail when ok=false")
 
 
 class SuccessStoryInput(BaseModel):
@@ -195,7 +195,7 @@ class SuccessStoryInput(BaseModel):
         description="Tool call ID of the completed execute_sql/read_query action",
     )
     session_link: Optional[str] = Field(
-        None,
+        default=None,
         max_length=2048,
         description=(
             "Optional UI link that reopens the session. It is stored only as provenance; "
@@ -287,13 +287,13 @@ class IAgentInfo(BaseModel):
     name: str = Field(..., description="Agent name")
     type: str = Field(..., description="Agent type, e.g. builtin, gen_sql, gen_report")
     description: str = Field(default="", description="Agent description")
-    config_yaml: Optional[str] = Field(None, description="Agent configuration YAML, when available")
-    system_prompt: Optional[str] = Field(None, description="System prompt, when available")
+    config_yaml: Optional[str] = Field(default=None, description="Agent configuration YAML, when available")
+    system_prompt: Optional[str] = Field(default=None, description="System prompt, when available")
     tools: List[str] = Field(default_factory=list, description="Available tools")
     catalogs: List[str] = Field(default_factory=list, description="Catalog access patterns")
     subjects: List[str] = Field(default_factory=list, description="Subject access patterns")
     rules: List[str] = Field(default_factory=list, description="Additional rules")
-    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
 
 
 class GetAgentData(BaseModel):
@@ -314,9 +314,9 @@ class ReportEditSession(BaseModel):
 
     edit_session_id: str = Field(..., description="Opaque edit-session identifier.")
     subagent_id: str = Field(..., description="Subagent id to pass to /api/v1/chat/stream.")
-    artifact_type: str = Field("report", description="Artifact type locked by this edit session.")
+    artifact_type: str = Field(default="report", description="Artifact type locked by this edit session.")
     artifact_slug: str = Field(..., description="Report slug locked by this edit session.")
-    owner_user_id: Optional[str] = Field(None, description="User that created the edit session.")
+    owner_user_id: Optional[str] = Field(default=None, description="User that created the edit session.")
     created_at: str = Field(..., description="UTC ISO timestamp when the edit session was created.")
 
 
@@ -325,9 +325,9 @@ class DashboardEditSession(BaseModel):
 
     edit_session_id: str = Field(..., description="Opaque edit-session identifier.")
     subagent_id: str = Field(..., description="Subagent id to pass to /api/v1/chat/stream.")
-    artifact_type: str = Field("dashboard", description="Artifact type locked by this edit session.")
+    artifact_type: str = Field(default="dashboard", description="Artifact type locked by this edit session.")
     artifact_slug: str = Field(..., description="Dashboard slug locked by this edit session.")
-    owner_user_id: Optional[str] = Field(None, description="User that created the edit session.")
+    owner_user_id: Optional[str] = Field(default=None, description="User that created the edit session.")
     created_at: str = Field(..., description="UTC ISO timestamp when the edit session was created.")
 
 
@@ -338,9 +338,9 @@ class DatasourceConnectionStatus(BaseModel):
     status: Literal["unknown", "connecting", "connected", "failed", "timeout"] = Field(
         ..., description="Last known connection status"
     )
-    last_checked: Optional[str] = Field(None, description="Last status update timestamp")
-    latency_ms: Optional[int] = Field(None, description="Last successful/failed check duration in milliseconds")
-    error_message: Optional[str] = Field(None, description="Last connection error, if any")
+    last_checked: Optional[str] = Field(default=None, description="Last status update timestamp")
+    latency_ms: Optional[int] = Field(default=None, description="Last successful/failed check duration in milliseconds")
+    error_message: Optional[str] = Field(default=None, description="Last connection error, if any")
     cached: bool = Field(..., description="Whether this status came from the in-process status cache")
 
 
@@ -365,11 +365,11 @@ class UpdateServerInput(BaseModel):
     )
 
     type: str = Field(..., description="Server type (stdio, sse, http)")
-    command: Optional[str] = Field(None, description="Command for stdio servers")
-    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
-    url: Optional[str] = Field(None, description="URL for sse/http servers")
-    headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
-    auth: Optional[MCPAuthInput] = Field(None, description="Remote MCP authentication settings")
-    timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
-    env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
-    cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
+    command: Optional[str] = Field(default=None, description="Command for stdio servers")
+    args: Optional[List[str]] = Field(default=None, description="Arguments for stdio servers")
+    url: Optional[str] = Field(default=None, description="URL for sse/http servers")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthInput] = Field(default=None, description="Remote MCP authentication settings")
+    timeout: Optional[float] = Field(default=None, description="Timeout for sse/http servers")
+    env: Optional[Dict[str, str]] = Field(default=None, description="Environment variables for stdio servers")
+    cwd: Optional[str] = Field(default=None, description="Working directory for stdio servers")

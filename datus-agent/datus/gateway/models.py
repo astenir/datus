@@ -38,14 +38,14 @@ class InboundMessage(BaseModel):
 
     channel_id: str = Field(..., description="Adapter instance identifier")
     sender_id: str = Field(..., description="IM platform user ID")
-    sender_name: str = Field("", description="Display name")
+    sender_name: str = Field(default="", description="Display name")
     conversation_id: str = Field(..., description="IM group/DM/channel ID")
     message_id: str = Field(..., description="IM platform message ID")
     text: str = Field(..., description="Plain text content")
-    mentions_bot: bool = Field(False, description="Whether the message mentions the bot")
-    chat_type: Optional[str] = Field(None, description="Chat type: 'group' or 'p2p'")
-    thread_id: Optional[str] = Field(None, description="Thread ID for threaded conversations")
-    raw_payload: Optional[dict] = Field(None, description="Raw platform-specific payload")
+    mentions_bot: bool = Field(default=False, description="Whether the message mentions the bot")
+    chat_type: Optional[str] = Field(default=None, description="Chat type: 'group' or 'p2p'")
+    thread_id: Optional[str] = Field(default=None, description="Thread ID for threaded conversations")
+    raw_payload: Optional[dict] = Field(default=None, description="Raw platform-specific payload")
 
 
 class OutboundMessage(BaseModel):
@@ -53,12 +53,16 @@ class OutboundMessage(BaseModel):
 
     channel_id: str = Field(..., description="Adapter instance identifier")
     conversation_id: str = Field(..., description="IM group/DM/channel ID")
-    thread_id: Optional[str] = Field(None, description="Thread ID for threaded replies")
-    text: str = Field("", description="Markdown/plain text response")
-    ir: Optional[MarkdownIR] = Field(None, description="Structured IR for platform-specific rendering")
-    sql: Optional[str] = Field(None, description="Generated SQL code block")
-    stream_id: Optional[str] = Field(None, description="Groups outbound messages from the same request into one stream")
-    is_delta: bool = Field(False, description="True for token-level delta chunks that should be concatenated directly")
+    thread_id: Optional[str] = Field(default=None, description="Thread ID for threaded replies")
+    text: str = Field(default="", description="Markdown/plain text response")
+    ir: Optional[MarkdownIR] = Field(default=None, description="Structured IR for platform-specific rendering")
+    sql: Optional[str] = Field(default=None, description="Generated SQL code block")
+    stream_id: Optional[str] = Field(
+        default=None, description="Groups outbound messages from the same request into one stream"
+    )
+    is_delta: bool = Field(
+        default=False, description="True for token-level delta chunks that should be concatenated directly"
+    )
 
 
 class ReactionEvent(BaseModel):
@@ -69,17 +73,17 @@ class ReactionEvent(BaseModel):
     conversation_id: str = Field(..., description="IM group/DM/channel ID")
     target_message_id: str = Field(..., description="Message the reaction is on")
     emoji: str = Field(..., description="Normalized emoji name")
-    action: str = Field("added", description="'added' or 'removed'")
-    thread_id: Optional[str] = Field(None, description="Thread ID if applicable")
+    action: str = Field(default="added", description="'added' or 'removed'")
+    thread_id: Optional[str] = Field(default=None, description="Thread ID if applicable")
 
 
 class ChannelConfig(BaseModel):
     """Configuration for a single IM channel adapter."""
 
     adapter: str = Field(..., description="Adapter type: feishu, slack")
-    enabled: bool = Field(True, description="Whether this channel is enabled")
-    datasource: Optional[str] = Field(None, description="Override default datasource")
-    subagent_id: Optional[str] = Field(None, description="Route to a specific sub-agent")
+    enabled: bool = Field(default=True, description="Whether this channel is enabled")
+    datasource: Optional[str] = Field(default=None, description="Override default datasource")
+    subagent_id: Optional[str] = Field(default=None, description="Route to a specific sub-agent")
     verbose: Verbose = Field(Verbose.ON, description="Output verbosity level: quiet, brief, detail")
-    stream_response: bool = Field(True, description="Enable token-level streaming for chat responses")
+    stream_response: bool = Field(default=True, description="Enable token-level streaming for chat responses")
     extra: Dict = Field(default_factory=dict, description="Adapter-specific config (tokens, app_id, etc.)")

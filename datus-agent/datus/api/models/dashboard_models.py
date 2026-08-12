@@ -73,7 +73,7 @@ class DashboardDetail(BaseModel):
     manifest: ArtifactManifest = Field(
         ..., description="Full manifest.json contents (slug + name + description + kind + created_at)"
     )
-    created_at: Optional[str] = Field(None, description="ISO 8601 timestamp (render/app.jsx mtime)")
+    created_at: Optional[str] = Field(default=None, description="ISO 8601 timestamp (render/app.jsx mtime)")
     files: List[ArtifactFile] = Field(
         ...,
         description=(
@@ -105,7 +105,7 @@ class SqlQueryResultEnvelope(BaseModel):
     columns: List[QueryColumnMeta] = Field(..., description="Column name + inferred semantic type")
     rows: List[Dict[str, Any]] = Field(default_factory=list, description="Result rows; each is a {column → scalar} map")
     sql: Optional[str] = Field(
-        None,
+        default=None,
         description=(
             "The fully rendered SQL the connector executed (after Jinja2 + bind-value substitution). "
             "Surfaced so the in-iframe <ChartEntryMore> menu can show 'View SQL'."
@@ -129,7 +129,7 @@ class DashboardQueryRequest(BaseModel):
     )
     params: Dict[str, Any] = Field(default_factory=dict, description="User-selected filter values keyed by param name")
     published_version: Optional[int] = Field(
-        None,
+        default=None,
         ge=1,
         description=(
             "When set, render the template from an immutable snapshot at this version "

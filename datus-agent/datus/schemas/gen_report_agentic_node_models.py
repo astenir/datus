@@ -28,12 +28,12 @@ class GenReportNodeInput(AtContextInput):
     user_message: str = Field(..., description="User's analysis question (required)")
 
     # Database context
-    catalog: Optional[str] = Field(None, description="Database catalog")
-    database: Optional[str] = Field(None, description="Database name")
-    db_schema: Optional[str] = Field(None, description="Database schema")
+    catalog: Optional[str] = Field(default=None, description="Database catalog")
+    database: Optional[str] = Field(default=None, description="Database name")
+    db_schema: Optional[str] = Field(default=None, description="Database schema")
 
     # Prompt configuration
-    prompt_version: Optional[str] = Field(None, description="Prompt template version")
+    prompt_version: Optional[str] = Field(default=None, description="Prompt template version")
 
 
 class GenReportNodeResult(BaseResult):
@@ -45,7 +45,7 @@ class GenReportNodeResult(BaseResult):
 
     response: str = Field(default="", description="Natural language response/summary")
     report_result: Optional[Dict[str, Any]] = Field(
-        None,
+        default=None,
         description="Structured report result data (specific to report type)",
     )
     tokens_used: int = Field(default=0, description="Total tokens used in the analysis")

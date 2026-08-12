@@ -13,9 +13,9 @@ class ColumnInfo(BaseModel):
     name: str = Field(..., description="Column name")
     type: str = Field(..., description="Column data type")
     nullable: bool = Field(..., description="Whether column is nullable")
-    default_value: Optional[str] = Field(None, description="Default value")
+    default_value: Optional[str] = Field(default=None, description="Default value")
     pk: bool = Field(default=False, description="Whether column is primary key")
-    comment: Optional[str] = Field(None, description="Database column comment")
+    comment: Optional[str] = Field(default=None, description="Database column comment")
 
 
 class IndexInfo(BaseModel):
@@ -30,8 +30,8 @@ class TableDetailData(BaseModel):
     """Table detail data."""
 
     name: str = Field(..., description="Table name")
-    description: Optional[str] = Field(None, description="Table description")
-    rows: Optional[int] = Field(None, description="Number of rows in the table")
+    description: Optional[str] = Field(default=None, description="Table description")
+    rows: Optional[int] = Field(default=None, description="Number of rows in the table")
     columns: List[ColumnInfo] = Field(..., description="Column information")
     indexes: List[IndexInfo] = Field(..., description="Index information")
 
@@ -96,14 +96,16 @@ class SemanticModelInput(BaseModel):
 
     table: str = Field(..., description="Full table name")
     yaml: str = Field(..., description="SemanticModel YAML content")
-    catalog: Optional[str] = Field(None, description="Current catalog context")
-    database: Optional[str] = Field(None, description="Current database context")
-    db_schema: Optional[str] = Field(None, description="Current schema context")
-    semantic_model_name: Optional[str] = Field(None, description="Semantic model owning a shared physical table")
+    catalog: Optional[str] = Field(default=None, description="Current catalog context")
+    database: Optional[str] = Field(default=None, description="Current database context")
+    db_schema: Optional[str] = Field(default=None, description="Current schema context")
+    semantic_model_name: Optional[str] = Field(
+        default=None, description="Semantic model owning a shared physical table"
+    )
 
 
 class ValidateSemanticModelData(BaseModel):
     """Validate semantic model result data."""
 
     valid: bool = Field(..., description="Whether YAML is valid")
-    invalid_message: Optional[List[str]] = Field(None, description="Error message if invalid")
+    invalid_message: Optional[List[str]] = Field(default=None, description="Error message if invalid")

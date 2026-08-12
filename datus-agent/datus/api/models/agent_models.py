@@ -12,9 +12,9 @@ class AgentInfo(BaseModel):
 
     name: str = Field(..., description="Agent name")
     type: str = Field(..., description="Agent type (builtin/customize)")
-    config_yaml: Optional[str] = Field(None, description="Agent configuration YAML")
-    system_prompt: Optional[str] = Field(None, description="System prompt")
-    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    config_yaml: Optional[str] = Field(default=None, description="Agent configuration YAML")
+    system_prompt: Optional[str] = Field(default=None, description="System prompt")
+    created_at: Optional[str] = Field(default=None, description="Creation timestamp")
 
 
 class AgentListData(BaseModel):
@@ -129,7 +129,7 @@ class ChannelInput(BaseModel):
     encryption); ``${ENV_VAR}`` placeholders are resolved at load time.
     """
 
-    enabled: bool = Field(True, description="Whether this channel's gateway adapter is active.")
+    enabled: bool = Field(default=True, description="Whether this channel's gateway adapter is active.")
     type: str = Field(..., description="Adapter type, e.g. 'slack'.")
     name: str = Field(..., min_length=1, description="Reference name, used as the channel config key.")
     secrets: dict = Field(

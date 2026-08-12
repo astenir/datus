@@ -29,7 +29,7 @@ class _DBMetadataNames(BaseModel):
 
     info_table: str = Field(..., init=True, description="The name of metadata table")
     name_field: str = Field(..., init=True, description="Fields corresponding to names in metadata table")
-    has_sql_field: bool = Field(True, init=True, description="Is there a SQL field.")
+    has_sql_field: bool = Field(default=True, init=True, description="Is there a SQL field.")
 
 
 METADATA_DICT: Dict[str, _DBMetadataNames] = {
