@@ -625,6 +625,18 @@ _add(
         note="Personal MCP binding is visible only after the canonical session owner check.",
     ),
 )
+_add(
+    "GET",
+    "/api/v1/me/mcp-servers/{mcp_id}/references",
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        SESSION_OWNER,
+        SYSTEM_READONLY,
+        module_permission="module.mcp.personal",
+        note="Session references of a personal MCP are owner-scoped and read-only; used by the delete confirmation dialog.",
+    ),
+)
 _add_many(
     "POST",
     [
