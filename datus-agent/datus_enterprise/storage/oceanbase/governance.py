@@ -174,6 +174,15 @@ class ObArtifactAclStore(_ObStoreBase):
         )
         return await self.get_acl(artifact_type=artifact_type, slug=slug)
 
+    async def delete_acl(self, *, artifact_type: str, slug: str) -> None:
+        await self._execute(
+            """
+            DELETE FROM enterprise_artifact_acls
+            WHERE artifact_type = %s AND slug = %s
+            """,
+            (artifact_type, slug),
+        )
+
 
 class ObAuditSink(_ObStoreBase):
     """OceanBase MySQL-backed audit sink and query reader."""

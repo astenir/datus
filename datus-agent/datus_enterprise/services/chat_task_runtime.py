@@ -298,6 +298,25 @@ def create_dashboard_edit_session(
     return session
 
 
+def has_active_artifact_edit_session(
+    sessions: dict[str, ArtifactEditSession],
+    *,
+    artifact_type: str,
+    slug: str,
+) -> bool:
+    """Return True when an unexpired edit session is locked to one artifact.
+
+    Delete/republish flows must refuse to mutate an artifact while an
+    ACL-bound edit subagent may still be writing to it.
+    """
+
+    purge_expired_artifact_edit_sessions(sessions)
+    return any(
+        session.artifact_type == artifact_type and session.artifact_slug == slug
+        for session in sessions.values()
+    )
+
+
 def get_artifact_edit_session(
     sessions: dict[str, ArtifactEditSession],
     subagent_id: Optional[str],

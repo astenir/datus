@@ -150,6 +150,9 @@ async def test_enterprise_postgres_metadata_stores_smoke() -> None:
         }
         assert await acl_store.put_acl(artifact_type="dashboard", slug=artifact_slug, acl=acl) == acl
         assert await acl_store.get_acl(artifact_type="dashboard", slug=artifact_slug) == acl
+        await acl_store.delete_acl(artifact_type="dashboard", slug=artifact_slug)
+        with pytest.raises(KeyError):
+            await acl_store.get_acl(artifact_type="dashboard", slug=artifact_slug)
 
         await audit_sink.write(
             AuditEvent(

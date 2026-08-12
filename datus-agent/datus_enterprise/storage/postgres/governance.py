@@ -184,6 +184,16 @@ class PgArtifactAclStore(_PgStoreBase):
             raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist artifact ACL.")
         return _artifact_acl_record(row)
 
+    async def delete_acl(self, *, artifact_type: str, slug: str) -> None:
+        await self._execute(
+            """
+            DELETE FROM enterprise_artifact_acls
+            WHERE artifact_type = $1 AND slug = $2
+            """,
+            artifact_type,
+            slug,
+        )
+
 
 class PgAuditSink(_PgStoreBase):
     """PostgreSQL-backed audit sink and query reader."""

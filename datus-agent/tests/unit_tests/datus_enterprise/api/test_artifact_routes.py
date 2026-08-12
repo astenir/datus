@@ -21,6 +21,7 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.enterprise.models import AccessDecision
 from datus.api.service import create_app
+from datus.api.services.chat_task_manager import ChatTaskManager
 from datus_enterprise.api import artifact_routes
 from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
 from datus_enterprise.services.report_service import EnterpriseReportService
@@ -58,6 +59,9 @@ class MemoryArtifactAclStore:
         self.acls[(artifact_type, slug)] = dict(acl)
         return dict(acl)
 
+    async def delete_acl(self, *, artifact_type: str, slug: str):
+        self.acls.pop((artifact_type, slug), None)
+
 
 class DenyAdminArtifactsAuthorizationProvider(LocalAuthorizationProvider):
     async def check(self, ctx, action, resource):
@@ -72,6 +76,7 @@ def _svc(tmp_path: Path):
         agent_config=agent_config,
         dashboard=EnterpriseDashboardService(agent_config=agent_config),
         report=EnterpriseReportService(agent_config=agent_config),
+        task_manager=ChatTaskManager(enterprise_enabled=False),
     )
 
 
@@ -1309,3 +1314,266 @@ def test_enterprise_artifact_routes_expose_authoritative_paths_once():
     assert len(dashboard_detail_routes) == 1
     assert len(dashboard_query_routes) == 1
     assert len(dashboard_edit_session_routes) == 1
+
+
+# ─── Artifact delete ─────────────────────────────────────────────────────────
+
+def _owner_acl(owner_user_id: str = "owner-1") -> dict:
+    return {
+        "owner_user_id": owner_user_id,
+        "visibility": "private",
+        "allowed_roles": [],
+        "allowed_user_ids": [],
+        "datasources": [],
+    }
+
+
+def _client_with_svc(
+    monkeypatch,
+    tmp_path: Path,
+    ctx: AppContext,
+    svc,
+    *,
+    audit_sink=None,
+    artifact_acl_store=None,
+) -> TestClient:
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink or NoopAuditSink(),
+            artifact_acl_store=artifact_acl_store,
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=InMemoryEnterpriseRoleStore(),
+        ),
+    )
+    return TestClient(app)
+
+
+def test_report_delete_owner_removes_directory_acl_and_audits(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore({("report", "sales"): _owner_acl()})
+    ctx = AppContext(user_id="owner-1", permissions={"module.report.view", "module.report.edit"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] is True
+    assert not (tmp_path / "reports" / "sales").exists()
+    assert store.acls == {}
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.delete"
+    assert event.resource_type == "report"
+    assert event.resource_id == "sales"
+    assert event.decision == "allow"
+
+
+def test_dashboard_delete_owner_removes_directory_acl_and_audits(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore({("dashboard", "ops"): _owner_acl()})
+    ctx = AppContext(user_id="owner-1", permissions={"module.dashboard.view", "module.dashboard.edit"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.delete("/api/v1/dashboards/ops")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert not (tmp_path / "dashboards" / "ops").exists()
+    assert store.acls == {}
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.delete"
+    assert event.resource_type == "dashboard"
+    assert event.resource_id == "ops"
+    assert event.decision == "allow"
+
+
+def test_report_delete_denied_without_edit_permission_does_not_resolve_service(monkeypatch):
+    ctx = AppContext(user_id="viewer-1", permissions={"module.report.view"})
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 403
+
+
+def test_report_delete_non_owner_editor_is_denied(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    store = MemoryArtifactAclStore({("report", "sales"): _owner_acl()})
+    ctx = AppContext(user_id="editor-1", permissions={"module.report.view", "module.report.edit"})
+
+    with _client(monkeypatch, tmp_path, ctx, artifact_acl_store=store) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 404
+    assert (tmp_path / "reports" / "sales").exists()
+    assert store.acls != {}
+
+
+def test_report_delete_admin_can_delete_other_owners_artifact(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore({("report", "sales"): _owner_acl(owner_user_id="other-owner")})
+    ctx = AppContext(user_id="admin", permissions={"module.report.view", "module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert not (tmp_path / "reports" / "sales").exists()
+    assert store.acls == {}
+    assert audit_sink.events[-1].decision == "allow"
+
+
+def test_report_delete_refused_while_edit_session_active(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore({("report", "sales"): _owner_acl()})
+    svc = _svc(tmp_path)
+    svc.task_manager.create_report_edit_session(user_id="owner-1", report_slug="sales")
+    ctx = AppContext(user_id="owner-1", permissions={"module.report.view", "module.report.edit"})
+
+    with _client_with_svc(
+        monkeypatch,
+        tmp_path,
+        ctx,
+        svc,
+        audit_sink=audit_sink,
+        artifact_acl_store=store,
+    ) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "EDIT_SESSION_ACTIVE"
+    assert (tmp_path / "reports" / "sales").exists()
+    assert store.acls != {}
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.delete"
+    assert event.decision == "deny"
+    assert event.reason == "active artifact edit session"
+
+
+def test_report_delete_missing_artifact_returns_not_found(monkeypatch, tmp_path: Path):
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(
+        user_id="owner-1",
+        permissions={"module.report.view", "module.report.edit"},
+        principal={"artifact_acl": {"report": ["missing"]}},
+    )
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink) as client:
+        response = client.delete("/api/v1/reports/missing")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "REPORT_NOT_FOUND"
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.delete"
+    assert event.decision == "deny"
+    assert event.reason == "REPORT_NOT_FOUND"
+
+
+def test_dashboard_delete_invalid_slug_returns_invalid_slug(monkeypatch, tmp_path: Path):
+    ctx = AppContext(
+        user_id="owner-1",
+        permissions={"module.dashboard.view", "module.dashboard.edit"},
+        principal={"artifact_acl": {"dashboard": ["Bad Slug!"]}},
+    )
+
+    with _client(monkeypatch, tmp_path, ctx) as client:
+        response = client.delete("/api/v1/dashboards/Bad%20Slug%21")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "INVALID_DASHBOARD_SLUG"
+
+
+def test_report_delete_survives_acl_store_failure(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+
+    class FailingAclDeleteStore(MemoryArtifactAclStore):
+        async def delete_acl(self, *, artifact_type: str, slug: str):
+            raise RuntimeError("acl store down")
+
+    audit_sink = CollectingAuditSink()
+    store = FailingAclDeleteStore({("report", "sales"): _owner_acl()})
+    ctx = AppContext(user_id="owner-1", permissions={"module.report.view", "module.report.edit"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert not (tmp_path / "reports" / "sales").exists()
+    assert audit_sink.events[-1].decision == "allow"
+
+
+def test_has_active_artifact_edit_session_matches_type_and_slug():
+    task_manager = ChatTaskManager(enterprise_enabled=False)
+    task_manager.create_report_edit_session(user_id="u1", report_slug="sales")
+
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="sales") is True
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="other") is False
+    assert task_manager.has_active_artifact_edit_session(artifact_type="dashboard", slug="sales") is False
+
+    task_manager.create_dashboard_edit_session(user_id="u1", dashboard_slug="ops")
+    assert task_manager.has_active_artifact_edit_session(artifact_type="dashboard", slug="ops") is True
+
+
+def test_has_active_artifact_edit_session_ignores_expired_sessions():
+    task_manager = ChatTaskManager(enterprise_enabled=False)
+    task_manager.create_report_edit_session(user_id="u1", report_slug="stale")
+    for subagent_id, session in task_manager._artifact_edit_sessions.items():
+        task_manager._artifact_edit_sessions[subagent_id] = session.model_copy(
+            update={"created_at": "2000-01-01T00:00:00Z"}
+        )
+
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="stale") is False

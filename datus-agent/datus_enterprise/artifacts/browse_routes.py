@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_platform_active
+from datus.api.enterprise.deps import (
+    get_artifact_acl_store,
+    require_any_module,
+    require_platform_active,
+)
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
 from datus.api.models.downstream import ReportEditSession
@@ -35,9 +40,13 @@ from datus_enterprise.artifacts.helpers import (
 from datus_enterprise.artifacts.models import (
     ArtifactListItem,
 )
+from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-artifacts"])
 logger = get_logger(__name__)
+
+_require_report_delete = require_any_module("module.report.edit", "module.admin.artifacts")
+_require_dashboard_delete = require_any_module("module.dashboard.edit", "module.admin.artifacts")
 
 
 @router.get(
@@ -156,3 +165,142 @@ async def create_report_edit_session(
 )
 async def get_report_html_by_path(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Response:
     return await _render_report_html(svc, ctx, slug)
+
+
+@router.delete(
+    "/reports/{slug}",
+    response_model=Result[bool],
+    summary="Delete Report Artifact",
+    description=(
+        "Permanently delete a report artifact directory and its share ACL. "
+        "Requires owner or module.admin.artifacts edit authorization; refused while "
+        "an unexpired report edit session is still active."
+    ),
+    dependencies=[
+        Depends(_require_report_delete),
+        Depends(require_platform_active(operation="report.delete", resource_type="report")),
+    ],
+)
+async def delete_report_artifact(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Result[bool]:
+    await require_artifact_edit_access(ctx, artifact_type="report", slug=slug)
+    return await _delete_artifact(svc, ctx, artifact_type="report", slug=slug)
+
+
+@router.delete(
+    "/dashboards/{slug}",
+    response_model=Result[bool],
+    summary="Delete Dashboard Artifact",
+    description=(
+        "Permanently delete a dashboard artifact directory and its share ACL. "
+        "Requires owner or module.admin.artifacts edit authorization; refused while "
+        "an unexpired dashboard edit session is still active."
+    ),
+    dependencies=[
+        Depends(_require_dashboard_delete),
+        Depends(require_platform_active(operation="dashboard.delete", resource_type="dashboard")),
+    ],
+)
+async def delete_dashboard_artifact(svc: ServiceDep, ctx: DashboardViewCtx, slug: str) -> Result[bool]:
+    await require_artifact_edit_access(ctx, artifact_type="dashboard", slug=slug)
+    return await _delete_artifact(svc, ctx, artifact_type="dashboard", slug=slug)
+
+
+async def _delete_artifact(
+    svc: ServiceDep,
+    ctx: AppContext,
+    *,
+    artifact_type: Literal["report", "dashboard"],
+    slug: str,
+) -> Result[bool]:
+    """Delete the on-disk artifact, then its share ACL, with audit."""
+
+    if _has_active_artifact_edit_session(svc, artifact_type=artifact_type, slug=slug):
+        await _audit_artifact_delete(
+            ctx,
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="active artifact edit session",
+        )
+        return Result(
+            success=False,
+            errorCode="EDIT_SESSION_ACTIVE",
+            errorMessage=f"{artifact_type} {slug!r} is being edited; try again later.",
+        )
+
+    project_files_root = _project_files_root(svc)
+    if artifact_type == "report":
+        result = await svc.report.delete_report(project_files_root=project_files_root, report_slug=slug)
+    else:
+        result = await svc.dashboard.delete_dashboard(project_files_root=project_files_root, dashboard_slug=slug)
+
+    if not result.success:
+        await _audit_artifact_delete(
+            ctx,
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason=str(result.errorCode),
+        )
+        return result
+
+    await _delete_artifact_acl(artifact_type=artifact_type, slug=slug)
+    await _audit_artifact_delete(ctx, artifact_type=artifact_type, slug=slug, decision="allow")
+    return result
+
+
+def _has_active_artifact_edit_session(
+    svc: ServiceDep,
+    *,
+    artifact_type: str,
+    slug: str,
+) -> bool:
+    task_manager = getattr(svc, "task_manager", None)
+    check = getattr(task_manager, "has_active_artifact_edit_session", None)
+    if check is None:
+        return False
+    return check(artifact_type=artifact_type, slug=slug)
+
+
+async def _delete_artifact_acl(*, artifact_type: str, slug: str) -> None:
+    store = get_artifact_acl_store()
+    if store is None:
+        return
+    try:
+        await store.delete_acl(artifact_type=artifact_type, slug=slug)
+    except Exception as exc:
+        logger.warning(
+            "Failed to delete artifact ACL for %s/%s: %s",
+            artifact_type,
+            slug,
+            exc,
+        )
+
+
+async def _audit_artifact_delete(
+    ctx: AppContext,
+    *,
+    artifact_type: str,
+    slug: str,
+    decision: str,
+    reason: str | None = None,
+) -> None:
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="artifact.delete",
+                resource_type=artifact_type,
+                resource_id=slug,
+                decision=decision,
+                reason=reason,
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Artifact delete audit failed for %s/%s decision=%s: %s",
+            artifact_type,
+            slug,
+            decision,
+            exc,
+        )

@@ -127,6 +127,9 @@ async def test_oceanbase_enterprise_metadata_and_session_round_trip():
         acl = {"owner_user_id": user_id, "visibility": "private", "allowed_roles": [], "allowed_user_ids": []}
         assert await acl_store.put_acl(artifact_type="dashboard", slug=f"{prefix}_dashboard", acl=acl) == acl
         assert await acl_store.get_acl(artifact_type="dashboard", slug=f"{prefix}_dashboard") == acl
+        await acl_store.delete_acl(artifact_type="dashboard", slug=f"{prefix}_dashboard")
+        with pytest.raises(KeyError):
+            await acl_store.get_acl(artifact_type="dashboard", slug=f"{prefix}_dashboard")
 
         await audit_sink.write(
             AuditEvent(

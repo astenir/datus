@@ -262,6 +262,9 @@ class FakeConnection:
         if "DELETE FROM user_datasources" in normalized:
             deleted = self.user_datasources.pop((args[0], args[1]), None)
             return f"DELETE {1 if deleted else 0}"
+        if "DELETE FROM enterprise_artifact_acls" in normalized:
+            deleted = self.artifact_acls.pop((args[0], args[1]), None)
+            return f"DELETE {1 if deleted else 0}"
         if "UPDATE user_datasources SET last_used_at" in normalized:
             row = self.user_datasources.get((args[0], args[1]))
             if row is None:
@@ -925,6 +928,22 @@ async def test_pg_artifact_acl_store_round_trips_nested_acl_and_missing_semantic
     assert await store.get_acl(artifact_type="dashboard", slug="ops") == acl
     with pytest.raises(KeyError):
         await store.get_acl(artifact_type="dashboard", slug="missing")
+
+
+@pytest.mark.asyncio
+async def test_pg_artifact_acl_store_delete_removes_acl_idempotently(fake_pg):
+    store = PgArtifactAclStore(dsn="postgresql://metadata")
+    acl = {"owner_user_id": "alice", "visibility": "private", "allowed_roles": [], "allowed_user_ids": []}
+
+    await store.put_acl(artifact_type="report", slug="sales", acl=acl)
+    await store.delete_acl(artifact_type="report", slug="sales")
+
+    with pytest.raises(KeyError):
+        await store.get_acl(artifact_type="report", slug="sales")
+
+    # Deleting a missing ACL is idempotent.
+    await store.delete_acl(artifact_type="report", slug="sales")
+    await store.delete_acl(artifact_type="report", slug="never-existed")
 
 
 @pytest.mark.asyncio
