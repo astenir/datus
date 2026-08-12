@@ -618,18 +618,26 @@ class GenSQLAgenticNode(AgenticNode):
             return set()
 
         tool_names: set[str] = set()
+        # With more than one configured server every MCP tool is exposed to the
+        # model as ``<server_name>_<tool_name>`` (see
+        # ``datus.models.mcp_utils.PrefixedMCPServer``); advertise the same
+        # names here so the prompt never contradicts the SDK tool schema.
+        multi_server = len(active_server_names) > 1
         for server_name in active_server_names:
             server_config = mcp_manager.get_server_config(server_name)
             tool_filter = getattr(server_config, "tool_filter", None) if server_config else None
+            tool_prefix = f"{server_name}_" if multi_server else ""
 
             allowed_tool_names = getattr(tool_filter, "allowed_tool_names", None)
             if allowed_tool_names:
-                tool_names.update(name for name in allowed_tool_names if tool_filter.is_tool_allowed(name))
+                tool_names.update(
+                    tool_prefix + name for name in allowed_tool_names if tool_filter.is_tool_allowed(name)
+                )
 
             cached_tool_names = self._get_cached_mcp_tool_names(self.mcp_servers[server_name])
             if tool_filter:
                 cached_tool_names = {name for name in cached_tool_names if tool_filter.is_tool_allowed(name)}
-            tool_names.update(cached_tool_names)
+            tool_names.update(tool_prefix + name for name in cached_tool_names)
 
         return tool_names
 
