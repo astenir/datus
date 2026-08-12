@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { EyeIcon, FilePenLineIcon, FileSearchIcon, Share2Icon, UserRoundIcon } from "@lucide/vue"
+import {
+  EyeIcon,
+  FilePenLineIcon,
+  FileSearchIcon,
+  MoreHorizontalIcon,
+  Share2Icon,
+  Trash2Icon,
+  UserRoundIcon,
+} from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -10,6 +18,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ArtifactManifest } from "@/types"
 
@@ -27,6 +42,7 @@ const props = defineProps<{
   openingSlug: string | null
   sharingSlug: string | null
   editingSlug: string | null
+  deletingSlug: string | null
   editEnabled: boolean
 }>()
 
@@ -35,6 +51,7 @@ const emit = defineEmits<{
   openPreview: [slug: string]
   share: [slug: string]
   edit: [slug: string]
+  delete: [slug: string]
 }>()
 
 function authorLabel(item: ReadonlyArtifactManifest): string {
@@ -50,6 +67,10 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
   }
 
   return `作者：${displayName || userId || "未知"}`
+}
+
+function hasMenuActions(item: ReadonlyArtifactManifest): boolean {
+  return Boolean(item.can_manage_share || (props.editEnabled && item.can_edit))
 }
 </script>
 
@@ -142,9 +163,9 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
           {{ item.description }}
         </CardDescription>
       </CardHeader>
-      <CardFooter class="mt-auto grid h-8 shrink-0 grid-cols-4 gap-1">
+      <CardFooter class="mt-auto flex h-8 shrink-0 gap-1">
         <Button
-          class="col-start-1 w-full min-w-0"
+          class="min-w-0 flex-1"
           variant="outline"
           size="sm"
           @click="emit('select', item.slug)"
@@ -153,7 +174,7 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
           详情
         </Button>
         <Button
-          class="col-start-2 w-full min-w-0"
+          class="min-w-0 flex-1"
           variant="outline"
           size="sm"
           :disabled="props.openingSlug === item.slug"
@@ -163,19 +184,8 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
           {{ props.openingSlug === item.slug ? "加载中" : "查看" }}
         </Button>
         <Button
-          v-if="item.can_manage_share"
-          class="col-start-3 w-full min-w-0"
-          variant="outline"
-          size="sm"
-          :disabled="props.sharingSlug === item.slug"
-          @click="emit('share', item.slug)"
-        >
-          <Share2Icon data-icon="inline-start" />
-          {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
-        </Button>
-        <Button
           v-if="props.editEnabled && item.can_edit"
-          class="col-start-4 w-full min-w-0"
+          class="min-w-0 flex-1"
           variant="outline"
           size="sm"
           :disabled="Boolean(props.editingSlug)"
@@ -184,6 +194,43 @@ function authorTitle(item: ReadonlyArtifactManifest): string {
           <FilePenLineIcon data-icon="inline-start" />
           {{ props.editingSlug === item.slug ? "创建中" : "编辑" }}
         </Button>
+        <DropdownMenu
+          v-if="hasMenuActions(item)"
+        >
+          <DropdownMenuTrigger
+            as-child
+            class="min-w-0 flex-1"
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              class="w-full min-w-0"
+            >
+              <MoreHorizontalIcon data-icon="inline-start" />
+              更多
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              v-if="item.can_manage_share"
+              :disabled="props.sharingSlug === item.slug"
+              @select="emit('share', item.slug)"
+            >
+              <Share2Icon />
+              {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="item.can_manage_share && props.editEnabled && item.can_edit" />
+            <DropdownMenuItem
+              v-if="props.editEnabled && item.can_edit"
+              variant="destructive"
+              :disabled="props.deletingSlug === item.slug"
+              @select="emit('delete', item.slug)"
+            >
+              <Trash2Icon />
+              {{ props.deletingSlug === item.slug ? "删除中" : "删除" }}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </CardFooter>
     </Card>
   </div>

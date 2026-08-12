@@ -13,6 +13,7 @@ async function renderGrid(items: ArtifactManifest[], loading = false): Promise<s
     openingSlug: null,
     sharingSlug: null,
     editingSlug: null,
+    deletingSlug: null,
     editEnabled: true,
   });
   return renderToString(app);
@@ -31,20 +32,7 @@ describe("ArtifactCollectionGrid", () => {
     expect(html).not.toContain("xl:grid-cols-3");
   });
 
-  it("does not expose edit when the owner can share but lacks edit capability", async () => {
-    const html = await renderGrid([{
-      slug: "fund-overview",
-      name: "Fund Overview",
-      description: "Dashboard",
-      can_manage_share: true,
-      can_edit: false,
-    }]);
-
-    expect(html).toContain("分享");
-    expect(html).not.toContain("编辑");
-  });
-
-  it("exposes edit when the backend grants artifact edit capability", async () => {
+  it("exposes edit directly and keeps the more menu when the backend grants edit capability", async () => {
     const html = await renderGrid([{
       slug: "fund-overview",
       name: "Fund Overview",
@@ -54,6 +42,35 @@ describe("ArtifactCollectionGrid", () => {
     }]);
 
     expect(html).toContain("编辑");
+    expect(html).toContain("更多");
+  });
+
+  it("keeps the more menu for share-only users without an edit button", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      can_manage_share: true,
+      can_edit: false,
+    }]);
+
+    expect(html).toContain("更多");
+    expect(html).not.toContain("编辑");
+    expect(html).not.toContain("删除");
+  });
+
+  it("keeps a two-action footer when the user has no share or edit capability", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      can_manage_share: false,
+      can_edit: false,
+    }]);
+
+    expect(html).toContain("详情");
+    expect(html).toContain("查看");
+    expect(html).not.toContain("更多");
   });
 
   it("shows the artifact owner display name", async () => {

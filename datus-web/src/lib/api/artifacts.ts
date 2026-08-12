@@ -61,6 +61,10 @@ export const dashboardApi = {
     return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/edit-sessions`, { method: "POST" });
   },
 
+  delete(baseUrl: string, slug: string): Promise<boolean | null> {
+    return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}`, { method: "DELETE" });
+  },
+
   query(
     baseUrl: string,
     dashboardSlug: string,
@@ -109,6 +113,10 @@ export const reportApi = {
 
   createEditSession(baseUrl: string, slug: string): Promise<ReportEditSession | null> {
     return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/edit-sessions`, { method: "POST" });
+  },
+
+  delete(baseUrl: string, slug: string): Promise<boolean | null> {
+    return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}`, { method: "DELETE" });
   },
 };
 
