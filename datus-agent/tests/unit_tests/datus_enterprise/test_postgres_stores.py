@@ -56,6 +56,56 @@ async def test_pg_personal_mcp_store_counts_and_deletes_owned_bindings():
     assert store._execute.await_args.args[1:] == ("project", "session-1", "alice")
 
 
+@pytest.mark.asyncio
+async def test_pg_personal_mcp_store_lists_and_unbinds_referencing_sessions():
+    store = PgUserMcpServerStore(
+        dsn="postgresql://metadata",
+        encryption_secret="test-user-mcp-secret-32-characters",
+    )
+    rows = [
+        Row(
+            project_id="project",
+            session_id="session-1",
+            updated_at="2026-01-02T00:00:00+00:00",
+            servers_json=[
+                {"mcp_id": "a" * 32, "revision": 1, "display_name": "Search"},
+                {"mcp_id": "c" * 32, "revision": 1, "display_name": "Other"},
+            ],
+        ),
+        Row(
+            project_id="project",
+            session_id="session-2",
+            updated_at="2026-01-03T00:00:00+00:00",
+            servers_json=[{"mcp_id": "b" * 32, "revision": 1}],
+        ),
+    ]
+
+    # list_session_bindings 只返回引用该 MCP 的会话，不包含无关绑定。
+    store._fetch = AsyncMock(return_value=rows)
+    references = await store.list_session_bindings("alice", "a" * 32)
+    assert references == [
+        {"project_id": "project", "session_id": "session-1", "updated_at": "2026-01-02T00:00:00+00:00"}
+    ]
+
+    # unbind_server 解除引用并更新/删除行：保留剩余引用时 UPDATE，全部解除时 DELETE。
+    store._fetch = AsyncMock(return_value=rows)
+    store._execute = AsyncMock(return_value="UPDATE 1")
+    assert await store.unbind_server("alice", "a" * 32) == 1
+    assert store._execute.call_count == 1
+    assert store._execute.await_args.args[1:] == (
+        f'[{{"display_name": "Other", "mcp_id": "{"c" * 32}", "revision": 1}}]',
+        "project",
+        "session-1",
+        "alice",
+    )
+
+    # 绑定中只剩被删 MCP 时整行删除，避免残留空绑定把后续重新选择误判为 locked。
+    store._fetch = AsyncMock(return_value=[rows[1]])
+    store._execute = AsyncMock(return_value="DELETE 1")
+    assert await store.unbind_server("alice", "b" * 32) == 1
+    assert store._execute.await_args.args[1:] == ("project", "session-2", "alice")
+
+
 class Row(dict):
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -211,6 +261,9 @@ class FakeConnection:
             return "UPDATE 1"
         if "DELETE FROM user_datasources" in normalized:
             deleted = self.user_datasources.pop((args[0], args[1]), None)
+            return f"DELETE {1 if deleted else 0}"
+        if "DELETE FROM enterprise_artifact_acls" in normalized:
+            deleted = self.artifact_acls.pop((args[0], args[1]), None)
             return f"DELETE {1 if deleted else 0}"
         if "UPDATE user_datasources SET last_used_at" in normalized:
             row = self.user_datasources.get((args[0], args[1]))
@@ -875,6 +928,22 @@ async def test_pg_artifact_acl_store_round_trips_nested_acl_and_missing_semantic
     assert await store.get_acl(artifact_type="dashboard", slug="ops") == acl
     with pytest.raises(KeyError):
         await store.get_acl(artifact_type="dashboard", slug="missing")
+
+
+@pytest.mark.asyncio
+async def test_pg_artifact_acl_store_delete_removes_acl_idempotently(fake_pg):
+    store = PgArtifactAclStore(dsn="postgresql://metadata")
+    acl = {"owner_user_id": "alice", "visibility": "private", "allowed_roles": [], "allowed_user_ids": []}
+
+    await store.put_acl(artifact_type="report", slug="sales", acl=acl)
+    await store.delete_acl(artifact_type="report", slug="sales")
+
+    with pytest.raises(KeyError):
+        await store.get_acl(artifact_type="report", slug="sales")
+
+    # Deleting a missing ACL is idempotent.
+    await store.delete_acl(artifact_type="report", slug="sales")
+    await store.delete_acl(artifact_type="report", slug="never-existed")
 
 
 @pytest.mark.asyncio

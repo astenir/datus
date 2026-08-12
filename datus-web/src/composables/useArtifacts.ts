@@ -4,6 +4,7 @@ import { toast } from "vue-sonner";
 import { useConnection } from "@/composables/useConnection";
 import { artifactShareApi, dashboardApi, reportApi } from "@/lib/api";
 import { withArtifactPreviewRuntime } from "@/lib/artifact-preview-bridge";
+import { ApiResultError } from "@/lib/chat";
 import type {
   ArtifactManifest,
   ArtifactShare,
@@ -141,6 +142,9 @@ export function useArtifacts() {
   const editLoadingKey = shallowRef<string | null>(null);
   const editError = shallowRef<string | null>(null);
   const editRequestId = shallowRef(0);
+  const deleteLoadingKey = shallowRef<string | null>(null);
+  const deleteError = shallowRef<string | null>(null);
+  const deleteRequestId = shallowRef(0);
   const previewUrls: string[] = [];
 
   const activeDetail = computed<ArtifactDetail | null>(() => {
@@ -540,6 +544,67 @@ export function useArtifacts() {
     );
   }
 
+  async function deleteArtifact(
+    tab: ArtifactViewTab,
+    slugValue: string | null | undefined,
+  ): Promise<boolean> {
+    const slug = nonEmptySlug(slugValue);
+    const requestId = deleteRequestId.value + 1;
+    deleteRequestId.value = requestId;
+    deleteError.value = null;
+    const kindLabel = tab === "report" ? "报表" : "仪表盘";
+
+    if (!slug) {
+      deleteError.value = `请选择要删除的${kindLabel}`;
+      toast.error(`请选择要删除的${kindLabel}`);
+      return false;
+    }
+
+    const key = artifactPreviewKey(tab, slug);
+    deleteLoadingKey.value = key;
+
+    try {
+      const deleted =
+        tab === "report"
+          ? await reportApi.delete(connection.effectiveBase(), slug)
+          : await dashboardApi.delete(connection.effectiveBase(), slug);
+      if (deleteRequestId.value !== requestId) return false;
+      if (!deleted) {
+        deleteError.value = `删除${kindLabel}失败`;
+        toast.error(`删除${kindLabel}失败`);
+        return false;
+      }
+
+      const items = tab === "report" ? reports : dashboards;
+      items.value = items.value.filter(item => item.slug !== slug);
+      if (activeDetailSlug.value === slug) {
+        activeDetailTab.value = null;
+        activeDetailSlug.value = null;
+        dashboardDetail.value = null;
+        reportDetail.value = null;
+        resetDashboardQuery();
+      }
+      if (activePreviewSlug.value === slug) {
+        clearPreview();
+      }
+      toast.success(`${kindLabel}已删除`);
+      return true;
+    } catch (err) {
+      if (deleteRequestId.value !== requestId) return false;
+
+      const editingActive = err instanceof ApiResultError && err.errorCode === "EDIT_SESSION_ACTIVE";
+      const message = editingActive ? `${kindLabel}正在编辑中，请稍后再试` : `删除${kindLabel}失败`;
+      console.error(`删除${kindLabel}失败:`, err);
+      deleteError.value = message;
+      toast.error(message);
+      return false;
+    } finally {
+      if (deleteRequestId.value === requestId) {
+        deleteLoadingKey.value = null;
+      }
+    }
+  }
+
   function htmlUrl(tab: ArtifactViewTab, slug: string): string {
     return artifactHtmlUrl(connection.effectiveBase(), tab, slug);
   }
@@ -582,6 +647,8 @@ export function useArtifacts() {
     shareDirectoryError: readonly(shareDirectoryError),
     editLoadingKey: readonly(editLoadingKey),
     editError: readonly(editError),
+    deleteLoadingKey: readonly(deleteLoadingKey),
+    deleteError: readonly(deleteError),
     loadArtifacts,
     loadDetail,
     runDashboardQuery,
@@ -596,5 +663,6 @@ export function useArtifacts() {
     createArtifactEditSession,
     createReportEditSession,
     createDashboardEditSession,
+    deleteArtifact,
   };
 }

@@ -20,6 +20,8 @@ import json
 import re
 from typing import Optional
 
+from datus.utils.exceptions import DatusException, ErrorCode
+
 # Stable ``error_type`` codes the frontend can map to localized copy. Keyed by
 # litellm/openai exception class names (matched anywhere in the MRO, so
 # provider-specific subclasses still resolve). Each maps to (code, fallback).
@@ -46,6 +48,10 @@ _CLASS_TO_ERROR: dict[str, tuple[str, str]] = {
     "ContextWindowExceededError": (
         "CONTEXT_LENGTH_EXCEEDED",
         "This conversation is too long for the model. Please start a new session or compact it.",
+    ),
+    "MaxTurnsExceeded": (
+        "MODEL_MAX_TURNS_EXCEEDED",
+        "The task exceeded its maximum allowed execution turns. Please start a new session or compact it, then retry.",
     ),
     "AuthenticationError": (
         "UPSTREAM_AUTH_ERROR",
@@ -94,6 +100,11 @@ def humanize_stream_error(exc: BaseException) -> tuple[str, str]:
 
 
 def _classify(exc: BaseException) -> tuple[str, str]:
+    if isinstance(exc, DatusException) and exc.code is ErrorCode.MODEL_MAX_TURNS_EXCEEDED:
+        # DatusException stringifies to ``error_code=300022, error_message=...``,
+        # which no class-name entry covers. Surface the structured code so the
+        # client can localize it instead of degrading to INTERNAL_ERROR.
+        return _CLASS_TO_ERROR["MaxTurnsExceeded"]
     for klass in type(exc).__mro__:
         mapped = _CLASS_TO_ERROR.get(klass.__name__)
         if mapped:

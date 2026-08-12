@@ -87,6 +87,49 @@ class ObUserMcpServerStore(_ObStoreBase):
         )
         return sum(1 for row in rows if _binding_references(_json_records(row["servers_json"]), mcp_id))
 
+    async def list_session_bindings(self, user_id: str, mcp_id: str) -> list[dict[str, Any]]:
+        rows = await self._fetchall(
+            "SELECT project_id, session_id, updated_at, servers_json "
+            "FROM enterprise_session_mcp_bindings WHERE user_id = %s",
+            (user_id,),
+        )
+        return [
+            {
+                "project_id": str(row["project_id"]),
+                "session_id": str(row["session_id"]),
+                "updated_at": _iso(row.get("updated_at")),
+            }
+            for row in rows
+            if _binding_references(_json_records(row["servers_json"]), mcp_id)
+        ]
+
+    async def unbind_server(self, user_id: str, mcp_id: str) -> int:
+        """Drop ``mcp_id`` from every binding of ``user_id``; delete emptied rows."""
+        rows = await self._fetchall(
+            "SELECT project_id, session_id, servers_json FROM enterprise_session_mcp_bindings WHERE user_id = %s",
+            (user_id,),
+        )
+        changed = 0
+        for row in rows:
+            servers = _json_records(row["servers_json"])
+            remaining = [item for item in servers if str(item.get("mcp_id") or "") != mcp_id]
+            if len(remaining) == len(servers):
+                continue
+            if remaining:
+                await self._execute(
+                    "UPDATE enterprise_session_mcp_bindings SET servers_json = %s, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE project_id = %s AND session_id = %s AND user_id = %s",
+                    (json.dumps(remaining, sort_keys=True), row["project_id"], row["session_id"], user_id),
+                )
+            else:
+                await self._execute(
+                    "DELETE FROM enterprise_session_mcp_bindings "
+                    "WHERE project_id = %s AND session_id = %s AND user_id = %s",
+                    (row["project_id"], row["session_id"], user_id),
+                )
+            changed += 1
+        return changed
+
     async def get_session_binding(self, project_id: str, session_id: str, user_id: str) -> dict[str, Any] | None:
         row = await self._fetchone(
             """
@@ -108,7 +151,9 @@ class ObUserMcpServerStore(_ObStoreBase):
     ) -> dict[str, Any]:
         normalized = _normalized_servers(servers)
         existing = await self.get_session_binding(project_id, session_id, user_id)
-        if existing and existing["servers"] != normalized:
+        # 按 mcp_id/revision 投影比较：旧行未快照 display_name，直接比较整行会把
+        # 升级前已绑定的会话误判为 selection locked。
+        if existing and _binding_projection(existing["servers"]) != _binding_projection(normalized):
             raise DatusException(
                 ErrorCode.COMMON_FIELD_INVALID, message="Personal MCP selection is locked for this session."
             )
@@ -185,9 +230,13 @@ def _json_list(value: Any) -> list[str]:
 
 def _normalized_servers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
-        ({"mcp_id": str(item["mcp_id"]), "revision": int(item["revision"])} for item in servers),
+        ({key: item[key] for key in ("mcp_id", "revision", "display_name") if key in item} for item in servers),
         key=lambda item: item["mcp_id"],
     )
+
+
+def _binding_projection(servers: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    return sorted((str(item.get("mcp_id") or ""), int(item.get("revision") or 0)) for item in servers)
 
 
 def _binding(row: dict[str, Any]) -> dict[str, Any]:

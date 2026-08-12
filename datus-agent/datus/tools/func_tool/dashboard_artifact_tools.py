@@ -67,7 +67,10 @@ from datus.tools.func_tool.report_artifact_tools import (
     _resolve_relative_import,
 )
 from datus.utils.loggings import get_logger
-from datus_enterprise.services.artifact_creation_acl import create_default_artifact_acl_after_manifest
+from datus_enterprise.services.artifact_creation_acl import (
+    create_default_artifact_acl_after_manifest,
+    maybe_adopt_owned_artifact,
+)
 
 logger = get_logger(__name__)
 
@@ -429,8 +432,10 @@ class DashboardArtifactTools:
         The LLM picks the ``slug`` — it doubles as the on-disk directory
         name and as the stable identifier surfaced everywhere downstream
         (SaaS list pages, IDE explorer, backend routes). The tool refuses to
-        overwrite an existing directory; retry with a different semantic slug
-        if the requested value is already reserved.
+        overwrite an existing directory; in a create-only session a collision
+        on a slug this session owns (e.g. a partial artifact a failed run
+        left behind) is **adopted** for in-place repair instead — retry with
+        a different semantic slug only when adoption is denied.
 
         Args:
             slug: Lowercase ASCII identifier matching ``^[a-z0-9_]{1,80}$``.
@@ -500,21 +505,29 @@ class DashboardArtifactTools:
         try:
             candidate.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
-            if not self._allow_bind_existing:
+            if self._allow_bind_existing:
                 return FuncToolResult(
                     success=0,
                     error=(
-                        f"dashboards/{slug}/ already exists. Pick a different slug; existing dashboards "
-                        "can only be opened through an ACL-authorized edit session."
+                        f"dashboards/{slug}/ already exists. Pick a different slug — first `glob('dashboards/*')` "
+                        "to see what's taken, or call `bind_existing_dashboard` if you meant to edit it."
                     ),
                 )
-            return FuncToolResult(
-                success=0,
-                error=(
-                    f"dashboards/{slug}/ already exists. Pick a different slug — first `glob('dashboards/*')` "
-                    "to see what's taken, or call `bind_existing_dashboard` if you meant to edit it."
-                ),
+            # Create-only session: the slug already exists on disk. When this
+            # session owns it (a partial artifact from a failed run of the same
+            # conversation), adopt it so the follow-up run can repair/continue
+            # it instead of silently spawning a duplicate under a new slug.
+            adoption_error = await maybe_adopt_owned_artifact(
+                self.agent_config,
+                artifact_type="dashboard",
+                slug=slug,
             )
+            if adoption_error is not None:
+                return FuncToolResult(
+                    success=0,
+                    error=(f"dashboards/{slug}/ already exists. {adoption_error} Pick a different slug and retry."),
+                )
+            return self._adopt_existing_dashboard(slug)
         except OSError as exc:
             return FuncToolResult(success=0, error=f"Failed to reserve dashboards/{slug}/: {exc}")
         result = self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
@@ -536,6 +549,62 @@ class DashboardArtifactTools:
         if not self._allow_bind_existing:
             self._locked_dashboard_slug = slug
             self._allow_create = False
+        return result
+
+    def _adopt_existing_dashboard(self, dashboard_slug: str) -> FuncToolResult:
+        """Adopt an existing dashboard directory as this run's recovery target.
+
+        Called from ``start_new_dashboard`` when the requested slug already
+        exists and the create-only session owns it (ownership verified by
+        :func:`maybe_adopt_owned_artifact`). Mirrors the locked edit-session
+        bootstrap: missing manifest / directories / ``render/app.jsx`` are
+        repaired in place and surfaced via ``bootstrap_warning``, and the
+        filesystem is bound to the adopted slug so every mutation stays
+        inside it. The one-artifact-per-run lock is kept so the run cannot
+        create a second artifact after adopting.
+        """
+        candidate = self._project_root / "dashboards" / dashboard_slug
+        manifest_path = candidate / "manifest.json"
+        manifest_missing = not manifest_path.is_file()
+        required_dirs = {
+            "render": candidate / "render",
+            "queries": candidate / "queries",
+            "analysis": candidate / "analysis",
+        }
+        missing_dirs = [name for name, path in required_dirs.items() if not path.is_dir()]
+        missing_app = not (candidate / "render" / "app.jsx").is_file()
+
+        manifest = None
+        if manifest_missing:
+            manifest = ArtifactManifest(
+                slug=dashboard_slug,
+                name=dashboard_slug,
+                description=(
+                    "Recovered incomplete dashboard artifact. Replace this description after the "
+                    "dashboard render tree is rebuilt."
+                ),
+                kind="dashboard",
+                created_at=utc_now_iso(),
+            )
+        result = self._activate(dashboard_slug, mode="edit", create_dirs=True, manifest=manifest)
+        if result.success == 1 and isinstance(result.result, dict):
+            missing_items = []
+            if manifest_missing:
+                missing_items.append("manifest.json")
+            missing_items.extend(f"{name}/" for name in missing_dirs)
+            if missing_app:
+                missing_items.append("render/app.jsx")
+            missing_text = ", ".join(missing_items)
+            result.result["bootstrap_warning"] = (
+                f"dashboards/{dashboard_slug}/ already existed and was adopted for recovery "
+                f"(incomplete: {missing_text}); inspect the tree, write or repair render/app.jsx "
+                "if needed, then call validate_render()."
+            )
+        if result.success == 1 and self._on_artifact_authorized is not None:
+            self._on_artifact_authorized(dashboard_slug)
+        # Keep the create-session's one-artifact-per-run lock.
+        self._locked_dashboard_slug = dashboard_slug
+        self._allow_create = False
         return result
 
     def bind_existing_dashboard(self, dashboard_slug: str) -> FuncToolResult:

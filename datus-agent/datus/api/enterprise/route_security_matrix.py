@@ -258,6 +258,28 @@ _ARTIFACT_DASHBOARD_EDIT_SESSION_POLICY = _policy(
     data_boundaries={ARTIFACT_ACL},
     note="Creates a process-local dashboard edit subagent after owner/admin artifact edit authorization.",
 )
+_ARTIFACT_DASHBOARD_DELETE_POLICY = _policy(
+    MODULE_RBAC,
+    ARTIFACT_ACL,
+    AUDIT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.dashboard.edit",
+    audit_action="artifact.delete",
+    data_boundaries={ARTIFACT_ACL},
+    note="Permanently removes a dashboard directory and its share ACL after owner/admin artifact edit authorization.",
+)
+_ARTIFACT_REPORT_DELETE_POLICY = _policy(
+    MODULE_RBAC,
+    ARTIFACT_ACL,
+    AUDIT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.report.edit",
+    audit_action="artifact.delete",
+    data_boundaries={ARTIFACT_ACL},
+    note="Permanently removes a report directory and its share ACL after owner/admin artifact edit authorization.",
+)
 
 _add("GET", "/", _LOCAL_READ_POLICY)
 _add("GET", "/health", _LOCAL_READ_POLICY)
@@ -603,6 +625,18 @@ _add(
         note="Personal MCP binding is visible only after the canonical session owner check.",
     ),
 )
+_add(
+    "GET",
+    "/api/v1/me/mcp-servers/{mcp_id}/references",
+    _policy(
+        MODULE_RBAC,
+        TOOL_PERMISSION,
+        SESSION_OWNER,
+        SYSTEM_READONLY,
+        module_permission="module.mcp.personal",
+        note="Session references of a personal MCP are owner-scoped and read-only; used by the delete confirmation dialog.",
+    ),
+)
 _add_many(
     "POST",
     [
@@ -720,6 +754,8 @@ _add(
 )
 _add("GET", "/api/v1/report/detail", _ARTIFACT_REPORT_VIEW_POLICY)
 _add("POST", "/api/v1/reports/{slug}/edit-sessions", _ARTIFACT_REPORT_EDIT_SESSION_POLICY)
+_add("DELETE", "/api/v1/reports/{slug}", _ARTIFACT_REPORT_DELETE_POLICY)
+_add("DELETE", "/api/v1/dashboards/{slug}", _ARTIFACT_DASHBOARD_DELETE_POLICY)
 
 _add_many(
     "GET",

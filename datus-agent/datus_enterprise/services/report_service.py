@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -68,6 +69,45 @@ class EnterpriseReportService(ReportService):
 
         manifests.sort(key=lambda manifest: manifest.updated_at or manifest.created_at or "", reverse=True)
         return Result(success=True, data=manifests)
+
+    async def delete_report(
+        self,
+        *,
+        project_files_root: Path,
+        report_slug: str,
+    ) -> Result[bool]:
+        """Delete one report artifact directory from disk.
+
+        ACL metadata cleanup is the caller's responsibility (the ACL store
+        is an enterprise-extension hook, not part of the upstream service
+        contract). Returns ``success=True`` only after the directory is gone.
+        """
+
+        report_dir = _resolve_report_dir(project_files_root, report_slug)
+        if report_dir is None:
+            return Result(
+                success=False,
+                errorCode="INVALID_REPORT_SLUG",
+                errorMessage=f"report_slug must match {REPORT_SLUG_RE.pattern}",
+            )
+        if not await asyncio.to_thread(report_dir.is_dir):
+            return Result(
+                success=False,
+                errorCode="REPORT_NOT_FOUND",
+                errorMessage=f"report {report_slug!r} not found",
+            )
+
+        try:
+            await asyncio.to_thread(shutil.rmtree, report_dir)
+        except Exception as exc:
+            logger.exception("Failed to delete report %s: %s", report_slug, exc)
+            return Result(
+                success=False,
+                errorCode="DELETE_FAILED",
+                errorMessage=f"failed to delete report {report_slug!r}",
+            )
+
+        return Result(success=True, data=True)
 
     async def render_html(
         self,

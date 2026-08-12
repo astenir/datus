@@ -19,20 +19,56 @@ from datus.utils.datasource_scope import SCOPE_CONSTRAINTS_KEY
 router = APIRouter(prefix="/api/v1", tags=["enterprise-me"])
 RequestContextDep = Annotated[AppContext, Depends(deps.get_request_app_context)]
 
+# 每个能力域可被一个或多个权限点点亮；同一角色的多个权限点或通配符（如 module.*）
+# 都会被 _features_for_permissions 计入。覆盖范围与角色页可授予的权限保持一致。
 _FEATURE_PERMISSIONS = {
-    "chat": "module.chat",
-    "sql_executor": "module.sql_executor",
-    "datasource_catalog": "module.datasource_catalog",
-    "report_view": "module.report.view",
-    "report_query": "module.report.query",
-    "dashboard_view": "module.dashboard.view",
-    "dashboard_query": "module.dashboard.query",
-    "kb": "module.kb",
-    "mcp": "module.mcp",
-    "mcp_personal": "module.mcp.personal",
-    "admin": "module.admin.*",
-    "config_view": "module.config.view",
-    "config_edit": "module.config.edit",
+    "chat": ("module.chat",),
+    "chat_permission_mode": ("module.chat.permission_mode",),
+    "sql_executor": ("module.sql_executor",),
+    "datasource_catalog": ("module.datasource_catalog",),
+    "kb": ("module.kb",),
+    "mcp": ("module.mcp",),
+    "mcp_personal": ("module.mcp.personal",),
+    "mcp_server": (
+        "mcp.server.list",
+        "mcp.server.tools",
+        "mcp.server.connectivity",
+        "mcp.server.add",
+        "mcp.server.edit",
+        "mcp.server.remove",
+    ),
+    "mcp_filter": ("mcp.filter.view", "mcp.filter.set", "mcp.filter.remove"),
+    "mcp_personal_ops": (
+        "mcp.personal.list",
+        "mcp.personal.create",
+        "mcp.personal.edit",
+        "mcp.personal.remove",
+        "mcp.personal.connectivity",
+        "mcp.personal.tools",
+        "mcp.personal.use",
+    ),
+    "report_view": ("module.report.view",),
+    "report_query": ("module.report.query",),
+    "report_export": ("module.report.export",),
+    "report_edit": ("module.report.edit",),
+    "dashboard_view": ("module.dashboard.view",),
+    "dashboard_query": ("module.dashboard.query",),
+    "dashboard_export": ("module.dashboard.export",),
+    "dashboard_edit": ("module.dashboard.edit",),
+    "agent_manage": ("module.admin.agents",),
+    "user_manage": ("module.admin.users",),
+    "role_manage": ("module.admin.roles",),
+    "datasource_manage": ("module.admin.datasources",),
+    "artifact_manage": ("module.admin.artifacts",),
+    "session_manage": ("module.admin.sessions",),
+    "audit_view": ("module.admin.audit",),
+    "audit_export": ("module.admin.audit.export",),
+    "quota_manage": ("module.admin.quotas",),
+    "secret_manage": ("module.admin.secrets",),
+    "config_view": ("module.config.view",),
+    "config_edit": ("module.config.edit",),
+    "system_status": ("module.system.status",),
+    "admin": ("module.admin.*",),
 }
 
 _VIEW_PERMISSIONS = {
@@ -163,8 +199,12 @@ def _views(ctx: AppContext) -> dict[str, bool]:
 
 def _features_for_permissions(permissions: list[str]) -> dict[str, bool]:
     return {
-        feature: any(permission == "*" or fnmatchcase(required, permission) for permission in permissions)
-        for feature, required in _FEATURE_PERMISSIONS.items()
+        feature: any(
+            permission == "*" or fnmatchcase(required, permission)
+            for required in required_permissions
+            for permission in permissions
+        )
+        for feature, required_permissions in _FEATURE_PERMISSIONS.items()
     }
 
 

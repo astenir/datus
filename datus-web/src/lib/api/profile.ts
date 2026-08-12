@@ -13,8 +13,10 @@ import type {
   PersonalDatasourceProviderOptions,
   PersonalDatasourceSummary,
   PersonalMcpConnectivityResult,
+  PersonalMcpDeleteResult,
   PersonalMcpOptions,
   PersonalMcpSessionBinding,
+  PersonalMcpSessionReference,
   PersonalMcpSummary,
   PersonalMcpToolSummary,
   UpdateModelPreferenceInput,
@@ -146,9 +148,17 @@ export const meApi = {
     );
   },
 
-  deletePersonalMcp(id: string, signal?: AbortSignal): Promise<ApiResponse<{ deleted: boolean }>> {
-    return del<ApiResponse<{ deleted: boolean }>>(
-      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}`,
+  deletePersonalMcp(id: string, force = false, signal?: AbortSignal): Promise<ApiResponse<PersonalMcpDeleteResult>> {
+    const query = force ? "?force=1" : "";
+    return del<ApiResponse<PersonalMcpDeleteResult>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}${query}`,
+      { signal },
+    );
+  },
+
+  personalMcpReferences(id: string, signal?: AbortSignal): Promise<ApiResponse<PersonalMcpSessionReference[]>> {
+    return get<ApiResponse<PersonalMcpSessionReference[]>>(
+      `/api/v1/me/mcp-servers/${encodeURIComponent(id)}/references`,
       { signal },
     );
   },

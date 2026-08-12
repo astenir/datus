@@ -142,6 +142,9 @@ class _ArtifactAclStore:
     async def put_acl(self, *, artifact_type, slug, acl):
         return acl
 
+    async def delete_acl(self, *, artifact_type, slug):
+        return None
+
 
 class _LegacyOwnerStore:
     async def set_owner(self, project_id, session_id, user_id):

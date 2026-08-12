@@ -13,6 +13,7 @@ async function renderGrid(items: ArtifactManifest[], loading = false): Promise<s
     openingSlug: null,
     sharingSlug: null,
     editingSlug: null,
+    deletingSlug: null,
     editEnabled: true,
   });
   return renderToString(app);
@@ -31,20 +32,7 @@ describe("ArtifactCollectionGrid", () => {
     expect(html).not.toContain("xl:grid-cols-3");
   });
 
-  it("does not expose edit when the owner can share but lacks edit capability", async () => {
-    const html = await renderGrid([{
-      slug: "fund-overview",
-      name: "Fund Overview",
-      description: "Dashboard",
-      can_manage_share: true,
-      can_edit: false,
-    }]);
-
-    expect(html).toContain("分享");
-    expect(html).not.toContain("编辑");
-  });
-
-  it("exposes edit when the backend grants artifact edit capability", async () => {
+  it("exposes edit directly and keeps the more menu when the backend grants edit capability", async () => {
     const html = await renderGrid([{
       slug: "fund-overview",
       name: "Fund Overview",
@@ -54,6 +42,35 @@ describe("ArtifactCollectionGrid", () => {
     }]);
 
     expect(html).toContain("编辑");
+    expect(html).toContain("更多");
+  });
+
+  it("keeps the more menu for share-only users without an edit button", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      can_manage_share: true,
+      can_edit: false,
+    }]);
+
+    expect(html).toContain("更多");
+    expect(html).not.toContain("编辑");
+    expect(html).not.toContain("删除");
+  });
+
+  it("keeps a two-action footer when the user has no share or edit capability", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      can_manage_share: false,
+      can_edit: false,
+    }]);
+
+    expect(html).toContain("详情");
+    expect(html).toContain("查看");
+    expect(html).not.toContain("更多");
   });
 
   it("shows the artifact owner display name", async () => {
@@ -91,6 +108,31 @@ describe("ArtifactCollectionGrid", () => {
 
     expect(html).toContain("未知作者");
     expect(html).toContain("作者：未知");
+  });
+
+  it("shows the artifact creation date on the same line as the author", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+      owner_display_name: "Owner User",
+      created_at: "2026-07-23T08:56:00Z",
+    }]);
+
+    expect(html).toContain("2026/07/23");
+    expect(html).toContain("创建时间：");
+  });
+
+  it("hides the creation date when the manifest has no created_at", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+    }]);
+
+    expect(html).not.toContain("创建时间：");
   });
 
   it("shows a loading state instead of the empty state during the initial request", async () => {

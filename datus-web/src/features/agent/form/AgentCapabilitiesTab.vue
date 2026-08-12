@@ -12,6 +12,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { AgentManagerController } from "@/composables/useAgentManager"
 import SearchableMultiSelect from "@/features/shared/SearchableMultiSelect.vue"
 
@@ -24,6 +32,14 @@ const customSkillInput = defineModel<string>("customSkillInput", { required: tru
 
 const defaultUseTools = computed(() => props.manager.selectedUseTools.value?.default_tools ?? [])
 const mcpServerOptions = computed(() => props.manager.mcpServerOptions.value)
+const policyModeLabel = computed(() =>
+  props.manager.form.value.toolPolicyMode === "allowlist" ? "仅允许所选工具" : "继承节点工具"
+)
+const personalMcpModeLabel = computed(() =>
+  props.manager.form.value.personalMcpMode === "selectable"
+    ? "允许用户在新会话选择"
+    : "禁用"
+)
 const selectedMcpList = computed(() =>
   props.manager.form.value.mcpText
     .split(/[\n,]/)
@@ -43,74 +59,132 @@ function addCustomSkill() {
 <template>
   <div class="flex flex-col gap-5">
     <div>
-      <h2 class="text-lg font-semibold">扩展能力</h2>
-      <p class="mt-1 text-sm text-muted-foreground">选择 Agent 可以调用的工具、MCP Server 和 Skill。</p>
+      <h2 class="text-lg font-semibold">工具与扩展能力</h2>
+      <p class="mt-1 text-sm text-muted-foreground">
+        配置 Agent 可以调用的工具、MCP Server 和 Skill，并定义工具的允许与拒绝策略。
+      </p>
     </div>
 
+    <FieldGroup class="grid gap-5 md:grid-cols-2">
+      <Field class="md:col-span-2">
+        <FieldLabel for="agent-tool-policy-mode">工具策略</FieldLabel>
+        <Select v-model="props.manager.form.value.toolPolicyMode">
+          <SelectTrigger id="agent-tool-policy-mode" class="w-full">
+            <SelectValue>{{ policyModeLabel }}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="allowlist">仅允许所选工具</SelectItem>
+              <SelectItem value="inherit">继承节点工具</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <FieldDescription>建议企业自定义 Chat 使用允许列表。</FieldDescription>
+      </Field>
+
+      <Field>
+        <div class="flex items-center justify-between gap-2">
+          <FieldLabel>工具</FieldLabel>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            :disabled="props.readonly || defaultUseTools.length === 0"
+            @click="props.manager.applyDefaultTools"
+          >
+            <ListChecksIcon data-icon="inline-start" />
+            使用默认值
+          </Button>
+        </div>
+        <SearchableMultiSelect
+          :options="props.manager.toolOptions.value"
+          :selected-values="props.manager.selectedTools.value"
+          :disabled="props.readonly || props.manager.toolsLoading.value"
+          placeholder="选择工具"
+          search-placeholder="搜索工具或分类"
+          empty-text="未选择工具；保存时后端会按节点类型使用默认行为。"
+          @toggle="props.manager.toggleListFieldValue('toolsText', $event)"
+        />
+        <FieldDescription v-if="props.manager.form.value.toolPolicyMode === 'allowlist'">
+          允许列表模式下，未选中的工具不会暴露给模型。
+        </FieldDescription>
+        <FieldDescription v-else>
+          继承模式下，所选工具仍决定实际加载的工具集；留空时按节点类型加载默认工具。
+        </FieldDescription>
+        <FieldDescription>
+          目录未返回精确项的节点默认工具标记为“默认”；其他已保存值标记为“当前配置”。
+        </FieldDescription>
+      </Field>
+
+      <Field>
+        <FieldLabel>拒绝工具</FieldLabel>
+        <SearchableMultiSelect
+          :options="props.manager.deniedToolOptions.value"
+          :selected-values="props.manager.deniedTools.value"
+          placeholder="选择必须禁止的工具"
+          search-placeholder="搜索工具名称或分类..."
+          empty-text="未设置额外拒绝规则"
+          no-results-text="没有匹配工具"
+          @toggle="props.manager.toggleListFieldValue('deniedToolsText', $event)"
+        />
+        <FieldDescription>
+          拒绝规则在所有执行上下文生效（含本地/CLI 会话）；Web 与企业会话的服务端 Bash 由后端强制禁用，无法通过本页重新启用。其他工具仍遵循拒绝优先。
+        </FieldDescription>
+      </Field>
+
+      <Field>
+        <FieldLabel>Skills</FieldLabel>
+        <SearchableMultiSelect
+          :options="props.manager.skillOptions.value"
+          :selected-values="props.manager.selectedSkills.value"
+          :disabled="props.readonly || props.manager.skillOptions.value.length === 0"
+          placeholder="选择 Skill"
+          search-placeholder="搜索 Skill"
+          empty-text="未选择 Skill。"
+          @toggle="props.manager.toggleListFieldValue('skillsText', $event)"
+        />
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <Input
+            v-model="customSkillInput"
+            :readonly="props.readonly"
+            placeholder="添加自定义 Skill"
+            @keydown.enter.prevent="addCustomSkill"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="props.readonly || !customSkillInput.trim()"
+            @click="addCustomSkill"
+          >
+            <PlusIcon data-icon="inline-start" />
+            添加
+          </Button>
+        </div>
+        <FieldDescription>
+          当前后端未提供全量 Skill 目录，可按标签添加项目内已有 Skill。
+        </FieldDescription>
+      </Field>
+
+      <Field>
+        <FieldLabel for="agent-personal-mcp-mode">个人 MCP</FieldLabel>
+        <Select v-model="props.manager.form.value.personalMcpMode">
+          <SelectTrigger id="agent-personal-mcp-mode" class="w-full">
+            <SelectValue>{{ personalMcpModeLabel }}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="disabled">禁用</SelectItem>
+              <SelectItem value="selectable">允许用户在新会话选择</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <FieldDescription>
+          这里仅开放选择能力，不绑定任何个人资源。用户在 Chat 新会话中选择自己的 MCP；企业 MCP 绑定见下方区块。
+        </FieldDescription>
+      </Field>
+    </FieldGroup>
+
     <FieldGroup class="gap-5">
-      <div class="grid gap-5 lg:grid-cols-2">
-        <Field>
-          <div class="flex items-center justify-between gap-2">
-            <FieldLabel>工具</FieldLabel>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              :disabled="props.readonly || defaultUseTools.length === 0"
-              @click="props.manager.applyDefaultTools"
-            >
-              <ListChecksIcon data-icon="inline-start" />
-              使用默认值
-            </Button>
-          </div>
-          <SearchableMultiSelect
-            :options="props.manager.toolOptions.value"
-            :selected-values="props.manager.selectedTools.value"
-            :disabled="props.readonly || props.manager.toolsLoading.value"
-            placeholder="选择工具"
-            search-placeholder="搜索工具或分类"
-            empty-text="未选择工具；保存时后端会按节点类型使用默认行为。"
-            @toggle="props.manager.toggleListFieldValue('toolsText', $event)"
-          />
-          <FieldDescription>
-            目录未返回精确项的节点默认工具标记为“默认”；其他已保存值标记为“当前配置”。
-          </FieldDescription>
-        </Field>
-
-        <Field>
-          <FieldLabel>Skills</FieldLabel>
-          <SearchableMultiSelect
-            :options="props.manager.skillOptions.value"
-            :selected-values="props.manager.selectedSkills.value"
-            :disabled="props.readonly || props.manager.skillOptions.value.length === 0"
-            placeholder="选择 Skill"
-            search-placeholder="搜索 Skill"
-            empty-text="未选择 Skill。"
-            @toggle="props.manager.toggleListFieldValue('skillsText', $event)"
-          />
-          <div class="flex flex-col gap-2 sm:flex-row">
-            <Input
-              v-model="customSkillInput"
-              :readonly="props.readonly"
-              placeholder="添加自定义 Skill"
-              @keydown.enter.prevent="addCustomSkill"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              :disabled="props.readonly || !customSkillInput.trim()"
-              @click="addCustomSkill"
-            >
-              <PlusIcon data-icon="inline-start" />
-              添加
-            </Button>
-          </div>
-          <FieldDescription>
-            当前后端未提供全量 Skill 目录，可按标签添加项目内已有 Skill。
-          </FieldDescription>
-        </Field>
-      </div>
-
       <Alert v-if="!props.manager.selectedNodeSupportsMcp.value">
         <BotIcon />
         <AlertTitle>当前节点类型不支持 MCP</AlertTitle>

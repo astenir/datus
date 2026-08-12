@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue"
-import { AlertCircleIcon, PlusIcon, SaveIcon } from "@lucide/vue"
+import { AlertCircleIcon, PlusIcon, SaveIcon, XIcon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -24,22 +24,29 @@ import {
 } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
+import { usePersonalMcp } from "@/composables/usePersonalMcp"
+import { reconcileToolFilter } from "@/features/mcp/personal-mcp-tool-filter"
 import type {
   PersonalMcpOptions,
   PersonalMcpSummary,
+  PersonalMcpToolSummary,
   PersonalMcpTransport,
   UpsertPersonalMcpInput,
 } from "@/types/profile"
 
 const open = defineModel<boolean>("open", { default: false })
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   mode: "create" | "edit"
   server?: PersonalMcpSummary | null
   submitting: boolean
   options?: PersonalMcpOptions | null
-}>()
+  canViewTools?: boolean
+}>(), {
+  server: null,
+  options: null,
+  canViewTools: false,
+})
 
 const emit = defineEmits<{
   submit: [input: UpsertPersonalMcpInput]
@@ -50,13 +57,20 @@ interface PersonalMcpForm {
   transport: PersonalMcpTransport
   url: string
   token: string
-  allowedToolsText: string
-  blockedToolsText: string
+  // 已勾选的工具名；允许/禁止互斥，禁止列表优先于允许列表。
+  allowedTools: string[]
+  blockedTools: string[]
   enabled: boolean
 }
 
+const manager = usePersonalMcp()
 const form = reactive<PersonalMcpForm>(defaultForm())
 const error = shallowRef("")
+// 已加载的工具快照；已配置但列表中没有的名字单独保留，防止保存时静默丢失。
+const availableTools = shallowRef<PersonalMcpToolSummary[]>([])
+const unknownAllowed = shallowRef<string[]>([])
+const unknownBlocked = shallowRef<string[]>([])
+const toolsLoading = shallowRef(false)
 const isEdit = computed(() => props.mode === "edit")
 const title = computed(() => isEdit.value ? "编辑个人 MCP" : "添加个人 MCP")
 // 组织级网络策略：默认严格（仅 HTTPS + 公网 + 白名单），管理员显式放开后才允许
@@ -65,11 +79,19 @@ const allowInsecureHttp = computed(() => props.options?.allow_insecure_http === 
 const allowPrivateHosts = computed(() => props.options?.allow_private_hosts === true)
 const urlLabel = computed(() => allowInsecureHttp.value ? "MCP URL" : "HTTPS URL")
 const plaintextUrl = computed(() => form.url.trim().toLowerCase().startsWith("http://"))
+// 工具过滤只支持勾选已加载的工具：新建时（尚无连接）和有查看工具权限时只给提示，
+// 编辑且工具列表可用时渲染勾选清单，不存在盲填入口。
+const showToolCheckboxes = computed(() => isEdit.value && props.canViewTools)
 
 watch(open, (value) => {
   if (!value) return
-  Object.assign(form, defaultForm(props.server))
+  const server = props.server
+  Object.assign(form, defaultForm(server))
   error.value = ""
+  availableTools.value = []
+  unknownAllowed.value = []
+  unknownBlocked.value = []
+  if (server && isEdit.value) void syncTools(server)
 })
 
 function defaultForm(server?: PersonalMcpSummary | null): PersonalMcpForm {
@@ -78,14 +100,52 @@ function defaultForm(server?: PersonalMcpSummary | null): PersonalMcpForm {
     transport: server?.transport ?? "http",
     url: server?.url ?? "",
     token: "",
-    allowedToolsText: server?.allowed_tools.join("\n") ?? "",
-    blockedToolsText: server?.blocked_tools.join("\n") ?? "",
+    allowedTools: [...(server?.allowed_tools ?? [])],
+    blockedTools: [...(server?.blocked_tools ?? [])],
     enabled: server?.enabled ?? true,
   }
 }
 
-function toolNames(value: string): string[] {
-  return [...new Set(value.split(/[\n,]/).map(item => item.trim()).filter(Boolean))]
+async function syncTools(server: PersonalMcpSummary): Promise<void> {
+  toolsLoading.value = true
+  try {
+    await manager.loadTools(server.id)
+  } finally {
+    toolsLoading.value = false
+  }
+  const loaded = [...(manager.tools.value[server.id] ?? [])]
+  availableTools.value = loaded
+  form.allowedTools = reconcileToolFilter(server.allowed_tools, loaded).known
+  form.blockedTools = reconcileToolFilter(server.blocked_tools, loaded).known
+  unknownAllowed.value = reconcileToolFilter(server.allowed_tools, loaded).unknown
+  unknownBlocked.value = reconcileToolFilter(server.blocked_tools, loaded).unknown
+}
+
+// 允许/禁止互斥：勾选一边自动从另一边移除，避免出现无意义的双列表项。
+function toggleAllowed(name: string, checked: boolean): void {
+  if (checked) {
+    if (!form.allowedTools.includes(name)) form.allowedTools.push(name)
+    form.blockedTools = form.blockedTools.filter(item => item !== name)
+  } else {
+    form.allowedTools = form.allowedTools.filter(item => item !== name)
+  }
+}
+
+function toggleBlocked(name: string, checked: boolean): void {
+  if (checked) {
+    if (!form.blockedTools.includes(name)) form.blockedTools.push(name)
+    form.allowedTools = form.allowedTools.filter(item => item !== name)
+  } else {
+    form.blockedTools = form.blockedTools.filter(item => item !== name)
+  }
+}
+
+function removeUnknown(name: string, target: "allowed" | "blocked"): void {
+  if (target === "allowed") {
+    unknownAllowed.value = unknownAllowed.value.filter(item => item !== name)
+  } else {
+    unknownBlocked.value = unknownBlocked.value.filter(item => item !== name)
+  }
 }
 
 function submitForm(): void {
@@ -111,8 +171,8 @@ function submitForm(): void {
     display_name: displayName,
     transport: form.transport,
     url,
-    allowed_tools: toolNames(form.allowedToolsText),
-    blocked_tools: toolNames(form.blockedToolsText),
+    allowed_tools: [...new Set([...form.allowedTools, ...unknownAllowed.value])],
+    blocked_tools: [...new Set([...form.blockedTools, ...unknownBlocked.value])],
     enabled: form.enabled,
   }
   const token = form.token.trim()
@@ -218,32 +278,142 @@ function submitForm(): void {
             </FieldDescription>
           </Field>
 
-          <div class="grid gap-4 md:grid-cols-2">
-            <Field>
-              <FieldLabel for="personal-mcp-allowed-tools">允许工具</FieldLabel>
-              <Textarea
-                id="personal-mcp-allowed-tools"
-                v-model="form.allowedToolsText"
-                class="min-h-24 font-mono text-xs leading-6"
-                placeholder="query\nsearch"
-                spellcheck="false"
-                :disabled="props.submitting"
-              />
-              <FieldDescription>逗号或换行分隔；留空表示不设置允许列表。</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel for="personal-mcp-blocked-tools">禁止工具</FieldLabel>
-              <Textarea
-                id="personal-mcp-blocked-tools"
-                v-model="form.blockedToolsText"
-                class="min-h-24 font-mono text-xs leading-6"
-                placeholder="delete\nwrite"
-                spellcheck="false"
-                :disabled="props.submitting"
-              />
-              <FieldDescription>禁止列表优先于允许列表。</FieldDescription>
-            </Field>
-          </div>
+          <template v-if="showToolCheckboxes">
+            <div class="grid gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel>允许工具</FieldLabel>
+                <div
+                  v-if="toolsLoading"
+                  class="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground"
+                >
+                  <Spinner />
+                  正在加载工具...
+                </div>
+                <div
+                  v-else
+                  class="max-h-48 overflow-y-auto rounded-md border p-1.5"
+                >
+                  <label
+                    v-for="tool in availableTools"
+                    :key="tool.name"
+                    class="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-0.5 size-4 accent-primary"
+                      :checked="form.allowedTools.includes(tool.name)"
+                      :disabled="props.submitting"
+                      @change="toggleAllowed(tool.name, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span class="min-w-0">
+                      <span class="block truncate font-mono text-xs leading-5">{{ tool.name }}</span>
+                      <span
+                        v-if="tool.description"
+                        class="block truncate text-xs text-muted-foreground"
+                      >{{ tool.description }}</span>
+                    </span>
+                  </label>
+                  <p
+                    v-if="availableTools.length === 0"
+                    class="px-2 py-1.5 text-sm text-muted-foreground"
+                  >
+                    暂无可用工具，或工具列表加载失败；可先测试连接后再试。
+                  </p>
+                </div>
+                <div
+                  v-if="unknownAllowed.length > 0"
+                  class="mt-2 flex flex-wrap items-center gap-1.5"
+                >
+                  <span class="text-xs text-muted-foreground">已配置但未加载：</span>
+                  <button
+                    v-for="name in unknownAllowed"
+                    :key="name"
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs hover:bg-muted"
+                    :disabled="props.submitting"
+                    @click="removeUnknown(name, 'allowed')"
+                  >
+                    {{ name }}
+                    <XIcon class="size-3" />
+                  </button>
+                </div>
+                <FieldDescription>勾选要允许的工具；已配置但未加载的名字会保留，点击可移除。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel>禁止工具</FieldLabel>
+                <div
+                  v-if="toolsLoading"
+                  class="flex items-center gap-2 rounded-md border p-3 text-sm text-muted-foreground"
+                >
+                  <Spinner />
+                  正在加载工具...
+                </div>
+                <div
+                  v-else
+                  class="max-h-48 overflow-y-auto rounded-md border p-1.5"
+                >
+                  <label
+                    v-for="tool in availableTools"
+                    :key="tool.name"
+                    class="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-0.5 size-4 accent-primary"
+                      :checked="form.blockedTools.includes(tool.name)"
+                      :disabled="props.submitting"
+                      @change="toggleBlocked(tool.name, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span class="min-w-0">
+                      <span class="block truncate font-mono text-xs leading-5">{{ tool.name }}</span>
+                      <span
+                        v-if="tool.description"
+                        class="block truncate text-xs text-muted-foreground"
+                      >{{ tool.description }}</span>
+                    </span>
+                  </label>
+                  <p
+                    v-if="availableTools.length === 0"
+                    class="px-2 py-1.5 text-sm text-muted-foreground"
+                  >
+                    暂无可用工具，或工具列表加载失败；可先测试连接后再试。
+                  </p>
+                </div>
+                <div
+                  v-if="unknownBlocked.length > 0"
+                  class="mt-2 flex flex-wrap items-center gap-1.5"
+                >
+                  <span class="text-xs text-muted-foreground">已配置但未加载：</span>
+                  <button
+                    v-for="name in unknownBlocked"
+                    :key="name"
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs hover:bg-muted"
+                    :disabled="props.submitting"
+                    @click="removeUnknown(name, 'blocked')"
+                  >
+                    {{ name }}
+                    <XIcon class="size-3" />
+                  </button>
+                </div>
+                <FieldDescription>勾选要禁止的工具；已配置但未加载的名字会保留，点击可移除。禁止列表优先于允许列表。</FieldDescription>
+              </Field>
+            </div>
+          </template>
+
+          <Field v-else-if="isEdit">
+            <FieldLabel>允许/禁止工具</FieldLabel>
+            <FieldDescription>
+              当前角色没有查看 MCP 工具的权限，无法配置允许/禁止工具。请联系管理员开通后重试。
+            </FieldDescription>
+          </Field>
+
+          <Field v-else>
+            <FieldLabel>允许/禁止工具</FieldLabel>
+            <FieldDescription>
+              添加并成功连接后即可查看该 MCP 提供的工具，届时可在编辑中勾选允许/禁止的工具，无需在此预先填写工具名。
+            </FieldDescription>
+          </Field>
 
           <Field class="flex-row items-center justify-between rounded-md border p-3">
             <div>

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -68,6 +69,45 @@ class EnterpriseDashboardService(DashboardService):
 
         manifests.sort(key=lambda manifest: manifest.updated_at or manifest.created_at or "", reverse=True)
         return Result(success=True, data=manifests)
+
+    async def delete_dashboard(
+        self,
+        *,
+        project_files_root: Path,
+        dashboard_slug: str,
+    ) -> Result[bool]:
+        """Delete one dashboard artifact directory from disk.
+
+        ACL metadata cleanup is the caller's responsibility (the ACL store
+        is an enterprise-extension hook, not part of the upstream service
+        contract). Returns ``success=True`` only after the directory is gone.
+        """
+
+        dashboard_dir = _resolve_dashboard_dir(project_files_root, dashboard_slug)
+        if dashboard_dir is None:
+            return Result(
+                success=False,
+                errorCode="INVALID_DASHBOARD_SLUG",
+                errorMessage=f"dashboard_slug must match {DASHBOARD_SLUG_RE.pattern}",
+            )
+        if not await asyncio.to_thread(dashboard_dir.is_dir):
+            return Result(
+                success=False,
+                errorCode="DASHBOARD_NOT_FOUND",
+                errorMessage=f"dashboard {dashboard_slug!r} not found",
+            )
+
+        try:
+            await asyncio.to_thread(shutil.rmtree, dashboard_dir)
+        except Exception as exc:
+            logger.exception("Failed to delete dashboard %s: %s", dashboard_slug, exc)
+            return Result(
+                success=False,
+                errorCode="DELETE_FAILED",
+                errorMessage=f"failed to delete dashboard {dashboard_slug!r}",
+            )
+
+        return Result(success=True, data=True)
 
     async def render_html(
         self,

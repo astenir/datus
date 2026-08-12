@@ -146,6 +146,125 @@ async def test_enterprise_create_binds_filesystem_only_after_private_acl(
     ("artifact_type", "root_name", "tools_cls", "filesystem_cls", "start_name", "bind_name"),
     CASES,
 )
+async def test_enterprise_create_collision_adopts_own_partial_artifact(
+    tmp_path: Path,
+    artifact_type,
+    root_name,
+    tools_cls,
+    filesystem_cls,
+    start_name,
+    bind_name,
+):
+    """A create-only session adopts an existing directory it owns.
+
+    Recovery contract: a subagent run that crashed after ``start_new_*`` bound
+    a slug leaves the artifact directory on disk, and visual runs are not
+    resumable. The follow-up run re-uses the same slug; ``start_new_*`` must
+    adopt the directory (repairing missing pieces) instead of failing, so the
+    parent never falls back to generating a duplicate under a new slug.
+    """
+    del bind_name
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    partial_dir = project_root / root_name / "mine"
+    partial_dir.mkdir(parents=True)
+    store = MemoryArtifactAclStore()
+    store.acls[(artifact_type, "mine")] = {"owner_user_id": "alice", "visibility": "private"}
+    agent_config = SimpleNamespace(
+        project_root=str(project_root),
+        _enterprise_enabled=True,
+        _request_user_id="alice",
+        _artifact_acl_store=store,
+    )
+    filesystem = filesystem_cls(root_path=str(project_root), require_authorized_artifact=True)
+    tools = tools_cls(
+        agent_config=agent_config,
+        db_func_tool=object(),
+        allow_bind_existing=False,
+        on_artifact_authorized=filesystem.bind_authorized_artifact,
+    )
+
+    result = await getattr(tools, start_name)(
+        slug="mine",
+        name="Mine",
+        description="Resume the partial artifact a failed run left behind.",
+    )
+
+    assert result.success == 1, result.error
+    assert result.result["mode"] == "edit"
+    assert "bootstrap_warning" in result.result
+    assert (project_root / root_name / "mine" / "manifest.json").is_file()
+    # Filesystem writes are bound to the adopted slug and nothing else.
+    assert filesystem.write_file(f"{root_name}/mine/render/app.jsx", "export default function App() {}\n").success == 1
+    assert filesystem.write_file("unrelated.txt", "not an artifact").success == 0
+    assert filesystem.write_file(f"{root_name}/other/render/app.jsx", "cross-artifact").success == 0
+    # The one-artifact-per-run lock is kept after adoption.
+    second_create = await getattr(tools, start_name)(
+        slug="mine_second",
+        name="Second",
+        description="A second artifact must not be created in one bound request.",
+    )
+    assert second_create.success == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("artifact_type", "root_name", "tools_cls", "filesystem_cls", "start_name", "bind_name"),
+    CASES,
+)
+async def test_enterprise_create_collision_rejects_other_owner(
+    tmp_path: Path,
+    artifact_type,
+    root_name,
+    tools_cls,
+    filesystem_cls,
+    start_name,
+    bind_name,
+):
+    """Adoption must not cross a user boundary.
+
+    Same-session recovery only: when the colliding directory belongs to
+    another owner, ``start_new_*`` fails with the adoption denial so the run
+    picks a fresh slug instead of silently gaining write access to a foreign
+    artifact.
+    """
+    del bind_name
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    foreign_dir = project_root / root_name / "bobs"
+    foreign_dir.mkdir(parents=True)
+    store = MemoryArtifactAclStore()
+    store.acls[(artifact_type, "bobs")] = {"owner_user_id": "bob", "visibility": "private"}
+    agent_config = SimpleNamespace(
+        project_root=str(project_root),
+        _enterprise_enabled=True,
+        _request_user_id="alice",
+        _artifact_acl_store=store,
+    )
+    filesystem = filesystem_cls(root_path=str(project_root), require_authorized_artifact=True)
+    tools = tools_cls(
+        agent_config=agent_config,
+        db_func_tool=object(),
+        allow_bind_existing=False,
+        on_artifact_authorized=filesystem.bind_authorized_artifact,
+    )
+
+    result = await getattr(tools, start_name)(
+        slug="bobs",
+        name="Bobs",
+        description="Must not adopt an artifact owned by another user.",
+    )
+
+    assert result.success == 0
+    assert "different owner" in (result.error or "")
+    assert filesystem.write_file(f"{root_name}/bobs/render/app.jsx", "unauthorized").success == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("artifact_type", "root_name", "tools_cls", "filesystem_cls", "start_name", "bind_name"),
+    CASES,
+)
 async def test_enterprise_create_without_acl_store_rolls_back(
     tmp_path: Path,
     artifact_type,

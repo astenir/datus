@@ -1648,3 +1648,41 @@ def test_effective_default_priority_user_enterprise_then_first_available(monkeyp
     assert personal_response.json()["data"]["source"] == "user"
     assert enterprise_fallback.json()["data"]["default_agent_id"] == "safe_chat"
     assert enterprise_fallback.json()["data"]["source"] == "enterprise"
+
+
+def test_builtin_agent_max_turns_defaults_align_with_node_runtime_defaults(monkeypatch):
+    """Built-in Agent defaults must match the runtime node class defaults.
+
+    Previously every built-in summary hardcoded 30, which drifted from the
+    node constructors (50 for most nodes, 80 for visual-artifact nodes) and
+    made enterprise runs cap complex dashboards/reports far below the
+    agent.yml default. The summary now derives from the capability registry,
+    and the detail API must surface the effective record value instead of
+    the EnterpriseAgentDetail model fallback (30).
+    """
+
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store, enabled=True)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        dashboard_detail = client.get("/api/v1/admin/agents/gen_visual_dashboard")
+        report_detail = client.get("/api/v1/admin/agents/gen_visual_report")
+        sql_detail = client.get("/api/v1/admin/agents/gen_sql")
+
+    assert dashboard_detail.json()["data"]["max_turns"] == 80
+    assert report_detail.json()["data"]["max_turns"] == 80
+    assert sql_detail.json()["data"]["max_turns"] == 50
+
+    # Every other enterprise built-in falls back to the node class default (50)
+    # rather than the old hardcoded 30.
+    from datus_enterprise.agents.registry import (
+        ENTERPRISE_BUILTIN_AGENT_IDS,
+        builtin_agent_default_max_turns,
+    )
+
+    assert all(
+        builtin_agent_default_max_turns(agent_id) == 50
+        for agent_id in sorted(ENTERPRISE_BUILTIN_AGENT_IDS)
+        if agent_id not in {"gen_visual_dashboard", "gen_visual_report"}
+    )

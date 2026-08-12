@@ -288,6 +288,10 @@ const friendlyChatErrors: Record<string, { title: string; message: string; tone?
     title: "模型访问受限",
     message: "当前账号无权使用所选模型。请选择授权范围内的模型，或联系管理员调整模型权限。",
   },
+  MODEL_MAX_TURNS_EXCEEDED: {
+    title: "对话轮数超限",
+    message: "本次任务的执行步骤超过了上限，已自动停止。可以精简问题、压缩会话，或新建会话后重试。",
+  },
   RATE_LIMITED: {
     title: "请求过于频繁",
     message: "当前请求触发了限流保护。请稍后再试。",
@@ -417,6 +421,35 @@ function safePermissionMessage(rawMessage: string) {
   return rawMessage.slice("权限受限：".length).trim();
 }
 
+// Structured bits recognizable in raw PERMISSION_DENIED payloads that the
+// server did not localize (older deployments / unmatched raise sites). Only
+// these stable fragments are surfaced — raw exception text is deliberately
+// not echoed into the UI (see ``hides raw exception text`` test).
+const permissionRejectedToolPattern = /User rejected execution of\s+'([^']+)'/i;
+const permissionToolPattern = /Tool\s+'([^']+)'/i;
+const permissionSqlKindPattern = /SQL statement kind\s+'([^']+)'/i;
+const permissionBashRulePattern = /Bash command blocked by rule\s+'([^']+)'/i;
+
+function summarizePermissionDenied(rawMessage: string): string {
+  const rejected = rawMessage.match(permissionRejectedToolPattern);
+  if (rejected) {
+    return `操作未获得确认，已取消：${rejected[1]}。如需执行，请重新发起并在确认弹窗中选择允许。`;
+  }
+  const tool = rawMessage.match(permissionToolPattern);
+  if (tool) {
+    return `被拦截的工具：${tool[1]}。换参数通常不会绕过限制，请联系管理员或检查权限规则配置。`;
+  }
+  const sqlKind = rawMessage.match(permissionSqlKindPattern);
+  if (sqlKind) {
+    return `被拦截的 SQL 语句类型：${sqlKind[1]}。换写法不会绕过限制，请联系管理员或检查 agent.yml 权限规则。`;
+  }
+  const bashRule = rawMessage.match(permissionBashRulePattern);
+  if (bashRule) {
+    return `被拦截的命令规则：${bashRule[1]}。换写法不会绕过限制，请联系管理员或检查 agent.yml 权限规则。`;
+  }
+  return "";
+}
+
 export function friendlyChatErrorBlock(input: {
   code?: unknown;
   message?: unknown;
@@ -437,7 +470,7 @@ export function friendlyChatErrorBlock(input: {
     }
 
     const permissionMessage = code === "PERMISSION_DENIED"
-      ? safePermissionMessage(rawMessage)
+      ? safePermissionMessage(rawMessage) || summarizePermissionDenied(rawMessage)
       : "";
     return {
       type: "error",

@@ -2732,3 +2732,58 @@ class TestGenSQLSystemPromptToolContext:
             tool_names = node._get_available_tool_names()
 
         assert tool_names == ["describe_table", "search_reference_template"]
+
+    def test_mcp_tool_names_for_prompt_are_server_qualified_with_multiple_servers(
+        self, real_agent_config, mock_llm_create
+    ):
+        """With more than one bound server, advertised MCP tool names carry the server prefix.
+
+        The runtime exposes every MCP tool as ``<server_name>_<tool_name>``
+        when more than one server is configured (see
+        ``datus.models.mcp_utils.PrefixedMCPServer``); the prompt must
+        advertise the same names so the model never calls a raw tool name the
+        SDK cannot resolve. This covers both the cached-tool and the
+        tool-filter allowlist sources.
+        """
+
+        node = _make_gen_sql_node(agent_config=real_agent_config)
+        node.mcp_servers = {
+            "enterprise_search": SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
+            "personal_" + "a" * 32: SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
+        }
+        tool_filter = SimpleNamespace(
+            allowed_tool_names=["NM007399", "search_doc"],
+            is_tool_allowed=lambda name: True,
+        )
+        server_config = SimpleNamespace(tool_filter=tool_filter)
+        mcp_manager = MagicMock()
+        mcp_manager.get_server_config.return_value = server_config
+
+        with patch("datus.tools.mcp_tools.mcp_manager.MCPManager", return_value=mcp_manager):
+            tool_names = node._get_mcp_tool_names_for_prompt()
+
+        assert tool_names == {
+            "enterprise_search_NM007399",
+            "enterprise_search_search_doc",
+            f"personal_{'a' * 32}_NM007399",
+            f"personal_{'a' * 32}_search_doc",
+        }
+
+    def test_mcp_tool_names_for_prompt_keep_original_names_with_single_server(self, real_agent_config, mock_llm_create):
+        """A single bound server keeps its raw tool names (zero-change path)."""
+
+        node = _make_gen_sql_node(agent_config=real_agent_config)
+        node.mcp_servers = {
+            "enterprise_search": SimpleNamespace(_tools_list=[SimpleNamespace(name="NM007399")]),
+        }
+        tool_filter = SimpleNamespace(
+            allowed_tool_names=["search_doc"],
+            is_tool_allowed=lambda name: True,
+        )
+        mcp_manager = MagicMock()
+        mcp_manager.get_server_config.return_value = SimpleNamespace(tool_filter=tool_filter)
+
+        with patch("datus.tools.mcp_tools.mcp_manager.MCPManager", return_value=mcp_manager):
+            tool_names = node._get_mcp_tool_names_for_prompt()
+
+        assert tool_names == {"NM007399", "search_doc"}

@@ -6,7 +6,17 @@ import {
   FilePenLineIcon,
   RefreshCwIcon,
   Share2Icon,
+  Trash2Icon,
 } from "@lucide/vue"
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -51,6 +61,9 @@ const shareTargetTab = shallowRef<ArtifactViewTab>("dashboard")
 const shareTargetSlug = shallowRef<string | null>(null)
 const detailDialogOpen = shallowRef(false)
 const detailTargetSlug = shallowRef<string | null>(null)
+const deleteConfirmOpen = shallowRef(false)
+const deleteTargetTab = shallowRef<ArtifactViewTab>("dashboard")
+const deleteTargetSlug = shallowRef<string | null>(null)
 
 const selectedViewerSlug = computed(() => props.selectedSlug?.trim() || null)
 const selectedDetailSlug = computed(() => detailTargetSlug.value)
@@ -113,6 +126,23 @@ const selectedDetailCanEdit = computed(() => {
   return items.some(item => item.slug === slug && item.can_edit === true)
 })
 const selectedEditLoading = computed(() => editingSlugFor(props.tab) === selectedDetailSlug.value)
+const selectedDeleting = computed(() => {
+  const slug = selectedDetailSlug.value
+  if (!slug) return false
+  return artifacts.deleteLoadingKey.value === artifactPreviewKey(props.tab, slug)
+})
+const deleteTargetName = computed(() => {
+  const slug = deleteTargetSlug.value
+  if (!slug) return ""
+  const items = deleteTargetTab.value === "report" ? artifacts.reports.value : artifacts.dashboards.value
+  return items.find(item => item.slug === slug)?.name?.trim() || slug
+})
+const deleteTargetKindLabel = computed(() => deleteTargetTab.value === "report" ? "报表" : "仪表盘")
+const deleteConfirmLoading = computed(() => {
+  const slug = deleteTargetSlug.value
+  if (!slug) return false
+  return artifacts.deleteLoadingKey.value === artifactPreviewKey(deleteTargetTab.value, slug)
+})
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))
@@ -120,6 +150,8 @@ const dashboardSharingSlug = computed(() => sharingSlugFor("dashboard"))
 const reportSharingSlug = computed(() => sharingSlugFor("report"))
 const dashboardEditingSlug = computed(() => editingSlugFor("dashboard"))
 const reportEditingSlug = computed(() => editingSlugFor("report"))
+const dashboardDeletingSlug = computed(() => deletingSlugFor("dashboard"))
+const reportDeletingSlug = computed(() => deletingSlugFor("report"))
 
 function loadingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.previewLoadingKey.value
@@ -135,6 +167,12 @@ function sharingSlugFor(tab: ArtifactViewTab): string | null {
 
 function editingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.editLoadingKey.value
+  const prefix = `${tab}:`
+  return key?.startsWith(prefix) ? key.slice(prefix.length) : null
+}
+
+function deletingSlugFor(tab: ArtifactViewTab): string | null {
+  const key = artifacts.deleteLoadingKey.value
   const prefix = `${tab}:`
   return key?.startsWith(prefix) ? key.slice(prefix.length) : null
 }
@@ -225,6 +263,39 @@ function handleShareDialogOpen(open: boolean) {
   }
 }
 
+function handleDeleteConfirmOpen(open: boolean) {
+  deleteConfirmOpen.value = open
+  if (!open) {
+    deleteTargetSlug.value = null
+  }
+}
+
+function requestDelete(tab: ArtifactViewTab, slug: string | null | undefined) {
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  deleteTargetTab.value = tab
+  deleteTargetSlug.value = normalizedSlug
+  deleteConfirmOpen.value = true
+}
+
+async function confirmDelete() {
+  const tab = deleteTargetTab.value
+  const slug = deleteTargetSlug.value
+  if (!slug) return
+
+  const deleted = await artifacts.deleteArtifact(tab, slug)
+  if (!deleted) return
+
+  deleteConfirmOpen.value = false
+  deleteTargetSlug.value = null
+  if (detailTargetSlug.value === slug) {
+    detailDialogOpen.value = false
+    detailTargetSlug.value = null
+  }
+  void artifacts.loadArtifacts(tab)
+}
+
 function handleDetailDialogOpen(open: boolean) {
   detailDialogOpen.value = open
   if (!open) {
@@ -312,12 +383,14 @@ watch(
           :opening-slug="dashboardOpeningSlug"
           :sharing-slug="dashboardSharingSlug"
           :editing-slug="dashboardEditingSlug"
+          :deleting-slug="dashboardDeletingSlug"
           :edit-enabled="true"
           empty-title="暂无仪表盘"
           @select="openDetail('dashboard', $event)"
           @open-preview="openPreview('dashboard', $event)"
           @share="openShare('dashboard', $event)"
           @edit="editArtifact('dashboard', $event)"
+          @delete="requestDelete('dashboard', $event)"
         />
       </template>
 
@@ -328,12 +401,14 @@ watch(
           :opening-slug="reportOpeningSlug"
           :sharing-slug="reportSharingSlug"
           :editing-slug="reportEditingSlug"
+          :deleting-slug="reportDeletingSlug"
           :edit-enabled="true"
           empty-title="暂无报表"
           @select="openDetail('report', $event)"
           @open-preview="openPreview('report', $event)"
           @share="openShare('report', $event)"
           @edit="editArtifact('report', $event)"
+          @delete="requestDelete('report', $event)"
         />
       </template>
     </div>
@@ -351,7 +426,7 @@ watch(
             >
               {{ detailKindLabel }}
             </Badge>
-            <DialogTitle class="min-w-0 truncate">{{ detailDialogTitle }}</DialogTitle>
+            <DialogTitle class="min-w-0 truncate leading-snug">{{ detailDialogTitle }}</DialogTitle>
           </div>
           <DialogDescription class="truncate">
             {{ selectedDetailSlug ?? "未选择产物" }}
@@ -412,6 +487,23 @@ watch(
             {{ selectedEditLoading ? "创建中" : `编辑${detailKindLabel}` }}
           </Button>
           <Button
+            v-if="selectedDetailCanEdit"
+            variant="destructive"
+            size="sm"
+            :disabled="selectedDeleting"
+            @click="requestDelete(props.tab, selectedDetailSlug)"
+          >
+            <Spinner
+              v-if="selectedDeleting"
+              data-icon="inline-start"
+            />
+            <Trash2Icon
+              v-else
+              data-icon="inline-start"
+            />
+            {{ selectedDeleting ? "删除中" : "删除" }}
+          </Button>
+          <Button
             size="sm"
             :disabled="selectedPreviewOpening"
             @click="openPreview(props.tab, selectedDetailSlug)"
@@ -445,5 +537,39 @@ watch(
       @update:open="handleShareDialogOpen"
       @save="saveShare"
     />
+
+    <AlertDialog
+      :open="deleteConfirmOpen"
+      @update:open="handleDeleteConfirmOpen"
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>删除{{ deleteTargetKindLabel }}「{{ deleteTargetName }}」？</AlertDialogTitle>
+          <AlertDialogDescription>
+            删除后无法恢复，其分享设置将一并移除。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel as-child>
+            <Button variant="outline">取消</Button>
+          </AlertDialogCancel>
+          <Button
+            variant="destructive"
+            :disabled="deleteConfirmLoading"
+            @click="confirmDelete"
+          >
+            <Spinner
+              v-if="deleteConfirmLoading"
+              data-icon="inline-start"
+            />
+            <Trash2Icon
+              v-else
+              data-icon="inline-start"
+            />
+            {{ deleteConfirmLoading ? "删除中" : "确认删除" }}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </section>
 </template>

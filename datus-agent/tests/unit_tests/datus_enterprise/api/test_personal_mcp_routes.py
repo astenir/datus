@@ -18,6 +18,7 @@ from datus.api.enterprise.defaults import (
     SqliteUserMcpServerStore,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.models.cli_models import ChatSessionItemInfo
 from datus.api.models.downstream import StreamChatInput
 from datus.utils.exceptions import DatusException
 from datus_enterprise.api import personal_mcp_routes
@@ -67,9 +68,32 @@ def _client(ctx: AppContext):
     app = FastAPI()
     app.include_router(personal_mcp_routes.router)
 
+    async def _list_sessions(user_id=None, subagent_id=None):
+        return SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(
+                sessions=[
+                    ChatSessionItemInfo(
+                        user_query="帮我分析季度销售",
+                        session_id="session-1",
+                        created_at="2025-01-01T00:00:00+00:00",
+                        last_updated="2025-01-02T00:00:00+00:00",
+                        total_turns=3,
+                        token_count=0,
+                        last_sql_queries=[],
+                        is_active=False,
+                    )
+                ]
+            ),
+        )
+
     async def service(request: Request):
         request.state.app_context = ctx
-        return SimpleNamespace(agent_config=_agent_config(), project_id="project")
+        return SimpleNamespace(
+            agent_config=_agent_config(),
+            project_id="project",
+            chat=SimpleNamespace(list_sessions_async=_list_sessions),
+        )
 
     async def context(request: Request):
         request.state.app_context = ctx
@@ -138,6 +162,103 @@ def test_personal_mcp_delete_is_blocked_while_session_references_it(monkeypatch)
     assert response.status_code == 409
     assert response.json()["detail"] == {"code": "PERSONAL_MCP_SERVER_IN_USE", "session_count": 1}
     assert asyncio.run(store.get_server("alice", record["id"])) is not None
+
+
+def test_personal_mcp_references_return_which_sessions_keep_it_alive(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    record = asyncio.run(
+        store.put_server(
+            user_id="alice",
+            mcp_id="a" * 32,
+            display_name="Search",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            token=None,
+            allowed_tools=[],
+            blocked_tools=[],
+            enabled=True,
+        )
+    )
+    asyncio.run(
+        store.set_session_binding(
+            project_id="project",
+            session_id="session-1",
+            user_id="alice",
+            servers=[{"mcp_id": record["id"], "revision": record["revision"]}],
+        )
+    )
+
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get(f"/api/v1/me/mcp-servers/{record['id']}/references")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert len(data) == 1
+    assert data[0]["session_id"] == "session-1"
+    assert data[0]["title"] == "帮我分析季度销售"
+    assert data[0]["updated_at"]
+
+
+def test_personal_mcp_references_are_empty_without_bindings(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    record = asyncio.run(
+        store.put_server(
+            user_id="alice",
+            mcp_id="a" * 32,
+            display_name="Search",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            token=None,
+            allowed_tools=[],
+            blocked_tools=[],
+            enabled=True,
+        )
+    )
+
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get(f"/api/v1/me/mcp-servers/{record['id']}/references")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
+
+
+def test_personal_mcp_force_delete_unbinds_referencing_sessions(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    record = asyncio.run(
+        store.put_server(
+            user_id="alice",
+            mcp_id="a" * 32,
+            display_name="Search",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            token=None,
+            allowed_tools=[],
+            blocked_tools=[],
+            enabled=True,
+        )
+    )
+    asyncio.run(
+        store.set_session_binding(
+            project_id="project",
+            session_id="session-1",
+            user_id="alice",
+            servers=[{"mcp_id": record["id"], "revision": record["revision"]}],
+        )
+    )
+
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.delete(f"/api/v1/me/mcp-servers/{record['id']}?force=1")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"deleted": True, "unbound_sessions": 1}
+    assert asyncio.run(store.get_server("alice", record["id"])) is None
+    # 绑定行被整行删除而非残留空列表：残留空绑定会让该会话后续重新选择 MCP 时
+    # 被误判为 selection locked，破坏用户重新绑定能力。
+    assert asyncio.run(store.get_session_binding("project", "session-1", "alice")) is None
+    assert asyncio.run(store.count_session_bindings("alice", record["id"])) == 0
 
 
 def test_personal_mcp_connectivity_returns_tool_count(monkeypatch):
@@ -232,6 +353,32 @@ def test_personal_mcp_session_binding_keeps_empty_display_name_for_deleted_serve
     assert response.json()["data"] == {
         "session_id": "session-1",
         "servers": [{"mcp_id": "b" * 32, "revision": 1, "display_name": ""}],
+    }
+
+
+def test_personal_mcp_session_binding_keeps_snapshot_name_after_server_deleted(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    asyncio.run(
+        store.set_session_binding(
+            project_id="project",
+            session_id="session-1",
+            user_id="alice",
+            servers=[{"mcp_id": "b" * 32, "revision": 1, "display_name": "Search"}],
+        )
+    )
+
+    async def allow_session(*_args, **_kwargs):
+        return SimpleNamespace(error=None)
+
+    monkeypatch.setattr(personal_mcp_routes, "authorize_session_access", allow_session)
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get("/api/v1/me/mcp-servers/session-binding/session-1")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "session_id": "session-1",
+        "servers": [{"mcp_id": "b" * 32, "revision": 1, "display_name": "Search"}],
     }
 
 
@@ -392,7 +539,9 @@ async def test_chat_projection_attaches_only_owned_selected_mcp(monkeypatch):
     )
     binding = await store.get_session_binding("project", "chat_custom_session_1", "alice")
     assert binding is not None
-    assert binding["servers"] == [{"mcp_id": record["id"], "revision": 1}]
+    # 旧断言只存 {"mcp_id", "revision"}；新契约同时快照 display_name：MCP 被强制删除后，
+    # 历史会话渲染仍能把 personal_<id> 还原为 MCP 名称，而不是显示原始 ID。
+    assert binding["servers"] == [{"mcp_id": record["id"], "revision": 1, "display_name": "Search"}]
 
 
 @pytest.mark.asyncio

@@ -337,6 +337,21 @@ def is_enterprise_reserved_agent_id(agent_id: str) -> bool:
     return agent_id in ENTERPRISE_RESERVED_AGENT_IDS
 
 
+def builtin_agent_default_max_turns(agent_id: str) -> int:
+    """Return the built-in Agent's runtime-default ``max_turns``.
+
+    Aligned with the node class constructor defaults (``agent.yml``
+    ``agentic_nodes.<name>.max_turns`` fallback): visual-artifact nodes
+    default to 80, every other built-in node class to 50. The value is
+    deliberately not hardcoded here so enterprise Agent management cannot
+    drift from the runtime node defaults again.
+    """
+    capability = get_agent_node_capability(agent_id)
+    if capability is None:
+        return 50
+    return capability.default_max_turns
+
+
 def builtin_agent_summary(agent_id: str) -> dict[str, Any]:
     """Return the stable summary shape for one built-in agent."""
 
@@ -362,7 +377,7 @@ def builtin_agent_summary(agent_id: str) -> dict[str, Any]:
             }
         },
         "rules": [],
-        "max_turns": 30,
+        "max_turns": builtin_agent_default_max_turns(agent_id),
     }
 
 

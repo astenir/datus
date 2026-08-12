@@ -258,6 +258,24 @@ describe("useAgentManager", () => {
     expect(manager.agentCount.value).toBe(2);
   });
 
+  it("excludes the top-level default chat agent from subagent delegation options", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "chat", name: "chat", node_class: "chat", status: "published", source: "builtin" },
+      { agent_id: "chat_custom", name: "聊天助手", node_class: "chat", status: "published", source: "custom" },
+      { agent_id: "analyst", name: "analyst", node_class: "gen_sql", status: "published", source: "custom" },
+    ]);
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+
+    // Old expectation: "chat" was offered as a delegation target but the
+    // backend task tool never accepts it (it is the top-level parent node),
+    // so every saved runtime policy warned "Subagent type 'chat' ... is not a
+    // known type". New expectation: only real delegation targets are offered.
+    expect(manager.subagentOptions.value.map(option => option.value)).toEqual(["analyst", "chat_custom"]);
+  });
+
   it("defaults newly created enterprise agents to enterprise visibility", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -1246,5 +1264,25 @@ describe("agentManagerInternals", () => {
 
     expect(agentManagerInternals.parseListText("a, b\nc")).toEqual(["a", "b", "c"]);
     expect(agentManagerInternals.parseListText(" ")).toBeUndefined();
+  });
+
+  it("resolves node-class default max_turns from the catalog with a static fallback", async () => {
+    const { resolveNodeClassDefaultMaxTurns } = await import("./useAgentManager");
+
+    const catalog = [
+      { node_class: "gen_visual_dashboard", label: "", description: "", supports_mcp: false, default_max_turns: 80 },
+      { node_class: "gen_visual_report", label: "", description: "", supports_mcp: false, default_max_turns: 80 },
+      { node_class: "gen_sql", label: "", description: "", supports_mcp: false, default_max_turns: 50 },
+    ] as const;
+
+    // Catalog value wins when the backend has published one.
+    expect(resolveNodeClassDefaultMaxTurns(catalog, "gen_visual_dashboard")).toBe(80);
+    expect(resolveNodeClassDefaultMaxTurns(catalog, "gen_sql")).toBe(50);
+    // Static fallback keeps visual-artifact nodes at 80 and the rest at 50
+    // before the catalog loads (or when the class is unknown).
+    expect(resolveNodeClassDefaultMaxTurns([], "gen_visual_dashboard")).toBe(80);
+    expect(resolveNodeClassDefaultMaxTurns([], "gen_visual_report")).toBe(80);
+    expect(resolveNodeClassDefaultMaxTurns([], "gen_sql")).toBe(50);
+    expect(resolveNodeClassDefaultMaxTurns([], undefined)).toBe(50);
   });
 });

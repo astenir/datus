@@ -7,6 +7,7 @@ const dashboardHtml = vi.fn();
 const dashboardGetAcl = vi.fn();
 const dashboardPutAcl = vi.fn();
 const dashboardCreateEditSession = vi.fn();
+const dashboardDelete = vi.fn();
 const dashboardQuery = vi.fn();
 const listShareUsers = vi.fn();
 const listShareRoles = vi.fn();
@@ -17,6 +18,7 @@ const reportHtml = vi.fn();
 const reportGetAcl = vi.fn();
 const reportPutAcl = vi.fn();
 const reportCreateEditSession = vi.fn();
+const reportDelete = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 
@@ -39,6 +41,7 @@ vi.mock("@/lib/api", () => ({
     getAcl: dashboardGetAcl,
     putAcl: dashboardPutAcl,
     createEditSession: dashboardCreateEditSession,
+    delete: dashboardDelete,
     query: dashboardQuery,
   },
   artifactShareApi: {
@@ -53,6 +56,7 @@ vi.mock("@/lib/api", () => ({
     getAcl: reportGetAcl,
     putAcl: reportPutAcl,
     createEditSession: reportCreateEditSession,
+    delete: reportDelete,
   },
 }));
 
@@ -168,6 +172,8 @@ describe("useArtifacts", () => {
       owner_user_id: "alice",
       created_at: "2026-07-08T00:00:00Z",
     });
+    reportDelete.mockResolvedValue(true);
+    dashboardDelete.mockResolvedValue(true);
     listShareUsers.mockResolvedValue([
       {
         user_id: "bob",
@@ -471,5 +477,101 @@ describe("useArtifacts", () => {
     expect(artifacts.queryResult.value).toBeNull();
     expect(artifacts.activeQuerySlug.value).toBeNull();
     expect(artifacts.queryLoading.value).toBe(false);
+  });
+});
+
+describe("useArtifacts delete", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    reportDelete.mockResolvedValue(true);
+    dashboardDelete.mockResolvedValue(true);
+  });
+
+  it("deletes a report and removes it from the local collection", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+    await artifacts.loadArtifacts("report");
+
+    const deleted = await artifacts.deleteArtifact("report", "fund-report");
+
+    expect(deleted).toBe(true);
+    expect(reportDelete).toHaveBeenCalledWith("http://api.test", "fund-report");
+    expect(artifacts.reports.value.some(item => item.slug === "fund-report")).toBe(false);
+    expect(artifacts.deleteLoadingKey.value).toBeNull();
+    expect(toastSuccess).toHaveBeenCalledWith("报表已删除");
+  });
+
+  it("deletes a dashboard through its own api", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+    await artifacts.loadArtifacts("dashboard");
+
+    const deleted = await artifacts.deleteArtifact("dashboard", "fund-overview");
+
+    expect(deleted).toBe(true);
+    expect(dashboardDelete).toHaveBeenCalledWith("http://api.test", "fund-overview");
+    expect(artifacts.dashboards.value.some(item => item.slug === "fund-overview")).toBe(false);
+    expect(toastSuccess).toHaveBeenCalledWith("仪表盘已删除");
+  });
+
+  it("closes the active detail and preview when the deleted artifact is open", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:preview"),
+      revokeObjectURL: vi.fn(),
+    });
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+    await artifacts.loadDetail("report", "fund-report");
+    await artifacts.openHtmlPreview("report", "fund-report");
+
+    await artifacts.deleteArtifact("report", "fund-report");
+
+    expect(artifacts.activeDetail.value).toBeNull();
+    expect(artifacts.activeDetailSlug.value).toBeNull();
+    expect(artifacts.activePreviewSlug.value).toBeNull();
+    expect(artifacts.activePreviewUrl.value).toBeNull();
+  });
+
+  it("keeps the artifact and reports a friendly message on an active edit session", async () => {
+    reportDelete.mockRejectedValue(
+      new (await import("@/lib/chat")).ApiResultError("report is being edited", "EDIT_SESSION_ACTIVE"),
+    );
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+    await artifacts.loadArtifacts("report");
+
+    const deleted = await artifacts.deleteArtifact("report", "fund-report");
+
+    expect(deleted).toBe(false);
+    expect(artifacts.reports.value.some(item => item.slug === "fund-report")).toBe(true);
+    expect(toastError).toHaveBeenCalledWith("报表正在编辑中，请稍后再试");
+    expect(artifacts.deleteError.value).toBe("报表正在编辑中，请稍后再试");
+    expect(artifacts.deleteLoadingKey.value).toBeNull();
+  });
+
+  it("keeps the artifact on a generic delete failure", async () => {
+    reportDelete.mockRejectedValue(new Error("boom"));
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+    await artifacts.loadArtifacts("report");
+
+    const deleted = await artifacts.deleteArtifact("report", "fund-report");
+
+    expect(deleted).toBe(false);
+    expect(artifacts.reports.value.some(item => item.slug === "fund-report")).toBe(true);
+    expect(toastError).toHaveBeenCalledWith("删除报表失败");
+    expect(artifacts.deleteLoadingKey.value).toBeNull();
+  });
+
+  it("rejects deletion without a slug", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const deleted = await artifacts.deleteArtifact("report", "  ");
+
+    expect(deleted).toBe(false);
+    expect(reportDelete).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("请选择要删除的报表");
   });
 });

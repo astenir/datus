@@ -9,7 +9,6 @@ import {
   SaveIcon,
   ShieldCheckIcon,
   UserRoundIcon,
-  WrenchIcon,
 } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -32,10 +31,9 @@ import AgentAccessTab from "@/features/agent/form/AgentAccessTab.vue"
 import AgentBehaviorTab from "@/features/agent/form/AgentBehaviorTab.vue"
 import AgentCapabilitiesTab from "@/features/agent/form/AgentCapabilitiesTab.vue"
 import AgentMetadataTab from "@/features/agent/form/AgentMetadataTab.vue"
-import AgentPolicyTab from "@/features/agent/form/AgentPolicyTab.vue"
 import { cn } from "@/lib/utils"
 
-type AgentFormTab = "basic" | "access" | "policy" | "behavior" | "capabilities" | "metadata"
+type AgentFormTab = "basic" | "access" | "behavior" | "capabilities" | "metadata"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -70,7 +68,7 @@ const formDialogDescription = computed(() => {
     return "当前 Agent 的编辑数据未能完整加载。"
   }
   if (selectedIsReadonly.value) {
-    return "系统内置定义保持只读，但可配置企业访问范围、默认分配和运行工具策略。"
+    return "系统内置定义保持只读，但可配置企业访问范围、默认分配、工具策略和委派规则。"
   }
   return props.manager.formMode.value === "edit"
     ? "编辑当前 Agent 的基础配置、访问范围、运行行为和扩展能力。"
@@ -151,7 +149,7 @@ async function submitForm() {
     >
       <DialogHeader class="gap-2 px-5 py-4 pr-14 text-left sm:px-6 sm:py-5 sm:pr-16">
         <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <DialogTitle class="min-w-0 truncate">{{ dialogTitle }}</DialogTitle>
+          <DialogTitle class="min-w-0 truncate leading-snug">{{ dialogTitle }}</DialogTitle>
           <template v-if="!props.manager.detailLoading.value && !props.manager.detailError.value">
             <Badge :variant="selectedIsReadonly ? 'outline' : 'secondary'">{{ sourceLabel }}</Badge>
             <Badge variant="outline">{{ statusLabel }}</Badge>
@@ -205,7 +203,7 @@ async function submitForm() {
           >
             <LockIcon />
             <AlertTitle>系统内置 Agent</AlertTitle>
-            <AlertDescription>基础定义与提示模板只读；访问控制、默认用户和权限策略可直接保存。</AlertDescription>
+            <AlertDescription>基础定义与提示模板只读；访问控制、默认用户、工具策略与委派规则可直接保存。</AlertDescription>
           </Alert>
 
           <Tabs
@@ -245,13 +243,6 @@ async function submitForm() {
                   访问控制
                 </TabsTrigger>
                 <TabsTrigger
-                  value="policy"
-                  :class="cn(!isDesktop && 'flex-none')"
-                >
-                  <WrenchIcon />
-                  权限策略
-                </TabsTrigger>
-                <TabsTrigger
                   value="behavior"
                   :class="cn(!isDesktop && 'flex-none')"
                 >
@@ -263,7 +254,7 @@ async function submitForm() {
                   :class="cn(!isDesktop && 'flex-none')"
                 >
                   <BlocksIcon />
-                  扩展能力
+                  工具与扩展
                   <Badge
                     v-if="capabilityCount > 0"
                     variant="secondary"
@@ -306,12 +297,6 @@ async function submitForm() {
                   :manager="props.manager"
                   :readonly="false"
                 />
-              </TabsContent>
-              <TabsContent
-                value="policy"
-                class="m-0 p-4 sm:p-6"
-              >
-                <AgentPolicyTab :manager="props.manager" />
               </TabsContent>
               <TabsContent
                 value="behavior"

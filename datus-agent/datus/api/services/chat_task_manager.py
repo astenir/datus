@@ -50,6 +50,7 @@ from datus_enterprise.services.chat_task_runtime import (
     create_dashboard_edit_session,
     create_report_edit_session,
     get_artifact_edit_session,
+    has_active_artifact_edit_session,
     initialize_chat_task_runtime,
     persist_terminal_event,
     persist_tool_execution_event,
@@ -415,6 +416,15 @@ class ChatTaskManager:
         """Return a live report/dashboard edit session by its chat subagent id."""
 
         return get_artifact_edit_session(self._artifact_edit_sessions, subagent_id)
+
+    def has_active_artifact_edit_session(self, *, artifact_type: str, slug: str) -> bool:
+        """Return True while an unexpired edit session is locked to one artifact."""
+
+        return has_active_artifact_edit_session(
+            self._artifact_edit_sessions,
+            artifact_type=artifact_type,
+            slug=slug,
+        )
 
     async def start_chat(
         self,

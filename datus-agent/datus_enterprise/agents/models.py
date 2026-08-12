@@ -160,6 +160,10 @@ class EnterpriseAgentNodeType(BaseModel):
     label: str
     description: str
     supports_mcp: bool = False
+    #: Runtime fallback ``max_turns`` for the node class (mirrors the
+    #: node constructor default; the Agent form's "leave empty" hint and
+    #: save fallback use this value).
+    default_max_turns: int = 50
 
 
 class AgentPreferenceSummary(BaseModel):

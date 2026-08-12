@@ -635,6 +635,10 @@ class ArtifactAclStore(Protocol):
         """Persist and return the ACL metadata for one artifact."""
         ...
 
+    async def delete_acl(self, *, artifact_type: str, slug: str) -> None:
+        """Remove the ACL metadata for one artifact (idempotent)."""
+        ...
+
 
 @runtime_checkable
 class AuditSink(Protocol):
