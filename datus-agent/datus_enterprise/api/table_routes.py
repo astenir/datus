@@ -36,7 +36,7 @@ ConfigEditCtx = Annotated[AppContext, Depends(_require_config_edit)]
 class SemanticModelInput(UpstreamSemanticModelInput):
     """Route request with downstream datasource projection context."""
 
-    datasource_id: str | None = Field(None, description="Datasource selected for this request")
+    datasource_id: str | None = Field(default=None, description="Datasource selected for this request")
 
 
 async def _resolve_request_service(request: Request) -> ServiceDep:

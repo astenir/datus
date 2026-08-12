@@ -21,8 +21,8 @@ class SchedulerNodeInput(AtContextInput):
     """Input model for SchedulerAgenticNode."""
 
     user_message: str = Field(..., description="User's scheduler request (required)")
-    database: Optional[str] = Field(None, description="Database name for context")
-    prompt_version: Optional[str] = Field(None, description="Prompt template version")
+    database: Optional[str] = Field(default=None, description="Database name for context")
+    prompt_version: Optional[str] = Field(default=None, description="Prompt template version")
 
 
 class SchedulerNodeResult(BaseResult):
@@ -30,7 +30,7 @@ class SchedulerNodeResult(BaseResult):
 
     response: str = Field(default="", description="Natural language response/summary")
     scheduler_result: Optional[Dict[str, Any]] = Field(
-        None,
+        default=None,
         description="Structured scheduler result data (job_id, status, etc.)",
     )
     tokens_used: int = Field(default=0, description="Total tokens used")

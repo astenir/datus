@@ -12,6 +12,20 @@ MCP_CONNECTION_ACTION_PREFIX = "mcp."
 MCP_CONNECTION_ACTION_SUFFIX = ".connect"
 
 
+def request_mcp_display_names(node: Any) -> dict[str, str]:
+    """Resolve request-scoped personal MCP aliases to user-facing display names.
+
+    ``project_personal_mcp_for_chat`` stores ``{alias: display_name}`` on the
+    request clone as ``agent_config._request_mcp_display_names``. Unknown or
+    non-personal servers fall back to their raw alias/name.
+    """
+    agent_config = getattr(node, "agent_config", None)
+    if agent_config is None:
+        return {}
+    raw = getattr(agent_config, "_request_mcp_display_names", None)
+    return {str(key): str(value) for key, value in dict(raw or {}).items()}
+
+
 def is_mcp_connection_tool_name(tool_name: Any) -> bool:
     return (
         isinstance(tool_name, str)
@@ -42,8 +56,10 @@ def record_mcp_connection_failure(node: Any, server_name: str, error: str) -> No
 def drain_mcp_connection_failure_actions(node: Any, manager: Any) -> list[ActionHistory]:
     failures = getattr(node, "_mcp_connection_failures", [])
     node._mcp_connection_failures = []
+    display_names = request_mcp_display_names(node)
     actions: list[ActionHistory] = []
     for server_name, error in failures:
+        display_name = display_names.get(server_name) or server_name
         tool_name = f"{MCP_CONNECTION_ACTION_PREFIX}{server_name}{MCP_CONNECTION_ACTION_SUFFIX}"
         call_tool_id = str(uuid.uuid4())
         input_data = {"function_name": tool_name, "arguments": {}, "server_name": server_name}
@@ -63,7 +79,7 @@ def drain_mcp_connection_failure_actions(node: Any, manager: Any) -> list[Action
             input=input_data,
             output={
                 "error": safe_error,
-                "summary": f"MCP Server '{server_name}' connection failed; the Agent continued without it.",
+                "summary": f"MCP Server '{display_name}' connection failed; the Agent continued without it.",
             },
             status=ActionStatus.FAILED,
             start_time=start_action.start_time,

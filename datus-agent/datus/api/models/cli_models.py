@@ -24,12 +24,12 @@ class ExecuteSQLInput(BaseModel):
         }
     )
 
-    database_name: Optional[str] = Field(None, description="Database name")
+    database_name: Optional[str] = Field(default=None, description="Database name")
     sql_query: str = Field(..., description="SQL query to execute")
-    result_format: str = Field("arrow", description="Result format (arrow, csv, json)")
-    system: bool = Field(False, description="Whether this is a system command")
+    result_format: str = Field(default="arrow", description="Result format (arrow, csv, json)")
+    system: bool = Field(default=False, description="Whether this is a system command")
     execute_task_id: Optional[str] = Field(
-        None,
+        default=None,
         description=(
             "Caller-supplied task ID used to identify this execution so it can later be "
             "cancelled via /sql/stop_execute. Returned unchanged in ExecuteSQLData. "
@@ -43,12 +43,12 @@ class ExecuteSQLData(BaseModel):
 
     execute_task_id: str = Field(..., description="Task ID for this SQL execution, can be used to stop it")
     sql_query: str = Field(..., description="Executed SQL query")
-    row_count: Optional[int] = Field(None, description="Number of rows returned")
-    sql_return: Optional[str] = Field(None, description="SQL result data")
+    row_count: Optional[int] = Field(default=None, description="Number of rows returned")
+    sql_return: Optional[str] = Field(default=None, description="SQL result data")
     result_format: str = Field(..., description="Result format")
     execution_time: float = Field(..., description="Execution time in seconds")
     executed_at: str = Field(..., description="Execution timestamp")
-    columns: Optional[List[str]] = Field(None, description="Column names")
+    columns: Optional[List[str]] = Field(default=None, description="Column names")
 
 
 class StopExecuteSQLInput(BaseModel):
@@ -80,9 +80,9 @@ class ExecuteContextInput(BaseModel):
     )
 
     context_type: str = Field(..., description="Type of context command")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    args: str = Field("", description="Context command arguments")
+    database_name: Optional[str] = Field(default=None, description="Database name")
+    schema_name: Optional[str] = Field(default=None, description="Schema name")
+    args: str = Field(default="", description="Context command arguments")
 
 
 class TableInfo(BaseModel):
@@ -90,25 +90,25 @@ class TableInfo(BaseModel):
 
     table_name: str = Field(..., description="Table name")
     table_type: str = Field(..., description="Table type")
-    row_count: Optional[int] = Field(None, description="Number of rows")
-    columns_count: Optional[int] = Field(None, description="Number of columns")
+    row_count: Optional[int] = Field(default=None, description="Number of rows")
+    columns_count: Optional[int] = Field(default=None, description="Number of columns")
 
 
 class ContextResultData(BaseModel):
     """Generic context result data."""
 
-    tables: Optional[List[TableInfo]] = Field(None, description="Tables information")
-    total_count: Optional[int] = Field(None, description="Total count")
-    context_info: Optional[Dict[str, Any]] = Field(None, description="Context information")
-    output: Optional[Any] = Field(None, description="Context command output")
+    tables: Optional[List[TableInfo]] = Field(default=None, description="Tables information")
+    total_count: Optional[int] = Field(default=None, description="Total count")
+    context_info: Optional[Dict[str, Any]] = Field(default=None, description="Context information")
+    output: Optional[Any] = Field(default=None, description="Context command output")
 
 
 class ExecuteContextData(BaseModel):
     """Data for context execution result."""
 
     context_type: str = Field(..., description="Context type")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
+    database_name: Optional[str] = Field(default=None, description="Database name")
+    schema_name: Optional[str] = Field(default=None, description="Schema name")
     result: ContextResultData = Field(..., description="Context result")
 
 
@@ -134,7 +134,7 @@ class ChatInput(BaseModel):
 
     # Core message fields
     message: str = Field(..., description="Chat message")
-    session_id: Optional[str] = Field(None, description="Session ID")
+    session_id: Optional[str] = Field(default=None, description="Session ID")
     model: Optional[str] = Field(
         default=None,
         description=(
@@ -143,8 +143,8 @@ class ChatInput(BaseModel):
             "Takes highest priority over all other model config."
         ),
     )
-    plan_mode: bool = Field(False, description="Whether in plan mode")
-    source: Optional[str] = Field(None, description="chat source, web/vscode")
+    plan_mode: bool = Field(default=False, description="Whether in plan mode")
+    source: Optional[str] = Field(default=None, description="chat source, web/vscode")
     interactive: Optional[bool] = Field(
         default=None,
         description="Override server default for ask_user interactive tool. None = use server default.",
@@ -152,16 +152,16 @@ class ChatInput(BaseModel):
 
     # Database context fields
     datasource: Optional[str] = Field(
-        None,
+        default=None,
         description="Datasource (connection profile) override; selects which configured datasource to use",
     )
-    catalog: Optional[str] = Field(None, description="Database catalog for context")
-    database: Optional[str] = Field(None, description="Database name for context")
-    db_schema: Optional[str] = Field(None, description="Database schema for context")
+    catalog: Optional[str] = Field(default=None, description="Database catalog for context")
+    database: Optional[str] = Field(default=None, description="Database name for context")
+    db_schema: Optional[str] = Field(default=None, description="Database schema for context")
 
     # Chat configuration
     max_turns: int = Field(default=30, description="Maximum conversation turns per interaction")
-    workspace_root: Optional[str] = Field(None, description="Root directory path for filesystem MCP server")
+    workspace_root: Optional[str] = Field(default=None, description="Root directory path for filesystem MCP server")
 
     # Context references (parsed from @ symbols)
     table_paths: Optional[List[str]] = Field(default=None, description="Table path identifiers for @Table references")
@@ -175,11 +175,11 @@ class ChatInput(BaseModel):
 
     # Response control
     stream_response: Optional[bool] = Field(
-        None, description="Whether to stream response; None means use server default"
+        default=None, description="Whether to stream response; None means use server default"
     )
 
     # Legacy fields for backward compatibility
-    context_id: Optional[str] = Field(None, description="Context ID (legacy)")
+    context_id: Optional[str] = Field(default=None, description="Context ID (legacy)")
 
 
 class ActionInfo(BaseModel):
@@ -187,27 +187,27 @@ class ActionInfo(BaseModel):
 
     action_id: str = Field(..., description="Action ID")
     role: str = Field(..., description="Action role (user/assistant/tool)")
-    function_name: Optional[str] = Field(None, description="Function name if tool action")
+    function_name: Optional[str] = Field(default=None, description="Function name if tool action")
     status: str = Field(..., description="Action status")
-    output: Optional[Dict[str, Any]] = Field(None, description="Action output")
+    output: Optional[Dict[str, Any]] = Field(default=None, description="Action output")
     timestamp: str = Field(..., description="Action timestamp")
 
 
 class SessionInfo(BaseModel):
     """Chat session information."""
 
-    session_id: Optional[str] = Field(None, description="Session ID")
-    token_count: int = Field(0, description="Total tokens used")
-    action_count: int = Field(0, description="Total actions performed")
-    conversation_count: int = Field(0, description="Total conversations")
+    session_id: Optional[str] = Field(default=None, description="Session ID")
+    token_count: int = Field(default=0, description="Total tokens used")
+    action_count: int = Field(default=0, description="Total actions performed")
+    conversation_count: int = Field(default=0, description="Total conversations")
 
 
 class ExtractedData(BaseModel):
     """Extracted structured data from chat response."""
 
-    sql: Optional[str] = Field(None, description="Extracted SQL query")
-    clean_output: Optional[str] = Field(None, description="Clean text output")
-    raw_response: Optional[str] = Field(None, description="Raw AI response")
+    sql: Optional[str] = Field(default=None, description="Extracted SQL query")
+    clean_output: Optional[str] = Field(default=None, description="Clean text output")
+    raw_response: Optional[str] = Field(default=None, description="Raw AI response")
     context_references: Dict[str, List[str]] = Field(default_factory=dict, description="Referenced context items")
 
 
@@ -218,46 +218,46 @@ class ChatData(BaseModel):
     message_id: str = Field(..., description="Message ID")
     user_message: str = Field(..., description="User message")
     response: str = Field(..., description="AI response")
-    session_id: Optional[str] = Field(None, description="Session ID")
+    session_id: Optional[str] = Field(default=None, description="Session ID")
     timestamp: str = Field(..., description="Response timestamp")
 
     # Enhanced fields from ChatAgenticNode
-    sql: Optional[str] = Field(None, description="Generated or referenced SQL query")
-    tokens_used: int = Field(0, description="Tokens used in this interaction")
+    sql: Optional[str] = Field(default=None, description="Generated or referenced SQL query")
+    tokens_used: int = Field(default=0, description="Tokens used in this interaction")
     node_type: str = Field(default="chat", description="Node type used (chat/gen_sql)")
 
     # Execution details
     actions: List[ActionInfo] = Field(default_factory=list, description="Execution actions performed")
-    session_info: Optional[SessionInfo] = Field(None, description="Session statistics")
-    extracted_data: Optional[ExtractedData] = Field(None, description="Extracted structured data")
+    session_info: Optional[SessionInfo] = Field(default=None, description="Session statistics")
+    extracted_data: Optional[ExtractedData] = Field(default=None, description="Extracted structured data")
 
     # Context information
     database_context: Dict[str, Optional[str]] = Field(default_factory=dict, description="Database context used")
-    context_updated: bool = Field(False, description="Whether SQL context was updated")
+    context_updated: bool = Field(default=False, description="Whether SQL context was updated")
 
     # Execution metadata
-    execution_time: Optional[float] = Field(None, description="Total execution time in seconds")
+    execution_time: Optional[float] = Field(default=None, description="Total execution time in seconds")
 
 
 # Chat Session Management models
 class ChatSessionItemInfo(BaseModel):
     """Chat session item information."""
 
-    user_query: Optional[str] = Field(None, description="First user message in the session")
+    user_query: Optional[str] = Field(default=None, description="First user message in the session")
     session_id: str = Field(..., description="Session ID")
     created_at: str = Field(..., description="Session creation time")
     last_updated: str = Field(..., description="Last update time")
-    total_turns: int = Field(0, description="Total conversation turns")
-    token_count: int = Field(0, description="Total tokens used")
+    total_turns: int = Field(default=0, description="Total conversation turns")
+    token_count: int = Field(default=0, description="Total tokens used")
     last_sql_queries: List[str] = Field(default_factory=list, description="Recent SQL queries")
-    is_active: bool = Field(False, description="Whether session is currently active")
+    is_active: bool = Field(default=False, description="Whether session is currently active")
 
 
 class ChatSessionData(BaseModel):
     """Chat session summary data."""
 
     sessions: List[ChatSessionItemInfo] = Field(default_factory=list, description="Chat session items")
-    total_count: int = Field(0, description="Total session count")
+    total_count: int = Field(default=0, description="Total session count")
 
 
 class CompactSessionInput(BaseModel):
@@ -271,10 +271,10 @@ class CompactSessionData(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     success: bool = Field(..., description="Whether compaction succeeded")
-    new_token_count: Optional[int] = Field(None, description="Token count after compaction")
-    tokens_saved: Optional[int] = Field(None, description="Tokens saved by compaction")
-    compression_ratio: Optional[str] = Field(None, description="Compression ratio achieved")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    new_token_count: Optional[int] = Field(default=None, description="Token count after compaction")
+    tokens_saved: Optional[int] = Field(default=None, description="Tokens saved by compaction")
+    compression_ratio: Optional[str] = Field(default=None, description="Compression ratio achieved")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
 
 
 # Streaming Chat models
@@ -363,7 +363,7 @@ class InternalCommandInput(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"command": "show", "args": "tables"}})
 
     command: str = Field(..., description="Internal command")
-    args: str = Field("", description="Command arguments")
+    args: str = Field(default="", description="Command arguments")
 
 
 class InternalCommandResultData(BaseModel):
@@ -371,8 +371,8 @@ class InternalCommandResultData(BaseModel):
 
     command_output: str = Field(..., description="Command output")
     action_taken: str = Field(..., description="Action taken")
-    context_changed: bool = Field(False, description="Whether context changed")
-    data: Optional[Any] = Field(None, description="Additional data")
+    context_changed: bool = Field(default=False, description="Whether context changed")
+    data: Optional[Any] = Field(default=None, description="Additional data")
 
 
 class InternalCommandData(BaseModel):
@@ -530,24 +530,26 @@ class SSESessionData(BaseModel):
     """Data structure for SSE session events."""
 
     session_id: str = Field(..., description="Service session ID")
-    llm_session_id: Optional[str] = Field(None, description="LLM session ID")
+    llm_session_id: Optional[str] = Field(default=None, description="LLM session ID")
 
 
 class SSEEndData(BaseModel):
     """Data structure for SSE end events."""
 
     session_id: str = Field(..., description="Service session ID")
-    llm_session_id: Optional[str] = Field(None, description="LLM session ID")
+    llm_session_id: Optional[str] = Field(default=None, description="LLM session ID")
     total_events: int = Field(..., description="Total events sent")
     action_count: int = Field(..., description="Total actions performed")
     duration: float = Field(..., description="Duration in seconds")
-    requests: int = Field(0, description="Number of LLM calls in this turn")
-    input_tokens: int = Field(0, description="Turn input tokens")
-    output_tokens: int = Field(0, description="Turn output tokens")
-    total_tokens: int = Field(0, description="Turn total tokens")
-    cached_tokens: int = Field(0, description="Cache hit tokens")
-    session_total_tokens: int = Field(0, description="Current context window usage (last model call input_tokens)")
-    context_length: int = Field(0, description="Model max context window")
+    requests: int = Field(default=0, description="Number of LLM calls in this turn")
+    input_tokens: int = Field(default=0, description="Turn input tokens")
+    output_tokens: int = Field(default=0, description="Turn output tokens")
+    total_tokens: int = Field(default=0, description="Turn total tokens")
+    cached_tokens: int = Field(default=0, description="Cache hit tokens")
+    session_total_tokens: int = Field(
+        default=0, description="Current context window usage (last model call input_tokens)"
+    )
+    context_length: int = Field(default=0, description="Model max context window")
 
 
 class SSEPingData(BaseModel):
@@ -561,19 +563,19 @@ class SSEErrorData(BaseModel):
 
     error: str = Field(..., description="Error message")
     error_type: str = Field(..., description="Error type name")
-    session_id: Optional[str] = Field(None, description="Service session ID")
-    llm_session_id: Optional[str] = Field(None, description="LLM session ID")
+    session_id: Optional[str] = Field(default=None, description="Service session ID")
+    llm_session_id: Optional[str] = Field(default=None, description="LLM session ID")
 
 
 class SSEUsageDelta(BaseModel):
     """Per-LLM-call token-usage delta (this call only)."""
 
-    requests: int = Field(0, description="LLM calls contributed by this update (typically 1)")
-    input_tokens: int = Field(0, description="Input tokens used by this LLM call")
-    output_tokens: int = Field(0, description="Output tokens produced by this LLM call")
-    total_tokens: int = Field(0, description="Total tokens (input + output + reasoning)")
-    cached_tokens: int = Field(0, description="Cached input tokens credited to this call")
-    reasoning_tokens: int = Field(0, description="Reasoning tokens spent on this call")
+    requests: int = Field(default=0, description="LLM calls contributed by this update (typically 1)")
+    input_tokens: int = Field(default=0, description="Input tokens used by this LLM call")
+    output_tokens: int = Field(default=0, description="Output tokens produced by this LLM call")
+    total_tokens: int = Field(default=0, description="Total tokens (input + output + reasoning)")
+    cached_tokens: int = Field(default=0, description="Cached input tokens credited to this call")
+    reasoning_tokens: int = Field(default=0, description="Reasoning tokens spent on this call")
 
 
 class SSEUsageData(BaseModel):
@@ -586,19 +588,19 @@ class SSEUsageData(BaseModel):
     """
 
     session_id: str = Field(..., description="Service session ID")
-    llm_session_id: Optional[str] = Field(None, description="LLM session ID")
-    depth: int = Field(0, description="Agent depth: 0 = main agent, >0 = sub-agent (spawned via task())")
+    llm_session_id: Optional[str] = Field(default=None, description="LLM session ID")
+    depth: int = Field(default=0, description="Agent depth: 0 = main agent, >0 = sub-agent (spawned via task())")
     parent_action_id: Optional[str] = Field(
-        None, description="For sub-agent usage (depth>0), the parent task() call id it belongs to"
+        default=None, description="For sub-agent usage (depth>0), the parent task() call id it belongs to"
     )
-    requests: int = Field(0, description="Turn-cumulative LLM call count")
-    input_tokens: int = Field(0, description="Turn-cumulative input tokens")
-    output_tokens: int = Field(0, description="Turn-cumulative output tokens")
-    total_tokens: int = Field(0, description="Turn-cumulative total tokens")
-    cached_tokens: int = Field(0, description="Turn-cumulative cache-hit tokens")
-    reasoning_tokens: int = Field(0, description="Turn-cumulative reasoning tokens")
-    last_call_input_tokens: int = Field(0, description="Most recent call's input window size")
-    context_length: int = Field(0, description="Model max context window")
+    requests: int = Field(default=0, description="Turn-cumulative LLM call count")
+    input_tokens: int = Field(default=0, description="Turn-cumulative input tokens")
+    output_tokens: int = Field(default=0, description="Turn-cumulative output tokens")
+    total_tokens: int = Field(default=0, description="Turn-cumulative total tokens")
+    cached_tokens: int = Field(default=0, description="Turn-cumulative cache-hit tokens")
+    reasoning_tokens: int = Field(default=0, description="Turn-cumulative reasoning tokens")
+    last_call_input_tokens: int = Field(default=0, description="Most recent call's input window size")
+    context_length: int = Field(default=0, description="Model max context window")
     delta: SSEUsageDelta = Field(default_factory=SSEUsageDelta, description="This LLM call's contribution")
 
 

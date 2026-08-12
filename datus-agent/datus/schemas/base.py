@@ -60,7 +60,7 @@ class BaseResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     success: bool = Field(..., description="Indicates whether the operation was successful")
-    error: Optional[str] = Field(None, description="Error message if operation failed")
+    error: Optional[str] = Field(default=None, description="Error message if operation failed")
 
     # Action history and execution stats for agentic nodes
     action_history: Optional[List[dict]] = Field(

@@ -91,10 +91,14 @@ agent:
         mysql: "3306"
         oceanbase: "2881"
 
-    # 本地联调默认关闭；开启后必须配置允许域名，且只接受 HTTPS HTTP/SSE。
+    # 本地联调默认关闭；开启后必须配置允许域名，默认只接受 HTTPS 公网 HTTP/SSE。
+    # allow_insecure_http（允许 http:// 明文）与 allow_private_hosts（允许私网/回环）
+    # 是受控放开开关，默认 false，仅建议在本地或隔离环境开启。
     user_mcp:
       enabled: false
       allowed_hosts: []
+      allow_insecure_http: false
+      allow_private_hosts: false
       max_servers_per_user: 10
       max_selected_per_session: 3
       timeout_seconds: 30

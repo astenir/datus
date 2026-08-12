@@ -131,10 +131,10 @@ class GenVisualDashboardNodeInput(AtContextInput):
     """Input model for GenVisualDashboardAgenticNode."""
 
     user_message: str = Field(..., description="User's dashboard question (required)")
-    catalog: Optional[str] = Field(None, description="Database catalog")
-    database: Optional[str] = Field(None, description="Database name")
-    db_schema: Optional[str] = Field(None, description="Database schema")
-    prompt_version: Optional[str] = Field(None, description="Prompt template version override")
+    catalog: Optional[str] = Field(default=None, description="Database catalog")
+    database: Optional[str] = Field(default=None, description="Database name")
+    db_schema: Optional[str] = Field(default=None, description="Database schema")
+    prompt_version: Optional[str] = Field(default=None, description="Prompt template version override")
 
 
 class GenVisualDashboardNodeResult(BaseResult):
@@ -142,14 +142,14 @@ class GenVisualDashboardNodeResult(BaseResult):
 
     response: str = Field(default="", description="Natural language summary shown after the artifact is produced")
     dashboard_slug: Optional[str] = Field(
-        None,
+        default=None,
         description="LLM-chosen slug; doubles as the dashboard's directory name.",
     )
-    app_jsx_path: Optional[str] = Field(None, description="Relative path to render/app.jsx under project_root")
+    app_jsx_path: Optional[str] = Field(default=None, description="Relative path to render/app.jsx under project_root")
     render_file_count: int = Field(default=0, description="Number of files persisted under dashboards/<slug>/render/")
     template_count: int = Field(default=0, description="Number of templates persisted under queries/")
     html_path: Optional[str] = Field(
-        None,
+        default=None,
         description=(
             "Project-relative path to the standalone ``index.html`` compiled by the CLI "
             "(``dashboards/<slug>/index.html``). ``None`` outside CLI mode — the SaaS path "

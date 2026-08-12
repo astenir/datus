@@ -1,4 +1,5 @@
 import { displayValueForTool, summarizeValue, tableFromToolValue } from "@/lib/tool-display";
+import { resolvePersonalMcpDisplayName } from "@/lib/personal-mcp-display";
 import type { MessageDisplayBlock, ToolChildMessage } from "@/types";
 
 export type ToolDisplayBlock = Extract<
@@ -172,7 +173,9 @@ export function toolPresentation(
 
   return {
     title,
-    technicalName: isSubagent && subagentType ? `${block.toolName} · ${subagentType}` : block.toolName,
+    technicalName: resolvePersonalMcpDisplayName(
+      isSubagent && subagentType ? `${block.toolName} · ${subagentType}` : block.toolName,
+    ),
     state,
     statusLabel: toolStatusLabel(state),
     ...(summary ? { summary: truncate(summary, 140) } : {}),

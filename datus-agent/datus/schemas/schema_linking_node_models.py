@@ -21,15 +21,15 @@ class SchemaLinkingInput(BaseInput):
 
     input_text: str = Field(..., description="The query text to analyze for schema linking")
     database_type: str = Field(DBType.SQLITE, description="Database type: sqlite, duckdb snowflake, etc ")
-    catalog_name: str = Field("", description="Catalog name for context")
-    database_name: str = Field("", description="Database name for context")
-    schema_name: str = Field("", description="Schema name for context")
+    catalog_name: str = Field(default="", description="Catalog name for context")
+    database_name: str = Field(default="", description="Database name for context")
+    schema_name: str = Field(default="", description="Schema name for context")
 
     matching_rate: Literal["fast", "medium", "slow", "from_llm"] = Field(
-        "fast",
+        default="fast",
         description="Match rates of the schema linking, allowed values: fast, medium, slow, from_llm",
     )
-    sql_context: Optional[SQLContext] = Field(None, description="The SQL context")
+    sql_context: Optional[SQLContext] = Field(default=None, description="The SQL context")
     prompt_version: Optional[str] = Field(default=None, description="Version for prompt")
     top_n: int = Field(default=5, description="Number of top tables to return")
     table_type: TABLE_TYPE = Field(default="table", description="Table type for the task")

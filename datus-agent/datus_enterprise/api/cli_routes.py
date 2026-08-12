@@ -120,7 +120,7 @@ async def execute_context(
     context_type: Annotated[str, Path(description="Type of context command")],
     ctx: ContextMetadataCtx,
     http_request: Request,
-    request: ExecuteContextInput = None,
+    request: ExecuteContextInput | None = None,
 ) -> Result[ExecuteContextData]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
     if request is None:
@@ -151,7 +151,7 @@ async def execute_internal_command(
     command: Annotated[str, Path(description="Internal command name")],
     ctx: InternalMetadataCtx,
     http_request: Request,
-    request: InternalCommandInput = None,
+    request: InternalCommandInput | None = None,
 ) -> Result[InternalCommandData]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
     if request is None:

@@ -245,13 +245,18 @@ class ChatService(EnterpriseChatServiceMixin):
             return Result[ChatSessionData](
                 success=True,
                 data=ChatSessionData(
-                    session_id=session_id,
-                    created_at="",
-                    last_updated=now_utc_iso(),
-                    total_turns=0,
-                    token_count=0,
-                    last_sql_queries=[],
-                    is_active=False,
+                    sessions=[
+                        ChatSessionItemInfo(
+                            session_id=session_id,
+                            created_at="",
+                            last_updated=now_utc_iso(),
+                            total_turns=0,
+                            token_count=0,
+                            last_sql_queries=[],
+                            is_active=False,
+                        )
+                    ],
+                    total_count=1,
                 ),
             )
         except Exception as e:

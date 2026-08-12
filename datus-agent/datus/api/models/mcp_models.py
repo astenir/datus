@@ -11,7 +11,7 @@ class MCPAuthInput(BaseModel):
     """Input-only remote MCP authentication settings."""
 
     mode: MCPAuthModeValue = Field(..., description="Remote MCP authentication mode")
-    token: Optional[str] = Field(None, description="Static bearer token; accepted on writes and never returned")
+    token: Optional[str] = Field(default=None, description="Static bearer token; accepted on writes and never returned")
 
 
 class MCPAuthSummary(BaseModel):
@@ -28,14 +28,14 @@ class MCPServerInfo(BaseModel):
     name: str = Field(..., description="Server name/identifier")
     type: str = Field(..., description="Server type (stdio, sse, http)")
     status: str = Field(..., description="Server status (available, unavailable)")
-    command: Optional[str] = Field(None, description="Command for stdio servers")
-    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
-    url: Optional[str] = Field(None, description="URL for sse/http servers")
-    headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
-    auth: Optional[MCPAuthSummary] = Field(None, description="Redaction-safe remote authentication summary")
-    timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
-    env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
-    cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
+    command: Optional[str] = Field(default=None, description="Command for stdio servers")
+    args: Optional[List[str]] = Field(default=None, description="Arguments for stdio servers")
+    url: Optional[str] = Field(default=None, description="URL for sse/http servers")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthSummary] = Field(default=None, description="Redaction-safe remote authentication summary")
+    timeout: Optional[float] = Field(default=None, description="Timeout for sse/http servers")
+    env: Optional[Dict[str, str]] = Field(default=None, description="Environment variables for stdio servers")
+    cwd: Optional[str] = Field(default=None, description="Working directory for stdio servers")
 
 
 class AddServerInput(BaseModel):
@@ -49,14 +49,14 @@ class AddServerInput(BaseModel):
 
     name: str = Field(..., description="Server name/identifier")
     type: str = Field(..., description="Server type (stdio, sse, http)")
-    command: Optional[str] = Field(None, description="Command for stdio servers")
-    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
-    url: Optional[str] = Field(None, description="URL for sse/http servers")
-    headers: Optional[Dict[str, str]] = Field(None, description="Headers for sse/http servers")
-    auth: Optional[MCPAuthInput] = Field(None, description="Remote MCP authentication settings")
-    timeout: Optional[float] = Field(None, description="Timeout for sse/http servers")
-    env: Optional[Dict[str, str]] = Field(None, description="Environment variables for stdio servers")
-    cwd: Optional[str] = Field(None, description="Working directory for stdio servers")
+    command: Optional[str] = Field(default=None, description="Command for stdio servers")
+    args: Optional[List[str]] = Field(default=None, description="Arguments for stdio servers")
+    url: Optional[str] = Field(default=None, description="URL for sse/http servers")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="Headers for sse/http servers")
+    auth: Optional[MCPAuthInput] = Field(default=None, description="Remote MCP authentication settings")
+    timeout: Optional[float] = Field(default=None, description="Timeout for sse/http servers")
+    env: Optional[Dict[str, str]] = Field(default=None, description="Environment variables for stdio servers")
+    cwd: Optional[str] = Field(default=None, description="Working directory for stdio servers")
 
 
 # Connectivity models
@@ -64,16 +64,16 @@ class ConnectivityDetails(BaseModel):
     """Details about server connectivity."""
 
     type: str = Field(..., description="Server type")
-    tools_count: Optional[int] = Field(None, description="Number of available tools")
-    tools_available: Optional[bool] = Field(None, description="Whether tools are available")
-    tool_names: Optional[List[str]] = Field(None, description="List of available tool names")
-    connected: Optional[bool] = Field(None, description="Whether connection was successful")
-    command: Optional[str] = Field(None, description="Command for stdio servers")
-    args: Optional[List[str]] = Field(None, description="Arguments for stdio servers")
-    url: Optional[str] = Field(None, description="URL for sse/http servers")
-    headers_count: Optional[int] = Field(None, description="Number of headers")
-    timeout: Optional[float] = Field(None, description="Connection timeout")
-    env_count: Optional[int] = Field(None, description="Number of environment variables")
+    tools_count: Optional[int] = Field(default=None, description="Number of available tools")
+    tools_available: Optional[bool] = Field(default=None, description="Whether tools are available")
+    tool_names: Optional[List[str]] = Field(default=None, description="List of available tool names")
+    connected: Optional[bool] = Field(default=None, description="Whether connection was successful")
+    command: Optional[str] = Field(default=None, description="Command for stdio servers")
+    args: Optional[List[str]] = Field(default=None, description="Arguments for stdio servers")
+    url: Optional[str] = Field(default=None, description="URL for sse/http servers")
+    headers_count: Optional[int] = Field(default=None, description="Number of headers")
+    timeout: Optional[float] = Field(default=None, description="Connection timeout")
+    env_count: Optional[int] = Field(default=None, description="Number of environment variables")
 
 
 # Tool management models
@@ -105,14 +105,14 @@ class ToolFilterInput(BaseModel):
         }
     )
 
-    enabled: bool = Field(True, description="Whether filtering is enabled")
-    allowed_tools: Optional[List[str]] = Field(None, description="List of allowed tool names")
-    blocked_tools: Optional[List[str]] = Field(None, description="List of blocked tool names")
+    enabled: bool = Field(default=True, description="Whether filtering is enabled")
+    allowed_tools: Optional[List[str]] = Field(default=None, description="List of allowed tool names")
+    blocked_tools: Optional[List[str]] = Field(default=None, description="List of blocked tool names")
 
 
 class ToolFilterConfig(BaseModel):
     """Tool filter configuration."""
 
     enabled: bool = Field(..., description="Whether filtering is enabled")
-    allowed_tool_names: Optional[List[str]] = Field(None, description="List of allowed tool names")
-    blocked_tool_names: Optional[List[str]] = Field(None, description="List of blocked tool names")
+    allowed_tool_names: Optional[List[str]] = Field(default=None, description="List of allowed tool names")
+    blocked_tool_names: Optional[List[str]] = Field(default=None, description="List of blocked tool names")

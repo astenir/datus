@@ -21,8 +21,8 @@ class GenDashboardNodeInput(AtContextInput):
     """Input model for GenDashboardAgenticNode."""
 
     user_message: str = Field(..., description="User's dashboard request (required)")
-    database: Optional[str] = Field(None, description="Database name for context")
-    prompt_version: Optional[str] = Field(None, description="Prompt template version")
+    database: Optional[str] = Field(default=None, description="Database name for context")
+    prompt_version: Optional[str] = Field(default=None, description="Prompt template version")
 
 
 class GenDashboardNodeResult(BaseResult):
@@ -30,7 +30,7 @@ class GenDashboardNodeResult(BaseResult):
 
     response: str = Field(default="", description="Natural language response/summary")
     dashboard_result: Optional[Dict[str, Any]] = Field(
-        None,
+        default=None,
         description="Structured dashboard result data (dashboard_id, charts created, etc.)",
     )
     tokens_used: int = Field(default=0, description="Total tokens used")

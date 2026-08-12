@@ -42,7 +42,11 @@ class DocSearchNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
-        next_input = DocSearchInput(keywords=workflow.context.doc_search_keywords, top_n=3, method="internal")
+        next_input = DocSearchInput(
+            platform=workflow.task.database_type,
+            keywords=workflow.context.doc_search_keywords,
+            top_n=3,
+        )
         self.input = next_input
         return {"success": True, "message": "Document appears valid", "suggestions": [next_input]}
 

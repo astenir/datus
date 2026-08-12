@@ -35,14 +35,16 @@ class RunWorkflowRequest(BaseModel):
     datasource: str = Field(..., description="Datasource identifier")
     task: str = Field(..., description="Natural language task description")
     mode: Mode = Field(Mode.SYNC, description="Execution mode: sync or async")
-    task_id: Optional[str] = Field(None, description="Custom task ID for idempotency")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    current_date: Optional[str] = Field(None, description="Current date reference for relative time expressions")
-    subject_path: Optional[List[str]] = Field(None, description="Subject path for the task")
+    task_id: Optional[str] = Field(default=None, description="Custom task ID for idempotency")
+    catalog_name: Optional[str] = Field(default=None, description="Catalog name")
+    database_name: Optional[str] = Field(default=None, description="Database name")
+    schema_name: Optional[str] = Field(default=None, description="Schema name")
+    current_date: Optional[str] = Field(
+        default=None, description="Current date reference for relative time expressions"
+    )
+    subject_path: Optional[List[str]] = Field(default=None, description="Subject path for the task")
     ext_knowledge: Optional[str] = Field(
-        None, description="Supplementary description / evidence supplied with the question"
+        default=None, description="Supplementary description / evidence supplied with the question"
     )
 
 
@@ -52,11 +54,11 @@ class RunWorkflowResponse(BaseModel):
     task_id: str = Field(..., description="Unique task identifier")
     status: str = Field(..., description="Workflow execution status")
     workflow: str = Field(..., description="Workflow name")
-    sql: Optional[str] = Field(None, description="Generated SQL query")
-    result: Optional[List[Dict[str, Any]]] = Field(None, description="Workflow execution results")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
-    error: Optional[str] = Field(None, description="Error message if any")
-    execution_time: Optional[float] = Field(None, description="Execution time in seconds")
+    sql: Optional[str] = Field(default=None, description="Generated SQL query")
+    result: Optional[List[Dict[str, Any]]] = Field(default=None, description="Workflow execution results")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+    error: Optional[str] = Field(default=None, description="Error message if any")
+    execution_time: Optional[float] = Field(default=None, description="Execution time in seconds")
 
 
 class TokenResponse(BaseModel):

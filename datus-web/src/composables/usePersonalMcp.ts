@@ -9,6 +9,10 @@ import {
 import { toast } from "vue-sonner";
 
 import { meApi } from "@/lib/api";
+import {
+  clearPersonalMcpDisplayNames,
+  setPersonalMcpDisplayNames,
+} from "@/lib/personal-mcp-display";
 import { HttpError } from "@/lib/request";
 import type {
   ApiResponse,
@@ -25,6 +29,8 @@ function defaultOptions(): PersonalMcpOptions {
   return {
     enabled: false,
     allowed_hosts: [],
+    allow_insecure_http: false,
+    allow_private_hosts: false,
     max_servers_per_user: 0,
     max_selected_per_session: 0,
   };
@@ -58,24 +64,59 @@ async function personalMcpInUseCount(error: unknown): Promise<number | null> {
   }
 }
 
-export function usePersonalMcp() {
-  const loading = shallowRef(false);
-  const saving = shallowRef(false);
-  const testingId = shallowRef<string | null>(null);
-  const toolsLoadingId = shallowRef<string | null>(null);
-  const bindingLoading = shallowRef(false);
-  const error = shallowRef<string | null>(null);
-  const options = ref<PersonalMcpOptions>(defaultOptions());
-  const servers = ref<PersonalMcpSummary[]>([]);
-  const tools = ref<Record<string, PersonalMcpToolSummary[]>>({});
-  const selectedIds = ref<string[]>([]);
-  const selectionLocked = shallowRef(false);
-  const boundSessionId = shallowRef<string | null>(null);
+// 个人 MCP 状态在模块级共享：会话工作区（会话内 MCP 选择器）与 MCP 管理页各自调用
+// usePersonalMcp() 时读写同一份 servers/options，管理页的新增、启用、删除会立即
+// 反映到会话选择列表，无需整页刷新。dispose 通过实例计数保护：只要还有存活实例
+// （例如 MCP 管理页随 Tab 切换卸载，但工作区仍在），就不会中止请求或清空共享状态。
+const loading = shallowRef(false);
+const saving = shallowRef(false);
+const testingId = shallowRef<string | null>(null);
+const toolsLoadingId = shallowRef<string | null>(null);
+const bindingLoading = shallowRef(false);
+const error = shallowRef<string | null>(null);
+const options = ref<PersonalMcpOptions>(defaultOptions());
+const servers = ref<PersonalMcpSummary[]>([]);
+const tools = ref<Record<string, PersonalMcpToolSummary[]>>({});
+const selectedIds = ref<string[]>([]);
+const selectionLocked = shallowRef(false);
+const boundSessionId = shallowRef<string | null>(null);
 
-  let loadController: AbortController | null = null;
-  let toolsController: AbortController | null = null;
-  let testController: AbortController | null = null;
-  let bindingController: AbortController | null = null;
+let loadController: AbortController | null = null;
+let toolsController: AbortController | null = null;
+let testController: AbortController | null = null;
+let bindingController: AbortController | null = null;
+let instanceCount = 0;
+
+function dispose(): void {
+  instanceCount = Math.max(0, instanceCount - 1);
+  if (instanceCount > 0) return;
+
+  loadController?.abort();
+  toolsController?.abort();
+  testController?.abort();
+  bindingController?.abort();
+  loadController = null;
+  toolsController = null;
+  testController = null;
+  bindingController = null;
+  loading.value = false;
+  saving.value = false;
+  testingId.value = null;
+  toolsLoadingId.value = null;
+  bindingLoading.value = false;
+  error.value = null;
+  options.value = defaultOptions();
+  servers.value = [];
+  tools.value = {};
+  selectedIds.value = [];
+  selectionLocked.value = false;
+  boundSessionId.value = null;
+  clearPersonalMcpDisplayNames();
+}
+
+export function usePersonalMcp() {
+  instanceCount += 1;
+  if (getCurrentScope()) onScopeDispose(dispose);
 
   const enabledServers = computed(() => servers.value.filter(server => server.enabled));
   const isAvailable = computed(() => options.value.enabled && options.value.allowed_hosts.length > 0);
@@ -100,6 +141,11 @@ export function usePersonalMcp() {
       if (controller.signal.aborted) return;
       options.value = resultData(optionsResult, defaultOptions());
       servers.value = resultData(serversResult, []);
+      // 服务列表携带 MCP 名称，供工具卡片 / 权限请求把 personal_<id> 别名还原为名称。
+      setPersonalMcpDisplayNames(servers.value.map(server => ({
+        id: server.id,
+        displayName: server.display_name,
+      })));
     } catch (loadError) {
       if (isAbortError(loadError) || controller.signal.aborted) return;
       console.error("加载个人 MCP 失败:", loadError);
@@ -268,6 +314,11 @@ export function usePersonalMcp() {
       );
       if (controller.signal.aborted) return;
       selectedIds.value = result.servers.map(server => server.mcp_id);
+      // 会话绑定是权威来源（服务可能已重命名），以绑定返回的 MCP 名称为准。
+      setPersonalMcpDisplayNames(result.servers.map(server => ({
+        id: server.mcp_id,
+        displayName: server.display_name,
+      })));
     } catch (bindingError) {
       if (isAbortError(bindingError) || controller.signal.aborted) return;
       console.error("恢复会话个人 MCP 选择失败:", bindingError);
@@ -288,16 +339,8 @@ export function usePersonalMcp() {
     selectionLocked.value = false;
     boundSessionId.value = null;
     selectedIds.value = [];
+    clearPersonalMcpDisplayNames();
   }
-
-  function dispose(): void {
-    loadController?.abort();
-    toolsController?.abort();
-    testController?.abort();
-    bindingController?.abort();
-  }
-
-  if (getCurrentScope()) onScopeDispose(dispose);
 
   return {
     loading: readonly(loading),

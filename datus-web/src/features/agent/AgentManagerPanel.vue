@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAgentManager } from "@/composables/useAgentManager"
 import AgentFormDialog from "@/features/agent/AgentFormDialog.vue"
 import {
@@ -286,20 +287,19 @@ onMounted(() => {
             description="点击 Agent 查看工具，使用操作按钮编辑或管理。"
           >
             <template #meta>
-              <Tabs
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
                 :model-value="agentSourceFilter"
                 class="shrink-0"
+                aria-label="按 Agent 来源过滤"
                 @update:model-value="updateAgentSourceFilter"
               >
-                <TabsList
-                  aria-label="按 Agent 来源过滤"
-                  class="grid h-auto shrink-0 grid-cols-3"
-                >
-                  <TabsTrigger value="all">全部 {{ manager.agentCount.value }}</TabsTrigger>
-                  <TabsTrigger value="custom">自定义 {{ customAgentCount }}</TabsTrigger>
-                  <TabsTrigger value="builtin">系统内置 {{ builtinAgentCount }}</TabsTrigger>
-                </TabsList>
-              </Tabs>
+                <ToggleGroupItem value="all">全部 {{ manager.agentCount.value }}</ToggleGroupItem>
+                <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
+                <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
+              </ToggleGroup>
             </template>
             <template #action>
               <Badge

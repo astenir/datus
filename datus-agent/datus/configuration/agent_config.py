@@ -24,6 +24,7 @@ from datus.utils.path_utils import get_files_from_glob_pattern
 if TYPE_CHECKING:
     from datus.prompts.prompt_manager import PromptManager
     from datus.tools.func_tool.fs_path_policy import PathAllowlist
+    from datus.tools.mcp_tools.mcp_credentials import MCPRequestCredentials
     from datus.utils.path_manager import DatusPathManager
 
 # Regex for validating platform/identifier names (no special chars that break paths)
@@ -1329,6 +1330,24 @@ class AgentConfig:
 
         self.sql_policy_config = SqlPolicyConfig.from_dict(kwargs.get("sql_policy", {}))
         self.principal: Dict[str, Any] = {}
+        # Request-scoped runtime state attached later by API/gateway callers to
+        # the per-request AgentConfig copy. Declared here (not as dataclass
+        # fields) so type checkers know them while ``dataclasses.asdict()`` /
+        # the service fingerprint stays stable.
+        self._session_body_store: Any = None
+        self._session_project_id: Optional[str] = None
+        self._request_user_id: Optional[str] = None
+        self._artifact_acl_store: Any = None
+        self._enterprise_enabled: bool = False
+        self._business_datasource_read_only: bool = False
+        self._protect_artifact_filesystem: bool = False
+        self._request_workspace_root: Optional[str] = None
+        self._client_source: Optional[str] = None
+        self._mcp_request_credentials: Optional["MCPRequestCredentials"] = None
+        self._enterprise_allowed_agent_ids: Set[str] = set()
+        self._request_required_subagent_ids: Set[str] = set()
+        self._request_mcp_servers: Dict[str, Any] = {}
+        self._request_mcp_display_names: Dict[str, str] = {}
 
         # Initialize skills configuration
         self.skills_config = self._init_skills_config(kwargs.get("skills", {}))

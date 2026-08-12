@@ -92,10 +92,10 @@ class ToolFilterConfig(BaseModel):
     """Configuration for tool filtering on MCP servers."""
 
     allowed_tool_names: Optional[List[str]] = Field(
-        None, description="List of allowed tool names (whitelist). If specified, only these tools are allowed."
+        default=None, description="List of allowed tool names (whitelist). If specified, only these tools are allowed."
     )
     blocked_tool_names: Optional[List[str]] = Field(
-        None, description="List of blocked tool names (blacklist). These tools are excluded."
+        default=None, description="List of blocked tool names (blacklist). These tools are excluded."
     )
     enabled: bool = Field(default=True, description="Whether tool filtering is enabled")
 
@@ -197,7 +197,7 @@ class MCPServerConfig(BaseModel):
 
     name: str = Field(..., description="Server name/identifier")
     type: MCPServerType = Field(..., description="Server communication type")
-    tool_filter: Optional[ToolFilterConfig] = Field(None, description="Tool filtering configuration")
+    tool_filter: Optional[ToolFilterConfig] = Field(default=None, description="Tool filtering configuration")
 
     class Config:
         use_enum_values = True
@@ -299,9 +299,9 @@ class STDIOServerConfig(MCPServerConfig):
 
     type: MCPServerType = Field(default=MCPServerType.STDIO, description="Server communication type")
     command: str = Field(..., description="Command to execute")
-    args: Optional[List[str]] = Field(None, description="Command arguments")
-    env: Optional[Dict[str, str]] = Field(None, description="Env variables")
-    cwd: Optional[str] = Field(None, description="Working directory")
+    args: Optional[List[str]] = Field(default=None, description="Command arguments")
+    env: Optional[Dict[str, str]] = Field(default=None, description="Env variables")
+    cwd: Optional[str] = Field(default=None, description="Working directory")
 
     def get_connection_info(self) -> Dict[str, Any]:
         """Get connection information for STDIO server."""
@@ -319,9 +319,9 @@ class SSEServerConfig(MCPServerConfig):
 
     type: MCPServerType = Field(default=MCPServerType.SSE, description="Server communication type")
     url: str = Field(..., description="Server URL")
-    headers: Optional[Dict[str, str]] = Field(None, description="HTTP headers")
-    auth: Optional[MCPAuthConfig] = Field(None, description="Remote authentication strategy")
-    timeout: Optional[float] = Field(None, description="Connection timeout")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="HTTP headers")
+    auth: Optional[MCPAuthConfig] = Field(default=None, description="Remote authentication strategy")
+    timeout: Optional[float] = Field(default=None, description="Connection timeout")
 
     @field_validator("timeout")
     @classmethod
@@ -346,9 +346,9 @@ class HTTPServerConfig(MCPServerConfig):
 
     type: MCPServerType = Field(default=MCPServerType.HTTP, description="Server communication type")
     url: str = Field(..., description="Server URL")
-    headers: Optional[Dict[str, str]] = Field(None, description="HTTP headers")
-    auth: Optional[MCPAuthConfig] = Field(None, description="Remote authentication strategy")
-    timeout: Optional[float] = Field(None, description="Connection timeout")
+    headers: Optional[Dict[str, str]] = Field(default=None, description="HTTP headers")
+    auth: Optional[MCPAuthConfig] = Field(default=None, description="Remote authentication strategy")
+    timeout: Optional[float] = Field(default=None, description="Connection timeout")
 
     @field_validator("timeout")
     @classmethod

@@ -83,20 +83,22 @@ class GenVisualReportNodeInput(AtContextInput):
     """Input model for GenVisualReportAgenticNode."""
 
     user_message: str = Field(..., description="User's analysis question (required)")
-    catalog: Optional[str] = Field(None, description="Database catalog")
-    database: Optional[str] = Field(None, description="Database name")
-    db_schema: Optional[str] = Field(None, description="Database schema")
-    prompt_version: Optional[str] = Field(None, description="Prompt template version override")
+    catalog: Optional[str] = Field(default=None, description="Database catalog")
+    database: Optional[str] = Field(default=None, description="Database name")
+    db_schema: Optional[str] = Field(default=None, description="Database schema")
+    prompt_version: Optional[str] = Field(default=None, description="Prompt template version override")
 
 
 class GenVisualReportNodeResult(BaseResult):
     """Result model for GenVisualReportAgenticNode."""
 
     response: str = Field(default="", description="Natural language summary shown after the artifact is produced")
-    report_slug: Optional[str] = Field(None, description="LLM-chosen slug; doubles as the report's directory name.")
-    app_jsx_path: Optional[str] = Field(None, description="Relative path to render/app.jsx under project_root")
+    report_slug: Optional[str] = Field(
+        default=None, description="LLM-chosen slug; doubles as the report's directory name."
+    )
+    app_jsx_path: Optional[str] = Field(default=None, description="Relative path to render/app.jsx under project_root")
     render_file_count: int = Field(default=0, description="Number of files persisted under reports/<slug>/render/")
-    html_path: Optional[str] = Field(None, description="Path to compiled index.html (CLI mode only)")
+    html_path: Optional[str] = Field(default=None, description="Path to compiled index.html (CLI mode only)")
     query_count: int = Field(default=0, description="Number of queries persisted under queries/")
     tokens_used: int = Field(default=0, description="Total tokens used during this run")
     artifact_kind: Literal["report"] = Field(

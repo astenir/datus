@@ -4759,6 +4759,8 @@ export interface components {
             mcp_id: string;
 
             revision: number;
+
+            display_name: string;
         };
 
         PersonalMcpSummary: {

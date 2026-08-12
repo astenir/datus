@@ -131,6 +131,8 @@ export type PersonalMcpTransport = "http" | "sse";
 export interface PersonalMcpOptions {
   enabled: boolean;
   allowed_hosts: readonly string[];
+  allow_insecure_http: boolean;
+  allow_private_hosts: boolean;
   max_servers_per_user: number;
   max_selected_per_session: number;
 }
@@ -176,5 +178,5 @@ export interface PersonalMcpToolSummary {
 
 export interface PersonalMcpSessionBinding {
   session_id: string;
-  servers: Array<{ mcp_id: string; revision: number }>;
+  servers: Array<{ mcp_id: string; revision: number; display_name: string }>;
 }

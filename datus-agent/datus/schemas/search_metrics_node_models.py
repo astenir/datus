@@ -18,7 +18,7 @@ class SearchMetricsInput(BaseInput):
     sql_contexts: Optional[List[SQLContext]] = Field(default=[], description="The SQL context")
     top_n: int = Field(default=5, description="Number of top tables to return")
     matching_rate: Literal["fast", "medium", "slow"] = Field(
-        "fast",
+        default="fast",
         description="Match rates of the search metrics, allowed values: fast, medium, slow",
     )
 

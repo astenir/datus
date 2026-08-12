@@ -45,6 +45,43 @@ def test_drain_emits_a_failed_mcp_action_pair_and_clears_pending_failures():
     assert node._drain_mcp_connection_failure_actions(manager) == []
 
 
+def test_drain_resolves_personal_mcp_alias_to_display_name_in_summary():
+    node = _make_node(
+        agent_config=SimpleNamespace(
+            _request_mcp_display_names={
+                f"personal_{'a' * 32}": "我的搜索服务",
+            }
+        ),
+    )
+    manager = ActionHistoryManager()
+
+    node._record_mcp_connection_failure(f"personal_{'a' * 32}", "connection refused")
+    actions = node._drain_mcp_connection_failure_actions(manager)
+
+    assert len(actions) == 2
+    start_action, action = actions
+    # The technical identity keeps the runtime alias; only the user-facing
+    # summary resolves it back to the display name (MCP 名称).
+    assert start_action.action_type == f"mcp.personal_{'a' * 32}.connect"
+    assert start_action.input["server_name"] == f"personal_{'a' * 32}"
+    assert action.output == {
+        "error": "Failed to connect to MCP server. Please check the server address and network connectivity.",
+        "summary": "MCP Server '我的搜索服务' connection failed; the Agent continued without it.",
+    }
+
+
+def test_drain_keeps_raw_alias_when_display_name_is_unknown():
+    node = _make_node(agent_config=SimpleNamespace(_request_mcp_display_names={}))
+    manager = ActionHistoryManager()
+
+    node._record_mcp_connection_failure(f"personal_{'b' * 32}", "timed out")
+    actions = node._drain_mcp_connection_failure_actions(manager)
+
+    assert actions[1].output["summary"] == (
+        f"MCP Server 'personal_{'b' * 32}' connection failed; the Agent continued without it."
+    )
+
+
 @pytest.mark.asyncio
 async def test_mcp_failure_is_emitted_before_the_model_yields_its_first_action():
     node = _make_node()

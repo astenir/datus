@@ -55,6 +55,18 @@
 必须先配置对应的 `DATUS_USER_MODEL_CREDENTIAL_SECRET`、
 `DATUS_USER_DATASOURCE_SECRET` 或 `DATUS_USER_MCP_SECRET`，且每个密钥至少 32 个字符。
 
+## 个人 MCP 网络策略
+
+个人 MCP（`enterprise.user_mcp`）默认只允许 HTTPS 公网地址，且必须命中
+`allowed_hosts` 白名单（不能为空）。两个受控放开开关默认关闭，仅在本地或隔离环境开启：
+
+- `allow_insecure_http`：允许 `http://` 明文传输。Bearer Token 可能被网络嗅探，
+  开启后前端会提示明文警告，审计事件会标记 `insecure_http` 模式。
+- `allow_private_hosts`：允许私网/回环地址（如 `localhost`、`10.x`、`192.168.x`）。
+  开启后白名单仍然生效，连接前 DNS 复查仍然执行，审计事件会标记 `private_hosts` 模式。
+
+两者独立生效，同时开启时审计标记为 `relaxed`。生产环境应保持默认严格模式。
+
 ## Web 文件工具执行边界
 
 当前下游 Vue 客户端不会在浏览器中执行 `write_file`、`edit_file`、`delete_file`。下游完整配置应显式保留：

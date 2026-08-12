@@ -18,9 +18,15 @@ class DataVisualizationRequest(BaseModel):
     """POST body for /api/v1/data_visualization."""
 
     csv_data: CsvData
-    chart_type: Optional[ChartType] = Field(None, description="Desired chart type; omit for auto-recommendation")
-    sql: Optional[str] = Field(None, description="SQL query that produced the data (enables metadata extraction)")
-    user_question: Optional[str] = Field(None, description="User's original question (improves insight quality)")
+    chart_type: Optional[ChartType] = Field(
+        default=None, description="Desired chart type; omit for auto-recommendation"
+    )
+    sql: Optional[str] = Field(
+        default=None, description="SQL query that produced the data (enables metadata extraction)"
+    )
+    user_question: Optional[str] = Field(
+        default=None, description="User's original question (improves insight quality)"
+    )
 
 
 # ── Response payloads ────────────────────────────────────────────────
@@ -32,21 +38,25 @@ class ChartData(BaseModel):
     chart_type: ChartType = Field(..., description="Recommended chart type")
     columns: List[str] = Field(..., description="All column names in the dataset")
     numeric_columns: List[str] = Field(..., description="Numeric column names (eligible for Y-axis)")
-    x_col: Optional[str] = Field(None, description="X-axis column (absent when chart_type is Unknown)")
-    y_cols: Optional[List[str]] = Field(None, description="Y-axis column(s) (absent when chart_type is Unknown)")
-    reason: str = Field("", description="Explanation for the recommendation")
+    x_col: Optional[str] = Field(default=None, description="X-axis column (absent when chart_type is Unknown)")
+    y_cols: Optional[List[str]] = Field(
+        default=None, description="Y-axis column(s) (absent when chart_type is Unknown)"
+    )
+    reason: str = Field(default="", description="Explanation for the recommendation")
 
 
 class DataInsight(BaseModel):
     """Context metadata extracted from SQL and data analysis."""
 
-    period: Optional[str] = Field(None, description="Time range extracted from SQL")
-    filters: Optional[List[str]] = Field(None, description="Human-readable filter descriptions")
-    insight: Optional[str] = Field(None, description="AI-generated analytical summary")
+    period: Optional[str] = Field(default=None, description="Time range extracted from SQL")
+    filters: Optional[List[str]] = Field(default=None, description="Human-readable filter descriptions")
+    insight: Optional[str] = Field(default=None, description="AI-generated analytical summary")
 
 
 class DataVisualizationData(BaseModel):
     """Wrapper returned in ``Result.data``."""
 
     chart: ChartData = Field(..., description="Chart configuration for rendering")
-    data_insight: Optional[DataInsight] = Field(None, description="Context metadata (present when sql is provided)")
+    data_insight: Optional[DataInsight] = Field(
+        default=None, description="Context metadata (present when sql is provided)"
+    )

@@ -116,7 +116,7 @@ class AttributionAnalysisResult(BaseModel):
     top_dimension_values: List[DimensionValueContribution] = Field(
         ..., description="Legacy cross-dimension list of top contributors"
     )
-    anomaly_context: Optional[Dict] = Field(None, description="Anomaly detection context")
+    anomaly_context: Optional[Dict] = Field(default=None, description="Anomaly detection context")
     comparison_metadata: Dict = Field(..., description="Comparison period metadata")
     per_dimension: Dict[str, DimensionAttribution] = Field(default_factory=dict)
     warnings: List[AttributionWarning] = Field(default_factory=list)

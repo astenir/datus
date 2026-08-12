@@ -16,6 +16,7 @@ from datus_enterprise.agents.registry import agent_policy_metadata
 from datus_enterprise.personal_mcp import (
     normalize_personal_mcp_id,
     personal_mcp_alias,
+    personal_mcp_display_names,
     personal_mcp_options,
     record_to_mcp_config,
     validate_personal_mcp_destination,
@@ -75,7 +76,9 @@ async def project_personal_mcp_for_chat(
                 raise HTTPException(status_code=409, detail="PERSONAL_MCP_REVISION_CHANGED")
         try:
             validate_personal_mcp_policy(agent_config, url=str(record["url"]))
-            await validate_personal_mcp_destination(str(record["url"]))
+            await validate_personal_mcp_destination(
+                str(record["url"]), allow_private_hosts=options["allow_private_hosts"]
+            )
         except DatusException as exc:
             raise HTTPException(status_code=400, detail="PERSONAL_MCP_DESTINATION_DENIED") from exc
         records.append(record)
@@ -85,6 +88,13 @@ async def project_personal_mcp_for_chat(
     for alias, record in zip(aliases, records, strict=True):
         request_servers[alias] = record_to_mcp_config(record, timeout_seconds=options["timeout_seconds"])
     agent_config._request_mcp_servers = request_servers
+
+    # Keep the alias -> display_name map next to the projected servers so chat
+    # rendering can show the user-facing MCP name instead of the record ID
+    # alias (``personal_<id>``) in tool cards and connection-failure events.
+    request_display_names = dict(getattr(agent_config, "_request_mcp_display_names", {}) or {})
+    request_display_names.update(personal_mcp_display_names(records))
+    agent_config._request_mcp_display_names = request_display_names
     _attach_to_target_agent(agent_config, request.subagent_id, aliases)
 
     request.personal_mcp_ids = requested_ids

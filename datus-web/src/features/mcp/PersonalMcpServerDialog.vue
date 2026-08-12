@@ -26,6 +26,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type {
+  PersonalMcpOptions,
   PersonalMcpSummary,
   PersonalMcpTransport,
   UpsertPersonalMcpInput,
@@ -37,6 +38,7 @@ const props = defineProps<{
   mode: "create" | "edit"
   server?: PersonalMcpSummary | null
   submitting: boolean
+  options?: PersonalMcpOptions | null
 }>()
 
 const emit = defineEmits<{
@@ -57,6 +59,12 @@ const form = reactive<PersonalMcpForm>(defaultForm())
 const error = shallowRef("")
 const isEdit = computed(() => props.mode === "edit")
 const title = computed(() => isEdit.value ? "编辑个人 MCP" : "添加个人 MCP")
+// 组织级网络策略：默认严格（仅 HTTPS + 公网 + 白名单），管理员显式放开后才允许
+// 明文 HTTP 或私网/回环地址。options 可能尚未加载，按严格模式兜底。
+const allowInsecureHttp = computed(() => props.options?.allow_insecure_http === true)
+const allowPrivateHosts = computed(() => props.options?.allow_private_hosts === true)
+const urlLabel = computed(() => allowInsecureHttp.value ? "MCP URL" : "HTTPS URL")
+const plaintextUrl = computed(() => form.url.trim().toLowerCase().startsWith("http://"))
 
 watch(open, (value) => {
   if (!value) return
@@ -89,9 +97,13 @@ function submitForm(): void {
   }
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== "https:") throw new Error("HTTPS required")
+    if (parsed.protocol !== "https:" && !(allowInsecureHttp.value && parsed.protocol === "http:")) {
+      throw new Error("HTTPS required")
+    }
   } catch {
-    error.value = "个人 MCP 只允许使用有效的 HTTPS URL"
+    error.value = allowInsecureHttp.value
+      ? "个人 MCP 只允许使用有效的 HTTP/HTTPS URL"
+      : "个人 MCP 只允许使用有效的 HTTPS URL"
     return
   }
 
@@ -116,7 +128,8 @@ function submitForm(): void {
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
-          仅支持组织白名单内的 HTTPS HTTP/SSE 服务。个人凭据由服务端加密保存，不会回显。
+          仅支持组织白名单内的
+          {{ allowInsecureHttp ? "HTTP/HTTPS" : "HTTPS" }} HTTP/SSE 服务。个人凭据由服务端加密保存，不会回显。
         </DialogDescription>
       </DialogHeader>
 
@@ -125,6 +138,22 @@ function submitForm(): void {
           <AlertCircleIcon />
           <AlertTitle>配置无效</AlertTitle>
           <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+
+        <Alert v-if="plaintextUrl">
+          <AlertCircleIcon />
+          <AlertTitle>明文传输警告</AlertTitle>
+          <AlertDescription>
+            当前地址使用明文 HTTP，个人 Bearer Token 可能被网络窃听。仅建议在受信内网或本地开发环境使用。
+          </AlertDescription>
+        </Alert>
+
+        <Alert v-if="allowPrivateHosts">
+          <AlertCircleIcon />
+          <AlertTitle>私网地址已放开</AlertTitle>
+          <AlertDescription>
+            组织配置允许私网/回环地址（如 localhost、10.x、192.168.x），连接目标仍受域名白名单约束。
+          </AlertDescription>
         </Alert>
 
         <FieldGroup class="gap-4">
@@ -156,7 +185,7 @@ function submitForm(): void {
           </div>
 
           <Field>
-            <FieldLabel for="personal-mcp-url">HTTPS URL</FieldLabel>
+            <FieldLabel for="personal-mcp-url">{{ urlLabel }}</FieldLabel>
             <Input
               id="personal-mcp-url"
               v-model="form.url"
@@ -165,7 +194,10 @@ function submitForm(): void {
               placeholder="https://mcp.example.com/api"
               :disabled="props.submitting"
             />
-            <FieldDescription>不允许本地地址、URL 凭据、query 或 fragment；服务端会再次校验域名和 DNS。</FieldDescription>
+            <FieldDescription>
+              {{ allowInsecureHttp ? "允许 http:// 或 https://" : "仅允许 https://" }}；不允许 URL 凭据、query 或 fragment；
+              服务端会再次校验域名、DNS 和{{ allowPrivateHosts ? "私网策略" : "公网地址" }}。
+            </FieldDescription>
           </Field>
 
           <Field>

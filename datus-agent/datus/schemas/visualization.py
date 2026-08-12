@@ -26,6 +26,6 @@ class VisualizationOutput(BaseResult):
 class VisualizationWithContextOutput(VisualizationOutput):
     """Extended output that includes data context metadata."""
 
-    period: Optional[str] = Field(None, description="Time range from SQL")
-    filters: Optional[List[str]] = Field(None, description="Human-readable filters")
-    insight: Optional[str] = Field(None, description="Analytical summary")
+    period: Optional[str] = Field(default=None, description="Time range from SQL")
+    filters: Optional[List[str]] = Field(default=None, description="Human-readable filters")
+    insight: Optional[str] = Field(default=None, description="Analytical summary")

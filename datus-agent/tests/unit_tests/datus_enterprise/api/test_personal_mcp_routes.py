@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -171,6 +172,19 @@ def test_personal_mcp_session_binding_is_restored_from_owner_scoped_store(monkey
     store = InMemoryUserMcpServerStore()
     _install(monkeypatch, store)
     asyncio.run(
+        store.put_server(
+            user_id="alice",
+            mcp_id="a" * 32,
+            display_name="My Search",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            token=None,
+            allowed_tools=[],
+            blocked_tools=[],
+            enabled=True,
+        )
+    )
+    asyncio.run(
         store.set_session_binding(
             project_id="project",
             session_id="session-1",
@@ -187,9 +201,37 @@ def test_personal_mcp_session_binding_is_restored_from_owner_scoped_store(monkey
         response = client.get("/api/v1/me/mcp-servers/session-binding/session-1")
 
     assert response.status_code == 200
+    # The binding carries the user-facing display name so chat rendering can
+    # resolve the runtime ``personal_<id>`` alias back to the MCP name.
     assert response.json()["data"] == {
         "session_id": "session-1",
-        "servers": [{"mcp_id": "a" * 32, "revision": 2}],
+        "servers": [{"mcp_id": "a" * 32, "revision": 2, "display_name": "My Search"}],
+    }
+
+
+def test_personal_mcp_session_binding_keeps_empty_display_name_for_deleted_server(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    asyncio.run(
+        store.set_session_binding(
+            project_id="project",
+            session_id="session-1",
+            user_id="alice",
+            servers=[{"mcp_id": "b" * 32, "revision": 1}],
+        )
+    )
+
+    async def allow_session(*_args, **_kwargs):
+        return SimpleNamespace(error=None)
+
+    monkeypatch.setattr(personal_mcp_routes, "authorize_session_access", allow_session)
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get("/api/v1/me/mcp-servers/session-binding/session-1")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "session_id": "session-1",
+        "servers": [{"mcp_id": "b" * 32, "revision": 1, "display_name": ""}],
     }
 
 
@@ -283,7 +325,7 @@ async def test_chat_projection_attaches_only_owned_selected_mcp(monkeypatch):
     _install(monkeypatch, store)
     monkeypatch.setattr(
         "datus_enterprise.services.personal_mcp_chat.validate_personal_mcp_destination",
-        lambda _url: _completed(),
+        lambda _url, **_kwargs: _completed(),
     )
     record = await store.put_server(
         user_id="alice",
@@ -330,10 +372,14 @@ async def test_chat_projection_attaches_only_owned_selected_mcp(monkeypatch):
     alias = f"personal_{record['id']}"
     assert [item["id"] for item in projected] == [record["id"]]
     assert alias in config._request_mcp_servers
+    # The projection keeps the user-facing display name next to the runtime
+    # alias so chat rendering never shows the record ID in tool cards.
+    assert config._request_mcp_display_names == {alias: "Search"}
     assert alias in config.agentic_nodes["chat_custom"]["mcp"]
     assert f"mcp.{alias}.*" in config.agentic_nodes["chat_custom"]["tool_policy"]["allowed"]
     assert config.agentic_nodes["child"] == {"id": "child", "mcp": "enterprise_child"}
     assert not hasattr(shared_config, "_request_mcp_servers")
+    assert not hasattr(shared_config, "_request_mcp_display_names")
     assert shared_config.agentic_nodes["chat_custom"]["mcp"] == "enterprise_search"
     binding = await store.get_session_binding("project", "chat_custom_session_1", "alice")
     assert binding is None
@@ -355,7 +401,7 @@ async def test_chat_projection_enforces_use_permission_agent_mode_and_owner(monk
     _install(monkeypatch, store)
     monkeypatch.setattr(
         "datus_enterprise.services.personal_mcp_chat.validate_personal_mcp_destination",
-        lambda _url: _completed(),
+        lambda _url, **_kwargs: _completed(),
     )
     record = await store.put_server(
         user_id="alice",
@@ -417,7 +463,7 @@ async def test_chat_projection_rechecks_current_allowed_hosts(monkeypatch):
     _install(monkeypatch, store)
     monkeypatch.setattr(
         "datus_enterprise.services.personal_mcp_chat.validate_personal_mcp_destination",
-        lambda _url: _completed(),
+        lambda _url, **_kwargs: _completed(),
     )
     record = await store.put_server(
         user_id="alice",
@@ -458,7 +504,7 @@ async def test_existing_session_rejects_selection_change_and_revision_change(mon
     _install(monkeypatch, store)
     monkeypatch.setattr(
         "datus_enterprise.services.personal_mcp_chat.validate_personal_mcp_destination",
-        lambda _url: _completed(),
+        lambda _url, **_kwargs: _completed(),
     )
     record = await store.put_server(
         user_id="alice",
@@ -520,6 +566,125 @@ async def test_existing_session_rejects_selection_change_and_revision_change(mon
             project_id="project",
             new_session=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_destination_validation_allows_private_address_when_configured(monkeypatch):
+    monkeypatch.setattr(
+        "datus_enterprise.personal_mcp.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("10.0.0.8", 0))],
+    )
+    # 默认严格模式仍然拒绝私网解析结果。
+    with pytest.raises(DatusException, match="not public"):
+        await validate_personal_mcp_destination("https://mcp.example.com/mcp")
+    # 显式开启 allow_private_hosts 后放行（连接前 DNS 复查仍然执行）。
+    await validate_personal_mcp_destination("https://mcp.example.com/mcp", allow_private_hosts=True)
+
+
+def _config_with_mcp_flags(*, allow_insecure_http: bool = False, allow_private_hosts: bool = False):
+    return SimpleNamespace(
+        enterprise_config={
+            "user_mcp": {
+                "enabled": True,
+                "allowed_hosts": ["*.example.com", "127.0.0.1"],
+                "allow_insecure_http": allow_insecure_http,
+                "allow_private_hosts": allow_private_hosts,
+            }
+        }
+    )
+
+
+def test_personal_mcp_policy_flags_open_http_and_private_hosts_independently():
+    # 两个开关都关闭：https 明文 URL 被拒、私网被拒（既有契约）。
+    strict = _config_with_mcp_flags()
+    with pytest.raises(DatusException, match="must use HTTPS"):
+        validate_personal_mcp_policy(strict, url="http://mcp.example.com/mcp")
+    with pytest.raises(DatusException, match="not public"):
+        validate_personal_mcp_policy(strict, url="https://127.0.0.1/mcp")
+
+    # 只开 allow_insecure_http：允许公网明文 HTTP，但私网仍然被拒。
+    insecure = _config_with_mcp_flags(allow_insecure_http=True)
+    assert validate_personal_mcp_policy(insecure, url="http://mcp.example.com/mcp") == "http://mcp.example.com/mcp"
+    assert validate_personal_mcp_policy(insecure, url="https://mcp.example.com/mcp").startswith("https://")
+    with pytest.raises(DatusException, match="not public"):
+        validate_personal_mcp_policy(insecure, url="https://127.0.0.1/mcp")
+
+    # 只开 allow_private_hosts：允许私网 HTTPS，但明文 HTTP 仍然被拒。
+    private = _config_with_mcp_flags(allow_private_hosts=True)
+    assert validate_personal_mcp_policy(private, url="https://127.0.0.1/mcp") == "https://127.0.0.1/mcp"
+    with pytest.raises(DatusException, match="must use HTTPS"):
+        validate_personal_mcp_policy(private, url="http://127.0.0.1/mcp")
+
+    # 两个开关都打开：明文 + 私网均可；白名单仍然生效。
+    relaxed = _config_with_mcp_flags(allow_insecure_http=True, allow_private_hosts=True)
+    assert validate_personal_mcp_policy(relaxed, url="http://127.0.0.1/mcp") == "http://127.0.0.1/mcp"
+    with pytest.raises(DatusException, match="host is not allowed"):
+        validate_personal_mcp_policy(relaxed, url="http://unapproved.example.net/mcp")
+
+
+def test_personal_mcp_policy_mode_labels():
+    from datus_enterprise.personal_mcp import personal_mcp_policy_mode
+
+    assert personal_mcp_policy_mode(_agent_config()) == "strict"
+    assert personal_mcp_policy_mode(_config_with_mcp_flags(allow_insecure_http=True)) == "insecure_http"
+    assert personal_mcp_policy_mode(_config_with_mcp_flags(allow_private_hosts=True)) == "private_hosts"
+    assert (
+        personal_mcp_policy_mode(_config_with_mcp_flags(allow_insecure_http=True, allow_private_hosts=True))
+        == "relaxed"
+    )
+
+
+def test_personal_mcp_api_allows_http_when_configured(monkeypatch):
+    store = InMemoryUserMcpServerStore()
+    _install(monkeypatch, store)
+    base_config = _agent_config
+
+    def relaxed_config():
+        config = base_config()
+        config.enterprise_config["user_mcp"]["allow_insecure_http"] = True
+        return config
+
+    monkeypatch.setattr(sys.modules[__name__], "_agent_config", relaxed_config)
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        created = client.post(
+            "/api/v1/me/mcp-servers",
+            json={"display_name": "HTTP", "transport": "http", "url": "http://mcp.example.com/mcp"},
+        )
+
+    assert created.status_code == 200
+    assert created.json()["data"]["url"] == "http://mcp.example.com/mcp"
+
+
+def test_personal_mcp_options_expose_network_policy_flags(monkeypatch):
+    _install(monkeypatch, InMemoryUserMcpServerStore())
+    base_config = _agent_config
+
+    def relaxed_config():
+        config = base_config()
+        config.enterprise_config["user_mcp"]["allow_insecure_http"] = True
+        config.enterprise_config["user_mcp"]["allow_private_hosts"] = True
+        return config
+
+    monkeypatch.setattr(sys.modules[__name__], "_agent_config", relaxed_config)
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get("/api/v1/me/mcp-servers/options")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["allow_insecure_http"] is True
+    assert data["allow_private_hosts"] is True
+    assert "timeout_seconds" not in data
+
+
+def test_personal_mcp_options_default_to_strict(monkeypatch):
+    _install(monkeypatch, InMemoryUserMcpServerStore())
+    with _client(AppContext(user_id="alice", permissions=PERMISSIONS)) as client:
+        response = client.get("/api/v1/me/mcp-servers/options")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["allow_insecure_http"] is False
+    assert data["allow_private_hosts"] is False
 
 
 async def _completed():

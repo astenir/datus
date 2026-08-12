@@ -30,6 +30,7 @@ from datus_enterprise.personal_mcp import (
     normalize_transport,
     personal_mcp_alias,
     personal_mcp_options,
+    personal_mcp_policy_mode,
     record_to_mcp_config,
     validate_personal_mcp_destination,
     validate_personal_mcp_policy,
@@ -44,6 +45,8 @@ RequestContextDep = Annotated[AppContext, Depends(deps.get_request_app_context)]
 class PersonalMcpOptions(BaseModel):
     enabled: bool
     allowed_hosts: list[str] = Field(default_factory=list)
+    allow_insecure_http: bool
+    allow_private_hosts: bool
     max_servers_per_user: int
     max_selected_per_session: int
 
@@ -78,6 +81,7 @@ class UpsertPersonalMcpRequest(BaseModel):
 class PersonalMcpSessionBindingItem(BaseModel):
     mcp_id: str
     revision: int
+    display_name: str = ""
 
 
 class PersonalMcpSessionBinding(BaseModel):
@@ -145,12 +149,22 @@ async def get_personal_mcp_session_binding(
         raise HTTPException(status_code=404, detail="RESOURCE_NOT_FOUND")
     binding = await _store().get_session_binding(svc.project_id, session_id, _require_user_id(ctx))
     servers = list(binding.get("servers") or []) if binding else []
+    user_id = _require_user_id(ctx)
+    items = []
+    for item in servers:
+        # Join the user-facing display name so chat rendering can resolve the
+        # runtime alias (``personal_<id>``) back to the MCP name.
+        record = await _store().get_server(user_id, str(item["mcp_id"]))
+        items.append(
+            PersonalMcpSessionBindingItem(
+                mcp_id=str(item["mcp_id"]),
+                revision=int(item["revision"]),
+                display_name=str(record.get("display_name") or "") if record else "",
+            )
+        )
     return Result(
         success=True,
-        data=PersonalMcpSessionBinding(
-            session_id=session_id,
-            servers=[PersonalMcpSessionBindingItem(**item) for item in servers],
-        ),
+        data=PersonalMcpSessionBinding(session_id=session_id, servers=items),
     )
 
 
@@ -185,7 +199,7 @@ async def create_personal_mcp_server(
     payload = _validated_payload(body, svc.agent_config)
     mcp_id = uuid.uuid4().hex
     record = await _store().put_server(user_id=user_id, mcp_id=mcp_id, **payload)
-    await _audit_best_effort(ctx, "create", mcp_id, new_record=record)
+    await _audit_best_effort(ctx, "create", mcp_id, agent_config=svc.agent_config, new_record=record)
     return Result(success=True, data=_summary(record))
 
 
@@ -221,7 +235,9 @@ async def update_personal_mcp_server(
     record = await _store().put_server(
         user_id=_require_user_id(ctx), mcp_id=normalize_personal_mcp_id(mcp_id), **payload
     )
-    await _audit_best_effort(ctx, "edit", str(record["id"]), old_record=existing, new_record=record)
+    await _audit_best_effort(
+        ctx, "edit", str(record["id"]), agent_config=svc.agent_config, old_record=existing, new_record=record
+    )
     return Result(success=True, data=_summary(record))
 
 
@@ -234,7 +250,11 @@ async def update_personal_mcp_server(
         Depends(require_platform_active(operation="me.mcp.remove", resource_type="user_mcp_server")),
     ],
 )
-async def delete_personal_mcp_server(mcp_id: str, ctx: RequestContextDep) -> Result[dict[str, bool]]:
+async def delete_personal_mcp_server(
+    mcp_id: str,
+    svc: ServiceDep,
+    ctx: RequestContextDep,
+) -> Result[dict[str, bool]]:
     existing = await _owned_record(ctx, mcp_id)
     user_id = _require_user_id(ctx)
     normalized_id = normalize_personal_mcp_id(mcp_id)
@@ -248,6 +268,7 @@ async def delete_personal_mcp_server(mcp_id: str, ctx: RequestContextDep) -> Res
             ctx,
             "remove",
             str(existing["id"]),
+            agent_config=svc.agent_config,
             old_record=existing,
             metadata={"blocked": True, "session_count": session_count},
         )
@@ -256,7 +277,14 @@ async def delete_personal_mcp_server(mcp_id: str, ctx: RequestContextDep) -> Res
             detail={"code": "PERSONAL_MCP_SERVER_IN_USE", "session_count": session_count},
         )
     deleted = await _store().delete_server(user_id, normalized_id)
-    await _audit_best_effort(ctx, "remove", str(existing["id"]), old_record=existing, metadata={"deleted": deleted})
+    await _audit_best_effort(
+        ctx,
+        "remove",
+        str(existing["id"]),
+        agent_config=svc.agent_config,
+        old_record=existing,
+        metadata={"deleted": deleted},
+    )
     return Result(success=True, data={"deleted": deleted})
 
 
@@ -276,6 +304,7 @@ async def test_personal_mcp_server(mcp_id: str, svc: ServiceDep, ctx: RequestCon
         ctx,
         "connectivity",
         str(record["id"]),
+        agent_config=svc.agent_config,
         new_record=record,
         metadata={"connected": success},
     )
@@ -352,9 +381,9 @@ def _summary(record: dict[str, Any]) -> PersonalMcpSummary:
 
 async def _operate(record: dict[str, Any], agent_config: Any, *, operation: str):
     try:
-        validate_personal_mcp_policy(agent_config, url=str(record["url"]))
-        await validate_personal_mcp_destination(str(record["url"]))
         options = personal_mcp_options(agent_config)
+        validate_personal_mcp_policy(agent_config, url=str(record["url"]))
+        await validate_personal_mcp_destination(str(record["url"]), allow_private_hosts=options["allow_private_hosts"])
         manager = MCPManager(agent_config=agent_config)
         alias = personal_mcp_alias(str(record["id"]))
         manager.config.servers[alias] = record_to_mcp_config(record, timeout_seconds=options["timeout_seconds"])
@@ -373,6 +402,7 @@ async def _audit_best_effort(
     operation: str,
     resource_id: str,
     *,
+    agent_config: Any | None = None,
     old_record: dict[str, Any] | None = None,
     new_record: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -386,6 +416,7 @@ async def _audit_best_effort(
                 resource_id=resource_id,
                 decision="allow",
                 metadata={
+                    "policy_mode": personal_mcp_policy_mode(agent_config) if agent_config is not None else None,
                     "old": _audit_summary(old_record),
                     "new": _audit_summary(new_record),
                     **(metadata or {}),
