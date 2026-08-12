@@ -509,23 +509,19 @@ export function permissionBadgeItems(permissions: readonly string[] = []): Permi
     const code = permission.trim();
     if (!code) continue;
 
-    if (code.includes("*")) {
-      selected.set(code, {
-        code,
-        kind: "wildcard",
-        label: permissionLabel(code),
-      });
-      continue;
-    }
-
     selected.set(code, {
       code,
-      kind: "regular",
+      kind: code.includes("*") ? "wildcard" : "regular",
       label: permissionLabel(code),
     });
   }
 
-  return [...selected.values()];
+  // 被更大权限覆盖的权限不再单独展示，例如已有“全部权限”时省略所有具体权限；
+  // 该折叠只影响展示，不影响后端权限语义。
+  const items = [...selected.values()];
+  return items.filter((item) =>
+    !items.some((other) => other.code !== item.code && permissionMatches(item.code, other.code))
+  );
 }
 
 export function permissionRiskLabel(risk: PermissionRisk): string {
@@ -556,6 +552,7 @@ export function normalizePermissionSelection(permissions: readonly string[]): st
 
   while (changed) {
     changed = false;
+    // 1. 补全前置依赖权限（requires）
     for (const permission of [...selected]) {
       const option = optionByValue.get(permission) ?? rolePermissionOption(permission);
       for (const required of option.requires) {
@@ -564,6 +561,17 @@ export function normalizePermissionSelection(permissions: readonly string[]): st
           changed = true;
         }
       }
+    }
+    // 2. 移除被更大权限（通配符）覆盖的冗余权限，例如选了 module.* 后不再保留 module.chat
+    const covered = new Set<string>();
+    for (const permission of selected) {
+      if ([...selected].some((other) => other !== permission && permissionMatches(permission, other))) {
+        covered.add(permission);
+      }
+    }
+    if (covered.size > 0) {
+      for (const code of covered) selected.delete(code);
+      changed = true;
     }
   }
 
@@ -653,6 +661,17 @@ function pruneInvalidPermissionSelection(permissions: readonly string[]): string
         selected.delete(selectedCode);
         changed = true;
       }
+    }
+    // 与 normalizePermissionSelection 保持一致的覆盖剪枝，避免删除路径重新引入冗余权限
+    const covered = new Set<string>();
+    for (const permission of selected) {
+      if ([...selected].some((other) => other !== permission && permissionMatches(permission, other))) {
+        covered.add(permission);
+      }
+    }
+    if (covered.size > 0) {
+      for (const code of covered) selected.delete(code);
+      changed = true;
     }
   }
 

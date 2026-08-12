@@ -35,10 +35,22 @@ describe("permission labels", () => {
     ]);
   });
 
-  it("does not expand overlapping wildcard permissions into many badges", () => {
+  it("collapses overlapping wildcard permissions into the covering badge", () => {
     expect(permissionBadgeItems(["module.*", "module.admin.*"])).toEqual([
       { code: "module.*", kind: "wildcard", label: "全部功能权限" },
-      { code: "module.admin.*", kind: "wildcard", label: "全部管理权限" },
+    ]);
+    expect(permissionBadgeItems(["module.*", "module.chat", "module.admin.roles", "mcp.*", "mcp.server.list"])).toEqual([
+      { code: "module.*", kind: "wildcard", label: "全部功能权限" },
+      { code: "mcp.*", kind: "wildcard", label: "全部 MCP 权限" },
+    ]);
+  });
+
+  it("collapses covered permissions when the all-permissions badge is present", () => {
+    expect(permissionBadgeItems(["*", "module.*", "mcp.*", "module.chat", "mcp.server.add", "module.admin.users"])).toEqual([
+      { code: "*", kind: "wildcard", label: "全部权限" },
+    ]);
+    expect(permissionBadgeItems(["module.report.*", "module.report.view", "module.report.export"])).toEqual([
+      { code: "module.report.*", kind: "wildcard", label: "全部报表权限" },
     ]);
   });
 
@@ -90,6 +102,25 @@ describe("permission labels", () => {
       "mcp.server.tools",
       "mcp.server.connectivity",
     ], "module.mcp")).toEqual([]);
+  });
+
+  it("removes permissions covered by a broader wildcard during normalization", () => {
+    expect(normalizePermissionSelection(["module.chat", "module.*"])).toEqual(["module.*"]);
+    expect(normalizePermissionSelection(["module.admin.users", "module.admin.*"])).toEqual(["module.admin.*"]);
+    expect(normalizePermissionSelection(["mcp.server.list", "mcp.*"])).toEqual(["module.mcp", "mcp.*"]);
+    expect(normalizePermissionSelection(["*", "module.chat", "mcp.server.add"])).toEqual(["*"]);
+  });
+
+  it("keeps narrower permissions that are not covered by the selected wildcard", () => {
+    expect(normalizePermissionSelection(["module.mcp", "mcp.*"])).toEqual(["module.mcp", "mcp.*"]);
+    expect(normalizePermissionSelection(["module.chat", "module.report.*"])).toEqual(["module.chat", "module.report.*"]);
+  });
+
+  it("clears previously selected permissions when toggling the all-permissions badge on", () => {
+    const selected = togglePermissionSelection(["module.chat", "mcp.server.list", "module.admin.roles"], "*");
+
+    expect(selected).toEqual(["*"]);
+    expect(togglePermissionSelection(["*"], "module.chat")).toEqual(["*"]);
   });
 
   it("applies role permission presets with prerequisites", () => {
