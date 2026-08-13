@@ -50,7 +50,7 @@ from datus_enterprise.services.chat_task_runtime import (
     create_dashboard_edit_session,
     create_report_edit_session,
     get_artifact_edit_session,
-    has_active_artifact_edit_session,
+    has_active_artifact_edit_task,
     initialize_chat_task_runtime,
     persist_terminal_event,
     persist_tool_execution_event,
@@ -336,6 +336,13 @@ class ChatTask:
         # SESSION_NOT_RUNNING and the client falls back to a fresh turn, rather
         # than enqueueing with nothing left to drain them.
         self.accepting_inserts: bool = True
+        # Artifact edit-session binding, set by ``ChatTaskManager.start_chat``
+        # when this task is dispatched to a report/dashboard edit subagent.
+        # It is the authoritative "currently editing" lock for artifact
+        # delete flows — see ``has_active_artifact_edit_session``.
+        self.artifact_edit_subagent_id: Optional[str] = None
+        self.artifact_edit_artifact_type: Optional[str] = None
+        self.artifact_edit_slug: Optional[str] = None
 
 
 COMPLETED_TASK_TTL = 300  # seconds to keep completed tasks for resume
@@ -418,10 +425,17 @@ class ChatTaskManager:
         return get_artifact_edit_session(self._artifact_edit_sessions, subagent_id)
 
     def has_active_artifact_edit_session(self, *, artifact_type: str, slug: str) -> bool:
-        """Return True while an unexpired edit session is locked to one artifact."""
+        """Return True while a running chat task is bound to an edit session for this artifact.
 
-        return has_active_artifact_edit_session(
-            self._artifact_edit_sessions,
+        A leftover edit-session record no longer blocks artifact mutation on
+        its own: the session is only "active" while the chat task dispatched
+        to its subagent still runs in ``self._tasks``. Stopped, finished, or
+        cancelled conversations release the artifact immediately; stale
+        records expire via ``purge_expired_artifact_edit_sessions``.
+        """
+
+        return has_active_artifact_edit_task(
+            self._tasks.values(),
             artifact_type=artifact_type,
             slug=slug,
         )
@@ -517,6 +531,13 @@ class ChatTaskManager:
         task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=user_id)  # type: ignore[arg-type]
         task.user_query = request.message
         task.admission_token = admission_token
+        # Bind the task to its artifact edit session before exposing it in
+        # ``_tasks`` so delete checks can never observe an unbound task.
+        edit_session = self.get_artifact_edit_session(sub_agent_id)
+        if edit_session is not None:
+            task.artifact_edit_subagent_id = edit_session.subagent_id
+            task.artifact_edit_artifact_type = edit_session.artifact_type
+            task.artifact_edit_slug = edit_session.artifact_slug
         self._tasks[session_id] = task
         owner_existed = False
         try:
