@@ -151,6 +151,8 @@ export const adminAuditApi = {
       headers: {
         Accept: "text/csv",
       },
+      // 导出文件较大时后端生成耗时可能超过默认 30s 超时。
+      timeoutMs: 120_000,
     });
 
     return {
@@ -217,6 +219,7 @@ export const adminDatasourceApi = {
     ]);
     return get<PaginatedApiResponse<AdminDatasourceGrantSubject[]>>(
       `/api/v1/admin/datasource-grant-subjects${query}`,
+      { signal: params.signal },
     );
   },
 

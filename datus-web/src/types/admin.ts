@@ -218,6 +218,8 @@ export interface DatasourceGrantSubjectListParams {
   search?: string;
   limit?: number;
   offset?: number;
+  /** 取消信号：主体目录为搜索联想接口，过期请求应被中止而不是堆积。 */
+  signal?: AbortSignal;
 }
 
 export interface QuotaListParams {

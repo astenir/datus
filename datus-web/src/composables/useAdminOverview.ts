@@ -194,6 +194,7 @@ export function useAdminOverview() {
   let grantDetailRequestId = 0;
   let grantCatalogRequestId = 0;
   let grantSubjectRequestId = 0;
+  let grantSubjectAbortController: AbortController | null = null;
   let ignoreNextGrantSubjectSearch = false;
   let secretDetailRequestId = 0;
   let artifactAclRequestId = 0;
@@ -326,6 +327,8 @@ export function useAdminOverview() {
 
   function resetGrantSubjectDirectory() {
     grantSubjectRequestId += 1;
+    grantSubjectAbortController?.abort();
+    grantSubjectAbortController = null;
     loadingGrantSubjects.value = false;
     grantSubjectError.value = null;
     grantSubjectHasMore.value = false;
@@ -340,10 +343,14 @@ export function useAdminOverview() {
     const subjectType = grantForm.value.subject_type === "role" ? "role" : "user";
     const requestId = grantSubjectRequestId + 1;
     grantSubjectRequestId = requestId;
+    grantSubjectAbortController?.abort();
+    const controller = new AbortController();
+    grantSubjectAbortController = controller;
     loadingGrantSubjects.value = true;
     grantSubjectError.value = null;
     try {
       await fetchPermissionsIfNeeded();
+      if (requestId !== grantSubjectRequestId) return;
       if (!canManageDatasources.value) {
         grantSubjectOptions.value = [];
         return;
@@ -353,6 +360,7 @@ export function useAdminOverview() {
         search: search.trim() || undefined,
         limit: 100,
         offset: 0,
+        signal: controller.signal,
       });
       if (requestId !== grantSubjectRequestId) return;
       if (!result.success) {

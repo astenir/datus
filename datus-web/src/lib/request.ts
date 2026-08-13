@@ -9,6 +9,17 @@ let apiBaseResolver: (() => string) | null = null;
 let currentAccessToken: string | null = null;
 let authenticationFailureHandler: ((error: HttpError) => void) | null = null;
 
+/**
+ * 默认请求超时时间（毫秒）。
+ * fetch 本身没有超时，后端挂起时前端会无限等待；统一在这里兜底。
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+export type RequestOptions = RequestInit & {
+  /** 覆盖默认请求超时（毫秒）；传 0 表示不等待超时。 */
+  timeoutMs?: number;
+};
+
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
@@ -166,10 +177,12 @@ async function responseErrorCode(response: Response): Promise<string | undefined
  * 封装的 fetch 请求
  * 自动添加 X-Datus-User-Id header
  * 状态码非 200 时抛出 HttpError
+ * 默认带超时兜底，超时后以 name 为 "TimeoutError" 的 DOMException 拒绝；
+ * 调用方传入的 signal 同样会被转发到实际请求。
  */
 export async function request(
   input: string | URL | globalThis.Request,
-  init?: RequestInit
+  init?: RequestOptions
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
 
@@ -182,26 +195,45 @@ export async function request(
     headers.set("Authorization", `Bearer ${currentAccessToken}`);
   }
 
-  const response = await fetch(resolveRequestInput(input), {
-    ...init,
-    headers,
-  });
-
-  // 状态码非 200 时抛出错误
-  if (!response.ok) {
-    const error = new HttpError(
-      response.status,
-      response.statusText,
-      response,
-      await responseErrorCode(response),
-    );
-    if (response.status === 401 && shouldAttachAccessToken(input)) {
-      authenticationFailureHandler?.(error);
-    }
-    throw error;
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const callerSignal = init?.signal;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+  const timeoutId = timeoutMs > 0
+    ? setTimeout(() => controller.abort(new DOMException("请求超时", "TimeoutError")), timeoutMs)
+    : undefined;
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
   }
 
-  return response;
+  try {
+    const response = await fetch(resolveRequestInput(input), {
+      ...init,
+      signal: controller.signal,
+      headers,
+    });
+
+    // 状态码非 200 时抛出错误
+    if (!response.ok) {
+      const error = new HttpError(
+        response.status,
+        response.statusText,
+        response,
+        await responseErrorCode(response),
+      );
+      if (response.status === 401 && shouldAttachAccessToken(input)) {
+        authenticationFailureHandler?.(error);
+      }
+      throw error;
+    }
+
+    return response;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 /**
@@ -209,7 +241,7 @@ export async function request(
  */
 export async function get<T = unknown>(
   url: string | URL,
-  init?: RequestInit
+  init?: RequestOptions
 ): Promise<T> {
   const response = await request(url, {
     ...init,
@@ -224,7 +256,7 @@ export async function get<T = unknown>(
 export async function post<T = unknown>(
   url: string | URL,
   body?: unknown,
-  init?: RequestInit
+  init?: RequestOptions
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   if (body && !headers.has("Content-Type")) {
@@ -246,7 +278,7 @@ export async function post<T = unknown>(
 export async function put<T = unknown>(
   url: string | URL,
   body?: unknown,
-  init?: RequestInit
+  init?: RequestOptions
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   if (body && !headers.has("Content-Type")) {
@@ -267,7 +299,7 @@ export async function put<T = unknown>(
  */
 export async function del<T = unknown>(
   url: string | URL,
-  init?: RequestInit
+  init?: RequestOptions
 ): Promise<T> {
   const response = await request(url, {
     ...init,

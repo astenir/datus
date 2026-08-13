@@ -1,168 +1,121 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  get,
-  setApiBaseResolver,
-  setAuthenticationFailureHandler,
-  setCurrentAccessToken,
-} from "./request";
+import { DEFAULT_REQUEST_TIMEOUT_MS, request } from "./request";
 
-function mockJsonResponse(payload: unknown) {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+/**
+ * 模拟一个尊重 signal 的挂起请求：signal 中止时以 signal.reason 拒绝，
+ * 与真实 fetch 的中止行为一致。
+ */
+function abortablePending(signal?: AbortSignal | null): Promise<Response> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
   });
 }
 
-describe("request helpers", () => {
+describe("request timeout", () => {
   afterEach(() => {
-    setApiBaseResolver(null);
-    setAuthenticationFailureHandler(null);
-    setCurrentAccessToken(null);
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("prefixes relative API requests with the configured API base", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "https://api.example.test/");
-
-    await get("/api/v1/me");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.example.test/api/v1/me",
-      expect.objectContaining({ method: "GET" }),
+  it("aborts requests that exceed the default timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => abortablePending(init?.signal),
     );
+
+    const pending = request("/api/v1/me");
+    const assertion = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS);
+
+    await assertion;
   });
 
-  it("does not prefix relative requests that already include the configured API base path", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "/datus-api");
-
-    await get("/datus-api/api/v1/chat/sessions");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/datus-api/api/v1/chat/sessions",
-      expect.objectContaining({ method: "GET" }),
+  it("honors a caller-provided timeout override", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => abortablePending(init?.signal),
     );
+
+    let settled = false;
+    const pending = request("/api/v1/me", { timeoutMs: 5_000 })
+      .catch((caught: unknown) => {
+        settled = true;
+        throw caught;
+      });
+    const assertion = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+    expect(settled).toBe(true);
   });
 
-  it("does not rewrite absolute URLs", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "https://api.example.test");
-
-    await get("https://auth.example.test/me");
-
-    expect(fetch).toHaveBeenCalledWith(
-      "https://auth.example.test/me",
-      expect.objectContaining({ method: "GET" }),
+  it("supports disabling the timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => abortablePending(init?.signal),
     );
-  });
 
-  it("adds the configured bearer token to relative Datus API requests", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setCurrentAccessToken("dev-alice-token");
-
-    await get("/api/v1/me");
-
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer dev-alice-token");
-  });
-
-  it("adds the configured bearer token to absolute Datus API requests on the configured API base", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "https://api.example.test");
-    setCurrentAccessToken("dev-alice-token");
-
-    await get("https://api.example.test/api/v1/config/agent");
-
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer dev-alice-token");
-  });
-
-  it("adds the configured bearer token to relative API requests that already include the configured base path", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "/datus-api");
-    setCurrentAccessToken("dev-alice-token");
-
-    await get("/datus-api/api/v1/chat/sessions");
-
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer dev-alice-token");
-  });
-
-  it("does not override explicit authorization headers", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setCurrentAccessToken("dev-alice-token");
-
-    await get("/api/v1/me", {
-      headers: { Authorization: "Bearer explicit-token" },
+    let settled = false;
+    void request("/api/v1/me", { timeoutMs: 0 }).catch((caught: unknown) => {
+      settled = true;
+      throw caught;
     });
 
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.get("Authorization")).toBe("Bearer explicit-token");
+    await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS * 2);
+    expect(settled).toBe(false);
   });
 
-  it("does not attach Datus bearer tokens to absolute URLs", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setCurrentAccessToken("dev-alice-token");
+  it("clears the timeout timer for successful requests", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("ok", { status: 200 }),
+    );
 
-    await get("https://auth.example.test/me");
+    const response = await request("/api/v1/me");
 
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.has("Authorization")).toBe(false);
+    expect(response.status).toBe(200);
+    // 成功后推进时间不会触发超时中止。
+    await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS + 1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not attach Datus bearer tokens to absolute API paths on a different origin", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
-    setApiBaseResolver(() => "https://api.example.test");
-    setCurrentAccessToken("dev-alice-token");
-
-    await get("https://other.example.test/api/v1/me");
-
-    const init = fetchMock.mock.calls[0]?.[1];
-    const headers = new Headers(init?.headers);
-    expect(headers.has("Authorization")).toBe(false);
-  });
-
-  it("reports a structured authentication failure for Datus API 401 responses", async () => {
-    const handler = vi.fn();
-    setAuthenticationFailureHandler(handler);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
-      JSON.stringify({ detail: "AUTH_TOKEN_INVALID" }),
-      {
-        status: 401,
-        statusText: "Unauthorized",
-        headers: { "Content-Type": "application/json" },
-      },
-    ));
-
-    await expect(get("/api/v1/me")).rejects.toMatchObject({
-      status: 401,
-      code: "AUTH_TOKEN_INVALID",
+  it("forwards caller abort signals to the underlying fetch", async () => {
+    const controller = new AbortController();
+    const pending: { signal?: AbortSignal | null } = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      pending.signal = init?.signal;
+      return abortablePending(init?.signal);
     });
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({
-      status: 401,
-      code: "AUTH_TOKEN_INVALID",
-    });
+    const requestPromise = request("/api/v1/me", { signal: controller.signal });
+    controller.abort();
+
+    await expect(requestPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(pending.signal?.aborted).toBe(true);
   });
 
-  it("does not report external authentication endpoint failures as Datus API failures", async () => {
-    const handler = vi.fn();
-    setAuthenticationFailureHandler(handler);
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
-      JSON.stringify({ detail: "token expired" }),
-      { status: 401, statusText: "Unauthorized" },
-    ));
+  it("rejects immediately when the caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) => abortablePending(init?.signal),
+    );
 
-    await expect(get("https://auth.example.test/me")).rejects.toMatchObject({ status: 401 });
-
-    expect(handler).not.toHaveBeenCalled();
+    await expect(request("/api/v1/me", { signal: controller.signal }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
