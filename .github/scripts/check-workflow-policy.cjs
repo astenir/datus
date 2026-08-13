@@ -2,9 +2,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const READ_ONLY_PERMISSIONS = { contents: "read", "pull-requests": "read" };
+// title-check 需要给 PR 打 label 和评论，是白名单中唯一允许 write 的 workflow。
+const TITLE_CHECK_PERMISSIONS = { contents: "read", "pull-requests": "write" };
 const WORKFLOW_PERMISSION_POLICIES = {
   "agent-artifact-renderer.yml": READ_ONLY_PERMISSIONS,
   "python-quality.yml": READ_ONLY_PERMISSIONS,
+  "title-check.yml": TITLE_CHECK_PERMISSIONS,
   "web-quality.yml": READ_ONLY_PERMISSIONS,
 };
 

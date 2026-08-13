@@ -40,7 +40,14 @@ Python quality gate
 | `.github/workflows/agent-artifact-renderer.yml` | `Detect relevant changes` | `Renderer package` | `Agent renderer gate` |
 | `.github/workflows/web-quality.yml` | `Detect relevant changes` | `Tests and build` | `Web quality gate` |
 
-三个 workflow 都监听：
+另有非门禁辅助 workflow `.github/workflows/title-check.yml`：监听 `pull_request_target`
+（opened/edited/reopened/labeled/unlabeled），校验 PR 标题符合 Conventional Commits 规范
+`<type>(<scope>): <描述>`，失败时打 `title needs formatting` label 并评论。它不参与三个
+required gate，也不运行任何子项目实体测试；带 `dont-check-PRs-with-this-label` 或 `meta`
+label 的 PR 跳过检查。校验脚本 `.github/scripts/check-pr-title.cjs` 在 workflow 内自带
+`node --test` 自检，只读取 PR 元数据，不执行 PR 代码。
+
+三个质量 workflow 都监听：
 
 ```text
 pull_request
@@ -288,7 +295,7 @@ retry-exempt-status-codes: 400,401,403,404,422
 
 - `.github/scripts/check-workflow-policy.cjs` 自动扫描 `.github/workflows/*.yml` 和 `*.yaml`。
 - 远程 Actions 必须固定到 40 位小写 commit SHA，并保留版本注释；仓库内 `uses: ./...` 可以使用相对路径。
-- 每个 workflow 必须登记显式权限白名单；当前三个 workflow 只允许 `contents: read` 和 `pull-requests: read`。
+- 每个 workflow 必须登记显式权限白名单；质量 workflow 只允许 `contents: read` 和 `pull-requests: read`，title-check 额外允许 `pull-requests: write`（用于打 label 和评论，是白名单中唯一的 write 权限）。
 - 禁止 job 级 `permissions` 覆盖。新增 workflow 或权限必须先更新并评审显式白名单。
 - 不向 PR workflow 注入部署 secrets、真实数据库凭据或远程 LLM key。
 - 不提交本地缓存、下载的 actionlint 二进制、构建产物或浏览器文件。

@@ -86,6 +86,21 @@ test("rejects job-level permission overrides", () => {
   assert.match(validateWorkflow("test.yml", source, POLICY).join("\n"), /job-level permissions/);
 });
 
+test("title-check policy explicitly allows pull-requests write", () => {
+  const workflows = {
+    "title-check.yml": workflowWith(
+      "run: true",
+      "permissions:\n  contents: read\n  pull-requests: write",
+    ),
+  };
+  assert.deepEqual(
+    validateWorkflowFiles(workflows, {
+      "title-check.yml": { contents: "read", "pull-requests": "write" },
+    }),
+    [],
+  );
+});
+
 test("requires every workflow to have an explicit policy", () => {
   const workflows = {
     "known.yml": workflowWith("run: true"),
