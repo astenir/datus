@@ -119,12 +119,38 @@ class TestExportSurfaceGuards:
         issues, _ = scan(
             {
                 "app": (
-                    'import ChartCard, { useDatusArtifact } from "@datus/web-artifact";\n'
+                    'import { ChartCard, useDatusArtifact } from "@datus/web-artifact";\n'
                     "export default function App() { return <ChartCard/>; }"
                 ),
             }
         )
         assert issues == []
+
+    def test_web_artifact_default_import_is_rejected(self):
+        # The runtime module has no default export — a default import is an
+        # undefined binding that crashes with React #130 at mount.
+        issues, _ = scan(
+            {
+                "app": (
+                    'import DatusArtifact from "@datus/web-artifact";\n'
+                    "export default function App() { return <DatusArtifact/>; }"
+                ),
+            }
+        )
+        assert len(issues) == 1
+        assert "no default export" in issues[0] and "#130" in issues[0]
+
+    def test_web_artifact_unknown_named_import_is_rejected(self):
+        issues, _ = scan(
+            {
+                "app": (
+                    'import { BlockHandle } from "@datus/web-artifact";\n'
+                    "export default function App() { return <BlockHandle><div/></BlockHandle>; }"
+                ),
+            }
+        )
+        assert len(issues) == 1
+        assert "BlockHandle" in issues[0] and "does not export" in issues[0]
 
     def test_multiline_named_imports_are_parsed(self):
         issues, warnings = scan(

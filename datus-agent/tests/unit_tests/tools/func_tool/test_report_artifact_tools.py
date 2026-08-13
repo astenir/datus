@@ -732,10 +732,18 @@ export default function App() {
 
 
 def _cards_app_jsx(body: str) -> str:
-    """An ``app.jsx`` whose single query is ``queries/sales_by_store``."""
+    """An ``app.jsx`` whose single query is ``queries/sales_by_store``.
+
+    ``BlockHandle`` is defined locally as a passthrough so the card audit
+    below exercises the JSX contract without importing it from
+    ``@datus/web-artifact`` (the pinned 0.1.x runtime does not export it —
+    that import is rejected by the runtime-export contract test).
+    """
     return f"""\
 import React from 'react';
-import {{ ChartCard, BlockHandle, useDatusArtifact }} from '@datus/web-artifact';
+import {{ ChartCard, useDatusArtifact }} from '@datus/web-artifact';
+
+const BlockHandle = ({{ children }}) => children;
 
 export default function App() {{
   const {{ useQuerySql }} = useDatusArtifact();
@@ -783,6 +791,27 @@ class TestValidateRenderCards:
             {"chart_id": "store_sales", "jsx_path": "render/app.jsx", "kind": "chart"},
             {"chart_id": "total_revenue", "jsx_path": "render/app.jsx", "kind": "kpi"},
         ]
+
+    def test_blockhandle_import_rejected_by_runtime_export_contract(
+        self, report_tools: ReportArtifactTools, project_root: Path
+    ):
+        # The pinned @datus/web-artifact-render 0.1.x does not export
+        # BlockHandle (the prompt advertised it while no published bundle
+        # shipped it) — importing it yields an undefined binding and React
+        # #130 at mount, so validate_render must refuse it.
+        app = """\
+import { BlockHandle } from '@datus/web-artifact';
+
+export default function App() {
+  return <BlockHandle handleId="kpi_total_revenue" name="Total revenue" kind="kpi"><div /></BlockHandle>;
+}
+"""
+        _write_render(project_root, report_tools.report_slug, {"app.jsx": app})
+
+        result = report_tools.validate_render()
+        assert result.success == 0
+        assert "does not export" in (result.error or "")
+        assert "#130" in (result.error or "")
 
     def test_duplicate_ids_across_primitives_rejected(self, report_tools: ReportArtifactTools, project_root: Path):
         # The failure this whole audit exists for: two blocks minting the
@@ -842,7 +871,8 @@ class TestValidateRenderCards:
         # not an error.
         shared = """\
 import React from 'react';
-import { BlockHandle } from '@datus/web-artifact';
+
+const BlockHandle = ({ children }) => children;
 
 export default function KpiCard({ handleId, label, children }) {
   return (

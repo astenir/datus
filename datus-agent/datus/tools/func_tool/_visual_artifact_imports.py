@@ -54,6 +54,34 @@ ALLOWED_BARE_MODULES: frozenset[str] = frozenset(
     }
 )
 
+# Public export surface of the pinned ``@datus/web-artifact-render`` runtime
+# (verified against the vendored 0.1.7 UMD bundle and unpkg 0.1.8). Unlike
+# the other bare modules, this is the repo's own contract, so a named import
+# outside this set is statically provable to be ``undefined`` at runtime and
+# throws React #130 at mount — ``BlockHandle`` is the historical example:
+# the system prompt advertised it while no published 0.1.x bundle exported it.
+WEB_ARTIFACT_EXPORTS: frozenset[str] = frozenset(
+    {
+        "useDatusArtifact",
+        "DatusArtifactProvider",
+        "BundledQueryArtifactProvider",
+        "RemoteQueryArtifactProvider",
+        "normalizeSqlId",
+        "AnimateOnVisible",
+        "ChartCard",
+        "ChartEntryMore",
+        "Skeleton",
+        "ErrorBlock",
+        "bootstrap",
+        "React",
+        "ReactDOM",
+        "Recharts",
+        "LucideReact",
+        "d3Format",
+        "dayjs",
+    }
+)
+
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 # ``import <bindings> from '<spec>'`` — bindings may be a default name, a
@@ -266,6 +294,22 @@ def scan_render_imports(modules: Dict[str, Dict[str, Any]]) -> Tuple[List[str], 
 
         for imp in imports:
             if imp.spec in ALLOWED_BARE_MODULES:
+                if imp.spec == "@datus/web-artifact":
+                    for local, imported in imp.named:
+                        if imported not in WEB_ARTIFACT_EXPORTS:
+                            issues.append(
+                                f"render/{rel}: import {{ {imported} }} from '@datus/web-artifact' but "
+                                "the pinned runtime (0.1.x) does not export it — the binding is "
+                                "undefined at runtime and throws React #130 at mount time. Known "
+                                f"exports: {sorted(WEB_ARTIFACT_EXPORTS)}."
+                            )
+                    if imp.default:
+                        issues.append(
+                            f"render/{rel}: default import {imp.default!r} from '@datus/web-artifact' "
+                            "but the runtime module has no default export — the binding is "
+                            "undefined at runtime and throws React #130 at mount time. "
+                            "Import the named exports instead."
+                        )
                 continue
             if not (imp.spec.startswith("./") or imp.spec.startswith("../")):
                 continue  # disallowed bare specifiers are reported elsewhere
