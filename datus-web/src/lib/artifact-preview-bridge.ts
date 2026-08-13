@@ -132,8 +132,10 @@ export function artifactRenderErrorFromMessage(
 
 const REACT_MINIFIED_ERROR_HINTS: Record<string, string> = {
   "31": "React 错误 #31：Objects are not valid as a React child —— 把对象/数组等非原始值直接渲染进了 JSX，需改为取值或序列化后再渲染。",
+  "62": "React 错误 #62：style 属性期望一个对象映射，却收到了非对象 —— 常见根因是 style={fn} 漏了调用括号，把函数本身传了进去（如 style={labelStyle} 应为 style={labelStyle()}）；也可能是 style=\"...\" 传了字符串。检查所有 style={xxx} 是否为对象或函数调用结果。",
   "130": "React 错误 #130：Element type is invalid ... but got: undefined —— 某个 JSX 组件在渲染时是 undefined。最可能原因：默认导入/命名导入混用（import Foo from './x' 但 x 只有命名导出，或反之）；JSX 中使用了未 import/未定义的大写组件名；导入的模块没有 export default 却被默认导入。请逐文件核对每个组件的 import 与目标文件的 export 是否一一对应。",
-  "310": "React 错误 #310：Rendered fewer hooks than expected —— 组件在条件分支提前 return，导致同一组件两次渲染的 hooks 数量不一致。检查所有 use*() 调用是否都在每个 return 之前。",
+  "300": "React 错误 #300：Rendered fewer hooks than expected —— 组件在条件分支提前 return，导致同一组件两次渲染的 hooks 数量不一致。检查所有 use*() 调用是否都在每个 return 之前。",
+  "310": "React 错误 #310：Rendered more hooks than during the previous render —— 条件分支中调用了不同数量的 hooks。检查 use*() 调用是否稳定、不随条件增减。",
   "321": "React 错误 #321：Invalid hook call —— hooks 在非组件或非自定义 hook 函数中被调用。检查 use*() 是否只在组件顶层调用。",
 };
 

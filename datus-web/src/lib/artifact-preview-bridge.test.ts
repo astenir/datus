@@ -134,6 +134,26 @@ describe("artifact preview bridge", () => {
     expect(prompt).toContain("默认导入/命名导入混用");
   });
 
+  it("decodes the style-prop error #62 with the call-parens fix", () => {
+    const prompt = artifactRepairPrompt("dashboard", "phfund_innovation_future_performance", {
+      message: "boom",
+      stack: "Error: Minified React error #62; visit https://reactjs.org/docs/error-decoder.html?invariant=62",
+    });
+
+    expect(prompt).toContain("style 属性期望一个对象映射");
+    expect(prompt).toContain("style={labelStyle} 应为 style={labelStyle()}");
+  });
+
+  it("distinguishes fewer-hooks #300 from more-hooks #310", () => {
+    const fewer = artifactRepairPrompt("report", "s", { message: "m", stack: "Minified React error #300" });
+    const more = artifactRepairPrompt("report", "s", { message: "m", stack: "Minified React error #310" });
+
+    expect(fewer).toContain("Rendered fewer hooks");
+    expect(fewer).toContain("提前 return");
+    expect(more).toContain("Rendered more hooks");
+    expect(more).not.toContain("提前 return");
+  });
+
   it("leaves unknown minified React errors without a decoded hint", () => {
     const prompt = artifactRepairPrompt("report", "three_literal_values_demo", {
       message: "boom",
