@@ -53,10 +53,11 @@ _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 # ``import <bindings> from '<spec>'`` — bindings may be a default name, a
 # ``* as NS`` namespace binding, a ``{ A, B as C }`` list, or default + list
-# combinations. Side-effect imports (``import './x'``) have no ``from`` and
-# are left to the existing path walker.
+# combinations. Newlines are allowed so multi-line named-import lists are
+# parsed. Side-effect imports (``import './x'``) have no ``from`` and are
+# left to the existing path walker.
 _IMPORT_STMT_RE = re.compile(
-    r"\bimport\s+(?P<bindings>[^'\"\n]+?)\s+from\s+['\"](?P<spec>[^'\"]+)['\"]",
+    r"\bimport\s+(?P<bindings>[^'\"]+?)\s+from\s+['\"](?P<spec>[^'\"]+)['\"]",
     re.DOTALL,
 )
 _NAMESPACE_BINDING_RE = re.compile(r"\*\s*as\s+([A-Za-z_$][\w$]*)")

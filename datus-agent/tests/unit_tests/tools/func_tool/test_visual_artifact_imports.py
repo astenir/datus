@@ -126,6 +126,22 @@ class TestExportSurfaceGuards:
         )
         assert issues == []
 
+    def test_multiline_named_imports_are_parsed(self):
+        issues, warnings = scan(
+            {
+                "app": (
+                    "import {\n"
+                    "  LineChart,\n"
+                    "  Line,\n"
+                    "  XAxis,\n"
+                    "} from 'recharts';\n"
+                    "export default function App() { return <LineChart><Line/></LineChart>; }"
+                ),
+            }
+        )
+        assert issues == []
+        assert warnings == []
+
 
 # --------------------------------------------------------------------------- #
 # Warnings — JSX tags not provably in scope                                    #
