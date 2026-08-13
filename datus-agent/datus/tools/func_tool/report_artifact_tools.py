@@ -54,6 +54,13 @@ from datus.tools.func_tool._visual_artifact_helpers import (
     utc_now_iso,
     write_query_brief,
 )
+from datus.tools.func_tool._visual_artifact_imports import (
+    ALLOWED_BARE_MODULES,
+    scan_render_imports,
+)
+from datus.tools.func_tool._visual_artifact_imports import (
+    resolve_relative_import as _resolve_relative_import,
+)
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.loggings import get_logger
 from datus_enterprise.services.artifact_creation_acl import (
@@ -94,19 +101,6 @@ _IMPORT_PATH_RE = re.compile(
 # `export default class ...`, `export default foo`, `export default ({...})
 # => ...`, etc.
 _DEFAULT_EXPORT_RE = re.compile(r"(?m)^\s*export\s+default\b")
-
-# Bare specifiers an authored render module is allowed to import. Keep in
-# lockstep with the module map inside the iframe runtime
-ALLOWED_BARE_MODULES: frozenset[str] = frozenset(
-    {
-        "react",
-        "recharts",
-        "lucide-react",
-        "d3-format",
-        "dayjs",
-        "@datus/web-artifact",
-    }
-)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -215,43 +209,6 @@ def _module_key(rel_path: str) -> str:
     ``"app.jsx"`` → ``"app"`` or ``"charts/trend.jsx"`` → ``"charts/trend"``.
     """
     return re.sub(r"\.(jsx|js)$", "", rel_path)
-
-
-def _resolve_relative_import(caller_key: str, spec: str, module_keys: Set[str]) -> Optional[str]:
-    """Resolve a relative import spec to a module key (or None when it doesn't).
-
-    Mirrors the iframe runtime's resolution so static validation can refuse
-    references the renderer would also reject. ``caller_key`` is the
-    importing module (e.g. ``"app"`` or ``"charts/trend"``); ``spec`` is the
-    relative path (``"./kpi-banner"``, ``"../shared/util"``). Returns the
-    resolved module key on success.
-    """
-    parts: List[str] = caller_key.split("/")[:-1] if "/" in caller_key else []
-    spec_segments = spec.split("/")
-    # The renderer accepts both extension-less and extension-full imports.
-    if spec_segments:
-        spec_segments[-1] = re.sub(r"\.(jsx|js)$", "", spec_segments[-1])
-
-    for seg in spec_segments:
-        if seg in ("", "."):
-            continue
-        if seg == "..":
-            if not parts:
-                return None  # escape attempt outside render/
-            parts.pop()
-        else:
-            parts.append(seg)
-
-    candidate = "/".join(parts)
-    if not candidate:
-        return None  # someone wrote `import './'` — meaningless
-
-    if candidate in module_keys:
-        return candidate
-    indexed = f"{candidate}/index"
-    if indexed in module_keys:
-        return indexed
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -1020,6 +977,14 @@ class ReportArtifactTools:
             ``lucide-react``, ``d3-format``, ``dayjs``,
             ``@datus/web-artifact``), OR
           - a relative path that resolves to a file under ``render/``.
+        * Every relative import binding resolves against the target module's
+          export surface — default-importing a module without ``export
+          default``, or named-importing a binding the target doesn't export,
+          is refused (the binding would be ``undefined`` at runtime and throw
+          React error #130). ``export *`` targets are skipped.
+        * Capitalized JSX tags not provably in scope are reported as
+          non-fatal warnings (the other common #130 root cause: the component
+          is never imported or defined).
         * No file escapes ``render/`` via ``../`` import.
         * No ``use*()`` hook call sits below a ``return`` in the same function
           — the Rules-of-Hooks violation that renders as a blank artifact.
@@ -1181,6 +1146,11 @@ class ReportArtifactTools:
             # ---- Rules of Hooks: no hook call below an early return
             issues.extend(format_hook_order_issues(mod["rel"], source))
 
+        # ---- import/export contract + out-of-scope JSX tags — the static
+        # root causes behind React #130 (Element type is invalid).
+        import_issues, import_warnings = scan_render_imports(modules)
+        issues.extend(import_issues)
+
         if not _DEFAULT_EXPORT_RE.search(modules["app"]["source"]):
             issues.append(
                 "render/app.jsx must include an `export default` (the renderer mounts the "
@@ -1206,10 +1176,14 @@ class ReportArtifactTools:
             reachable.add(k)
             stack.extend(modules[k]["imports"])
         unreferenced = sorted(modules.keys() - reachable)
-        warnings = card_warnings + [
-            f"render/{modules[k]['rel']} is not imported by render/app.jsx (directly or transitively)"
-            for k in unreferenced
-        ]
+        warnings = (
+            card_warnings
+            + import_warnings
+            + [
+                f"render/{modules[k]['rel']} is not imported by render/app.jsx (directly or transitively)"
+                for k in unreferenced
+            ]
+        )
 
         return FuncToolResult(
             result={

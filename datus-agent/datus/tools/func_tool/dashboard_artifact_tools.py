@@ -54,6 +54,7 @@ from datus.tools.func_tool._visual_artifact_helpers import (
     utc_now_iso,
     write_query_brief,
 )
+from datus.tools.func_tool._visual_artifact_imports import scan_render_imports
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.tools.func_tool.report_artifact_tools import (
     _DEFAULT_EXPORT_RE,
@@ -1156,6 +1157,14 @@ class DashboardArtifactTools:
         * Every ``import`` / ``export ... from`` path is either a bare
           specifier in the allowed list or a relative path that resolves
           to a file under ``render/``.
+        * Every relative import binding resolves against the target module's
+          export surface — default-importing a module without ``export
+          default``, or named-importing a binding the target doesn't export,
+          is refused (the binding would be ``undefined`` at runtime and throw
+          React error #130). ``export *`` targets are skipped.
+        * Capitalized JSX tags not provably in scope are reported as
+          non-fatal warnings (the other common #130 root cause: the component
+          is never imported or defined).
         * No ``use*()`` hook call sits below a ``return`` in the same function
           — the Rules-of-Hooks violation that renders as a blank artifact.
 
@@ -1364,6 +1373,11 @@ class DashboardArtifactTools:
             # ---- Rules of Hooks: no hook call below an early return
             issues.extend(format_hook_order_issues(mod["rel"], source))
 
+        # ---- import/export contract + out-of-scope JSX tags — the static
+        # root causes behind React #130 (Element type is invalid).
+        import_issues, import_warnings = scan_render_imports(modules)
+        issues.extend(import_issues)
+
         if not _DEFAULT_EXPORT_RE.search(modules["app"]["source"]):
             issues.append(
                 "render/app.jsx must include an `export default` (the renderer mounts the "
@@ -1392,6 +1406,7 @@ class DashboardArtifactTools:
             f"render/{modules[k]['rel']} is not imported by render/app.jsx (directly or transitively)"
             for k in unreferenced
         )
+        warnings.extend(import_warnings)
 
         # Cards registry derived from the validated <ChartCard> /
         # <BlockHandle> instances. Downstream consumers (publish wire
