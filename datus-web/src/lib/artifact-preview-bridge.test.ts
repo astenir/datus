@@ -123,6 +123,26 @@ describe("artifact preview bridge", () => {
     expect(prompt).not.toContain("Please use gen_visual_report");
   });
 
+  it("decodes known minified React errors into actionable guidance", () => {
+    const prompt = artifactRepairPrompt("report", "three_literal_values_demo", {
+      message: "boom",
+      stack: "Error: Minified React error #130; visit https://reactjs.org/docs/error-decoder.html?invariant=130&args[]=undefined",
+    });
+
+    expect(prompt).toContain("诊断提示");
+    expect(prompt).toContain("Element type is invalid");
+    expect(prompt).toContain("默认导入/命名导入混用");
+  });
+
+  it("leaves unknown minified React errors without a decoded hint", () => {
+    const prompt = artifactRepairPrompt("report", "three_literal_values_demo", {
+      message: "boom",
+      stack: "Error: Minified React error #999; visit https://reactjs.org/docs/error-decoder.html?invariant=999",
+    });
+
+    expect(prompt).not.toContain("诊断提示");
+  });
+
   it("uses the renderer's dashboard wording and falls back to the message without a stack", () => {
     const prompt = artifactRepairPrompt("dashboard", "fund_overview", {
       message: "boom",
