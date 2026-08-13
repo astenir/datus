@@ -28,6 +28,12 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
+#: Flags for every user-facing glob pattern (glob / grep include). Mirrors
+#: ``filesystem_tools._GLOB_MATCH_FLAGS``: ``BRACE`` lets LLMs write
+#: bash-style alternations like ``**/*.{jsx,js}`` instead of matching the
+#: brace group literally and silently returning an empty list.
+_GLOB_MATCH_FLAGS = wc_glob.DOTGLOB | wc_glob.GLOBSTAR | wc_glob.BRACE
+
 
 # Match FilesystemFuncTool's per-read cap so large files behave the same way
 # whether they're on disk or in memory.
@@ -178,7 +184,7 @@ class MemoryFilesystemFuncTool(BaseTool):
             for full_key in scoped:
                 rel = full_key[len(prefix) :].lstrip("/") if prefix else full_key
                 try:
-                    matched = wc_glob.globmatch(rel, pattern, flags=wc_glob.DOTGLOB | wc_glob.GLOBSTAR)
+                    matched = wc_glob.globmatch(rel, pattern, flags=_GLOB_MATCH_FLAGS)
                 except Exception:
                     matched = rel == pattern
                 if matched:
@@ -235,7 +241,7 @@ class MemoryFilesystemFuncTool(BaseTool):
                 if include:
                     name = full_key.rsplit("/", 1)[-1]
                     try:
-                        if not wc_glob.globmatch(name, include, flags=wc_glob.DOTGLOB | wc_glob.GLOBSTAR):
+                        if not wc_glob.globmatch(name, include, flags=_GLOB_MATCH_FLAGS):
                             continue
                     except Exception:
                         if name != include:

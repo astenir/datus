@@ -197,6 +197,22 @@ class TestTruncationCap:
         # happened — its absence is part of the "not truncated" contract.
         assert "message" not in res.result
 
+    def test_glob_with_brace_alternation(self):
+        fs = MemoryFilesystemFuncTool(
+            {
+                "render/app.jsx": "x",
+                "render/shared/colors.js": "y",
+                "render/styles.css": "z",
+            }
+        )
+        res = fs.glob("**/*.{jsx,js,css}")
+        assert res.success == 1
+        assert set(res.result["files"]) == {
+            "render/app.jsx",
+            "render/shared/colors.js",
+            "render/styles.css",
+        }
+
     def test_glob_over_cap_marks_truncated_and_caps_results(self, monkeypatch):
         import datus.tools.func_tool.memory_filesystem_tools as mod
 
