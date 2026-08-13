@@ -105,12 +105,23 @@ Default verification levels:
 | --- | --- |
 | Docs/config examples | YAML/format check plus focused doc/config tests if referenced |
 | Python unit behavior | `uv run ruff check ...` and focused `uv run pytest tests/unit_tests/...` |
+| Typed code in `datus/`/`datus_enterprise/` | `uv run --with basedpyright==1.39.9 basedpyright datus datus_enterprise`；错误数不得超基线（CI 强制） |
 | API route/security | route security matrix tests, auth/deps tests, focused API route tests |
 | Enterprise auth/projection/session | enterprise smoke, owner/projection/legacy-disabled/platform-status tests |
 | Provider/model changes | focused model tests plus provider coverage/regression targets |
 | Broad shared contracts | `uv run python ci/run-pr-tests.py <base>` and test audit |
 
 CI must not depend on API keys, remote LLMs, real network services, optional packages, or prebuilt external data. Gate true integration tests with environment variables and `skipif`.
+
+### basedpyright 增量基线
+
+根级 `python-quality.yml` 的 Agent quality job 运行 basedpyright（固定版本 `1.39.9`）并对比
+`ci/basedpyright-baseline.json`：存量错误不阻塞，**新增错误或警告即失败**。基线由
+`uv run --with basedpyright==1.39.9 basedpyright --outputjson datus datus_enterprise`
+生成。基线更新方式：先修复并量化减少，再运行
+`node ../.github/scripts/check-basedpyright-baseline.cjs --report <新报告> --baseline ci/basedpyright-baseline.json --update-baseline`
+提交新的基线文件。升级 basedpyright 版本时必须在同一 PR 中同步重生成基线并说明规则变化；
+不允许通过提高基线掩盖新增错误。
 
 Test file naming:
 

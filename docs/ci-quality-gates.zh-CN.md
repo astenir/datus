@@ -76,6 +76,15 @@ workflow_dispatch
 因此，“本地默认 pytest/build 可运行”不能写成“PR 已验证全部运行时依赖”；需要外部服务、
 凭据或目标部署的检查必须单独标注。
 
+### basedpyright 增量门禁
+
+Agent quality job 还运行 basedpyright（固定 `1.39.9`，`uv run --with` 注入到已同步的
+项目环境，依赖解析与本地一致）并对比 `datus-agent/ci/basedpyright-baseline.json`：
+存量 2808 errors/7 warnings 不阻塞，**新增错误或警告即失败**（fail closed），新增规则
+差异会打印到日志。对比脚本为 `.github/scripts/check-basedpyright-baseline.cjs`，
+自带单元测试。基线更新使用脚本 `--update-baseline` 模式；升级 basedpyright 或收紧
+规则时须在同一 PR 重生成基线并说明变化，不允许借提高基线掩盖新增错误。
+
 ## OpenAPI 生成契约（当前为部分自动规则）
 
 `datus-web/openapi.json` 和 `datus-web/src/types/openapi.ts` 是由脚本生成的契约 artifact；
