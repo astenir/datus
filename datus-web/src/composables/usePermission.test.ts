@@ -171,4 +171,79 @@ describe("usePermission", () => {
     expect(permission.hasViewPermission("mcp")).toBe(true);
     expect(permission.hasPermission("module.mcp")).toBe(false);
   });
+
+  it("deduplicates concurrent permission fetches into one request", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({
+      success: true,
+      data: {
+        user_id: "alice",
+        is_admin: false,
+        features: {},
+        datasource_grants: {},
+      },
+    }));
+
+    const permission = (await import("./usePermission")).usePermission();
+    const first = permission.fetchPermissions();
+    const second = permission.fetchPermissions();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(firstResult?.user_id).toBe("alice");
+    expect(secondResult?.user_id).toBe("alice");
+  });
+
+  it("reuses loaded permissions instead of refetching", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({
+      success: true,
+      data: {
+        user_id: "alice",
+        is_admin: true,
+        features: {},
+        datasource_grants: {},
+      },
+    }));
+
+    const permission = (await import("./usePermission")).usePermission();
+    await permission.fetchPermissions();
+    const again = await permission.fetchPermissions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(again?.is_admin).toBe(true);
+  });
+
+  it("cools down failed permission fetches and retries after the window", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    const permission = (await import("./usePermission")).usePermission();
+    try {
+      await permission.fetchPermissions();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(permission.isLoaded.value).toBe(false);
+
+      // 冷却窗口内不再发起网络请求。
+      await permission.fetchPermissions();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // 窗口结束后重试。
+      await vi.advanceTimersByTimeAsync(10_001);
+      await permission.fetchPermissions();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the failure cooldown on clearPermissions", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    const permission = (await import("./usePermission")).usePermission();
+
+    await permission.fetchPermissions();
+    permission.clearPermissions();
+    await permission.fetchPermissions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

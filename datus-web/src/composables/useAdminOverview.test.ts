@@ -425,12 +425,12 @@ describe("useAdminOverview", () => {
 
     overview.openCreateGrantDialog();
 
-    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith(expect.objectContaining({
       subjectType: "user",
       search: undefined,
       limit: 100,
       offset: 0,
-    }));
+    })));
     await vi.waitFor(() => expect(overview.grantSubjectOptions.value).toHaveLength(25));
     expect(overview.grantSubjectOptions.value[24]).toEqual({
       value: "user_24",
@@ -453,12 +453,12 @@ describe("useAdminOverview", () => {
       expect(listGrantSubjects).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await Promise.resolve();
-      expect(listGrantSubjects).toHaveBeenCalledWith({
+      expect(listGrantSubjects).toHaveBeenCalledWith(expect.objectContaining({
         subjectType: "user",
         search: "user_24",
         limit: 100,
         offset: 0,
-      });
+      }));
     } finally {
       vi.useRealTimers();
     }
@@ -468,12 +468,12 @@ describe("useAdminOverview", () => {
     overview.setGrantSubjectType("role");
 
     expect(overview.grantForm.value.subject_id).toBe("");
-    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledWith(expect.objectContaining({
       subjectType: "role",
       search: undefined,
       limit: 100,
       offset: 0,
-    }));
+    })));
   });
 
   it("ignores stale grant subject search responses", async () => {
@@ -507,6 +507,8 @@ describe("useAdminOverview", () => {
     const overview = useAdminOverview();
 
     const firstRequest = overview.loadGrantSubjects("first");
+    // 让第一个请求真正发出后再发起第二个，验证过期响应会被丢弃。
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(1));
     const secondRequest = overview.loadGrantSubjects("second");
     await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(2));
     resolveSecond({
@@ -528,6 +530,24 @@ describe("useAdminOverview", () => {
       description: undefined,
     }]);
     expect(overview.loadingGrantSubjects.value).toBe(false);
+  });
+
+  it("aborts a superseded grant subject request", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    const firstRequest = overview.loadGrantSubjects("first");
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(1));
+    const secondRequest = overview.loadGrantSubjects("second");
+    await vi.waitFor(() => expect(listGrantSubjects).toHaveBeenCalledTimes(2));
+    await Promise.allSettled([firstRequest, secondRequest]);
+
+    const firstParams = listGrantSubjects.mock.calls[0][0];
+    const secondParams = listGrantSubjects.mock.calls[1][0];
+    expect(firstParams.signal?.aborted).toBe(true);
+    expect(secondParams.signal?.aborted).toBe(false);
+    expect(overview.loadingGrantSubjects.value).toBe(false);
+    expect(overview.grantSubjectError.value).toBeNull();
   });
 
   it("keeps the selected grant subject visible when it is outside the returned page", async () => {

@@ -55,6 +55,18 @@ const permissions = ref<UserPermissions | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
+/**
+ * 权限拉取失败后的冷却窗口（毫秒）。
+ * 避免后端不稳定时每次搜索/操作都重新打 /api/v1/me，把卡顿放大。
+ */
+const PERMISSION_RETRY_AFTER_MS = 10_000;
+
+/** 进行中的权限请求，并发调用共享同一个 Promise，避免重复请求。 */
+let inFlightPermissions: Promise<UserPermissions | null> | null = null;
+
+/** 失败冷却截止时间戳，冷却期内直接返回 null 不发起网络请求。 */
+let permissionsFailedUntil: number | null = null;
+
 function normalizeMeSummary(payload: MeSummaryPayload | null | undefined): UserPermissions | null {
   if (!payload) return null;
 
@@ -136,23 +148,33 @@ function permissionMatches(required: string, granted: string): boolean {
 export function usePermission() {
   /**
    * 获取当前用户权限
+   * 已加载时直接返回缓存；并发调用共享同一请求；失败后进入短暂冷却，避免反复请求挂起的后端。
    */
   async function fetchPermissions(): Promise<UserPermissions | null> {
+    if (permissions.value) return permissions.value;
+    if (inFlightPermissions) return inFlightPermissions;
+    if (permissionsFailedUntil !== null && Date.now() < permissionsFailedUntil) return null;
+
     loading.value = true;
     error.value = null;
+    inFlightPermissions = (async () => {
+      try {
+        const result = await get<ApiResponse<MeSummaryPayload>>("/api/v1/me");
 
-    try {
-      const result = await get<ApiResponse<MeSummaryPayload>>("/api/v1/me");
-
-      permissions.value = normalizeMeSummary(result?.data);
-      return permissions.value;
-    } catch (err) {
-      console.error("获取权限失败:", err);
-      error.value = err instanceof Error ? err.message : "获取权限失败";
-      return null;
-    } finally {
-      loading.value = false;
-    }
+        permissions.value = normalizeMeSummary(result?.data);
+        permissionsFailedUntil = null;
+        return permissions.value;
+      } catch (err) {
+        console.error("获取权限失败:", err);
+        error.value = err instanceof Error ? err.message : "获取权限失败";
+        permissionsFailedUntil = Date.now() + PERMISSION_RETRY_AFTER_MS;
+        return null;
+      } finally {
+        loading.value = false;
+        inFlightPermissions = null;
+      }
+    })();
+    return inFlightPermissions;
   }
 
   /**
@@ -200,6 +222,7 @@ export function usePermission() {
   function clearPermissions(): void {
     permissions.value = null;
     error.value = null;
+    permissionsFailedUntil = null;
   }
 
   /**

@@ -7,7 +7,7 @@ import os
 import tempfile
 import threading
 import time
-from typing import List, Optional
+from typing import Any, Callable, List, Optional
 
 from datus_db_core import BaseSqlConnector
 
@@ -33,7 +33,7 @@ from datus.cli.generation_hooks import GenerationHooks
 from datus.configuration.agent_config_loader import AgentConfig
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.db_tools.capabilities import supports_namespace
-from datus.tools.db_tools.db_manager import DBManager
+from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_table_name_parts
 from datus.utils.text_utils import redact_uri
@@ -50,6 +50,14 @@ _DEFAULT_MAX_PREFETCH_TABLES = 500
 class DatasourceService:
     """Service for handling datasource management operations."""
 
+    # Short TTL for catalog/schema/table listings. Public datasource metadata
+    # changes at a low frequency, so reusing results within the window avoids
+    # repeated live ``information_schema`` queries on every directory expand.
+    _METADATA_CACHE_TTL = 60.0
+    # Upper bound for the metadata + column caches; on overflow the whole cache
+    # is dropped (low volume, cheapest correct eviction).
+    _METADATA_CACHE_MAX = 512
+
     def __init__(
         self,
         agent_config: Optional[AgentConfig] = None,
@@ -60,11 +68,18 @@ class DatasourceService:
 
         Args:
             agent_config: Datus agent configuration
-            db_manager: Optional shared connector manager for request-scoped services
+            db_manager: Optional shared connector manager for request-scoped services.
+                When omitted, ``db_manager`` resolves lazily through
+                ``db_manager_instance()`` so public datasources share the same
+                process-wide connectors as the AI query path (no second cold
+                connection set for schema/table browsing).
         """
         self.agent_config = agent_config
 
-        self.db_manager = db_manager or DBManager(agent_config.datasource_configs)
+        # Explicitly injected instance (request-scoped or shared) wins; otherwise
+        # resolve lazily via the process-level cache on first access.
+        self._db_manager = db_manager
+        self._datasource_configs = dict(agent_config.datasource_configs) if agent_config else {}
         self.current_datasource = agent_config.current_datasource
         self.semantic_rag = SemanticModelRAG(self.agent_config) if self.current_datasource else None
 
@@ -73,9 +88,50 @@ class DatasourceService:
         # In-memory column cache keyed by resolved table identity, so repeated
         # table/detail + autocomplete prefetch requests don't re-hit the source.
         # The lock serializes the not-thread-safe connector across concurrent
-        # asyncio.to_thread detail/batch requests.
-        self._columns_cache: dict[str, list[ColumnInfo]] = {}
+        # asyncio.to_thread detail/batch requests. Values are (monotonic_ts, columns)
+        # so stale entries expire via _METADATA_CACHE_TTL instead of growing unbounded.
+        self._columns_cache: dict[str, tuple[float, list[ColumnInfo]]] = {}
         self._schema_lock = threading.Lock()
+        # (datasource, kind, ...) -> (monotonic_ts, result) for catalog/schema/table
+        # listings fetched from the connector.
+        self._metadata_cache: dict[tuple, tuple[float, Any]] = {}
+        self._metadata_lock = threading.Lock()
+
+    @property
+    def db_manager(self) -> DBManager:
+        """Connector manager for this service.
+
+        An explicitly injected instance (request-scoped or shared) takes
+        precedence; otherwise the process-level shared instance from
+        ``db_manager_instance()`` is resolved lazily so schema/table browsing
+        reuses the same connectors as the AI query path (``DBFuncTool``), which
+        keeps public-datasource connections warm across both surfaces.
+        """
+        if self._db_manager is not None:
+            return self._db_manager
+        return db_manager_instance(self._datasource_configs)
+
+    def _cached_metadata(self, key: tuple, fetcher: Callable[[], Any]) -> Any:
+        """Return ``fetcher()`` output, cached by ``key`` with a short TTL.
+
+        Double-checked so concurrent misses may both fetch but later readers
+        reuse the cached result until expiry. Failed fetches (exceptions) are
+        never cached, keeping transient DB errors observable on the next call.
+        """
+        now = time.monotonic()
+        cached = self._metadata_cache.get(key)
+        if cached is not None and now - cached[0] < self._METADATA_CACHE_TTL:
+            return cached[1]
+        value = fetcher()
+        with self._metadata_lock:
+            now = time.monotonic()
+            cached = self._metadata_cache.get(key)
+            if cached is not None and now - cached[0] < self._METADATA_CACHE_TTL:
+                return cached[1]
+            if len(self._metadata_cache) >= self._METADATA_CACHE_MAX:
+                self._metadata_cache.clear()
+            self._metadata_cache[key] = (now, value)
+        return value
 
     def _ensure_semantic_rag(self) -> SemanticModelRAG:
         """Create semantic model storage only after a datasource is selected."""
@@ -227,18 +283,24 @@ class DatasourceService:
             if request.database_name:
                 db_names = [request.database_name]
             elif self._should_enumerate_databases(ds_id) and hasattr(connector, "get_databases"):
-                db_names = connector.get_databases(
-                    catalog_name=catalog_name,
-                    include_sys=request.include_sys_schemas,
+                db_names = self._cached_metadata(
+                    (ds_id, "databases", catalog_name or "", bool(request.include_sys_schemas)),
+                    lambda: connector.get_databases(
+                        catalog_name=catalog_name,
+                        include_sys=request.include_sys_schemas,
+                    ),
                 )
             elif connector.database_name:
                 db_names = [connector.database_name]
             elif hasattr(connector, "get_databases"):
                 # No database configured for this datasource — fall back to enumerating
                 # the server so the user can still browse what the connection can reach.
-                db_names = connector.get_databases(
-                    catalog_name=catalog_name,
-                    include_sys=request.include_sys_schemas,
+                db_names = self._cached_metadata(
+                    (ds_id, "databases", catalog_name or "", bool(request.include_sys_schemas)),
+                    lambda: connector.get_databases(
+                        catalog_name=catalog_name,
+                        include_sys=request.include_sys_schemas,
+                    ),
                 )
             else:
                 db_names = []
@@ -256,10 +318,13 @@ class DatasourceService:
                     schemas = [request.schema_name]
                 elif hasattr(connector, "get_schemas"):
                     try:
-                        schemas = connector.get_schemas(
-                            catalog_name=request.catalog_name,
-                            database_name=db_name,
-                            include_sys=request.include_sys_schemas,
+                        schemas = self._cached_metadata(
+                            (ds_id, "schemas", request.catalog_name or "", db_name, bool(request.include_sys_schemas)),
+                            lambda db_name=db_name: connector.get_schemas(
+                                catalog_name=request.catalog_name,
+                                database_name=db_name,
+                                include_sys=request.include_sys_schemas,
+                            ),
                         )
                     except Exception as e:
                         logger.warning(
@@ -275,10 +340,14 @@ class DatasourceService:
 
                 for schema in schemas:
                     # 3) Fetch queryable table-like objects for this (db, schema). A failure here only
-                    # invalidates this entry, not sibling schemas.
+                    # invalidates this entry, not sibling schemas. Results are TTL-cached so repeated
+                    # directory expands don't re-query the catalog per schema.
                     try:
-                        tables = self._get_table_like_names(
-                            connector, catalog_name=catalog_name, database_name=db_name, schema_name=schema
+                        tables = self._cached_metadata(
+                            (ds_id, "tables", catalog_name or "", db_name, schema),
+                            lambda db_name=db_name, schema=schema: self._get_table_like_names(
+                                connector, catalog_name=catalog_name, database_name=db_name, schema_name=schema
+                            ),
                         )
                     except Exception as e:
                         logger.warning(
@@ -319,8 +388,14 @@ class DatasourceService:
             else:
                 # No schema support — get queryable table-like objects directly. Isolate per-db failures.
                 try:
-                    tables = self._get_table_like_names(
-                        connector, catalog_name=catalog_name, database_name=db_name, schema_name=request.schema_name
+                    tables = self._cached_metadata(
+                        (ds_id, "tables", catalog_name or "", db_name, request.schema_name or ""),
+                        lambda db_name=db_name: self._get_table_like_names(
+                            connector,
+                            catalog_name=catalog_name,
+                            database_name=db_name,
+                            schema_name=request.schema_name,
+                        ),
                     )
                 except Exception as e:
                     logger.warning("Failed to get tables for db=%s: %s", db_name, e)
@@ -481,16 +556,16 @@ class DatasourceService:
                     )
 
                 cached = self._columns_cache.get(cache_key)
-                if cached is not None:
-                    return _detail(cached)
+                if cached is not None and time.monotonic() - cached[0] < self._METADATA_CACHE_TTL:
+                    return _detail(cached[1])
 
                 # Serialize the not-thread-safe connector; re-check the cache
                 # inside the lock (double-checked) so each table is fetched once
                 # even under concurrent detail/batch requests.
                 with self._schema_lock:
                     cached = self._columns_cache.get(cache_key)
-                    if cached is not None:
-                        return _detail(cached)
+                    if cached is not None and time.monotonic() - cached[0] < self._METADATA_CACHE_TTL:
+                        return _detail(cached[1])
 
                     schema_info = self.current_db_connector.get_schema(
                         catalog_name=catalog_name,
@@ -535,7 +610,9 @@ class DatasourceService:
                                 )
                             columns.append(column_info)
 
-                    self._columns_cache[cache_key] = columns
+                    self._columns_cache[cache_key] = (time.monotonic(), columns)
+                    if len(self._columns_cache) >= self._METADATA_CACHE_MAX:
+                        self._columns_cache.clear()
                     return _detail(columns)
 
             except Exception as e:

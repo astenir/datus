@@ -32,6 +32,53 @@ class TestDatasourceServiceInit:
 
         assert svc.db_manager is db_manager
 
+    def test_default_db_manager_shares_process_wide_instance(self, real_agent_config):
+        """Without an explicit db_manager, the service resolves the process-wide
+        shared instance (db_manager_instance), so schema/table browsing reuses
+        the same warm connectors as the AI query path for public datasources."""
+        from datus.tools.db_tools.db_manager import db_manager_instance
+
+        svc1 = DatasourceService(agent_config=real_agent_config)
+        svc2 = DatasourceService(agent_config=real_agent_config)
+
+        assert svc1.db_manager is svc2.db_manager
+        assert svc1.db_manager is db_manager_instance(real_agent_config.datasource_configs)
+
+
+class TestMetadataListingCache:
+    def test_catalog_listing_reuses_cached_metadata_within_ttl(self, real_agent_config, _no_schema_dialect):
+        """Repeated catalog expands within the TTL reuse the cached listing
+        instead of re-querying the connector for every request."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeServerConnector(database_name="")
+
+        svc._get_connection_info(connector, "ds", ListDatabasesInput())
+        assert connector.get_databases_calls == 1
+        svc._get_connection_info(connector, "ds", ListDatabasesInput())
+        assert connector.get_databases_calls == 1
+
+    def test_catalog_listing_cache_expires_after_ttl(self, real_agent_config, _no_schema_dialect):
+        """Once the TTL elapses the connector is queried again."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        svc._METADATA_CACHE_TTL = -1.0
+        connector = _FakeServerConnector(database_name="")
+
+        svc._get_connection_info(connector, "ds", ListDatabasesInput())
+        svc._get_connection_info(connector, "ds", ListDatabasesInput())
+        assert connector.get_databases_calls == 2
+
+    def test_table_listing_cached_per_schema(self, real_agent_config, _no_schema_dialect):
+        """Table lists are cached per (datasource, database, schema) so different
+        databases keep distinct entries while repeats hit the cache."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeServerConnector(database_name="")
+
+        first = svc._get_connection_info(connector, "ds", ListDatabasesInput())
+        second = svc._get_connection_info(connector, "ds", ListDatabasesInput())
+
+        assert [i.name for i in first] == [i.name for i in second]
+        assert first[0].tables == second[0].tables
+
 
 class TestGetConnectionInfoScoping:
     def test_catalog_listing_includes_views_for_grant_picker(self, real_agent_config, _no_schema_dialect):
