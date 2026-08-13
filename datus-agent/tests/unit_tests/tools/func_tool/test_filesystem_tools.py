@@ -411,6 +411,20 @@ class TestGlobSearch:
         names = [Path(p).name for p in result.result["files"]]
         assert "deep.py" in names
 
+    def test_glob_with_brace_alternation(self, tmp_path):
+        (tmp_path / "render").mkdir()
+        (tmp_path / "render" / "app.jsx").write_text("x")
+        (tmp_path / "render" / "shared").mkdir()
+        (tmp_path / "render" / "shared" / "colors.js").write_text("y")
+        (tmp_path / "render" / "styles.css").write_text("z")
+        tool = _make_tool(str(tmp_path))
+        result = tool.glob("**/*.{jsx,js,css}")
+        assert result.success == 1
+        rel_files = [Path(p) for p in result.result["files"]]
+        assert Path("render/app.jsx") in rel_files
+        assert Path("render/shared/colors.js") in rel_files
+        assert Path("render/styles.css") in rel_files
+
     def test_glob_nonexistent_directory(self, tmp_path):
         tool = _make_tool(str(tmp_path))
         result = tool.glob("*.py", "nonexistent")

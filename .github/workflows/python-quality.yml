@@ -98,6 +98,15 @@ jobs:
       - name: Run Ruff
         run: uv run ruff check datus tests
 
+      - name: Type check baseline
+        run: >-
+          uv run --with basedpyright==1.39.9
+          basedpyright --outputjson datus datus_enterprise
+          > /tmp/basedpyright-report.json || true
+          && node ../.github/scripts/check-basedpyright-baseline.cjs
+          --report /tmp/basedpyright-report.json
+          --baseline ci/basedpyright-baseline.json
+
       - name: Check release metadata
         run: uv run python ci/check_release_readiness.py
 

@@ -4,13 +4,17 @@
 
 """Static validation of the card primitives inside a ``render/`` tree.
 
-Both visual-artifact kinds mount the same two runtime components from
+Both visual-artifact kinds mount two card primitives from
 ``@datus/web-artifact``:
 
 * ``<ChartCard>`` — chrome + chart-actions menu around a query-backed
-  visualization.
+  visualization (shipped by every published 0.1.x runtime).
 * ``<BlockHandle>`` — a zero-chrome anchor around the blocks that aren't
-  charts (KPI tiles, insight callouts, the filter strip).
+  charts (KPI tiles, insight callouts, the filter strip). **Not shipped by
+  the published 0.1.x runtime yet** — the import is rejected by the
+  runtime-export contract in ``_visual_artifact_imports``; the audit below
+  stays so the JSX contract is enforced the moment a renderer version
+  exports it.
 
 Both carry an id that the viewer sends back to the agent when a user
 points at that block — for the creator ("change *this* tile") while the

@@ -21,7 +21,7 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.enterprise.models import AccessDecision
 from datus.api.service import create_app
-from datus.api.services.chat_task_manager import ChatTaskManager
+from datus.api.services.chat_task_manager import ChatTask, ChatTaskManager
 from datus_enterprise.api import artifact_routes
 from datus_enterprise.services.dashboard_service import EnterpriseDashboardService
 from datus_enterprise.services.report_service import EnterpriseReportService
@@ -78,6 +78,26 @@ def _svc(tmp_path: Path):
         report=EnterpriseReportService(agent_config=agent_config),
         task_manager=ChatTaskManager(enterprise_enabled=False),
     )
+
+
+def _bind_running_edit_task(
+    task_manager: ChatTaskManager,
+    session,
+    *,
+    session_id: str = "edit-task-1",
+) -> ChatTask:
+    """Insert a running chat task bound to an edit session into the manager.
+
+    Mirrors the binding performed by ``ChatTaskManager.start_chat`` when a
+    client dispatches to a report/dashboard edit subagent.
+    """
+
+    task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=session.owner_user_id)  # type: ignore[arg-type]
+    task.artifact_edit_subagent_id = session.subagent_id
+    task.artifact_edit_artifact_type = session.artifact_type
+    task.artifact_edit_slug = session.artifact_slug
+    task_manager._tasks[session_id] = task
+    return task
 
 
 def _write_manifest(root: Path, kind: str, slug: str) -> None:
@@ -1469,12 +1489,16 @@ def test_report_delete_admin_can_delete_other_owners_artifact(monkeypatch, tmp_p
     assert audit_sink.events[-1].decision == "allow"
 
 
-def test_report_delete_refused_while_edit_session_active(monkeypatch, tmp_path: Path):
+def test_report_delete_refused_while_edit_task_running(monkeypatch, tmp_path: Path):
+    # Old expectation: a bare (unexpired) edit-session record refused deletion.
+    # New expectation: refusal requires a running chat task bound to that
+    # session — the task-level binding is the authoritative edit lock.
     _write_manifest(tmp_path, "report", "sales")
     audit_sink = CollectingAuditSink()
     store = MemoryArtifactAclStore({("report", "sales"): _owner_acl()})
     svc = _svc(tmp_path)
-    svc.task_manager.create_report_edit_session(user_id="owner-1", report_slug="sales")
+    session = svc.task_manager.create_report_edit_session(user_id="owner-1", report_slug="sales")
+    _bind_running_edit_task(svc.task_manager, session)
     ctx = AppContext(user_id="owner-1", permissions={"module.report.view", "module.report.edit"})
 
     with _client_with_svc(
@@ -1497,6 +1521,41 @@ def test_report_delete_refused_while_edit_session_active(monkeypatch, tmp_path: 
     assert event.action == "artifact.delete"
     assert event.decision == "deny"
     assert event.reason == "active artifact edit session"
+
+
+def test_report_delete_allowed_after_edit_conversation_stopped(monkeypatch, tmp_path: Path):
+    # Regression: a leftover edit-session record whose chat task has stopped
+    # (or never started) must not block deletion. This was the bug behind
+    # "报表正在编辑中，请稍后再试" persisting after all conversations stopped.
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore({("report", "sales"): _owner_acl()})
+    svc = _svc(tmp_path)
+    session = svc.task_manager.create_report_edit_session(user_id="owner-1", report_slug="sales")
+    task = _bind_running_edit_task(svc.task_manager, session)
+    ctx = AppContext(user_id="owner-1", permissions={"module.report.view", "module.report.edit"})
+
+    # Simulate the conversation stopping: the task leaves ``_tasks``.
+    svc.task_manager._tasks.pop(task.session_id, None)
+
+    with _client_with_svc(
+        monkeypatch,
+        tmp_path,
+        ctx,
+        svc,
+        audit_sink=audit_sink,
+        artifact_acl_store=store,
+    ) as client:
+        response = client.delete("/api/v1/reports/sales")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert not (tmp_path / "reports" / "sales").exists()
+    assert store.acls == {}
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.delete"
+    assert event.decision == "allow"
 
 
 def test_report_delete_missing_artifact_returns_not_found(monkeypatch, tmp_path: Path):
@@ -1557,24 +1616,41 @@ def test_report_delete_survives_acl_store_failure(monkeypatch, tmp_path: Path):
     assert audit_sink.events[-1].decision == "allow"
 
 
-def test_has_active_artifact_edit_session_matches_type_and_slug():
+def test_has_active_artifact_edit_session_requires_running_bound_task():
+    # Old expectation: an unexpired session record alone counted as active.
+    # New expectation: only a running chat task bound to the session counts.
     task_manager = ChatTaskManager(enterprise_enabled=False)
-    task_manager.create_report_edit_session(user_id="u1", report_slug="sales")
+    report_session = task_manager.create_report_edit_session(user_id="u1", report_slug="sales")
 
+    # A record with no chat task must not block.
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="sales") is False
+
+    report_task = _bind_running_edit_task(task_manager, report_session)
     assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="sales") is True
     assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="other") is False
     assert task_manager.has_active_artifact_edit_session(artifact_type="dashboard", slug="sales") is False
 
-    task_manager.create_dashboard_edit_session(user_id="u1", dashboard_slug="ops")
+    dashboard_session = task_manager.create_dashboard_edit_session(user_id="u1", dashboard_slug="ops")
+    _bind_running_edit_task(task_manager, dashboard_session, session_id="edit-task-2")
     assert task_manager.has_active_artifact_edit_session(artifact_type="dashboard", slug="ops") is True
 
+    # A finished or stopped task releases the artifact immediately.
+    report_task.status = "completed"
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="sales") is False
 
-def test_has_active_artifact_edit_session_ignores_expired_sessions():
+
+def test_has_active_artifact_edit_session_ignores_expired_records_but_respects_running_task():
+    # Old expectation: expired records returned False.
+    # New expectation: expired records never count, but a still-running task
+    # bound to an expired record remains the authoritative lock.
     task_manager = ChatTaskManager(enterprise_enabled=False)
-    task_manager.create_report_edit_session(user_id="u1", report_slug="stale")
-    for subagent_id, session in task_manager._artifact_edit_sessions.items():
-        task_manager._artifact_edit_sessions[subagent_id] = session.model_copy(
+    session = task_manager.create_report_edit_session(user_id="u1", report_slug="stale")
+    for subagent_id, record in task_manager._artifact_edit_sessions.items():
+        task_manager._artifact_edit_sessions[subagent_id] = record.model_copy(
             update={"created_at": "2000-01-01T00:00:00Z"}
         )
 
     assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="stale") is False
+
+    _bind_running_edit_task(task_manager, session)
+    assert task_manager.has_active_artifact_edit_session(artifact_type="report", slug="stale") is True

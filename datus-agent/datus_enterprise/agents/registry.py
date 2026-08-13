@@ -322,6 +322,13 @@ def materialize_artifact_edit_agent(agent_config: Any, session: Any) -> None:
             ),
             "After bind returns bootstrap_warning, inspect the restored tree, write or repair render/app.jsx, "
             "save required queries, and call validate_render.",
+            "validate_render is a static check only — it cannot reproduce browser runtime errors (e.g. "
+            "Minified React errors, ReferenceError from a missing named import). When the user reports a "
+            "runtime render error, cross-check the reported Error/stack against the actual render files "
+            "(default/named exports, import paths, hook order) before validate_render; a passing "
+            "validate_render does not prove the runtime error is fixed.",
+            "Do not call web_search, web_fetch, or any other network tool to decode browser error URLs or "
+            "look up documentation for them; error data only maps to local render/ code.",
             f"Do not call {start_call} in this edit session.",
             f"Do not inspect, write, edit, or delete any other {session.artifact_type} artifact.",
         ],

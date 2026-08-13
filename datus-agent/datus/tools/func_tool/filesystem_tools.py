@@ -27,6 +27,12 @@ from datus_enterprise.services import artifact_filesystem_scope as artifact_scop
 
 logger = get_logger(__name__)
 
+#: Flags for every user-facing glob pattern (glob / grep include / exclude).
+#: ``BRACE`` lets LLMs write bash-style alternations like ``**/*.{jsx,js}
+#: — without it the brace group matches literally and the search silently
+#: returns an empty list.
+_GLOB_MATCH_FLAGS = wc_glob.DOTGLOB | wc_glob.GLOBSTAR | wc_glob.BRACE
+
 
 class FilesystemConfig:
     """Configuration for filesystem operations"""
@@ -667,7 +673,7 @@ class FilesystemFuncTool(BaseTool):
                 return False
             for exclude_pattern in exclude_patterns:
                 try:
-                    if wc_glob.globmatch(relative_path, exclude_pattern, flags=wc_glob.DOTGLOB | wc_glob.GLOBSTAR):
+                    if wc_glob.globmatch(relative_path, exclude_pattern, flags=_GLOB_MATCH_FLAGS):
                         return True
                 except Exception:
                     continue
@@ -726,9 +732,7 @@ class FilesystemFuncTool(BaseTool):
                             yield from walk_recursive(item_resolved)
                         elif item_resolved.is_file() and not item_is_hidden:
                             if include_pattern:
-                                if not wc_glob.globmatch(
-                                    item.name, include_pattern, flags=wc_glob.DOTGLOB | wc_glob.GLOBSTAR
-                                ):
+                                if not wc_glob.globmatch(item.name, include_pattern, flags=_GLOB_MATCH_FLAGS):
                                     continue
                             yield item_resolved
                     except OSError:
@@ -834,7 +838,7 @@ class FilesystemFuncTool(BaseTool):
                     match_rel = str(file_path)
 
                 try:
-                    matched = wc_glob.globmatch(match_rel, pattern, flags=wc_glob.DOTGLOB | wc_glob.GLOBSTAR)
+                    matched = wc_glob.globmatch(match_rel, pattern, flags=_GLOB_MATCH_FLAGS)
                 except Exception:
                     matched = file_path.name == pattern
 

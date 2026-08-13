@@ -174,7 +174,7 @@ async def get_report_html_by_path(svc: ServiceDep, ctx: ReportViewCtx, slug: str
     description=(
         "Permanently delete a report artifact directory and its share ACL. "
         "Requires owner or module.admin.artifacts edit authorization; refused while "
-        "an unexpired report edit session is still active."
+        "a running chat task is bound to an edit session for the report."
     ),
     dependencies=[
         Depends(_require_report_delete),
@@ -193,7 +193,7 @@ async def delete_report_artifact(svc: ServiceDep, ctx: ReportViewCtx, slug: str)
     description=(
         "Permanently delete a dashboard artifact directory and its share ACL. "
         "Requires owner or module.admin.artifacts edit authorization; refused while "
-        "an unexpired dashboard edit session is still active."
+        "a running chat task is bound to an edit session for the dashboard."
     ),
     dependencies=[
         Depends(_require_dashboard_delete),

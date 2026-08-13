@@ -1223,10 +1223,17 @@ class TestValidateRenderChartCard:
 
 
 def _edit_handle_app(handle_attrs: str) -> str:
-    """App whose KPI tile is wrapped in an ``<BlockHandle>`` with ``handle_attrs``."""
+    """App whose KPI tile is wrapped in a ``<BlockHandle>`` with ``handle_attrs``.
+
+    ``BlockHandle`` is defined locally as a passthrough so the card audit
+    below exercises the JSX contract without importing it from
+    ``@datus/web-artifact`` (the pinned 0.1.x runtime does not export it —
+    that import is rejected by the runtime-export contract test).
+    """
     return (
         "import React from 'react';\n"
-        "import { useDatusArtifact, BlockHandle } from '@datus/web-artifact';\n"
+        "import { useDatusArtifact } from '@datus/web-artifact';\n"
+        "const BlockHandle = ({ children }) => children;\n"
         "export default function App() {\n"
         "  const { useQuerySql } = useDatusArtifact();\n"
         "  const { data } = useQuerySql('queries/revenue_by_region', { month_floor: '2026-01' });\n"
@@ -1240,7 +1247,33 @@ def _edit_handle_app(handle_attrs: str) -> str:
 
 
 class TestValidateRenderBlockHandle:
-    """Static validation around the runtime-provided ``<BlockHandle>``."""
+    """Static validation around the ``<BlockHandle>`` JSX contract.
+
+    The pinned 0.1.x runtime does not export ``BlockHandle`` yet, so the
+    fixtures define it locally as a passthrough; the import rejection is
+    covered by ``test_blockhandle_import_rejected_by_runtime_export_contract``.
+    """
+
+    def test_blockhandle_import_rejected_by_runtime_export_contract(
+        self, dashboard_tools: DashboardArtifactTools, project_root: Path
+    ):
+        # The pinned @datus/web-artifact-render 0.1.x does not export
+        # BlockHandle (the prompt advertised it while no published bundle
+        # shipped it) — importing it yields an undefined binding and React
+        # #130 at mount, so validate_render must refuse it.
+        _seed_template(dashboard_tools)
+        app = (
+            "import React from 'react';\n"
+            "import { BlockHandle } from '@datus/web-artifact';\n"
+            "export default function App() {\n"
+            '  return <BlockHandle handleId="kpi_total_revenue" name="Total revenue" kind="kpi"><div /></BlockHandle>;\n'
+            "}\n"
+        )
+        _write_render(project_root, dashboard_tools.dashboard_slug, {"app.jsx": app})
+        result = dashboard_tools.validate_render()
+        assert result.success == 0
+        assert "does not export" in (result.error or "")
+        assert "#130" in (result.error or "")
 
     def test_edit_handle_happy_path_lands_in_cards_registry(
         self, dashboard_tools: DashboardArtifactTools, project_root: Path
@@ -1314,7 +1347,7 @@ class TestValidateRenderBlockHandle:
         _seed_template(dashboard_tools)
         second = (
             "import React from 'react';\n"
-            "import { BlockHandle } from '@datus/web-artifact';\n"
+            "const BlockHandle = ({ children }) => children;\n"
             "export function Tile() {\n"
             "  return (\n"
             '    <BlockHandle handleId="revenue_by_region" name="Total revenue" kind="kpi">\n'
@@ -1345,7 +1378,7 @@ class TestValidateRenderBlockHandle:
         _seed_template(dashboard_tools)
         shared = (
             "import React from 'react';\n"
-            "import { BlockHandle } from '@datus/web-artifact';\n"
+            "const BlockHandle = ({ children }) => children;\n"
             "export function KpiCard({ handleId, label, value, sqlId, params }) {\n"
             "  return (\n"
             '    <BlockHandle handleId={handleId} name={label} kind="kpi" sqlId={sqlId} params={params}>\n'

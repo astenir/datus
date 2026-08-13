@@ -3,6 +3,7 @@
 import asyncio
 import math
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional, Type, TypeAlias
@@ -298,21 +299,27 @@ def create_dashboard_edit_session(
     return session
 
 
-def has_active_artifact_edit_session(
-    sessions: dict[str, ArtifactEditSession],
+def has_active_artifact_edit_task(
+    tasks: Iterable[Any],
     *,
     artifact_type: str,
     slug: str,
 ) -> bool:
-    """Return True when an unexpired edit session is locked to one artifact.
+    """Return True while a running chat task is bound to an artifact edit session.
 
-    Delete/republish flows must refuse to mutate an artifact while an
-    ACL-bound edit subagent may still be writing to it.
+    The task-level binding is the authoritative "currently editing" lock for
+    delete/republish flows. A leftover edit-session record no longer blocks
+    artifact mutation once its chat task has stopped, finished, or been
+    cancelled; records themselves are only purged on expiry via
+    :func:`purge_expired_artifact_edit_sessions`.
     """
 
-    purge_expired_artifact_edit_sessions(sessions)
     return any(
-        session.artifact_type == artifact_type and session.artifact_slug == slug for session in sessions.values()
+        getattr(task, "status", None) == "running"
+        and getattr(task, "artifact_edit_subagent_id", None) is not None
+        and getattr(task, "artifact_edit_artifact_type", None) == artifact_type
+        and getattr(task, "artifact_edit_slug", None) == slug
+        for task in tasks
     )
 
 
