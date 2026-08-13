@@ -220,3 +220,71 @@ class TestJsxTagWarnings:
             }
         )
         assert len(warnings) == 1
+
+
+# --------------------------------------------------------------------------- #
+# React #62 — style prop receiving a function reference                       #
+# --------------------------------------------------------------------------- #
+
+
+class TestStylePropIssues:
+    def test_style_receives_same_file_function_declaration(self):
+        issues, _ = scan(
+            {
+                "app": (
+                    "function labelStyle() { return { fontSize: 12 }; }\n"
+                    "export default function App() { return <span style={labelStyle}>x</span>; }"
+                ),
+            }
+        )
+        assert len(issues) == 1
+        assert "style={labelStyle()}" in issues[0] and "React throws #62" in issues[0]
+
+    def test_style_receives_same_file_arrow_const(self):
+        issues, _ = scan(
+            {
+                "app": (
+                    "const selectStyle = () => ({ border: 'none' });\n"
+                    "export default function App() { return <select style={selectStyle} />; }"
+                ),
+            }
+        )
+        assert len(issues) == 1
+        assert "selectStyle()" in issues[0]
+
+    def test_style_function_called_inline_is_fine(self):
+        issues, _ = scan(
+            {
+                "app": (
+                    "function chipStyle(active) { return { color: active ? 'red' : 'blue' }; }\n"
+                    "export default function App() { return <button style={chipStyle(true)}>x</button>; }"
+                ),
+            }
+        )
+        assert issues == []
+
+    def test_style_object_literal_and_object_const_are_fine(self):
+        issues, _ = scan(
+            {
+                "app": (
+                    "const boxStyle = { padding: 8 };\n"
+                    "export default function App() { return <div style={{ color: 'red' }} /><span style={boxStyle} />; }"
+                ),
+            }
+        )
+        assert issues == []
+
+    def test_style_from_unknown_import_or_member_is_skipped(self):
+        # labelStyle comes from an import and helper.labelStyle from an object
+        # literal — neither is provably a function, so the scan must stay quiet.
+        issues, _ = scan(
+            {
+                "app": (
+                    "import { labelStyle } from './styles';\n"
+                    "const helper = { labelStyle: () => ({}) };\n"
+                    "export default function App() { return <div style={labelStyle} /><span style={helper.labelStyle} />; }"
+                ),
+                "styles": "export const labelStyle = { fontSize: 12 };",
+            }
+        )
+        assert issues == []

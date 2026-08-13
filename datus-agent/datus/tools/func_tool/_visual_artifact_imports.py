@@ -19,10 +19,15 @@ statically verifiable from the module sources alone. This module adds:
    target module's export surface.
 2. NON-FATAL warnings — capitalized JSX tags that are not in scope
    (imports + top-level definitions + function parameters).
+3. FATAL issues — a ``style={name}`` prop where ``name`` resolves to a
+   same-file function declaration or arrow-const assignment (passing the
+   function itself to ``style`` throws React #62 at mount time).
 
 The checks are deliberately conservative: ``export * from`` targets are
-skipped (their surface is unknowable statically), and the JSX-tag check is
-a warning so heuristic misses never block a legitimate render tree.
+skipped (their surface is unknowable statically), the JSX-tag check is a
+warning so heuristic misses never block a legitimate render tree, and the
+style check only fires when a local function definition proves the binding
+is a function.
 
 Shared between the report and dashboard validators so the two kinds can't
 drift on what counts as an import contract violation.
@@ -84,6 +89,16 @@ _NAMED_FN_PARAMS_RE = re.compile(r"\bfunction\s+[A-Za-z_$][\w$]*\s*\(\s*([^()]*?
 
 # Capitalized JSX tags: ``<ChartCard ...>`` / ``<ChartCard.Section ...>``.
 _JSX_TAG_RE = re.compile(r"<\s*([A-Z][A-Za-z0-9_$]*)")
+
+# ``style={name}`` with a bare identifier — the only way to statically prove
+# a React #62 crash is when ``name`` resolves to a same-file function
+# declaration or arrow-const assignment (passing the function itself, not
+# its result, to the style prop).
+_STYLE_BARE_IDENT_RE = re.compile(r"\bstyle\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}")
+_FUNCTION_DECL_RE = re.compile(r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\(")
+_ARROW_ASSIGN_RE = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\[[^\]]*\]|\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>"
+)
 
 
 @dataclass
@@ -285,5 +300,17 @@ def scan_render_imports(modules: Dict[str, Dict[str, Any]]) -> Tuple[List[str], 
                 "file — if the binding is undefined this throws React error #130 at mount time. "
                 "Check the import statement (default vs named export) or define the component."
             )
+
+        # ---- style prop receiving a same-file function reference (React #62)
+        local_functions = set(_FUNCTION_DECL_RE.findall(_strip_block_comments(source)))
+        local_functions.update(_ARROW_ASSIGN_RE.findall(_strip_block_comments(source)))
+        for match in _STYLE_BARE_IDENT_RE.finditer(_strip_block_comments(source)):
+            name = match.group(1)
+            if name in local_functions:
+                issues.append(
+                    f"render/{rel}: style={{ {name} }} passes the function {name} itself as the "
+                    "style prop — React throws #62 at mount time (style expects an object "
+                    f"mapping). Call it instead: style={{{name}()}}."
+                )
 
     return issues, warnings
