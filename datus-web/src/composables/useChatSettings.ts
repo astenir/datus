@@ -1,7 +1,17 @@
 import { readonly, shallowRef, watch } from "vue";
 import { readLocalStorage, writeLocalStorage } from "@/lib/local-storage";
+import { getCurrentUser, onCurrentUserChange } from "@/lib/request";
 
 const STORAGE_KEY = "datus-chat-settings";
+
+/**
+ * 按当前登录用户隔离设置存储 key，避免同一浏览器内切换账号后
+ * 计划模式等偏好互相串用。
+ */
+function storageKey(): string {
+  const username = getCurrentUser()?.username?.trim();
+  return username ? `${STORAGE_KEY}:${username}` : STORAGE_KEY;
+}
 
 type StoredSettings = {
   language: string;
@@ -30,7 +40,7 @@ function normalizeSettings(value: unknown): StoredSettings {
 }
 
 function loadSettings(): StoredSettings {
-  const raw = readLocalStorage(STORAGE_KEY);
+  const raw = readLocalStorage(storageKey());
   if (!raw) return { ...DEFAULT_SETTINGS };
 
   try {
@@ -48,7 +58,15 @@ const permissionMode = shallowRef(saved.permissionMode);
 const planMode = shallowRef(saved.planMode);
 
 watch([language, permissionMode, planMode], ([lang, perm, plan]) => {
-  writeLocalStorage(STORAGE_KEY, JSON.stringify({ language: lang, permissionMode: perm, planMode: plan }));
+  writeLocalStorage(storageKey(), JSON.stringify({ language: lang, permissionMode: perm, planMode: plan }));
+});
+
+// 切换登录用户时重新加载该用户的设置，避免跨用户串用。
+onCurrentUserChange(() => {
+  const next = loadSettings();
+  language.value = next.language;
+  permissionMode.value = next.permissionMode;
+  planMode.value = next.planMode;
 });
 
 function setLanguage(value: string) {
