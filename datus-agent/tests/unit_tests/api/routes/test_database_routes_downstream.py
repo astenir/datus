@@ -94,6 +94,7 @@ async def test_list_catalogs_delegates_to_upstream_and_prunes_grant_scope(monkey
         database_name="",
         schema_name="",
         include_sys_schemas=False,
+        namespaces_only=False,
     )
 
     assert result.success is True
@@ -105,6 +106,7 @@ async def test_list_catalogs_delegates_to_upstream_and_prunes_grant_scope(monkey
         database_name="",
         schema_name="",
         include_sys_schemas=False,
+        namespaces_only=False,
     )
 
 
@@ -136,6 +138,7 @@ async def test_list_catalogs_records_upstream_timeout(monkeypatch):
         database_name="",
         schema_name="",
         include_sys_schemas=False,
+        namespaces_only=False,
     )
 
     assert result.errorCode == "REQUEST_TIMEOUT"

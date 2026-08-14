@@ -407,6 +407,31 @@ class _FakeServerConnector:
         return ["t2", "t1"]
 
 
+class _FakeSchemaConnector:
+    """Schema-supporting connector exercising the per-schema listing path."""
+
+    dialect = "postgresql"
+    catalog_name = ""
+    connection_string = "postgresql+psycopg2://u:p@host:5432/db"
+
+    def __init__(self, database_name: str = "db1"):
+        self.database_name = database_name
+        self.queried_schemas: list[str] = []
+
+    def get_effective_capabilities(self):
+        return {"schema"}
+
+    def test_connection(self) -> bool:
+        return True
+
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False):
+        return ["public", "analytics"]
+
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        self.queried_schemas.append(schema_name)
+        return ["t1", "t2"]
+
+
 @pytest.fixture
 def _no_schema_dialect(monkeypatch):
     """Force the server-style (no per-database schema) code path."""
@@ -459,6 +484,34 @@ class TestGetConnectionInfoScoping:
 
         assert [i.name for i in infos] == ["ga4"]
         assert connector.get_databases_calls == 0
+
+
+class TestNamespacesOnly:
+    """namespaces_only lists db/schema levels without enumerating tables."""
+
+    def test_namespaces_only_skips_table_enumeration(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeSchemaConnector()
+
+        infos = svc._get_connection_info(connector, "ds", ListDatabasesInput(namespaces_only=True))
+
+        assert [(i.name, i.schema_name, i.connection_status) for i in infos] == [
+            ("db1", "public", "connected"),
+            ("db1", "analytics", "connected"),
+        ]
+        assert all(i.tables is None for i in infos)
+        assert all(i.tables_count is None for i in infos)
+        assert connector.queried_schemas == []
+
+    def test_default_still_enumerates_tables_per_schema(self, real_agent_config):
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeSchemaConnector()
+
+        infos = svc._get_connection_info(connector, "ds", ListDatabasesInput())
+
+        assert sorted(connector.queried_schemas) == ["analytics", "public"]
+        assert all(i.tables == ["t1", "t2"] for i in infos)
+        assert all(i.tables_count == 2 for i in infos)
 
 
 class TestGetTableSchema:

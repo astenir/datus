@@ -75,7 +75,7 @@ export const catalogApi = {
 
   list(
     baseUrl: string,
-    params?: { datasource_id?: string; catalog_name?: string; database_name?: string; schema_name?: string; include_sys_schemas?: boolean }
+    params?: { datasource_id?: string; catalog_name?: string; database_name?: string; schema_name?: string; include_sys_schemas?: boolean; namespaces_only?: boolean }
   ): Promise<{ databases: DatabaseInfo[] } | null> {
     const searchParams = new URLSearchParams();
     if (params?.datasource_id) searchParams.set("datasource_id", params.datasource_id);
@@ -83,6 +83,7 @@ export const catalogApi = {
     if (params?.database_name) searchParams.set("database_name", params.database_name);
     if (params?.schema_name) searchParams.set("schema_name", params.schema_name);
     if (params?.include_sys_schemas) searchParams.set("include_sys_schemas", "true");
+    if (params?.namespaces_only) searchParams.set("namespaces_only", "true");
     const query = searchParams.toString();
     return apiResult(baseUrl, `/api/v1/catalog/list${query ? `?${query}` : ""}`);
   },

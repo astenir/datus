@@ -49,6 +49,7 @@ interface WorkspaceDatasourceCatalogSource {
   selectCatalogDatasource: (datasourceId?: string) => void;
   hasCatalogSnapshot: (datasourceId?: string) => boolean;
   loadCatalog: (databaseName?: string, datasourceId?: string) => Promise<boolean>;
+  loadSchemaTables: (databaseName: string, schemaName: string, datasourceId?: string) => Promise<boolean>;
   loadDatasourceStatuses: (datasourceId?: string) => Promise<boolean>;
   prewarmDatasource: (datasourceId?: string) => Promise<boolean>;
   setDatabase: (value: string) => void;
@@ -286,6 +287,7 @@ export function useWorkspaceDatasourceContext(options: UseWorkspaceDatasourceCon
     currentDatasourceStatus,
     isPrewarmingCurrentDatasource,
     loadCatalog: refreshCatalog,
+    loadSchemaTables: options.catalog.loadSchemaTables,
     ensureCatalogLoaded,
     loadDatasourceStatuses: options.catalog.loadDatasourceStatuses,
     prewarmDatasource: options.catalog.prewarmDatasource,

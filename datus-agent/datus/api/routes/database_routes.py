@@ -28,6 +28,7 @@ DATABASE_NAME_QUERY = Query("", description="Database name")
 SCHEMA_NAME_QUERY = Query("", description="Schema name")
 CATALOG_NAME_QUERY = Query("", description="Catalog name")
 INCLUDE_SYS_SCHEMAS_QUERY = Query(False, description="Include system schemas")
+NAMESPACES_ONLY_QUERY = Query(False, description="Only list databases and schemas, skipping table enumeration")
 
 
 @router.get(
@@ -43,6 +44,7 @@ async def list_catalogs(
     database_name: Optional[str] = DATABASE_NAME_QUERY,
     schema_name: Optional[str] = SCHEMA_NAME_QUERY,
     include_sys_schemas: bool = INCLUDE_SYS_SCHEMAS_QUERY,
+    namespaces_only: bool = NAMESPACES_ONLY_QUERY,
 ) -> Result[DatabasesData]:
     """List available databases."""
     request = ListDatabasesInput(
@@ -51,6 +53,7 @@ async def list_catalogs(
         database_name=database_name,
         schema_name=schema_name,
         include_sys_schemas=include_sys_schemas,
+        namespaces_only=namespaces_only,
     )
     try:
         databases: Result[ListDatabasesData] = await asyncio.wait_for(

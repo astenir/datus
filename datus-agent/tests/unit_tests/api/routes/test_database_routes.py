@@ -49,6 +49,7 @@ async def _call(
     database_name: str = "",
     schema_name: str = "",
     include_sys_schemas: bool = False,
+    namespaces_only: bool = False,
 ) -> Result[DatabasesData]:
     """Call list_catalogs with explicit defaults to bypass FastAPI Query() object resolution."""
     return await list_catalogs(
@@ -58,6 +59,7 @@ async def _call(
         database_name=database_name,
         schema_name=schema_name,
         include_sys_schemas=include_sys_schemas,
+        namespaces_only=namespaces_only,
     )
 
 

@@ -32,18 +32,25 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   refresh: []
   selectTable: [table: string]
+  loadSchema: [database: string, schema: string]
 }>()
 
 const expandedPaths = shallowRef<Set<string>>(new Set())
+const databaseKey = shallowRef("")
 
 const treeData = computed(() => buildCatalogTree(props.entries))
 const hasCatalogData = computed(() => treeData.value.databases.length > 0)
 const selectedPath = computed(() => props.selectedTable?.trim() || undefined)
 
+// Reset expansion only when the database set changes (datasource switch or a
+// fresh load); keep the user's manual schema expansion when table lists update.
 watch(
-  () => treeData.value.expandedPaths,
-  (paths) => {
-    expandedPaths.value = new Set(paths)
+  () => treeData.value.databases.map((database) => database.path).join("|"),
+  (key) => {
+    if (key !== databaseKey.value) {
+      databaseKey.value = key
+      expandedPaths.value = new Set(treeData.value.expandedPaths)
+    }
   },
   { immediate: true },
 )
@@ -55,6 +62,13 @@ function handleSelectedPath(path: string) {
 
 function handleExpandedChange(paths: Set<string>) {
   expandedPaths.value = new Set(paths)
+  for (const database of treeData.value.databases) {
+    for (const schema of database.schemas) {
+      if (schema.tables.length === 0 && paths.has(schema.path)) {
+        emit("loadSchema", schema.database, schema.schema)
+      }
+    }
+  }
 }
 </script>
 

@@ -133,6 +133,7 @@ watch(
           description="点击表节点加载结构和语义 YAML。"
           @refresh="workspace.loadCatalog()"
           @select-table="requestTableLoad"
+          @load-schema="workspace.loadSchemaTables"
         />
 
         <div class="flex flex-col gap-4">
