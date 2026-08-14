@@ -102,8 +102,9 @@ def _patch_executor(monkeypatch, *, captured: dict) -> None:
         def __init__(self, *, agent_config, sub_agent_name):
             captured["sub_agent_name"] = sub_agent_name
 
-        def _get_connector(self, datasource):
+        def _get_connector(self, datasource, database=""):
             captured["datasource"] = datasource
+            captured["database"] = database
             return _FakeConnector()
 
         def execute_read_enforced(self, sql, connector, *, datasource="", result_format="list"):
@@ -268,6 +269,29 @@ async def test_run_query_without_published_version_uses_local_template(monkeypat
     # so the connector picks the same datasource binding the LLM saved.
     assert captured["sub_agent_name"] == "gen_visual_dashboard"
     assert captured["datasource"] == "warehouse"
+
+
+@pytest.mark.asyncio
+async def test_run_query_forwards_saved_database_to_connector(monkeypatch, tmp_path: Path):
+    """The saved ``database`` routes view-time re-execution to the same physical
+    DB the trial render used, instead of falling back to the datasource default."""
+    dashboard_dir = _write_dashboard(tmp_path)
+    meta = {**_SAMPLE_META, "database": "bgadb"}
+    (dashboard_dir / "queries" / "by_region.params.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+
+    result = await DashboardService(agent_config=MagicMock()).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        published_version=None,
+    )
+
+    assert result.success is True
+    assert captured["database"] == "bgadb"
 
 
 @pytest.mark.asyncio
@@ -511,7 +535,7 @@ def _patch_failing_executor(monkeypatch, *, exc: Exception | None = None, exec_r
         def __init__(self, *, agent_config, sub_agent_name):
             self.agent_config = agent_config
 
-        def _get_connector(self, datasource):
+        def _get_connector(self, datasource, database=""):
             return _Connector()
 
         def execute_read_enforced(self, sql, connector, *, datasource="", result_format="list"):
@@ -596,7 +620,7 @@ async def test_run_query_datasource_resolution_failure_returns_datasource_unavai
         def __init__(self, *, agent_config, sub_agent_name):
             pass
 
-        def _get_connector(self, datasource):
+        def _get_connector(self, datasource, database=""):
             raise RuntimeError(f"no datasource named {datasource!r}")
 
     import datus.tools.func_tool as func_tool_mod

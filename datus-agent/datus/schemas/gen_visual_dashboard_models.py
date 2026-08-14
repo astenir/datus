@@ -111,6 +111,9 @@ class QueryTemplateMetaFile(BaseModel):
     slug: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
     description: str = Field(default="")
     datasource: str
+    database: str = Field(
+        default="", description="Physical database the template ran against; empty = datasource default"
+    )
     params: List[TemplateParamDecl] = Field(..., description="Parameters declared by the SQL template")
     columns: List[QueryColumnMeta] = Field(..., min_length=1, description="Inferred from the sample render")
     sample_params: Dict[str, Any] = Field(default_factory=dict, description="Values used for the trial render")
