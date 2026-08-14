@@ -840,6 +840,7 @@ class DashboardArtifactTools:
         uses: Optional[Dict[str, Any]] = None,
         caveats: str = "",
         datasource: str = "",
+        database: str = "",
     ) -> FuncToolResult:
         """
         Persist a parameterized Jinja2 SQL template after a trial render,
@@ -890,6 +891,9 @@ class DashboardArtifactTools:
                 an empty string — filler like "no caveats" is NOT
                 acceptable.
             datasource: Logical datasource name. Empty string uses the default.
+            database: Physical database within the datasource. Empty uses the
+                datasource's configured default database (required to target a
+                non-default database, e.g. ``bgadb``).
 
         Returns:
             FuncToolResult.result is a dict like::
@@ -1022,7 +1026,7 @@ class DashboardArtifactTools:
         # 4. Execute via the connector
         connector = None
         try:
-            connector = self._db_func_tool._get_connector(datasource or None)
+            connector = self._db_func_tool._get_connector(datasource or None, database)
         except Exception as exc:
             return FuncToolResult(success=0, error=f"Failed to resolve datasource {datasource!r}: {exc}")
 

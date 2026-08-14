@@ -528,6 +528,110 @@ def _first_statement(sql: str) -> str:
     return s.strip()
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split ``sql`` into individual statements on top-level semicolons.
+
+    Mirrors ``_first_statement``'s quote/comment/dollar-quote handling so a
+    semicolon inside a string literal or dollar-quoted body never splits.
+    Empty statements (e.g. produced by a trailing ``;``) are dropped.
+    """
+    s = strip_sql_comments(sql).strip()
+    if not s:
+        return []
+
+    statements: list[str] = []
+    in_single_quote = False
+    in_double_quote = False
+    in_backtick = False
+    in_bracket = False
+    dollar_tag: Optional[str] = None
+    start = 0
+    i = 0
+    length = len(s)
+    while i < length:
+        ch = s[i]
+
+        if dollar_tag:
+            if s.startswith(dollar_tag, i):
+                i += len(dollar_tag)
+                dollar_tag = None
+                continue
+            i += 1
+            continue
+
+        if in_single_quote:
+            if ch == "'":
+                if i + 1 < length and s[i + 1] == "'":
+                    i += 2
+                    continue
+                if not _is_escaped(s, i):
+                    in_single_quote = False
+            i += 1
+            continue
+
+        if in_double_quote:
+            if ch == '"':
+                if i + 1 < length and s[i + 1] == '"':
+                    i += 2
+                    continue
+                if not _is_escaped(s, i):
+                    in_double_quote = False
+            i += 1
+            continue
+
+        if in_backtick:
+            if ch == "`":
+                if i + 1 < length and s[i + 1] == "`":
+                    i += 2
+                    continue
+                in_backtick = False
+            i += 1
+            continue
+
+        if in_bracket:
+            if ch == "]":
+                in_bracket = False
+            i += 1
+            continue
+
+        # Not within any quote context.
+        if ch == "'":
+            in_single_quote = True
+            i += 1
+            continue
+        if ch == '"':
+            in_double_quote = True
+            i += 1
+            continue
+        if ch == "`":
+            in_backtick = True
+            i += 1
+            continue
+        if ch == "[":
+            in_bracket = True
+            i += 1
+            continue
+        if ch == "$":
+            tag = _match_dollar_tag(s, i)
+            if tag:
+                dollar_tag = tag
+                i += len(tag)
+                continue
+
+        if ch == ";":
+            statement = s[start:i].strip()
+            if statement:
+                statements.append(statement)
+            start = i + 1
+
+        i += 1
+
+    tail = s[start:].strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 _KEYWORD_SQL_TYPE_MAP: Dict[str, SQLType] = {
     "SELECT": SQLType.SELECT,
     "VALUES": SQLType.SELECT,

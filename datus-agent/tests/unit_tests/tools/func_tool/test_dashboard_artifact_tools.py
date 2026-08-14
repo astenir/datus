@@ -515,6 +515,38 @@ class TestSaveQueryTemplate:
         assert "datasource" not in brief_data
         assert "created_at" not in brief_data
 
+    def test_database_is_forwarded_to_connector_resolution(self, dashboard_tools: DashboardArtifactTools, monkeypatch):
+        from unittest.mock import MagicMock
+
+        calls = []
+        connector = MagicMock()
+        connector.dialect = "postgresql"
+        db_func_tool = dashboard_tools._db_func_tool
+
+        def fake_get_connector(datasource=None, database=""):
+            calls.append((datasource, database))
+            return connector
+
+        monkeypatch.setattr(db_func_tool, "_get_connector", fake_get_connector)
+        monkeypatch.setattr(db_func_tool, "guard_estimated_rows", lambda sql, conn: None)
+        monkeypatch.setattr(
+            db_func_tool,
+            "execute_read_enforced",
+            lambda sql, conn, **kwargs: MagicMock(success=True, sql_return=[{"n": "v"}]),
+        )
+
+        result = dashboard_tools.save_query_template(
+            name="bgadb_route",
+            sql_template="-- @datus-params x:string\nSELECT :x AS n",
+            sample_params={"x": "v"},
+            goal="route check",
+            hypothesis="connector resolves to bgadb",
+            database="bgadb",
+        )
+
+        assert result.success == 1, result.error
+        assert calls == [(None, "bgadb")]
+
     def test_invalid_slug_rejected(self, dashboard_tools: DashboardArtifactTools):
         result = dashboard_tools.save_query_template(
             name="Bad Name!",

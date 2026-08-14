@@ -88,7 +88,10 @@ def test_registered_analytics_parser_allows_reads_and_rejects_writes(
         ("ALTER TABLE users ADD COLUMN note TEXT", "ALTER"),
         ("DROP TABLE users", "DROP"),
         ("CALL mutate_users()", "CALL"),
-        ("SELECT 1; DELETE FROM users", "MULTI_STATEMENT"),
+        # Multi-statement with a write now reports the concrete write, not the
+        # legacy blanket MULTI_STATEMENT label (each statement is evaluated).
+        ("SELECT 1; DELETE FROM users", "DELETE"),
+        ("SELECT 1; SET search_path = public", "SET"),
         ("EXPLAIN ANALYZE DELETE FROM users", "DELETE"),
         ("WITH removed AS (DELETE FROM users RETURNING *) SELECT * FROM removed", "DELETE"),
         ("SELECT * INTO archived_users FROM users", "SELECT"),
@@ -102,6 +105,20 @@ def test_rejects_mutating_or_unverifiable_statement(sql: str, operation: str) ->
 
     assert decision.allowed is False
     assert decision.operation == operation
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1; SELECT 2",
+        "SELECT 'a;b' AS x; SELECT 2",
+        "SHOW TABLES; SELECT * FROM users",
+    ],
+)
+def test_allows_read_only_multi_statement(sql: str) -> None:
+    decision = evaluate_business_datasource_read_only_sql(sql)
+
+    assert decision.allowed is True
 
 
 def test_delete_message_matches_product_copy() -> None:

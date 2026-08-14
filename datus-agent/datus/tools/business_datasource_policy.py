@@ -10,8 +10,8 @@ from sqlglot import expressions
 
 from datus.utils.constants import SQLType
 from datus.utils.sql_utils import (
-    _first_statement,
     _normalize_expression,
+    _split_sql_statements,
     parse_dialect,
     parse_sql_statement_kind,
     strip_sql_comments,
@@ -48,7 +48,12 @@ def evaluate_business_datasource_read_only_sql(
     sql: str,
     dialect: str = "",
 ) -> BusinessDatasourceReadOnlyDecision:
-    """Fail closed unless ``sql`` is one pure, read-only statement."""
+    """Fail closed unless every statement in ``sql`` is a read-only statement.
+
+    Multi-statement input is allowed only when *each* statement is read-only;
+    any write / DDL / context mutation among the statements denies the whole
+    batch (with that statement's operation, so the denial message stays specific).
+    """
 
     if not isinstance(sql, str) or not sql.strip():
         return _deny(SQLType.UNKNOWN.value, "UNKNOWN", "empty_or_invalid")
@@ -57,8 +62,20 @@ def evaluate_business_datasource_read_only_sql(
     normalized = cleaned.rstrip(";").strip()
     if not normalized:
         return _deny(SQLType.UNKNOWN.value, "UNKNOWN", "empty_or_invalid")
-    if _first_statement(normalized) != normalized:
-        return _deny(SQLType.UNKNOWN.value, "MULTI_STATEMENT", "multiple_statements")
+
+    statements = _split_sql_statements(normalized)
+    if len(statements) > 1:
+        for statement in statements:
+            decision = _evaluate_single_read_only(statement, dialect)
+            if not decision.allowed:
+                return decision
+        return BusinessDatasourceReadOnlyDecision(True, SQLType.SELECT.value, "SELECT", "read_only")
+
+    return _evaluate_single_read_only(normalized, dialect)
+
+
+def _evaluate_single_read_only(normalized: str, dialect: str) -> BusinessDatasourceReadOnlyDecision:
+    """Evaluate one non-empty, single statement for read-only safety."""
 
     kind = parse_sql_statement_kind(normalized, dialect)
     operation = _operation_label(normalized, kind)
