@@ -2079,6 +2079,29 @@ class TestDBFuncToolExecuteReadEnforced:
         assert "Multi-statement" in result.error
         connector.execute_query.assert_not_called()
 
+    def test_enterprise_read_only_allows_read_only_multi_statement(self):
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.read_only = True
+        tool.enterprise_read_only = True
+
+        result = tool.execute_read_enforced("SELECT 1 AS n; SELECT 2 AS m", connector)
+
+        assert result.success is True
+        connector.execute_query.assert_called_once()
+
+    def test_enterprise_read_only_rejects_multi_statement_with_write(self):
+        connector = self._connector()
+        tool = self._make_tool(connector)
+        tool.read_only = True
+        tool.enterprise_read_only = True
+
+        result = tool.execute_read_enforced("SELECT 1 AS n; DROP TABLE t", connector)
+
+        assert result.success is False
+        assert "DROP" in result.error
+        connector.execute_query.assert_not_called()
+
     def test_non_read_statement_rejected(self):
         connector = self._connector()
         tool = self._make_tool(connector)

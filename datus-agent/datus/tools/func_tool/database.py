@@ -1776,16 +1776,12 @@ class DBFuncTool:
 
         cleaned = strip_sql_comments(sql).strip()
         normalized_sql = cleaned.rstrip(";").strip()
-        if normalized_sql and _first_statement(normalized_sql) != normalized_sql:
-            return (
-                FuncToolResult(
-                    success=0,
-                    error="Multi-statement SQL is not allowed. Please submit one query at a time.",
-                ),
-                SQLType.UNKNOWN,
-            )
 
         if self.read_only:
+            # Enterprise business datasources: the policy validates every
+            # statement, so a read-only multi-statement input is allowed while
+            # any write / DDL / context mutation is still blocked. This replaces
+            # the generic single-statement backstop below.
             from datus.tools.business_datasource_policy import evaluate_business_datasource_read_only_sql
 
             decision = evaluate_business_datasource_read_only_sql(sql, connector.dialect)
@@ -1795,6 +1791,15 @@ class DBFuncTool:
                     denial or FuncToolResult(success=0, error="Read-only SQL policy denied the statement."),
                     SQLType.UNKNOWN,
                 )
+        elif normalized_sql and _first_statement(normalized_sql) != normalized_sql:
+            # Non-enterprise read paths keep the strict single-statement backstop.
+            return (
+                FuncToolResult(
+                    success=0,
+                    error="Multi-statement SQL is not allowed. Please submit one query at a time.",
+                ),
+                SQLType.UNKNOWN,
+            )
 
         sql_type = parse_sql_type(sql, connector.dialect)
         readonly_sql_types = {SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN}
