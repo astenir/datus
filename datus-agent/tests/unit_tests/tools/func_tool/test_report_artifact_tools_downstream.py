@@ -4,6 +4,7 @@
 
 """Downstream ACL and locked-edit coverage for report artifact tools."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -155,6 +156,38 @@ class TestBindExistingReport:
         assert "locked to reports/existing_demo" in (rejected.error or "")
         assert accepted.success == 1, accepted.error
         assert tools.report_slug == "existing_demo"
+
+    def test_bind_bumps_manifest_updated_at_without_losing_fields(self, db_func_tool: DBFuncTool, project_root: Path):
+        existing = project_root / "reports" / "existing_demo"
+        (existing / "render").mkdir(parents=True)
+        (existing / "render" / "app.jsx").write_text("export default function R() { return null; }\n")
+        (existing / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "slug": "existing_demo",
+                    "name": "Existing Demo",
+                    "description": "An existing report.",
+                    "kind": "report",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "datasources": ["finance"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        tools = ReportArtifactTools(
+            agent_config=SimpleNamespace(project_root=str(project_root)),
+            db_func_tool=db_func_tool,
+        )
+
+        result = tools.bind_existing_report("existing_demo")
+
+        assert result.success == 1, result.error
+        assert "manifest_warning" not in result.result
+        manifest = json.loads((existing / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["created_at"] == "2026-01-01T00:00:00Z"
+        assert manifest["datasources"] == ["finance"]
+        assert manifest["updated_at"].endswith("Z")
+        assert manifest["updated_at"] > "2026-01-01T00:00:00Z"
 
     def test_locked_edit_session_can_bind_incomplete_report_dir(self, db_func_tool: DBFuncTool, project_root: Path):
         incomplete = project_root / "reports" / "existing_demo"
