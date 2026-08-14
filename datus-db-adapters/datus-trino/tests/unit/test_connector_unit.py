@@ -160,7 +160,7 @@ def test_ensure_engine_forwards_http_scheme_and_verify():
 
         mock_create_engine.assert_called_once()
         connect_args = mock_create_engine.call_args.kwargs["connect_args"]
-        assert connect_args == {"verify": False, "http_scheme": "https"}
+        assert connect_args == {"verify": False, "http_scheme": "https", "request_timeout": 30}
         assert engine is mock_create_engine.return_value
         assert connector._owns_engine is True
 
@@ -174,7 +174,33 @@ def test_ensure_engine_default_http_scheme():
         connector._ensure_engine()
 
         connect_args = mock_create_engine.call_args.kwargs["connect_args"]
-        assert connect_args == {"verify": True, "http_scheme": "http"}
+        assert connect_args == {"verify": True, "http_scheme": "http", "request_timeout": 30}
+
+
+def test_ensure_engine_forwards_request_timeout():
+    """timeout_seconds is wired to the Trino HTTP request timeout via connect_args."""
+    config = TrinoConfig(host="localhost", port=8080, username="user", timeout_seconds=12)
+    connector = TrinoConnector(config)
+
+    with patch("datus_trino.connector.create_engine") as mock_create_engine:
+        connector._ensure_engine()
+
+        connect_args = mock_create_engine.call_args.kwargs["connect_args"]
+        assert connect_args["request_timeout"] == 12
+
+
+def test_test_connection_does_not_dispose_engine():
+    """test_connection must not tear down the engine the catalog flow is about to reuse."""
+    config = TrinoConfig(username="user")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = TrinoConnector(config)
+    connector.close = MagicMock()
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.test_connection", return_value=True):
+        assert connector.test_connection() is True
+
+    connector.close.assert_not_called()
 
 
 # ==================== Catalog Functionality Unit Tests ====================
