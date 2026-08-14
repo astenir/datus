@@ -78,18 +78,32 @@ function toDate(value: string): Date {
   return new Date(value.endsWith("Z") ? value : `${value}Z`)
 }
 
-function formatCreatedAt(value: string | null | undefined): string {
-  if (!value) return ""
-  return toDate(value).toLocaleDateString("zh-CN", {
+// The list is ordered by `updated_at ?? created_at` on the backend, so the
+// card shows the same fallback key to keep the visible time consistent with
+// the order.
+function activityTime(item: ReadonlyArtifactManifest): string | null {
+  return item.updated_at || item.created_at || null
+}
+
+function activityLabel(item: ReadonlyArtifactManifest): string {
+  return item.updated_at ? "更新于" : "创建于"
+}
+
+function formatActivityTime(value: string): string {
+  return toDate(value).toLocaleString("zh-CN", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   })
 }
 
-function createdAtTitle(value: string | null | undefined): string {
-  if (!value) return ""
-  return `创建时间：${toDate(value).toLocaleString("zh-CN", { hour12: false })}`
+function activityTitle(item: ReadonlyArtifactManifest): string {
+  const time = activityTime(item)
+  if (!time) return ""
+  return `${activityLabel(item)}：${formatActivityTime(time)}`
 }
 </script>
 
@@ -177,15 +191,15 @@ function createdAtTitle(value: string | null | undefined): string {
             </span>
           </div>
           <span
-            v-if="item.created_at"
+            v-if="activityTime(item)"
             class="ml-2 flex shrink-0 items-center gap-1"
-            :title="createdAtTitle(item.created_at)"
+            :title="activityTitle(item)"
           >
             <CalendarDaysIcon
               class="size-3.5 shrink-0"
               aria-hidden="true"
             />
-            {{ formatCreatedAt(item.created_at) }}
+            {{ activityLabel(item) }} {{ formatActivityTime(activityTime(item) ?? "") }}
           </span>
         </div>
         <CardDescription
