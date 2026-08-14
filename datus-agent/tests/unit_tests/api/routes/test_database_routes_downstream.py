@@ -199,6 +199,62 @@ def test_catalog_pruning_unions_independently_selected_grant_nodes():
     ]
 
 
+def test_catalog_pruning_keeps_namespaces_when_tables_not_loaded():
+    """namespaces_only listings (tables=None) keep every matching namespace even
+    when the grant scopes tables; table filtering is deferred to the lazy load."""
+    databases = [
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="public",
+            connection_status="connected",
+            tables=None,
+        ),
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="test",
+            connection_status="connected",
+            tables=None,
+        ),
+        DatabaseInfo(
+            name="postgres",
+            uri="postgresql://postgres",
+            type="postgresql",
+            current=False,
+            schema_name="public",
+            connection_status="connected",
+            tables=None,
+        ),
+    ]
+
+    visible = database_routes._prune_databases_for_datasource_grant(
+        databases,
+        datasource_id="ccks_fund",
+        datasource_grants={
+            "ccks_fund": {
+                "effect": "allow",
+                "databases": ["postgres"],
+                "schemas": ["ccks_fund.test"],
+                "tables": [
+                    "ccks_fund.public.mf_benchmarkgrowthrate",
+                    "ccks_fund.public.mf_bondportifoliodetail",
+                ],
+            }
+        },
+    )
+
+    assert [(item.name, item.schema_name, item.tables) for item in visible] == [
+        ("ccks_fund", "public", None),
+        ("ccks_fund", "test", None),
+        ("postgres", "public", None),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_datasource_status_uses_visible_datasources(monkeypatch):
     svc = _make_svc(current_datasource="my_ds")
