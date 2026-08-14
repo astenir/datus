@@ -353,6 +353,37 @@ class TestSaveQuery:
         assert "datasource" not in brief_payload
         assert "created_at" not in brief_payload
 
+    def test_database_is_forwarded_to_connector_resolution(self, report_tools: ReportArtifactTools, monkeypatch):
+        from unittest.mock import MagicMock
+
+        calls = []
+        connector = MagicMock()
+        connector.dialect = "postgresql"
+        db_func_tool = report_tools._db_func_tool
+
+        def fake_get_connector(datasource=None, database=""):
+            calls.append((datasource, database))
+            return connector
+
+        monkeypatch.setattr(db_func_tool, "_get_connector", fake_get_connector)
+        monkeypatch.setattr(db_func_tool, "guard_estimated_rows", lambda sql, conn: None)
+        monkeypatch.setattr(
+            db_func_tool,
+            "execute_read_enforced",
+            lambda sql, conn, **kwargs: MagicMock(success=True, sql_return=[{"n": 1}]),
+        )
+
+        result = report_tools.save_query(
+            name="bgadb_route",
+            sql="SELECT 1 AS n",
+            goal="route check",
+            hypothesis="connector resolves to bgadb",
+            database="bgadb",
+        )
+
+        assert result.success == 1, result.error
+        assert calls == [(None, "bgadb")]
+
     def test_invalid_slug_rejected(self, report_tools: ReportArtifactTools):
         result = report_tools.save_query(
             name="Bad Name!",

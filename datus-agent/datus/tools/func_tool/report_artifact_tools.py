@@ -740,6 +740,7 @@ class ReportArtifactTools:
         uses: Optional[Dict[str, Any]] = None,
         caveats: str = "",
         datasource: str = "",
+        database: str = "",
     ) -> FuncToolResult:
         """
         Run a read-only SQL, persist the SQL text, the result, AND the per-query brief sidecar.
@@ -786,6 +787,9 @@ class ReportArtifactTools:
                 no implicit assumptions get an empty string — filler like
                 "no caveats" is NOT acceptable.
             datasource: Logical datasource name. Empty string uses the default.
+            database: Physical database within the datasource. Empty uses the
+                datasource's configured default database (required to target a
+                non-default database, e.g. ``bgadb``).
 
         Returns:
             FuncToolResult.result is a dict like::
@@ -838,7 +842,7 @@ class ReportArtifactTools:
 
         connector = None
         try:
-            connector = self._db_func_tool._get_connector(datasource or None)
+            connector = self._db_func_tool._get_connector(datasource or None, database)
         except Exception as exc:
             return FuncToolResult(success=0, error=f"Failed to resolve datasource {datasource!r}: {exc}")
 
