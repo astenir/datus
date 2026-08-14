@@ -83,4 +83,27 @@ describe("useChatSettings", () => {
 
     expect(settings.language.value).toBe("en");
   });
+
+  it("isolates plan mode per user", async () => {
+    const storage = installLocalStorage(null);
+    const { setCurrentUser } = await import("@/lib/request");
+    setCurrentUser({ userId: 1, username: "alice", realname: "Alice", email: "" });
+
+    const { useChatSettings } = await import("./useChatSettings");
+    const settings = useChatSettings();
+
+    settings.setPlanMode(true);
+    await nextTick();
+    expect(settings.planMode.value).toBe(true);
+    expect(storage.setItem).toHaveBeenLastCalledWith("datus-chat-settings:alice", JSON.stringify({
+      language: "zh",
+      permissionMode: "normal",
+      planMode: true,
+    }));
+
+    setCurrentUser({ userId: 2, username: "bob", realname: "Bob", email: "" });
+    await nextTick();
+
+    expect(settings.planMode.value).toBe(false);
+  });
 });

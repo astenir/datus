@@ -175,6 +175,7 @@ watch(
         description="点击表节点查看字段、索引和行数。"
         @refresh="workspace.loadCatalog()"
         @select-table="selectTable"
+        @load-schema="workspace.loadSchemaTables"
       />
 
       <Card

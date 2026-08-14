@@ -14,6 +14,8 @@ const reportDetail: ReportDetail = {
     slug: "fund-report",
     name: "基金报告",
     description: "展示基金发展情况。",
+    created_at: "2026-05-01T10:00:00Z",
+    updated_at: "2026-08-01T09:30:00Z",
     datasources: ["ccks_fund"],
     key_tables: ["mf_fundarchives"],
   },
@@ -32,6 +34,8 @@ const dashboardDetail: DashboardDetail = {
     slug: "fund-dashboard",
     name: "基金仪表盘",
     description: "支持交互查询。",
+    created_at: "2026-05-01T10:00:00Z",
+    updated_at: "2026-08-01T09:30:00Z",
     datasources: ["ccks_fund"],
     key_tables: ["mf_benchmarkgrowthrate"],
   },
@@ -55,6 +59,21 @@ const dashboardQueryResult: SqlQueryResultEnvelope = {
   columns: [{ name: "fund_code", type: "string" }],
   rows: [{ fund_code: "000001" }],
   sql: "select fund_code\nfrom mf_fundarchives",
+}
+
+// Mirror the detail overview's time rendering so assertions stay valid in
+// any machine timezone: both sides run the same Intl formatting in-process.
+const detailTimeOptions = {
+  hour12: false,
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+} as const;
+
+function detailTime(value: string): string {
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  return date.toLocaleString("zh-CN", detailTimeOptions);
 }
 
 async function renderDetail(
@@ -84,6 +103,15 @@ describe("ArtifactDetailPanel", () => {
     expect(html).toContain("mf_fundarchives")
     expect(html).toContain("另有 1 个文件")
     expect(html).not.toContain("运行查询")
+  })
+
+  it("shows manifest-based creation and update times instead of the render-file mtime", async () => {
+    const html = await renderDetail(reportDetail, "report")
+
+    expect(html).toContain("更新时间")
+    expect(html).toContain(detailTime("2026-08-01T09:30:00Z"))
+    expect(html).toContain(detailTime("2026-05-01T10:00:00Z"))
+    expect(html).not.toContain(detailTime("2026-07-23T08:56:00Z"))
   })
 
   it("places the dashboard query runner beside its compact overview", async () => {

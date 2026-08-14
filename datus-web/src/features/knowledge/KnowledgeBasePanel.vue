@@ -398,6 +398,7 @@ onMounted(() => {
                   :loading="workspace.isLoadingCatalog.value"
                   @refresh="workspace.loadCatalog()"
                   @select-table="requestTableLoad"
+                  @load-schema="workspace.loadSchemaTables"
                 />
               </TabsContent>
               <TabsContent

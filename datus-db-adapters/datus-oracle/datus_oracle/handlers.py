@@ -52,6 +52,9 @@ def build_oracle_uri(db_config) -> str:
         query["service_name"] = service_name
     elif sid:
         query["sid"] = sid
+    timeout_seconds = getattr(db_config, "timeout_seconds", None)
+    if timeout_seconds:
+        query["tcp_connect_timeout"] = str(timeout_seconds)
     username = quote(_clean_str(db_config.username), safe="")
     password = quote(_clean_str(db_config.password), safe="")
     auth = f"{username}:{password}@" if password else f"{username}@"

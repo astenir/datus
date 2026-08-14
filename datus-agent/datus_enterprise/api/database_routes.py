@@ -37,6 +37,7 @@ async def list_catalogs(
     database_name: Optional[str] = upstream_database_routes.DATABASE_NAME_QUERY,
     schema_name: Optional[str] = upstream_database_routes.SCHEMA_NAME_QUERY,
     include_sys_schemas: bool = upstream_database_routes.INCLUDE_SYS_SCHEMAS_QUERY,
+    namespaces_only: bool = upstream_database_routes.NAMESPACES_ONLY_QUERY,
 ) -> Result[DatabasesData]:
     """Project datasource scope, delegate catalog loading, and prune the result."""
     try:
@@ -60,6 +61,7 @@ async def list_catalogs(
         database_name=database_name,
         schema_name=schema_name,
         include_sys_schemas=include_sys_schemas,
+        namespaces_only=namespaces_only,
     )
     if not result.success or result.data is None:
         if result.errorCode == "REQUEST_TIMEOUT":

@@ -31,6 +31,14 @@ def test_build_oracle_uri_with_sid():
     assert "service_name" not in uri
 
 
+def test_build_oracle_uri_includes_tcp_connect_timeout():
+    config = OracleConfig(username="app", service_name="SALES", timeout_seconds=15)
+
+    uri = build_oracle_uri(config)
+
+    assert "tcp_connect_timeout=15" in uri
+
+
 def test_resolve_oracle_context_prefers_query_schema():
     config = OracleConfig(username="app", service_name="FREEPDB1", schema="APP")
     uri = "oracle+oracledb://app:secret@localhost:1521/?service_name=FREEPDB1&schema=reporting"

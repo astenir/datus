@@ -323,9 +323,21 @@ class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
 
     @override
     def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        if schema_name:
-            conn.execute(text(f"ALTER SESSION SET CURRENT_SCHEMA = {self.quote_identifier(schema_name.upper())}"))
-            conn.commit()
+        """Apply the current schema, skipping the SET when the pooled connection already has it.
+
+        ``ALTER SESSION SET CURRENT_SCHEMA`` is session-level and takes effect
+        immediately, so no commit is issued. The applied schema is tracked on the
+        pooled connection record (``conn.info``) so repeated checkouts with the
+        same schema avoid the redundant round trip.
+        """
+        if not schema_name:
+            return
+        target = self.quote_identifier(schema_name.upper())
+        info = conn.info
+        if info.get("_datus_current_schema") == target:
+            return
+        conn.execute(text(f"ALTER SESSION SET CURRENT_SCHEMA = {target}"))
+        info["_datus_current_schema"] = target
 
     def get_sample_rows(
         self,

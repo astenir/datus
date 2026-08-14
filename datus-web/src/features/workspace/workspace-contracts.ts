@@ -6,6 +6,7 @@ export type ChatWorkspaceCatalogContract = Pick<
   | "currentDatasource"
   | "isLoadingCatalog"
   | "loadCatalog"
+  | "loadSchemaTables"
   | "visibleDatasourceOptions"
 >
 

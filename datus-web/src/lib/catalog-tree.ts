@@ -24,6 +24,8 @@ export type CatalogTreeSchemaNode = {
   key: string;
   path: string;
   name: string;
+  database: string;
+  schema: string;
   tables: CatalogTableRow[];
 };
 
@@ -31,6 +33,7 @@ export type CatalogTreeDatabaseNode = {
   key: string;
   path: string;
   name: string;
+  database: string;
   schemas: CatalogTreeSchemaNode[];
 };
 
@@ -119,8 +122,10 @@ export function buildCatalogTree(entries: readonly CatalogRecord[]): CatalogTree
 
   for (const entry of entries) {
     const rows = catalogTableRowsForEntry(entry);
-    const databaseName = databaseNameFromCatalog(entry) || "默认数据库";
-    const schemaName = stringField(entry.schema_name ?? entry.schema ?? entry.catalog_name) || "默认 schema";
+    const rawDatabase = databaseNameFromCatalog(entry);
+    const rawSchema = stringField(entry.schema_name ?? entry.schema ?? entry.catalog_name);
+    const databaseName = rawDatabase || "默认数据库";
+    const schemaName = rawSchema || "默认 schema";
     const databasePath = `database:${databaseName}`;
     const schemaPath = `${databasePath}:schema:${schemaName}`;
 
@@ -130,6 +135,7 @@ export function buildCatalogTree(entries: readonly CatalogRecord[]): CatalogTree
         key: databasePath,
         path: databasePath,
         name: databaseName,
+        database: rawDatabase,
         schemas: [],
       };
       databases.set(databasePath, databaseNode);
@@ -139,10 +145,16 @@ export function buildCatalogTree(entries: readonly CatalogRecord[]): CatalogTree
       key: schemaPath,
       path: schemaPath,
       name: schemaName,
+      database: rawDatabase,
+      schema: rawSchema,
       tables: rows,
     });
     expandedPaths.add(databasePath);
-    expandedPaths.add(schemaPath);
+    // Schemas auto-expand only once their tables are loaded; a namespace-only
+    // listing leaves them collapsed so tables can be fetched on demand.
+    if (rows.length > 0) {
+      expandedPaths.add(schemaPath);
+    }
   }
 
   return {

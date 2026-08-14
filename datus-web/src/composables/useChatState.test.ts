@@ -124,7 +124,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -198,7 +202,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -230,7 +238,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
 
     const { useChatState } = await import("./useChatState");
     const state = useChatState();
@@ -265,7 +277,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -315,7 +331,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -362,7 +382,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -408,7 +432,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -489,7 +517,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -583,7 +615,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -621,7 +657,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -670,7 +710,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,
@@ -728,7 +772,11 @@ describe("useChatState", () => {
     vi.doMock("@/composables/useConnection", () => ({
       useConnection: () => ({ effectiveBase: () => "" }),
     }));
-    vi.doMock("@/lib/request", () => ({ request }));
+    vi.doMock("@/lib/request", () => ({
+      request,
+      getCurrentUser: () => null,
+      onCurrentUserChange: () => () => {},
+    }));
     vi.doMock("@/lib/chat", async () => ({
       ...await vi.importActual<typeof import("@/lib/chat")>("@/lib/chat"),
       requestJson,

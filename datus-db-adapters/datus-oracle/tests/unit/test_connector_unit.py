@@ -219,15 +219,45 @@ def test_get_schema_returns_columns_with_pk_and_comments():
     ]
 
 
-def test_do_switch_context_sets_current_schema():
-    connector = make_connector()
+def _conn_with_info(current_schema=None):
+    """Return a mock SQLAlchemy connection with a persistent ``info`` dict."""
     conn = MagicMock()
+    conn.info = {} if current_schema is None else {"_datus_current_schema": current_schema}
+    return conn
+
+
+def test_do_switch_context_sets_current_schema_without_commit():
+    connector = make_connector()
+    conn = _conn_with_info()
 
     connector.do_switch_context(conn, schema_name="REPORTING")
 
     sql = str(conn.execute.call_args.args[0])
     assert 'ALTER SESSION SET CURRENT_SCHEMA = "REPORTING"' in sql
-    conn.commit.assert_called_once()
+    conn.commit.assert_not_called()
+    assert conn.info["_datus_current_schema"] == '"REPORTING"'
+
+
+def test_do_switch_context_skips_when_current_schema_already_applied():
+    connector = make_connector()
+    conn = _conn_with_info(current_schema='"REPORTING"')
+
+    connector.do_switch_context(conn, schema_name="REPORTING")
+
+    conn.execute.assert_not_called()
+    conn.commit.assert_not_called()
+
+
+def test_do_switch_context_reapplies_when_schema_changes():
+    connector = make_connector()
+    conn = _conn_with_info()
+
+    connector.do_switch_context(conn, schema_name="REPORTING")
+    connector.do_switch_context(conn, schema_name="APP")
+
+    assert conn.execute.call_count == 2
+    conn.commit.assert_not_called()
+    assert conn.info["_datus_current_schema"] == '"APP"'
 
 
 def test_get_ddl_calls_dbms_metadata():

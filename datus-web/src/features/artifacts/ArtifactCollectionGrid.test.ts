@@ -5,6 +5,22 @@ import { describe, expect, it } from "vitest";
 import ArtifactCollectionGrid from "./ArtifactCollectionGrid.vue";
 import type { ArtifactManifest } from "@/types";
 
+const timeOptions = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+} as const;
+
+// Mirror the component's time rendering so assertions stay valid in any
+// machine timezone: both sides run the same Intl formatting in-process.
+function localTime(value: string): string {
+  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
+  return date.toLocaleString("zh-CN", timeOptions);
+}
+
 async function renderGrid(items: ArtifactManifest[], loading = false): Promise<string> {
   const app = createSSRApp(ArtifactCollectionGrid, {
     items,
@@ -110,7 +126,22 @@ describe("ArtifactCollectionGrid", () => {
     expect(html).toContain("作者：未知");
   });
 
-  it("shows the artifact creation date on the same line as the author", async () => {
+  it("shows the update time to minute precision next to the author", async () => {
+    const html = await renderGrid([{
+      slug: "fund-overview",
+      name: "Fund Overview",
+      description: "Dashboard",
+      owner_user_id: "owner-1",
+      owner_display_name: "Owner User",
+      created_at: "2026-07-23T08:56:00Z",
+      updated_at: "2026-08-12T22:57:00Z",
+    }]);
+
+    expect(html).toContain(`更新于 ${localTime("2026-08-12T22:57:00Z")}`);
+    expect(html).toContain(`更新于：${localTime("2026-08-12T22:57:00Z")}`);
+  });
+
+  it("falls back to the creation time when the manifest has no updated_at", async () => {
     const html = await renderGrid([{
       slug: "fund-overview",
       name: "Fund Overview",
@@ -120,11 +151,11 @@ describe("ArtifactCollectionGrid", () => {
       created_at: "2026-07-23T08:56:00Z",
     }]);
 
-    expect(html).toContain("2026/07/23");
-    expect(html).toContain("创建时间：");
+    expect(html).toContain(`创建于 ${localTime("2026-07-23T08:56:00Z")}`);
+    expect(html).toContain(`创建于：${localTime("2026-07-23T08:56:00Z")}`);
   });
 
-  it("hides the creation date when the manifest has no created_at", async () => {
+  it("hides the time when the manifest has neither updated_at nor created_at", async () => {
     const html = await renderGrid([{
       slug: "fund-overview",
       name: "Fund Overview",
@@ -132,7 +163,8 @@ describe("ArtifactCollectionGrid", () => {
       owner_user_id: "owner-1",
     }]);
 
-    expect(html).not.toContain("创建时间：");
+    expect(html).not.toContain("更新于");
+    expect(html).not.toContain("创建于");
   });
 
   it("shows a loading state instead of the empty state during the initial request", async () => {

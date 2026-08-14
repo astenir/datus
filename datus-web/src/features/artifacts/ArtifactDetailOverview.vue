@@ -32,6 +32,11 @@ function formatOptionalDate(value: string | null | undefined) {
 
 const datasources = computed(() => props.detail.manifest?.datasources ?? [])
 const keyTables = computed(() => props.detail.manifest?.key_tables ?? [])
+// Prefer the manifest timestamps (the same values the collection card shows);
+// `detail.created_at` is derived from render/app.jsx mtime by the backend and
+// only serves as a fallback for manifests written before created_at existed.
+const createdAt = computed(() => props.detail.manifest?.created_at || props.detail.created_at)
+const updatedAt = computed(() => props.detail.manifest?.updated_at ?? null)
 const files = computed(() => props.detail.files ?? [])
 const visibleFiles = computed(() => files.value.slice(0, 5))
 const hiddenFileCount = computed(() => Math.max(files.value.length - visibleFiles.value.length, 0))
@@ -60,7 +65,16 @@ const statsClass = computed(() => cn(
         <div class="min-w-0">
           <dt class="text-xs text-muted-foreground">创建时间</dt>
           <dd class="mt-1 truncate text-sm font-medium">
-            {{ formatOptionalDate(props.detail.created_at) }}
+            {{ formatOptionalDate(createdAt) }}
+          </dd>
+        </div>
+        <div
+          v-if="updatedAt"
+          class="min-w-0"
+        >
+          <dt class="text-xs text-muted-foreground">更新时间</dt>
+          <dd class="mt-1 truncate text-sm font-medium">
+            {{ formatOptionalDate(updatedAt) }}
           </dd>
         </div>
         <div class="min-w-0">

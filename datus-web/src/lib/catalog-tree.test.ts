@@ -99,6 +99,7 @@ describe("catalog tree helpers", () => {
 
     expect(tree.databases).toHaveLength(1);
     expect(tree.databases[0]?.schemas.map((schema) => schema.name)).toEqual(["public", "risk"]);
+    expect(tree.databases[0]?.schemas.map((schema) => schema.schema)).toEqual(["public", "risk"]);
     expect(tree.databases[0]?.schemas[0]?.tables.map((table) => table.fullName)).toEqual([
       "fund.public.fund_nav",
       "fund.public.fund_profile",
@@ -108,5 +109,16 @@ describe("catalog tree helpers", () => {
       "database:fund:schema:public",
       "database:fund:schema:risk",
     ]);
+  });
+
+  it("keeps schema folders collapsed until tables are loaded", () => {
+    const namespaceOnly: CatalogRecord[] = [
+      { name: "fund.public", schema_name: "public", type: "postgresql", tables: [] },
+    ];
+
+    const tree = buildCatalogTree(namespaceOnly);
+
+    expect(tree.databases[0]?.schemas[0]?.tables).toEqual([]);
+    expect(Array.from(tree.expandedPaths)).toEqual(["database:fund"]);
   });
 });

@@ -83,7 +83,11 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin, MigrationTargetMi
                 pool_timeout=self.timeout_seconds,
                 pool_recycle=3600,
                 pool_pre_ping=True,
-                connect_args={"verify": self._verify_ssl, "http_scheme": self._http_scheme},
+                connect_args={
+                    "verify": self._verify_ssl,
+                    "http_scheme": self._http_scheme,
+                    "request_timeout": self.timeout_seconds,
+                },
             )
             self._owns_engine = True
             return self.engine
@@ -374,14 +378,14 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin, MigrationTargetMi
 
     @override
     def test_connection(self) -> bool:
-        """Test the database connection."""
-        try:
-            return super().test_connection()
-        finally:
-            try:
-                self.close()
-            except Exception as e:
-                logger.debug(f"Ignoring cleanup error during test: {e}")
+        """Test the database connection without tearing down the pooled engine.
+
+        The catalog listing flow calls ``test_connection()`` first and then
+        immediately enumerates schemas/tables. Disposing the engine here would
+        force a second engine plus a second physical connection on the very next
+        metadata call.
+        """
+        return super().test_connection()
 
     # ==================== MigrationTargetMixin ====================
 

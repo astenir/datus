@@ -29,6 +29,10 @@ class ListDatabasesInput(BaseModel):
     database_name: str = Field(default="", description="Database name")
     schema_name: str = Field(default="", description="Schema name")
     include_sys_schemas: bool = Field(default=False, description="Include system schemas when listing databases")
+    namespaces_only: bool = Field(
+        default=False,
+        description="Only list databases and schemas, skipping per-schema table enumeration",
+    )
 
 
 class ListDatabasesData(BaseModel):

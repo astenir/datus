@@ -1,6 +1,6 @@
 import { ref, computed, readonly, shallowRef } from "vue";
 import { catalogApi } from "@/lib/api";
-import { databaseNameFromCatalog, schemaOptionsForDatabase, uniqueOptions } from "@/lib/chat";
+import { databaseNameFromCatalog, schemaNameFromCatalog, schemaOptionsForDatabase, uniqueOptions } from "@/lib/chat";
 import { handleError } from "@/lib/utils";
 import { useConnection } from "./useConnection";
 import type { CatalogRecord, DatasourceStatusItem, SelectOption } from "@/types";
@@ -27,6 +27,7 @@ const datasourceStatuses = ref<Record<string, DatasourceStatusItem>>({});
 const prewarmingDatasources = shallowRef<Set<string>>(new Set());
 const latestCatalogRequestByDatasource = new Map<string, number>();
 const pendingCatalogRequests = new Map<number, { datasource: string; database: string }>();
+const pendingSchemaLoads = new Set<string>();
 let catalogRequestSequence = 0;
 
 function datasourceKey(datasourceId?: string) {
@@ -122,6 +123,7 @@ async function loadCatalog(databaseName?: string, datasourceId?: string): Promis
     const result = await catalogApi.list(base, {
       ...(datasource ? { datasource_id: datasource } : {}),
       ...(requestedDatabase ? { database_name: requestedDatabase } : {}),
+      namespaces_only: true,
     });
     if (result && latestCatalogRequestByDatasource.get(datasource) === requestId) {
       const entries = result.databases ?? [];
@@ -161,6 +163,46 @@ async function loadCatalog(databaseName?: string, datasourceId?: string): Promis
   } finally {
     pendingCatalogRequests.delete(requestId);
     syncCatalogLoading();
+  }
+}
+
+async function loadSchemaTables(databaseName: string, schemaName: string, datasourceId?: string): Promise<boolean> {
+  const datasource = datasourceKey(datasourceId) || activeDatasource.value;
+  const database = databaseName?.trim() ?? "";
+  const schema = schemaName?.trim() ?? "";
+  if (!datasource || !schema) return false;
+
+  const loadKey = `${datasource}::${database}::${schema}`;
+  if (pendingSchemaLoads.has(loadKey)) return false;
+  pendingSchemaLoads.add(loadKey);
+
+  try {
+    const result = await catalogApi.list(effectiveBase(), {
+      datasource_id: datasource,
+      database_name: database,
+      schema_name: schema,
+    });
+    if (!result) return false;
+
+    const fetched = result.databases ?? [];
+    catalogEntries.value = catalogEntries.value.map((entry) => {
+      const entryDatabase = databaseNameFromCatalog(entry);
+      const entrySchema = schemaNameFromCatalog(entry);
+      const match = fetched.find(
+        (item) => databaseNameFromCatalog(item) === entryDatabase && schemaNameFromCatalog(item) === entrySchema
+      );
+      if (match) {
+        return { ...entry, tables: match.tables ?? entry.tables, tables_count: match.tables_count };
+      }
+      return entry;
+    });
+    saveActiveSnapshot();
+    return true;
+  } catch (error) {
+    handleError("加载 Schema 表失败", error);
+    return false;
+  } finally {
+    pendingSchemaLoads.delete(loadKey);
   }
 }
 
@@ -240,6 +282,7 @@ export function useCatalog() {
     selectCatalogDatasource,
     hasCatalogSnapshot,
     loadCatalog,
+    loadSchemaTables,
     loadDatasourceStatuses,
     prewarmDatasource,
     setDatabase,

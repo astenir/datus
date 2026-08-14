@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, List, Optional
 
 from datus_db_core import BaseSqlConnector
@@ -45,6 +46,29 @@ _NO_SCHEMA_TYPES = {"sqlite", "duckdb", "mysql"}
 # Default cap on tables per /table/columns batch; override with
 # ``api.max_prefetch_tables`` in agent.yml.
 _DEFAULT_MAX_PREFETCH_TABLES = 500
+# Upper bound on concurrent catalog metadata probes (schema/table enumeration).
+_METADATA_MAX_PARALLELISM = 8
+
+
+def _parallel_map(fn: Callable, items: list) -> list:
+    """Run ``fn`` over ``items`` in parallel, preserving input order.
+
+    Callers wrap per-item errors inside the returned value so one failing item
+    never aborts siblings. Single-item and empty inputs skip the thread pool.
+    """
+    items = list(items)
+    if not items:
+        return []
+    if len(items) == 1:
+        return [fn(items[0])]
+    workers = min(_METADATA_MAX_PARALLELISM, len(items))
+    results: list = [None] * len(items)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_by_index = {pool.submit(fn, item): index for index, item in enumerate(items)}
+        for future in as_completed(future_by_index):
+            index = future_by_index[future]
+            results[index] = future.result()
+    return results
 
 
 class DatasourceService:
@@ -255,17 +279,31 @@ class DatasourceService:
         catalog_name = request.catalog_name or getattr(connector, "catalog_name", None)
         now = now_utc_iso()
 
-        def _disconnected(db_name: str) -> DatabaseInfo:
+        def _disconnected(db_name: str, schema_name: Optional[str] = None) -> DatabaseInfo:
             return DatabaseInfo(
                 name=db_name,
                 uri=_get_uri(connector),
                 type=dialect,
                 current=(db_name == connector.database_name),
                 catalog_name=catalog_name,
-                schema_name=None,
+                schema_name=schema_name,
                 connection_status="disconnected",
                 tables_count=None,
                 last_accessed=now,
+            )
+
+        def _connected(db_name: str, schema_name: Optional[str], tables: Optional[List[str]]) -> DatabaseInfo:
+            return DatabaseInfo(
+                name=db_name,
+                uri=_get_uri(connector),
+                type=dialect,
+                current=(db_name == connector.database_name),
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                connection_status="connected",
+                tables_count=None if tables is None else len(tables),
+                last_accessed=now,
+                tables=tables,
             )
 
         try:
@@ -309,15 +347,14 @@ class DatasourceService:
             return [_disconnected(connector.database_name)]
 
         db_infos: List[DatabaseInfo] = []
-        for db_name in db_names:
-            if has_schema:
-                # 2) Resolve schemas for this db — a single failing db must not
-                # abort the whole listing. Report the db as disconnected and
-                # keep going.
-                if request.schema_name:
-                    schemas = [request.schema_name]
-                elif hasattr(connector, "get_schemas"):
-                    try:
+        if has_schema:
+            # 2) Resolve schemas per database. Databases are independent, so fan
+            # them out; a single failing db must not abort siblings.
+            def _schemas_for_db(db_name: str):
+                try:
+                    if request.schema_name:
+                        schemas = [request.schema_name]
+                    elif hasattr(connector, "get_schemas"):
                         schemas = self._cached_metadata(
                             (ds_id, "schemas", request.catalog_name or "", db_name, bool(request.include_sys_schemas)),
                             lambda db_name=db_name: connector.get_schemas(
@@ -326,67 +363,53 @@ class DatasourceService:
                                 include_sys=request.include_sys_schemas,
                             ),
                         )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to get schemas for db=%s dialect=%s: %s",
-                            db_name,
-                            dialect,
-                            e,
-                        )
-                        db_infos.append(_disconnected(db_name))
-                        continue
-                else:
-                    schemas = ["public"]
+                    else:
+                        schemas = ["public"]
+                    return db_name, schemas, None
+                except Exception as exc:
+                    logger.warning("Failed to get schemas for db=%s dialect=%s: %s", db_name, dialect, exc)
+                    return db_name, [], exc
 
-                for schema in schemas:
-                    # 3) Fetch queryable table-like objects for this (db, schema). A failure here only
-                    # invalidates this entry, not sibling schemas. Results are TTL-cached so repeated
-                    # directory expands don't re-query the catalog per schema.
-                    try:
-                        tables = self._cached_metadata(
-                            (ds_id, "tables", catalog_name or "", db_name, schema),
-                            lambda db_name=db_name, schema=schema: self._get_table_like_names(
-                                connector, catalog_name=catalog_name, database_name=db_name, schema_name=schema
-                            ),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to get tables for db=%s schema=%s: %s",
-                            db_name,
-                            schema,
-                            e,
-                        )
-                        db_infos.append(
-                            DatabaseInfo(
-                                name=db_name,
-                                uri=_get_uri(connector),
-                                type=dialect,
-                                current=(db_name == connector.database_name),
-                                catalog_name=catalog_name,
-                                schema_name=schema,
-                                connection_status="disconnected",
-                                tables_count=None,
-                                last_accessed=now,
-                            )
-                        )
-                        continue
+            pairs: List[tuple] = []
+            for db_name, schemas, exc in _parallel_map(_schemas_for_db, db_names):
+                if exc is not None:
+                    db_infos.append(_disconnected(db_name))
+                    continue
+                pairs.extend((db_name, schema) for schema in schemas)
 
-                    db_infos.append(
-                        DatabaseInfo(
-                            name=db_name,
-                            uri=_get_uri(connector),
-                            type=dialect,
-                            current=(db_name == connector.database_name),
-                            catalog_name=catalog_name,
-                            schema_name=schema,
-                            connection_status="connected",
-                            tables_count=len(tables),
-                            last_accessed=now,
-                            tables=tables,
-                        )
+            # 3) Fetch queryable table-like objects per (db, schema). A failure
+            # only invalidates that entry, not siblings. ``namespaces_only`` skips
+            # this step entirely (the caller only needs the namespace tree) and
+            # leaves ``tables``/``tables_count`` unset for a later on-demand fetch.
+            if request.namespaces_only:
+                db_infos.extend(_connected(db_name, schema, None) for db_name, schema in pairs)
+                return db_infos
+
+            def _tables_for_pair(pair):
+                db_name, schema = pair
+                try:
+                    tables = self._cached_metadata(
+                        (ds_id, "tables", catalog_name or "", db_name, schema),
+                        lambda db_name=db_name, schema=schema: self._get_table_like_names(
+                            connector, catalog_name=catalog_name, database_name=db_name, schema_name=schema
+                        ),
                     )
-            else:
-                # No schema support — get queryable table-like objects directly. Isolate per-db failures.
+                    return db_name, schema, tables, None
+                except Exception as exc:
+                    logger.warning("Failed to get tables for db=%s schema=%s: %s", db_name, schema, exc)
+                    return db_name, schema, None, exc
+
+            for db_name, schema, tables, exc in _parallel_map(_tables_for_pair, pairs):
+                if exc is not None:
+                    db_infos.append(_disconnected(db_name, schema))
+                else:
+                    db_infos.append(_connected(db_name, schema, tables))
+        else:
+            # No schema support — get queryable table-like objects directly.
+            # Isolate per-db failures. ``namespaces_only`` is a no-op here because
+            # these datasources (sqlite/duckdb/mysql) have no intermediate schema
+            # level; their tables are the leaf and are cheap to enumerate.
+            def _tables_for_db(db_name):
                 try:
                     tables = self._cached_metadata(
                         (ds_id, "tables", catalog_name or "", db_name, request.schema_name or ""),
@@ -397,25 +420,16 @@ class DatasourceService:
                             schema_name=request.schema_name,
                         ),
                     )
-                except Exception as e:
-                    logger.warning("Failed to get tables for db=%s: %s", db_name, e)
-                    db_infos.append(_disconnected(db_name))
-                    continue
+                    return db_name, tables, None
+                except Exception as exc:
+                    logger.warning("Failed to get tables for db=%s: %s", db_name, exc)
+                    return db_name, None, exc
 
-                db_infos.append(
-                    DatabaseInfo(
-                        name=db_name,
-                        uri=_get_uri(connector),
-                        type=dialect,
-                        current=(db_name == connector.database_name),
-                        catalog_name=catalog_name,
-                        schema_name=None,
-                        connection_status="connected",
-                        tables_count=len(tables),
-                        last_accessed=now,
-                        tables=tables,
-                    )
-                )
+            for db_name, tables, exc in _parallel_map(_tables_for_db, db_names):
+                if exc is not None:
+                    db_infos.append(_disconnected(db_name))
+                else:
+                    db_infos.append(_connected(db_name, None, tables))
         return db_infos
 
     def _get_table_like_names(

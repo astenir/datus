@@ -164,6 +164,26 @@ def test_connector_connection_string_custom_sslmode():
         assert "sslmode=require" in connection_string
 
 
+def test_connector_connection_string_includes_connect_timeout():
+    """Connection string passes connect_timeout so slow hosts fail within timeout_seconds."""
+    config = PostgreSQLConfig(
+        host="localhost",
+        port=5432,
+        username="user",
+        password="pass",
+        database="db",
+        timeout_seconds=10,
+    )
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__") as mock_init:
+        PostgreSQLConnector(config)
+
+        call_args = mock_init.call_args
+        connection_string = call_args[0][0]
+
+        assert "connect_timeout=10" in connection_string
+
+
 @pytest.mark.acceptance
 def test_sys_databases():
     """Test _sys_databases returns correct system databases."""
@@ -413,6 +433,8 @@ def _make_connector():
     connector.engine = None
     connector._owns_engine = False
     connector.timeout_seconds = 30
+    # Keep the SQLAlchemy event hook out of LRU tests (it needs a real Engine).
+    connector._register_default_search_path = MagicMock()
     return connector
 
 
@@ -905,3 +927,74 @@ def test_get_metadata_mv_falls_back_to_lower_when_strict_empty():
     second_sql = connector._execute_pandas.call_args_list[1][0][0]
     assert "lower(schemaname)" in second_sql
     assert [m["table_name"] for m in result] == ["mv1"]
+
+
+# ==================== Engine Creation / Search Path Tests ====================
+
+
+def test_create_engine_registers_default_search_path():
+    """_create_engine builds a pool and registers the default search_path hook."""
+    connector = _make_connector()
+    connector._register_default_search_path = MagicMock()
+    mock_engine = MagicMock()
+
+    with patch("datus_postgresql.connector.create_engine", return_value=mock_engine) as mock_ce:
+        result = connector._create_engine("postgresql+psycopg2://u:p@h/db?sslmode=prefer")
+
+    assert result is mock_engine
+    mock_ce.assert_called_once()
+    connector._register_default_search_path.assert_called_once_with(mock_engine)
+
+
+def _conn_with_info(search_path=None):
+    """Return a mock SQLAlchemy connection with a persistent ``info`` dict."""
+    conn = MagicMock()
+    conn.info = {} if search_path is None else {"_datus_search_path": search_path}
+    return conn
+
+
+def test_do_switch_context_skips_when_search_path_already_applied():
+    """No SET or commit is issued when the pooled connection already has the target search_path."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    conn = _conn_with_info(search_path='"public"')
+
+    connector.do_switch_context(conn, schema_name="public")
+
+    conn.execute.assert_not_called()
+    conn.commit.assert_not_called()
+
+
+def test_do_switch_context_sets_search_path_once_without_commit():
+    """A non-default schema issues one SET and records it; no commit is issued."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    conn = _conn_with_info()
+
+    connector.do_switch_context(conn, schema_name="analytics")
+
+    conn.execute.assert_called_once()
+    conn.commit.assert_not_called()
+    assert conn.info["_datus_search_path"] == '"analytics"'
+
+
+def test_do_switch_context_reapplies_when_schema_changes():
+    """Switching back and forth re-SETs the search_path because pooled connections keep state."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    conn = _conn_with_info()
+
+    connector.do_switch_context(conn, schema_name="analytics")
+    connector.do_switch_context(conn, schema_name="public")
+
+    assert conn.execute.call_count == 2
+    conn.commit.assert_not_called()
+    assert conn.info["_datus_search_path"] == '"public"'
+
+
+def test_do_switch_context_empty_schema_is_noop():
+    """Empty schema_name short-circuits without touching the connection."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    conn = MagicMock()
+
+    connector.do_switch_context(conn, schema_name="")
+
+    conn.execute.assert_not_called()
+    conn.commit.assert_not_called()

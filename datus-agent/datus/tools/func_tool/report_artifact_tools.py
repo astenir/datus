@@ -610,7 +610,7 @@ class ReportArtifactTools:
                 )
             if result.success == 1 and self._on_artifact_authorized is not None:
                 self._on_artifact_authorized(report_slug)
-            return result
+            return self._bump_manifest_after_bind(report_slug, result)
         if missing_app:
             return FuncToolResult(
                 success=0,
@@ -622,6 +622,25 @@ class ReportArtifactTools:
         result = self._activate(report_slug, mode="edit", create_dirs=False)
         if result.success == 1 and self._on_artifact_authorized is not None:
             self._on_artifact_authorized(report_slug)
+        return self._bump_manifest_after_bind(report_slug, result)
+
+    def _bump_manifest_after_bind(self, report_slug: str, result: FuncToolResult) -> FuncToolResult:
+        """Refresh ``updated_at`` after a successful bind, matching the
+        ``ArtifactManifest.updated_at`` contract (list pages order by recency).
+
+        Best-effort like the ``save_query`` upsert: a missing/corrupt manifest
+        is surfaced as ``manifest_warning`` in the result instead of failing
+        the bind.
+        """
+        if result.success != 1 or not isinstance(result.result, dict):
+            return result
+        warning = upsert_manifest_after_save(
+            self._project_root / "reports" / report_slug / "manifest.json",
+            datasource=None,
+            timestamp=utc_now_iso(),
+        )
+        if warning:
+            result.result["manifest_warning"] = warning
         return result
 
     def _activate(

@@ -82,7 +82,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         # Build connection string
         connection_string = (
             f"postgresql+psycopg2://{encoded_username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}?sslmode={config.sslmode}"
+            f"{database}?sslmode={config.sslmode}&connect_timeout={config.timeout_seconds}"
         )
 
         super().__init__(
@@ -131,6 +131,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         return (
             f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
             f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
+            f"&connect_timeout={self.config.timeout_seconds}"
         )
 
     # ==================== Metadata Retrieval ====================
@@ -634,14 +635,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 self._engines.move_to_end(db)
                 return self._engines[db]
             conn_str = self._build_connection_string(db)
-            engine = create_engine(
-                conn_str,
-                pool_size=5,
-                max_overflow=10,
-                pool_timeout=self.timeout_seconds,
-                pool_recycle=3600,
-                pool_pre_ping=True,
-            )
+            engine = self._create_engine(conn_str)
             self._engines[db] = engine
             while len(self._engines) > self._max_engines:
                 _, evicted = self._engines.popitem(last=False)
@@ -650,6 +644,45 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 except Exception as e:
                     logger.warning(f"Error disposing evicted engine: {e}")
             return engine
+
+    def _create_engine(self, conn_str: str):
+        """Create a pooled engine for one database and register the default search_path hook."""
+        engine = create_engine(
+            conn_str,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=self.timeout_seconds,
+            pool_recycle=3600,
+            pool_pre_ping=True,
+        )
+        self._register_default_search_path(engine)
+        return engine
+
+    def _register_default_search_path(self, engine) -> None:
+        """Apply the default schema's search_path once per physical connection.
+
+        Metadata queries already qualify table names, so the search_path only
+        matters for user SQL that references unqualified identifiers. Setting it
+        once at connect time (and recording it in the pooled connection record's
+        ``info``) lets ``do_switch_context`` skip the redundant ``SET search_path``
+        on every checkout, which previously added a round trip plus a commit per
+        query.
+        """
+        from sqlalchemy import event
+
+        default_schema = self._default_schema
+        if not default_schema:
+            return
+        search_path = self.quote_identifier(default_schema)
+
+        @event.listens_for(engine, "connect")
+        def _apply_default_search_path(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            try:
+                cursor.execute(f"SET search_path TO {search_path}")
+            finally:
+                cursor.close()
+            connection_record.info["_datus_search_path"] = search_path
 
     @override
     def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
@@ -698,11 +731,19 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         """Apply schema context to a connection.
 
         Database switching is handled by _conn() which picks the right engine
-        based on the effective database_name.
+        based on the effective database_name. The applied search_path is tracked
+        on the pooled connection record (``conn.info``) so repeated checkouts
+        with the same schema skip the redundant SET. ``SET search_path`` is
+        session-level and takes effect immediately, so no commit is issued.
         """
-        if schema_name:
-            conn.execute(text(f"SET search_path TO {self.quote_identifier(schema_name)}"))
-            conn.commit()
+        if not schema_name:
+            return
+        target = self.quote_identifier(schema_name)
+        info = conn.info
+        if info.get("_datus_search_path") == target:
+            return
+        conn.execute(text(f"SET search_path TO {target}"))
+        info["_datus_search_path"] = target
 
     # ==================== Sample Data ====================
 

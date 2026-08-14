@@ -709,7 +709,7 @@ class DashboardArtifactTools:
                 )
             if result.success == 1 and self._on_artifact_authorized is not None:
                 self._on_artifact_authorized(dashboard_slug)
-            return result
+            return self._bump_manifest_after_bind(dashboard_slug, result)
         if missing_app:
             return FuncToolResult(
                 success=0,
@@ -721,6 +721,25 @@ class DashboardArtifactTools:
         result = self._activate(dashboard_slug, mode="edit", create_dirs=False)
         if result.success == 1 and self._on_artifact_authorized is not None:
             self._on_artifact_authorized(dashboard_slug)
+        return self._bump_manifest_after_bind(dashboard_slug, result)
+
+    def _bump_manifest_after_bind(self, dashboard_slug: str, result: FuncToolResult) -> FuncToolResult:
+        """Refresh ``updated_at`` after a successful bind, matching the
+        ``ArtifactManifest.updated_at`` contract (list pages order by recency).
+
+        Best-effort like the ``save_query_template`` upsert: a missing/corrupt
+        manifest is surfaced as ``manifest_warning`` in the result instead of
+        failing the bind.
+        """
+        if result.success != 1 or not isinstance(result.result, dict):
+            return result
+        warning = upsert_manifest_after_save(
+            self._project_root / "dashboards" / dashboard_slug / "manifest.json",
+            datasource=None,
+            timestamp=utc_now_iso(),
+        )
+        if warning:
+            result.result["manifest_warning"] = warning
         return result
 
     def _activate(

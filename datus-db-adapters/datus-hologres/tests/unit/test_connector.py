@@ -32,7 +32,8 @@ def connector(config):
 def test_connector_uses_hologres_dialect_and_postgresql_driver(connector):
     assert connector.dialect == "hologres"
     assert connector.connection_string.startswith("postgresql+psycopg2://")
-    assert connector.connection_string.endswith("/analytics?sslmode=disable")
+    assert "sslmode=disable" in connector.connection_string
+    assert "connect_timeout=30" in connector.connection_string
 
 
 def test_postgresql_connector_keeps_existing_dialect():

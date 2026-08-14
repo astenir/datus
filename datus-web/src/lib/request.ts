@@ -98,11 +98,17 @@ function shouldAttachAccessToken(input: string | URL | globalThis.Request): bool
   return target.origin === base.origin;
 }
 
+const currentUserListeners = new Set<() => void>();
+
 /**
  * 设置当前用户信息
  */
 export function setCurrentUser(user: UserInfo | null): void {
+  const previousKey = currentUserIdentityKey();
   currentUser = user;
+  if (previousKey !== currentUserIdentityKey()) {
+    for (const listener of [...currentUserListeners]) listener();
+  }
 }
 
 /**
@@ -110,6 +116,21 @@ export function setCurrentUser(user: UserInfo | null): void {
  */
 export function getCurrentUser(): UserInfo | null {
   return currentUser;
+}
+
+/**
+ * 注册当前用户变更监听，返回取消监听的函数。
+ * 供按用户隔离的前端本地状态（如聊天设置）在切换账号时重新加载。
+ */
+export function onCurrentUserChange(listener: () => void): () => void {
+  currentUserListeners.add(listener);
+  return () => {
+    currentUserListeners.delete(listener);
+  };
+}
+
+function currentUserIdentityKey(): string {
+  return currentUser?.username?.trim() || "";
 }
 
 /**
