@@ -201,7 +201,9 @@ def _prune_databases_for_datasource_grant(
 
         table_patterns = _scope_patterns(grant, "tables")
         tables = _filter_tables_for_grant(database, grant, field_order=field_order, tree_scope=tree_scope)
-        if table_patterns is not None and not tables and not namespace_selected:
+        # ``tables is None`` means tables were not enumerated (namespaces_only
+        # listing); keep the namespace and defer table filtering to the lazy load.
+        if table_patterns is not None and tables is not None and not tables and not namespace_selected:
             continue
         update = {"tables": tables}
         if table_patterns is not None and tables is not None:
@@ -220,6 +222,8 @@ def _filter_tables_for_grant(
     table_patterns = _scope_patterns(grant, "tables")
     if table_patterns is None:
         return database.tables
+    if database.tables is None:
+        return None
     if not database.tables:
         return []
     if tree_scope:
