@@ -1094,6 +1094,7 @@ class DashboardArtifactTools:
             "slug": name,
             "description": goal.strip(),
             "datasource": ds_label,
+            "database": database,
             "params": [p.model_dump() for p in params_decl],
             "columns": columns_meta,
             "sample_params": sample_params,

@@ -513,7 +513,7 @@ class DashboardService:
 
         try:
             db_tool = func_tool_mod.DBFuncTool(agent_config=execution_config, sub_agent_name="gen_visual_dashboard")
-            connector = db_tool._get_connector(meta.datasource or None)
+            connector = db_tool._get_connector(meta.datasource or None, meta.database or "")
         except Exception as exc:
             logger.exception("Failed to resolve datasource for %s/%s: %s", dashboard_slug, query_slug, exc)
             return Result(

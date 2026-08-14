@@ -972,22 +972,26 @@ class DBFuncTool:
         )
 
     def _check_sql_table_scope(self, sql: str, connector: Optional[BaseSqlConnector] = None) -> List[str]:
-        """Return table names from *sql* that fall outside the scoped context."""
+        """Return table names from *sql* that fall outside the scoped context.
+
+        Multi-statement SQL is split so each statement's tables are checked; a
+        read-only multi-statement input cannot smuggle an out-of-scope table
+        past the scope check on its first statement.
+        """
         if not self._scoped_patterns:
             return []
-        from datus.utils.sql_utils import extract_table_names
+        from datus.utils.sql_utils import _split_sql_statements, extract_table_names
 
         routed_connector = connector or self._primary_connector
         dialect = getattr(routed_connector, "dialect", "") or ""
-        table_names = extract_table_names(sql, dialect=dialect, ignore_empty=True)
-        table_names.extend(name for name in supplemental_table_names(sql) if name not in table_names)
-        if not table_names:
-            return []  # can't parse → allow (SHOW/DESCRIBE/EXPLAIN have no tables)
         out_of_scope: List[str] = []
-        for name in table_names:
-            coordinate = self._build_table_coordinate(raw_name=name, connector=routed_connector)
-            if not self._table_matches_scope(coordinate):
-                out_of_scope.append(name)
+        for statement in _split_sql_statements(sql):
+            table_names = extract_table_names(statement, dialect=dialect, ignore_empty=True)
+            table_names.extend(name for name in supplemental_table_names(statement) if name not in table_names)
+            for name in table_names:
+                coordinate = self._build_table_coordinate(raw_name=name, connector=routed_connector)
+                if not self._table_matches_scope(coordinate) and name not in out_of_scope:
+                    out_of_scope.append(name)
         return out_of_scope
 
     # Public methods that belong to the tool-plumbing framework rather than the
